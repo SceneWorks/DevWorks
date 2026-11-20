@@ -243,8 +243,6 @@ pub const NOT_YET_ACTIVE: &[&str] = &[
     "delivery.autoMerge",
     "delivery.maxReviewFixCycles",
     "reviews.automationWaitSeconds",
-    // Vision extraction of scanned documents: DW-288.
-    "knowledge.visionExtraction",
 ];
 /// How the description of every [`NOT_YET_ACTIVE`] setting begins.
 pub const NOT_YET_ACTIVE_PREFIX: &str = "Not yet active:";
@@ -916,15 +914,25 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
-            "knowledge.visionExtraction",
+            DOCUMENT_VISION_KEY,
             "Vision extraction fallback",
-            "Not yet active: document extraction does not use a vision model yet, so \
-                this switch changes nothing. Once it does, existing text is extracted \
-                first and a vision-capable routed model reads scanned pages.",
+            "Extracts existing text directly. An image-capable model can transcribe scanned PDF \
+                pages and eligible Word images. Turning this off keeps direct text available.",
             Knowledge,
             WORKSPACE,
             ValueKind::Bool,
             true,
+            NextAdmission
+        ),
+        setting!(
+            DOCUMENT_VISION_MODELS_KEY,
+            "Vision extraction models",
+            "Choose model IDs in preference order for scanned documents. An empty list uses \
+                the session's eligible pinned model, then the configured Low pool.",
+            Knowledge,
+            WORKSPACE,
+            ValueKind::ModelList,
+            Vec::<String>::new(),
             NextAdmission
         ),
         setting!(
@@ -1081,6 +1089,10 @@ fn build() -> Vec<SettingDescriptor> {
     all
 }
 
+/// Whether indexing may use a configured vision model for an image-only source.
+pub const DOCUMENT_VISION_KEY: &str = "knowledge.visionExtraction";
+/// Preferred image-capable models for the document indexer.
+pub const DOCUMENT_VISION_MODELS_KEY: &str = "knowledge.visionModels";
 /// Where artifact contents live (a harness policy shown for transparency).
 pub const ARTIFACT_LOCATION_KEY: &str = "storage.artifactLocation";
 /// Artifact retention: until explicit deletion (a harness policy; no automatic expiry).

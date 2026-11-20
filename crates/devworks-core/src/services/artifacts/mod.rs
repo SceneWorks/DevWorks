@@ -349,7 +349,8 @@ pub(crate) fn visible_in(
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
     if artifact.provenance["principalKind"] == "Host"
-        && DerivedKind::of(&artifact.provenance).is_some_and(DerivedKind::is_document_embedding)
+        && let Some(kind) =
+            DerivedKind::of(&artifact.provenance).filter(|kind| kind.is_document_custody())
     {
         let Ok(source) = serde_json::from_value::<ArtifactRef>(
             artifact.provenance["derived"]["documentSource"].clone(),
@@ -360,11 +361,17 @@ pub(crate) fn visible_in(
             document.state == ArtifactState::Live
                 && document.provenance["managedDocument"].as_bool() == Some(true)
                 && !DerivedKind::of(&document.provenance)
-                    .is_some_and(DerivedKind::is_document_embedding)
+                    .is_some_and(DerivedKind::is_document_custody)
         }) else {
             return Ok(false);
         };
-        return Ok(viewer.sees_owned(artifact.owner.as_ref())
+        let source_owned = matches!(
+            kind,
+            DerivedKind::DocumentVisionInput | DerivedKind::DocumentVisionOutput
+        );
+        let entitled = viewer.authorized.is_some()
+            && (source_owned || viewer.sees_owned(artifact.owner.as_ref()));
+        return Ok(entitled
             && visible_in(read, viewer, &document, project)?
             && read.version(&source.version_id)?.is_some_and(|version| {
                 version.live()
@@ -572,9 +579,13 @@ pub(crate) fn retained_convention(
                     .is_some_and(|s| !s.is_empty())
                 && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
         }
-        DerivedKind::DocumentEmbeddingOutput => {
+        DerivedKind::DocumentEmbeddingOutput | DerivedKind::DocumentVisionOutput => {
             id("requestId")
                 && id("attemptId")
+                && serde_json::from_value::<ArtifactRef>(derived["documentSource"].clone()).is_ok()
+        }
+        DerivedKind::DocumentVisionInput => {
+            id("requestId")
                 && serde_json::from_value::<ArtifactRef>(derived["documentSource"].clone()).is_ok()
         }
         DerivedKind::HelpTopic

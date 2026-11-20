@@ -90,6 +90,7 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         "schema65-extension.json"
     ),
     policy_document!("documentVectorExtension", Tables, "schema66-extension.json"),
+    policy_document!("documentVisionExtension", Tables, "schema67-extension.json"),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {
@@ -346,9 +347,15 @@ fn content_lineage(reference: &ColumnReference) -> bool {
         ("artifact_versions" | "artifact_tags", "artifacts") => "artifact_id",
         ("artifact_links", "artifact_versions") => "artifact_version_id",
         ("document_retrieval_preferences", "artifacts") => "artifact_id",
-        ("document_extractions" | "document_index_versions", "artifact_versions") => "version_id",
         (
-            "document_extracted_blocks" | "document_embedding_runs" | "document_vectors",
+            "document_extractions" | "document_index_versions" | "document_extraction_keys",
+            "artifact_versions",
+        ) => "version_id",
+        (
+            "document_extracted_blocks"
+            | "document_embedding_runs"
+            | "document_vectors"
+            | "document_vision_units",
             "document_extractions",
         ) => "extraction_id",
         ("document_lexical_rows", "document_extracted_blocks") => "block_id",
@@ -388,9 +395,15 @@ fn content_partitions(
         ),
         (
             "artifacts",
-            "id IN(SELECT id FROM ownedDocumentEmbeddingArtifacts)",
+            "id IN(SELECT id FROM ownedDocumentInferenceArtifacts)",
             Action::Delete,
             Reason::OwnedLineage,
+        ),
+        (
+            "artifacts",
+            "id IN(SELECT id FROM retainedVisionEvidence) AND id NOT IN(SELECT id FROM ownedDocumentInferenceArtifacts)",
+            Action::Keep,
+            Reason::SharedContent,
         ),
         (
             "artifact_shares",

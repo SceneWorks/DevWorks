@@ -4823,7 +4823,7 @@ pub(super) static CATALOG: [OperationDescriptor; 381] = [
         result_type: "IndexRunRecord",
         result_schema: schema_of::<IndexRunRecord>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(12)],
         native_execution: false,
         approval_required: false,
         human_only: false,

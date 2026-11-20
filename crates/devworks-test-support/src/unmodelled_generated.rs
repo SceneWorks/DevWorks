@@ -34,6 +34,8 @@ use devworks_core::protocol::RootId;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
 use devworks_core::services::documents::extraction::ExtractedBlock;
+use devworks_core::services::documents::vision::VisionTarget;
+use devworks_core::services::documents::vision::VisionUnit;
 use serde_json::Value;
 
 impl ArtifactRead for Unmodelled {
@@ -894,6 +896,9 @@ impl DocumentRead for Unmodelled {
     fn document_passage(&self, _: &Id, _: &Id) -> Result<Option<ExtractedBlock>, StorageError> {
         unmodelled()
     }
+    fn document_blocks(&self, _: &Id) -> Result<Vec<ExtractedBlock>, StorageError> {
+        unmodelled()
+    }
     fn has_document_vectors(
         &self,
         _: &ArtifactScope,
@@ -911,6 +916,40 @@ impl DocumentRead for Unmodelled {
     }
 }
 impl DocumentRepository for Unmodelled {
+    fn document_extraction_by_key(
+        &self,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn latest_document_direct_extraction(
+        &self,
+        _: &Id,
+        _: &Revision,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn document_vision_targets(&self, _: &Id) -> Result<Vec<VisionTarget>, StorageError> {
+        unmodelled()
+    }
+    fn next_document_extraction_revision(&self, _: &Id) -> Result<Revision, StorageError> {
+        unmodelled()
+    }
+    fn bind_document_extraction(
+        &mut self,
+        _: &Id,
+        _: &str,
+        _: &[VisionTarget],
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn document_vision_unit(&self, _: &Id, _: &Id) -> Result<Option<VisionUnit>, StorageError> {
+        unmodelled()
+    }
+    fn put_document_vision_unit(&mut self, _: &VisionUnit) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn insert_document_embedding_run(
         &mut self,
         _: &DocumentEmbeddingRun,

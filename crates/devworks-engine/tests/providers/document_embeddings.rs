@@ -47,6 +47,7 @@ impl DocumentProcessor for TextDocuments {
             blocks: TextExtractor::default()
                 .extract(input, control)
                 .map_err(|error| id(&format!("Text{error:?}")))?,
+            vision_targets: vec![],
             coverage: Coverage {
                 state: CoverageState::Complete,
                 gaps: vec![],
@@ -107,7 +108,7 @@ impl ConventionEmbeddings for LoseFirstAcknowledgement {
     }
 }
 
-fn command(
+pub(super) fn command(
     f: &Fx,
     cases: &UseCases,
     ctx: &InvocationContext,
@@ -136,7 +137,7 @@ fn command(
     result
 }
 
-fn search(
+pub(super) fn search(
     f: &Fx,
     cases: &UseCases,
     ctx: &InvocationContext,
@@ -175,7 +176,7 @@ fn search(
         .unwrap()
 }
 
-fn page(reply: DomainQueryReply) -> RetrievalPage {
+pub(super) fn page(reply: DomainQueryReply) -> RetrievalPage {
     let DomainQueryReply::Result {
         result: OperationResult::DocumentsSearch { value },
         ..
@@ -211,7 +212,7 @@ fn artifact(f: &Fx, ctx: &InvocationContext, bytes: &[u8], media: &'static str) 
     version_ref(&stored)
 }
 
-fn import(
+pub(super) fn import(
     f: &Fx,
     cases: &UseCases,
     ctx: &InvocationContext,
@@ -277,7 +278,7 @@ fn captured(
     })
 }
 
-fn sent(f: &Fx) -> usize {
+pub(super) fn sent(f: &Fx) -> usize {
     f.http.lock().unwrap().requests.lock().unwrap().len()
 }
 

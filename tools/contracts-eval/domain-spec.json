@@ -8775,12 +8775,14 @@
       "fields": {
         "document_id": "Id",
         "version_id": "Id",
-        "expected_revision": "Revision"
+        "expected_revision": "Revision",
+        "reextract": "?bool"
       },
       "result": "IndexRunRecord",
       "effect": "Inference",
       "authority": "Scoped",
-      "rules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Failed/canceled old version cannot publish current results."
+      "rules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Matching extraction is reused unless reextract is explicitly true. Unsettled previous attempts keep their original custody. Failed/canceled old version cannot publish current results.",
+      "since": {"reextract": 12}
     },
     "documents.retry": {
       "operation": "documents.retry",
@@ -11647,6 +11649,7 @@
     "documents.disable_retrieval": [1, 10],
     "documents.remove_index": [1, 10],
     "documents.resolve_citation": [11],
+    "documents.index": [1, 12],
     "artifacts.save": [
       1,
       2,

@@ -3,6 +3,9 @@
 //! fenced transaction publishes the per-version pointer and settles the delivery together.
 use super::extraction::{ExtractedBlock, ExtractionControl, ExtractionInput};
 use super::{checked_document, version_ref};
+use crate::locks::RwLockExt;
+
+mod routed_vision;
 use crate::{
     context::InvocationContext,
     fingerprint::{canonical_digest, sha256_hex},
@@ -32,10 +35,11 @@ use crate::{
         kernel::{Failure, Refusal, counter, rev},
     },
 };
+use routed_vision::VisionIndex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
@@ -46,9 +50,17 @@ const NORMALIZED_LIMIT: usize = 16 * 1024 * 1024;
 const COUNT_LIMIT: usize = 16_384;
 const EMBEDDING_OUTCOME_UNKNOWN: &str = "EmbeddingOutcomeUnknown";
 
+fn pending_inference(diagnostic: &str) -> bool {
+    matches!(
+        diagnostic,
+        EMBEDDING_OUTCOME_UNKNOWN | routed_vision::OUTCOME_UNKNOWN
+    )
+}
+
 pub struct DocumentExtraction {
     pub blocks: Vec<ExtractedBlock>,
     pub coverage: Coverage,
+    pub vision_targets: Vec<super::vision::VisionTarget>,
 }
 
 /// A configured native extractor. Its revision is part of every durable job and citation.
@@ -60,6 +72,21 @@ pub trait DocumentProcessor: Send + Sync {
         source: ExtractionInput<'_>,
         control: &ExtractionControl<'_>,
     ) -> Result<DocumentExtraction, Id>;
+
+    /// Renders exact requested targets in order. Capture one PNG at a time so large scans
+    /// never accumulate their decoded pages in memory.
+    fn render_vision(
+        &self,
+        _source: ExtractionInput<'_>,
+        targets: &[super::vision::VisionTarget],
+        _control: &ExtractionControl<'_>,
+        capture: &mut super::vision::RasterCapture<'_>,
+    ) -> Result<(), StorageError> {
+        for target in targets {
+            capture(target, Err(code("VisionRasterUnavailable")))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -72,6 +99,8 @@ struct Job {
     reference_revision: i64,
     current_version: Option<Id>,
     extraction_revision: Revision,
+    #[serde(default)]
+    reextract: bool,
     actor: ActorId,
     actor_kind: String,
     store_id: StoreId,
@@ -264,7 +293,10 @@ pub(crate) fn cancel_if_document(
 }
 
 fn cancel_record(entry: &QueueEntry, index: Option<&DocumentIndexVersion>) -> IndexRunRecord {
-    let operation = (entry.last_error.as_deref() == Some(EMBEDDING_OUTCOME_UNKNOWN))
+    let operation = entry
+        .last_error
+        .as_deref()
+        .is_some_and(pending_inference)
         .then_some(OperationState::OutcomeUnknown);
     let state = super::super::queue::delivery_state(entry, operation);
     let stage = match entry.state {
@@ -359,6 +391,14 @@ pub struct DocumentIndexer {
     artifacts: Arc<ArtifactService>,
     extractor: Arc<dyn DocumentProcessor>,
     embeddings: Option<Arc<IndexService>>,
+    vision: RwLock<Option<Arc<dyn super::vision::DocumentVision>>>,
+}
+
+pub(super) struct IndexRequest<'a> {
+    pub document: &'a Id,
+    pub version: &'a Id,
+    pub expected: &'a Revision,
+    pub reextract: bool,
 }
 
 enum VectorPublication {
@@ -379,12 +419,17 @@ impl DocumentIndexer {
             artifacts,
             extractor,
             embeddings: None,
+            vision: RwLock::new(None),
         }
     }
 
     pub fn with_embeddings(mut self, embeddings: Arc<IndexService>) -> Self {
         self.embeddings = Some(embeddings);
         self
+    }
+
+    pub fn set_vision(&self, producer: Arc<dyn super::vision::DocumentVision>) {
+        *self.vision.write_locked() = Some(producer);
     }
 
     pub(super) fn embeddings(&self) -> Option<&IndexService> {
@@ -396,10 +441,14 @@ impl DocumentIndexer {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         command: &AdmittedCommand,
-        document: &Id,
-        id: &Id,
-        expected: &Revision,
+        request: IndexRequest<'_>,
     ) -> Result<IndexRunRecord, Failure> {
+        let IndexRequest {
+            document,
+            version: id,
+            expected,
+            reextract,
+        } = request;
         let artifact = writable_document(tx, ctx, document)?;
         check_revision(&artifact, expected)?;
         let source = version(tx, document, id)?;
@@ -408,7 +457,7 @@ impl DocumentIndexer {
             && prior
                 .diagnostic
                 .as_ref()
-                .is_some_and(|id| id.as_str() == EMBEDDING_OUTCOME_UNKNOWN)
+                .is_some_and(|id| pending_inference(id.as_str()))
             && let Some(entry) = tx.queue().entry(&prior.latest)?
             && entry.state == QueueState::Reconciling
         {
@@ -418,17 +467,39 @@ impl DocumentIndexer {
             // A retry observes the original paid request under its original owner. It may not
             // create a new delivery (and hence a new provider identity) while custody is open.
             let saved = Job::from_delivery(&entry)?;
-            saved.restore(tx, &entry, self.extractor.revision())?;
-            let after = tx.queue().requeue(&entry.id, 0)?;
-            record_run(
-                tx,
-                &after,
-                &saved,
-                ctx.principal(),
-                "DocumentIndexReconciliationRequested",
-                None,
-            )?;
-            return Ok(cancel_record(&after, Some(prior)));
+            match saved.restore(tx, &entry, self.extractor.revision()) {
+                Ok(_) => {
+                    let after = tx.queue().requeue(&entry.id, 0)?;
+                    record_run(
+                        tx,
+                        &after,
+                        &saved,
+                        ctx.principal(),
+                        "DocumentIndexReconciliationRequested",
+                        None,
+                    )?;
+                    return Ok(cancel_record(&after, Some(prior)));
+                }
+                Err(StorageError::ViewUnavailable | StorageError::ScopeDenied)
+                    if prior.diagnostic.as_ref().is_some_and(|reason| {
+                        reason.as_str() == routed_vision::OUTCOME_UNKNOWN
+                    }) && saved.extraction_revision == self.extractor.revision()
+                        && same_source(&source, &saved.source) =>
+                {
+                    // The new owner can observe the same exact document's retained vision
+                    // custody. The old delivery cannot act under its revoked source fences.
+                    let retired = tx.queue().cancel(&entry.id)?;
+                    record_run(
+                        tx,
+                        &retired,
+                        &saved,
+                        ctx.principal(),
+                        "DocumentIndexAuthorityChanged",
+                        None,
+                    )?;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         if let Some(prior) = &prior
             && matches!(
@@ -444,6 +515,10 @@ impl DocumentIndexer {
         {
             return Err(StorageError::Busy.into());
         }
+        let extraction_revision = self.extractor.revision();
+        if reextract {
+            self.check_reextraction(tx, id, &extraction_revision)?;
+        }
         let controls = control::capture(tx, ctx)?;
         let job = Job {
             schema: JOB_SCHEMA,
@@ -452,7 +527,8 @@ impl DocumentIndexer {
             scope_revision: artifact.scope_revision,
             reference_revision: artifact.reference_revision,
             current_version: artifact.current_version_id,
-            extraction_revision: self.extractor.revision(),
+            extraction_revision,
+            reextract,
             actor: ctx.principal().clone(),
             actor_kind: ctx.principal_kind().as_str().into(),
             store_id: ctx.store_id().clone(),
@@ -475,7 +551,7 @@ impl DocumentIndexer {
             aggregate_id: run.as_str().into(),
             aggregate_revision: 1,
             kind: "DocumentIndexQueued".into(),
-            payload: json!({"documentId":document,"versionId":id}),
+            payload: json!({"documentId":document,"versionId":id,"reextract":reextract}),
         })?;
         tx.queue().enqueue(NewQueueEntry {
             id: run.clone(),
@@ -527,27 +603,44 @@ impl DocumentIndexer {
         job: &Job,
         cancellation: &Cancellation,
     ) -> Result<(), StorageError> {
-        let (version, revision) = (
-            job.source.version_id.clone(),
-            job.extraction_revision.clone(),
-        );
-        let (context, checkpoint) = self.fenced(entry, job, move |tx, ctx, mut index| {
-            let checkpoint = tx.documents().document_checkpoint(&version, &revision)?;
-            if checkpoint.is_some()
-                && matches!(
-                    index.stage,
-                    DocumentIndexStage::Queued | DocumentIndexStage::Partial
-                )
-            {
-                index.stage = DocumentIndexStage::Extracted;
-                tx.documents().put_document_index(&index)?;
-            }
-            Ok((ctx, checkpoint))
-        })?;
+        let algorithm = job.extraction_revision.clone();
+        let fresh_key = job.reextract.then(|| {
+            let run = crate::fingerprint::sha256_hex(entry.id.as_str().as_bytes());
+            format!("direct:{}:{}", algorithm.get(), &run[..32])
+        });
+        let version = job.source.version_id.clone();
+        let (context, checkpoint, revision, key) =
+            self.fenced(entry, job, move |tx, ctx, mut index| {
+                let (checkpoint, key) = if let Some(key) = fresh_key {
+                    let checkpoint = tx.documents().document_extraction_by_key(&version, &key)?;
+                    (checkpoint, key)
+                } else {
+                    let checkpoint = tx
+                        .documents()
+                        .latest_document_direct_extraction(&version, &algorithm)?;
+                    (checkpoint, format!("direct:{}", algorithm.get()))
+                };
+                let revision = match &checkpoint {
+                    Some(value) => value.revision.clone(),
+                    None => tx.documents().next_document_extraction_revision(&version)?,
+                };
+                if checkpoint.is_some()
+                    && matches!(
+                        index.stage,
+                        DocumentIndexStage::Queued | DocumentIndexStage::Partial
+                    )
+                {
+                    index.stage = DocumentIndexStage::Extracted;
+                    tx.documents().put_document_index(&index)?;
+                }
+                Ok((ctx, checkpoint, revision, key))
+            })?;
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        if checkpoint.is_none() {
+        let checkpoint = if let Some(checkpoint) = checkpoint {
+            checkpoint
+        } else {
             let source =
                 match self
                     .artifacts
@@ -570,7 +663,7 @@ impl DocumentIndexer {
             let output = self.extractor.extract(
                 ExtractionInput {
                     version: &job.source,
-                    revision: &job.extraction_revision,
+                    revision: &revision,
                     bytes: &source,
                 },
                 &control,
@@ -579,15 +672,29 @@ impl DocumentIndexer {
                 return Err(StorageError::Cancelled);
             }
             match output {
-                Ok(value) => self.save_checkpoint(entry, job, value)?,
+                Ok(value) => self.save_checkpoint(entry, job, revision, key, value)?,
                 Err(reason) => return self.finish(entry, job, Some(reason), false),
             }
-        }
+        };
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        let vectors = self.embed_document(entry, job, cancellation)?;
-        self.publish(entry, job, vectors)
+        let vision = match self.apply_vision(entry, job, &checkpoint, cancellation) {
+            Ok(vision) => vision,
+            Err(StorageError::ScopeDenied) => {
+                // Keep native text only if the document is still current under the claimed
+                // delivery. The routed setting or producer can be revoked independently.
+                self.fenced(entry, job, |_, _, _| Ok(()))?;
+                VisionIndex::direct(&checkpoint, Some(code("VisionAuthorityChanged")))
+            }
+            Err(error) => return Err(error),
+        };
+        let vectors = if vision.held {
+            VectorPublication::Absent
+        } else {
+            self.embed_document(entry, job, &vision, cancellation)?
+        };
+        self.publish(entry, job, &checkpoint, vision, vectors)
     }
 
     fn fenced<T: Send + 'static>(
@@ -622,30 +729,39 @@ impl DocumentIndexer {
         &self,
         entry: &QueueEntry,
         job: &Job,
+        revision: Revision,
+        key: String,
         extraction: DocumentExtraction,
-    ) -> Result<(), StorageError> {
-        let id = canonical_digest(&json!([job.source, job.extraction_revision]))
-            .map_err(|_| invalid())?;
+    ) -> Result<DocumentCheckpoint, StorageError> {
+        let id = canonical_digest(&json!([job.source, revision])).map_err(|_| invalid())?;
         let checkpoint = DocumentCheckpoint {
             id: Id::new(id).map_err(|_| invalid())?,
             version: job.source.version_id.clone(),
-            revision: job.extraction_revision.clone(),
+            revision,
             source_digest: job.source.sha256.as_str().into(),
             coverage: extraction.coverage,
             blocks: extraction.blocks.len().try_into().map_err(|_| invalid())?,
         };
         validate(&checkpoint, &job.source, &extraction.blocks)?;
         self.fenced(entry, job, move |tx, _, mut index| {
-            if tx
+            let checkpoint = if let Some(prior) = tx
                 .documents()
-                .document_checkpoint(&checkpoint.version, &checkpoint.revision)?
-                .is_none()
+                .document_extraction_by_key(&checkpoint.version, &key)?
             {
+                prior
+            } else {
                 tx.documents()
                     .insert_document_checkpoint(&checkpoint, &extraction.blocks)?;
-            }
+                tx.documents().bind_document_extraction(
+                    &checkpoint.id,
+                    &key,
+                    &extraction.vision_targets,
+                )?;
+                checkpoint
+            };
             index.stage = DocumentIndexStage::Extracted;
-            tx.documents().put_document_index(&index)
+            tx.documents().put_document_index(&index)?;
+            Ok(checkpoint)
         })
     }
 
@@ -655,20 +771,23 @@ impl DocumentIndexer {
         &self,
         entry: &QueueEntry,
         job: &Job,
+        vision: &VisionIndex,
         cancellation: &Cancellation,
     ) -> Result<VectorPublication, StorageError> {
+        let extraction = &vision.checkpoint;
         let Some(embeddings) = &self.embeddings else {
             return Ok(VectorPublication::Absent);
         };
-        let (runtime, run, version, revision) = (
+        let (runtime, run, version, revision, extraction_id) = (
             embeddings.clone(),
             entry.id.clone(),
             job.source.version_id.clone(),
-            job.extraction_revision.clone(),
+            extraction.revision.clone(),
+            extraction.id.clone(),
         );
-        let (plan, context, selection, mut observe_only) =
+        let (plan, context, selection, mut observe_only, previously_held) =
             self.fenced(entry, job, move |tx, ctx, index| {
-                let observe_only = index
+                let previously_held = index
                     .diagnostic
                     .as_ref()
                     .is_some_and(|id| id.as_str() == EMBEDDING_OUTCOME_UNKNOWN);
@@ -676,10 +795,10 @@ impl DocumentIndexer {
                 let checkpoint = tx
                     .documents()
                     .document_checkpoint(&version, &revision)?
+                    .filter(|value| value.id == extraction_id)
                     .ok_or(StorageError::ViewUnavailable)?;
                 let plan = match tx.documents().document_embedding_run(&run)? {
-                    Some(plan) if plan.extraction == checkpoint.id => plan,
-                    Some(_) => return Err(invalid()),
+                    Some(plan) => plan,
                     None => {
                         let space = if let Some(space) = &selection.space {
                             tx.conventions().put_convention_embedding_space(space)?;
@@ -698,8 +817,10 @@ impl DocumentIndexer {
                         plan
                     }
                 };
-                Ok((plan, ctx, selection, observe_only))
+                let observe_only = previously_held || plan.extraction != extraction_id;
+                Ok((plan, ctx, selection, observe_only, previously_held))
             })?;
+        let obsolete_extraction = plan.extraction != extraction.id;
         if plan.space.is_none() {
             return Ok(VectorPublication::Absent);
         }
@@ -720,6 +841,10 @@ impl DocumentIndexer {
             run: entry.id.clone(),
             generation: entry.generation,
         });
+        let mut dispatch_fences = fences.clone();
+        if let Some(settings_witness) = vision.witness.clone() {
+            dispatch_fences.push(AuthorityFence::DocumentVision { settings_witness });
+        }
         loop {
             if cancellation.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -729,7 +854,11 @@ impl DocumentIndexer {
                 tx.documents().pending_document_vectors(&snapshot, 32)
             })?;
             let Some((first_block, _)) = blocks.first() else {
-                return Ok(VectorPublication::Complete(plan));
+                return Ok(if obsolete_extraction {
+                    VectorPublication::Partial(code("VisionSettingsChanged"))
+                } else {
+                    VectorPublication::Complete(plan)
+                });
             };
             let origin = EmbeddingOrigin::DocumentIndex {
                 run_id: plan.run.clone(),
@@ -741,24 +870,40 @@ impl DocumentIndexer {
                 .iter()
                 .map(|(_, text)| text.as_str())
                 .collect::<Vec<_>>();
+            let active_fences = if observe_only {
+                &fences
+            } else {
+                &dispatch_fences
+            };
             let input = InputPreparation {
                 context: &context,
                 origin: &origin,
                 embedding_space: &space.id,
                 configuration_source_digest: &plan.configuration_digest,
                 texts: &texts,
-                fences: &fences,
+                fences: active_fences,
                 cancellation,
                 deadline_ms: None,
             };
             let prepared = if observe_only {
                 match embeddings.existing_embedding_inputs(input) {
                     Ok(inputs) => inputs,
-                    Err(StorageError::CursorExpired) => return Ok(VectorPublication::Held),
+                    Err(StorageError::CursorExpired) => {
+                        return Ok(if previously_held {
+                            VectorPublication::Held
+                        } else {
+                            VectorPublication::Partial(code("VisionSettingsChanged"))
+                        });
+                    }
                     Err(error) => return Err(error),
                 }
             } else {
-                embeddings.prepare_embedding_inputs(input)?
+                match embeddings.prepare_embedding_inputs(input) {
+                    Err(StorageError::ScopeDenied) if vision.witness.is_some() => {
+                        return Ok(VectorPublication::Partial(code("VisionSettingsChanged")));
+                    }
+                    result => result?,
+                }
             };
             let request_id = prepared.request_id.clone();
             let request = EmbeddingRequest {
@@ -768,7 +913,7 @@ impl DocumentIndexer {
                 configuration_source_digest: plan.configuration_digest.clone(),
                 preparation_operation: prepared.operation_id,
                 input_refs: prepared.input_refs,
-                fences: fences.clone(),
+                fences: active_fences.clone(),
                 cancellation: cancellation.clone(),
                 deadline_ms: None,
             };
@@ -800,6 +945,11 @@ impl DocumentIndexer {
                 }
                 Ok(_) => return Err(invalid()),
                 Err(EmbeddingFailure::Cancelled) => return Err(StorageError::Cancelled),
+                Err(EmbeddingFailure::Storage(StorageError::ScopeDenied))
+                    if vision.witness.is_some() =>
+                {
+                    return Ok(VectorPublication::Partial(code("VisionSettingsChanged")));
+                }
                 Err(EmbeddingFailure::Storage(error)) => return Err(error),
                 Err(EmbeddingFailure::Unknown { .. }) => {
                     return Ok(VectorPublication::Held);
@@ -810,6 +960,9 @@ impl DocumentIndexer {
                     )));
                 }
             };
+            if obsolete_extraction {
+                return Ok(VectorPublication::Partial(code("VisionSettingsChanged")));
+            }
             let vectors = blocks
                 .into_iter()
                 .map(|(id, _)| id)
@@ -833,20 +986,43 @@ impl DocumentIndexer {
         &self,
         entry: &QueueEntry,
         job: &Job,
+        direct: &DocumentCheckpoint,
+        vision: VisionIndex,
         vectors: VectorPublication,
     ) -> Result<(), StorageError> {
-        let (claimed, saved, runtime) = (entry.clone(), job.clone(), self.embeddings.clone());
+        let (claimed, saved, runtime, direct) = (
+            entry.clone(),
+            job.clone(),
+            self.embeddings.clone(),
+            direct.clone(),
+        );
         self.fenced(entry, job, move |tx, ctx, mut index| {
-            let extraction = tx
-                .documents()
-                .document_checkpoint(&saved.source.version_id, &saved.extraction_revision)?
-                .filter(|value| value.source_digest == saved.source.sha256.as_str())
-                .ok_or_else(invalid)?;
-            let held = matches!(vectors, VectorPublication::Held);
+            let settings_changed = if let Some(witness) = &vision.witness {
+                let policy = super::vision::policy(tx.configuration())?;
+                !policy.enabled || policy.witness != *witness
+            } else {
+                false
+            };
+            let extraction = if settings_changed {
+                tx.documents()
+                    .document_checkpoint(&saved.source.version_id, &direct.revision)?
+                    .filter(|value| value.id == direct.id)
+            } else {
+                tx.documents()
+                    .document_checkpoint(&saved.source.version_id, &vision.checkpoint.revision)?
+                    .filter(|value| value.id == vision.checkpoint.id)
+            }
+            .filter(|value| value.source_digest == saved.source.sha256.as_str())
+            .ok_or_else(invalid)?;
+            let embedding_held = matches!(vectors, VectorPublication::Held);
+            let held = vision.held || embedding_held;
             let diagnostic = match vectors {
                 VectorPublication::Absent => None,
                 VectorPublication::Partial(reason) => Some(reason),
                 VectorPublication::Held => Some(code(EMBEDDING_OUTCOME_UNKNOWN)),
+                VectorPublication::Complete(_) if settings_changed => {
+                    Some(code("VisionSettingsChanged"))
+                }
                 VectorPublication::Complete(run) => {
                     let selection = runtime
                         .as_ref()
@@ -859,7 +1035,9 @@ impl DocumentIndexer {
                         Some(code("EmbeddingRouteChanged"))
                     }
                 }
-            };
+            }
+            .or(vision.diagnostic)
+            .or_else(|| settings_changed.then(|| code("VisionSettingsChanged")));
             index.stage = if diagnostic.is_none()
                 && matches!(extraction.coverage.state, CoverageState::Complete)
             {
@@ -874,7 +1052,9 @@ impl DocumentIndexer {
                 tx.documents()
                     .set_document_retrieval(&saved.source.artifact_id, true)?;
             }
-            let event = if held {
+            let event = if vision.held {
+                "DocumentIndexVisionHeld"
+            } else if embedding_held {
                 "DocumentIndexEmbeddingHeld"
             } else if index.stage == DocumentIndexStage::Partial {
                 "DocumentIndexPartiallyPublished"
@@ -891,8 +1071,12 @@ impl DocumentIndexer {
             )?;
             let fence = claimed.fence().ok_or_else(invalid)?;
             if held {
-                tx.queue()
-                    .hold(&claimed.id, &fence, EMBEDDING_OUTCOME_UNKNOWN)?;
+                let reason = if vision.held {
+                    routed_vision::OUTCOME_UNKNOWN
+                } else {
+                    EMBEDDING_OUTCOME_UNKNOWN
+                };
+                tx.queue().hold(&claimed.id, &fence, reason)?;
             } else {
                 tx.queue()
                     .settle(&claimed.id, &fence, Settlement::Completed)?;

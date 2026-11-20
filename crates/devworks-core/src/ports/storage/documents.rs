@@ -3,6 +3,8 @@
 use super::{ArtifactScope, StorageError};
 use crate::protocol::{ActorId, Id, Revision, data::Coverage};
 use crate::services::documents::extraction::ExtractedBlock;
+use crate::services::documents::vision::VisionTarget;
+use crate::services::documents::vision::VisionUnit;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -106,6 +108,8 @@ pub trait DocumentRead {
         checkpoint: &Id,
         block: &Id,
     ) -> Result<Option<ExtractedBlock>, StorageError>;
+    /// Direct passages in their native order for an authorized exact derivative compilation.
+    fn document_blocks(&self, checkpoint: &Id) -> Result<Vec<ExtractedBlock>, StorageError>;
     /// Whether this authorized published population has any vectors in the exact space.
     fn has_document_vectors(
         &self,
@@ -123,6 +127,31 @@ pub trait DocumentRead {
 }
 
 pub trait DocumentRepository: DocumentRead {
+    /// A producer's identity is distinct from the immutable citation revision it published.
+    fn document_extraction_by_key(
+        &self,
+        version: &Id,
+        key: &str,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError>;
+    fn latest_document_direct_extraction(
+        &self,
+        version: &Id,
+        algorithm: &Revision,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError>;
+    fn document_vision_targets(&self, extraction: &Id) -> Result<Vec<VisionTarget>, StorageError>;
+    fn next_document_extraction_revision(&self, version: &Id) -> Result<Revision, StorageError>;
+    fn bind_document_extraction(
+        &mut self,
+        extraction: &Id,
+        key: &str,
+        targets: &[VisionTarget],
+    ) -> Result<(), StorageError>;
+    fn document_vision_unit(
+        &self,
+        extraction: &Id,
+        target: &Id,
+    ) -> Result<Option<VisionUnit>, StorageError>;
+    fn put_document_vision_unit(&mut self, unit: &VisionUnit) -> Result<(), StorageError>;
     /// Capture the run's immutable route once, before any native embedding is started.
     fn insert_document_embedding_run(
         &mut self,

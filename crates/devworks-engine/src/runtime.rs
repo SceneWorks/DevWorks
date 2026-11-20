@@ -948,16 +948,18 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
-    let use_cases = if let Some(ports) = &config.documents {
-        use devworks_core::services::documents::{DocumentLibrary, indexing::DocumentIndexer};
-        let indexer = Arc::new(
+    use devworks_core::services::documents::{DocumentLibrary, indexing::DocumentIndexer};
+    let document_indexer = config.documents.as_ref().map(|ports| {
+        Arc::new(
             DocumentIndexer::new(store.clone(), artifacts.clone(), ports.processor.clone())
                 .with_embeddings(conventions.indexing()),
-        );
+        )
+    });
+    let use_cases = if let Some(indexer) = &document_indexer {
         consumers.push(crate::documents::indexing::consumer(indexer.clone()));
         use_cases.with_document_library(Arc::new(
             DocumentLibrary::new(artifacts.clone(), ids.clone(), clock.clone())
-                .with_indexer(indexer),
+                .with_indexer(indexer.clone()),
         ))
     } else {
         use_cases
@@ -1211,6 +1213,17 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             return Err(BootError::Composition(StorageError::ScopeDenied));
         }
         service.enable_native_qualification();
+    }
+    if let (Some(indexer), Some(provider), Some(router)) =
+        (&document_indexer, &providers, use_cases.inference_router())
+    {
+        indexer.set_vision(Arc::new(crate::documents::vision::NativeVision::new(
+            store.clone(),
+            artifacts.clone(),
+            router,
+            provider,
+            tokio::runtime::Handle::current(),
+        )));
     }
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),

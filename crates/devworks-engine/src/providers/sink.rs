@@ -49,6 +49,7 @@ pub type ResultChannel = Arc<Mutex<ProviderResult>>;
 pub struct SourceProvenance {
     pub context: Option<ArtifactRef>,
     pub document_index: Option<(devworks_core::protocol::Id, i64)>,
+    pub document_vision_witness: Option<String>,
     pub instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
 }
 
@@ -61,12 +62,14 @@ enum ArtifactKind {
     NativeContinuation,
     CompactionSummary,
     SampledText,
+    DocumentVision,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Detached {
     No,
     Compaction,
     SampledText,
+    DocumentVision,
 }
 pub struct ProviderSink {
     store: Arc<dyn ApplicationStore>,
@@ -80,6 +83,7 @@ pub struct ProviderSink {
     content: BTreeMap<(u64, u64), Vec<ProviderBody>>,
     content_bytes: usize,
     content_items: usize,
+    vision_output_limit: bool,
     delegate_calls: usize,
     live: Option<Arc<super::live::LiveTurns>>,
     live_session: Option<devworks_core::protocol::Id>,
@@ -87,6 +91,7 @@ pub struct ProviderSink {
     turn_start_sequence: Option<i64>,
     source_context: Option<ArtifactRef>,
     document_index: Option<(devworks_core::protocol::Id, i64)>,
+    document_vision_witness: Option<String>,
     instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
     sequence: i64,
     embedding: Option<(
@@ -127,6 +132,7 @@ impl ProviderSink {
             content: BTreeMap::new(),
             content_bytes: 0,
             content_items: 0,
+            vision_output_limit: false,
             delegate_calls: 0,
             live: None,
             live_session: None,
@@ -135,6 +141,7 @@ impl ProviderSink {
             source_context: source.context,
             instruction_targets: source.instruction_targets,
             document_index: source.document_index,
+            document_vision_witness: source.document_vision_witness,
             sequence: 0,
             embedding,
             vectors: BTreeMap::new(),
@@ -158,6 +165,11 @@ impl ProviderSink {
         self.detached = Detached::SampledText;
         self
     }
+    pub(crate) fn with_document_vision(mut self) -> Self {
+        self.detached = Detached::DocumentVision;
+        self
+    }
+
     pub(crate) fn with_turn_start_sequence(mut self, sequence: Option<i64>) -> Self {
         self.turn_start_sequence = sequence;
         self
@@ -172,6 +184,11 @@ impl ProviderSink {
         value: Value,
         fence: &WriteFence,
     ) -> Result<(), StorageError> {
+        if self.detached == Detached::DocumentVision {
+            // Keep only the typed result and metered usage. Raw native frames may contain
+            // transcribed document text and must not create an independent provider artifact.
+            return Ok(());
+        }
         self.evidence_bytes = self.evidence_bytes.saturating_add(value.to_string().len());
         self.evidence.push(value);
         if self.evidence_bytes >= 1024 * 1024 {
@@ -214,12 +231,34 @@ impl ProviderSink {
     ) -> Result<(), StorageError> {
         // The decoder independently bounds the complete raw response to 32 MiB and 65536
         // observations. Bound this private representation too, including generated refs.
-        let bytes = serde_json::to_vec(&body)
-            .map_err(|_| invalid("provider content JSON"))?
-            .len();
+        let (bytes, limit) = if self.detached == Detached::DocumentVision {
+            let ProviderBody::TextDelta { text, .. } = &body else {
+                return Err(invalid("document vision emitted non-text content"));
+            };
+            (
+                text.len(),
+                devworks_core::services::documents::vision::MAX_TRANSCRIPTION_BYTES,
+            )
+        } else {
+            (
+                serde_json::to_vec(&body)
+                    .map_err(|_| invalid("provider content JSON"))?
+                    .len(),
+                MAX_CONTENT_BYTES,
+            )
+        };
+        if self.vision_output_limit {
+            return Ok(());
+        }
         if self.content_items >= MAX_CONTENT_ITEMS
-            || self.content_bytes.saturating_add(bytes) > MAX_CONTENT_BYTES
+            || self.content_bytes.saturating_add(bytes) > limit
         {
+            if self.detached == Detached::DocumentVision {
+                // Discard any partial transcription while the producer drains usage and closes.
+                self.content.clear();
+                self.vision_output_limit = true;
+                return Ok(());
+            }
             return Err(invalid("private provider turn exceeds content bound"));
         }
         self.content_bytes += bytes;
@@ -337,6 +376,14 @@ impl ProviderSink {
         let media_type = media_type.to_owned();
         let binding = self.prepared.identity.binding.clone();
         let source_context = self.source_context.clone();
+        let vision = matches!(kind, ArtifactKind::DocumentVision)
+            .then(|| {
+                self.document_index
+                    .clone()
+                    .zip(self.document_vision_witness.clone())
+                    .ok_or(StorageError::ScopeDenied)
+            })
+            .transpose()?;
         let artifact_kind = match kind {
             ArtifactKind::Evidence => "ProviderEvidence",
             ArtifactKind::NativeContinuation => {
@@ -345,6 +392,8 @@ impl ProviderSink {
             }
             ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
             ArtifactKind::SampledText => "ProviderSampledText",
+            ArtifactKind::DocumentVision =>
+                devworks_core::kernel::derivation::DerivedKind::DocumentVisionOutput.as_str(),
         };
         fence.publication(|| {
             // Existing artifact staging journals and file publication run off the DB writer.
@@ -368,23 +417,28 @@ impl ProviderSink {
                     .project_id
                     .clone()
                     .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+                let mut provenance = json!({
+                    "kind": artifact_kind,
+                    "nativeBinding": binding,
+                    "requestId": attempt.request_id,
+                    "attemptId": attempt.attempt_id,
+                    "actorId": attempt.actor_id,
+                    "sessionId": attempt.session_id,
+                    "sourceContext": source_context,
+                    "workId": attempt.work_id,
+                    "dispatch": accounting::snapshot(&attempt)?.dispatch
+                });
+                if let Some(((run, generation), settings_witness)) = vision {
+                    let document = document_source(tx, &run, generation, Some(&settings_witness))?;
+                    provenance["documentSource"] = json!(document);
+                }
                 let version = service_in.commit_host_bytes_in_scope(
                     tx,
                     &pending,
                     devworks_core::services::artifacts::host::HostArtifactPublication {
                         title: &title,
                         media_type: &media_type,
-                        provenance: json!({
-                            "kind": artifact_kind,
-                            "nativeBinding": binding,
-                            "requestId": attempt.request_id,
-                            "attemptId": attempt.attempt_id,
-                            "actorId": attempt.actor_id,
-                            "sessionId": attempt.session_id,
-                            "sourceContext": source_context,
-                            "workId": attempt.work_id,
-                            "dispatch": accounting::snapshot(&attempt)?.dispatch
-                        }),
+                        provenance,
                         scope,
                         owner: attempt.actor_id.clone(),
                     },
@@ -481,6 +535,22 @@ impl ProviderSink {
 fn invalid(message: impl Into<String>) -> StorageError {
     StorageError::InvalidRecord(message.into())
 }
+fn document_source(
+    tx: &mut dyn WriteTransaction,
+    run: &devworks_core::protocol::Id,
+    generation: i64,
+    settings_witness: Option<&str>,
+) -> Result<ArtifactRef, StorageError> {
+    if let Some(witness) = settings_witness {
+        let settings = devworks_core::services::documents::vision::policy(tx.configuration())?;
+        if !settings.enabled || witness != settings.witness {
+            return Err(StorageError::ScopeDenied);
+        }
+    }
+    devworks_core::services::documents::indexing::embedding_source_in(tx, run, generation)?
+        .ok_or(StorageError::ScopeDenied)
+}
+
 pub(crate) fn validate_binding(
     tx: &mut dyn WriteTransaction,
     binding: &NativeBinding,
@@ -965,6 +1035,7 @@ impl ProviderSink {
                 let current = attempt.clone();
                 let binding = self.prepared.identity.binding.clone();
                 let document_index = self.document_index.clone();
+                let vision_witness = self.document_vision_witness.clone();
                 let mut published = fence.publication(|| {
                     let mut staged = Vec::new();
                     for bytes in &bytes {
@@ -995,9 +1066,7 @@ impl ProviderSink {
                             use devworks_core::services::artifacts::host::HostArtifactPublication;
                             let document_source = document_index
                                 .map(|(run, generation)| {
-                                    devworks_core::services::documents::indexing::embedding_source_in(
-                                        tx, &run, generation,
-                                    )?.ok_or(StorageError::ScopeDenied)
+                                    document_source(tx, &run, generation, vision_witness.as_deref())
                                 })
                                 .transpose()?;
                             let mut references = Vec::new();
@@ -1010,7 +1079,8 @@ impl ProviderSink {
                                 });
                                 if let Some(source) = &document_source {
                                     use devworks_core::kernel::derivation::DerivedKind;
-                                    provenance["kind"] = json!(DerivedKind::DocumentEmbeddingOutput.as_str());
+                                    provenance["kind"] =
+                                        json!(DerivedKind::DocumentEmbeddingOutput.as_str());
                                     provenance["documentSource"] = json!(source);
                                 }
                                 let version = native.commit_host_bytes_in_scope(
@@ -1076,10 +1146,17 @@ impl ProviderSink {
             return Ok(());
         }
         if self.detached != Detached::No {
+            if self.vision_output_limit {
+                let mut result = self.result.locked();
+                result.outcome = Some(AttemptEnd::Incomplete);
+                result.faults.push("VisionTextLimit".into());
+                return Ok(());
+            }
             let compaction = self.detached == Detached::Compaction;
+            let vision = self.detached == Detached::DocumentVision;
             // A sampling request returns text that hit its token limit; compaction does not.
             if outcome == AttemptEnd::Completed
-                || (!compaction && outcome == AttemptEnd::Incomplete)
+                || (!compaction && !vision && outcome == AttemptEnd::Incomplete)
             {
                 let mut summary = String::new();
                 for (_, bodies) in std::mem::take(&mut self.content) {
@@ -1087,6 +1164,11 @@ impl ProviderSink {
                         let ProviderBody::TextDelta { text, .. } = body else {
                             return Err(invalid("detached generation emitted non-text content"));
                         };
+                        if vision && summary.len().saturating_add(text.len())
+                            > devworks_core::services::documents::vision::MAX_TRANSCRIPTION_BYTES
+                        {
+                            return Err(invalid("document vision output exceeds limit"));
+                        }
                         summary.push_str(&text);
                     }
                 }
@@ -1098,18 +1180,33 @@ impl ProviderSink {
                         "Provider compaction summary",
                         ArtifactKind::CompactionSummary,
                     )
+                } else if vision {
+                    (
+                        "Document vision transcription",
+                        ArtifactKind::DocumentVision,
+                    )
                 } else {
                     ("Provider sampled text", ArtifactKind::SampledText)
                 };
-                let artifact = self.artifact(
+                match self.artifact(
                     attempt,
                     summary.as_bytes(),
                     title,
                     "text/plain; charset=utf-8",
                     kind,
                     fence,
-                )?;
-                self.result.locked().result_artifact = Some(artifact);
+                ) {
+                    Ok(artifact) => self.result.locked().result_artifact = Some(artifact),
+                    Err(StorageError::ScopeDenied) if vision => {
+                        // Preserve the known closed outcome and metered usage while discarding
+                        // the bytes the document's current authority no longer permits.
+                        let mut result = self.result.locked();
+                        result.outcome = Some(AttemptEnd::Incomplete);
+                        result.faults.push("VisionAuthorityChanged".into());
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             self.result.locked().outcome = Some(outcome);
             return Ok(());

@@ -11,7 +11,10 @@ use devworks_core::{
         DocumentRepository, StorageError,
     },
     protocol::{ActorId, Id, Revision},
-    services::documents::extraction::ExtractedBlock,
+    services::documents::{
+        extraction::ExtractedBlock,
+        vision::{VisionTarget, VisionUnit},
+    },
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -128,14 +131,28 @@ fn passage(
             },
         )
         .optional())?;
-    row.map(|(text, citation, headings)| {
-        Ok(ExtractedBlock {
-            text,
-            citation: decode(&citation)?,
-            headings: Arc::from(decode::<Vec<_>>(&headings)?),
-        })
+    row.map(decode_passage).transpose()
+}
+
+fn decode_passage(
+    (text, citation, headings): (String, String, String),
+) -> Result<ExtractedBlock, StorageError> {
+    Ok(ExtractedBlock {
+        text,
+        citation: decode(&citation)?,
+        headings: Arc::from(decode::<Vec<_>>(&headings)?),
     })
-    .transpose()
+}
+
+fn blocks(conn: &Connection, id: &Id) -> Result<Vec<ExtractedBlock>, StorageError> {
+    let mut statement = db(conn.prepare_cached(
+        "SELECT text,citation_json,headings_json FROM document_extracted_blocks
+           WHERE extraction_id=?1 ORDER BY ordinal",
+    ))?;
+    let rows = db(statement.query_map([id.as_str()], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    }))?;
+    rows.map(|row| decode_passage(db(row)?)).collect()
 }
 
 // Both the population check and ranking use the same authorized published posting set.
@@ -385,6 +402,12 @@ macro_rules! document_reads {
             ) -> Result<Option<ExtractedBlock>, StorageError> {
                 passage(self.conn, checkpoint, block)
             }
+            fn document_blocks(
+                &self,
+                checkpoint: &Id,
+            ) -> Result<Vec<ExtractedBlock>, StorageError> {
+                blocks(self.conn, checkpoint)
+            }
             fn has_document_vectors(
                 &self,
                 scope: &ArtifactScope,
@@ -408,6 +431,123 @@ document_reads!(Snapshot<'_>);
 document_reads!(Unit<'_>);
 
 impl DocumentRepository for Unit<'_> {
+    fn document_extraction_by_key(
+        &self,
+        version: &Id,
+        key: &str,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        let revision = db(self
+            .conn
+            .query_row(
+                "SELECT e.revision FROM document_extraction_keys k JOIN document_extractions e
+               ON e.id=k.extraction_id AND e.version_id=k.version_id
+              WHERE k.version_id=?1 AND k.identity_key=?2",
+                params![version.as_str(), key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional())?;
+        revision
+            .map(|revision| {
+                checkpoint(
+                    self.conn,
+                    version,
+                    &Revision::new(revision).map_err(corrupt)?,
+                )
+            })
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    fn latest_document_direct_extraction(
+        &self,
+        version: &Id,
+        algorithm: &Revision,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        let key = format!("direct:{}", algorithm.get());
+        let revision = db(self
+            .conn
+            .query_row(
+                "SELECT e.revision FROM document_extraction_keys k JOIN document_extractions e
+               ON e.id=k.extraction_id AND e.version_id=k.version_id
+              WHERE k.version_id=?1 AND (k.identity_key=?2 OR k.identity_key GLOB ?3)
+              ORDER BY e.revision DESC LIMIT 1",
+                params![version.as_str(), key, format!("{key}:*")],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional())?;
+        match revision {
+            Some(revision) => checkpoint(
+                self.conn,
+                version,
+                &Revision::new(revision).map_err(corrupt)?,
+            ),
+            None => Ok(None),
+        }
+    }
+
+    fn document_vision_targets(&self, extraction: &Id) -> Result<Vec<VisionTarget>, StorageError> {
+        let encoded = db(self.conn.query_row(
+            "SELECT vision_targets_json FROM document_extraction_keys WHERE extraction_id=?1",
+            [extraction.as_str()],
+            |row| row.get::<_, String>(0),
+        ))?;
+        decode(&encoded)
+    }
+
+    fn next_document_extraction_revision(&self, version: &Id) -> Result<Revision, StorageError> {
+        let previous = db(self.conn.query_row(
+            "SELECT COALESCE(MAX(revision),0) FROM document_extractions WHERE version_id=?1",
+            [version.as_str()],
+            |row| row.get::<_, i64>(0),
+        ))?;
+        Revision::new(
+            previous
+                .checked_add(1)
+                .ok_or_else(|| invalid("document extraction revision overflow"))?,
+        )
+        .map_err(invalid)
+    }
+
+    fn bind_document_extraction(
+        &mut self,
+        extraction: &Id,
+        key: &str,
+        targets: &[VisionTarget],
+    ) -> Result<(), StorageError> {
+        let changed = db(self.conn.execute(
+            "INSERT INTO document_extraction_keys
+               (version_id,identity_key,extraction_id,vision_targets_json)
+             SELECT version_id,?2,id,?3 FROM document_extractions WHERE id=?1",
+            params![extraction.as_str(), key, encode(&targets)?],
+        ))?;
+        if changed != 1 {
+            return Err(invalid("document extraction missing"));
+        }
+        Ok(())
+    }
+
+    fn document_vision_unit(
+        &self,
+        extraction: &Id,
+        target: &Id,
+    ) -> Result<Option<VisionUnit>, StorageError> {
+        let row = db(self.conn.query_row(
+            "SELECT record_json FROM document_vision_units WHERE extraction_id=?1 AND target_id=?2",
+            params![extraction.as_str(), target.as_str()],
+            |row| row.get::<_, String>(0),
+        ).optional())?;
+        row.map(|value| decode(&value)).transpose()
+    }
+
+    fn put_document_vision_unit(&mut self, unit: &VisionUnit) -> Result<(), StorageError> {
+        db(self.conn.execute(
+            "INSERT INTO document_vision_units(extraction_id,target_id,record_json) VALUES(?1,?2,?3)
+               ON CONFLICT(extraction_id,target_id) DO UPDATE SET record_json=excluded.record_json",
+            params![unit.extraction.as_str(),unit.target.as_str(), encode(unit)?],
+        ))?;
+        Ok(())
+    }
+
     fn insert_document_embedding_run(
         &mut self,
         run: &DocumentEmbeddingRun,

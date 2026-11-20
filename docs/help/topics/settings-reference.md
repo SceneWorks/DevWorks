@@ -448,7 +448,19 @@ Vision extraction fallback.
 - Policy: Configurable
 - Section: Knowledge
 
-Not yet active: document extraction does not use a vision model yet, so this switch changes nothing. Once it does, existing text is extracted first and a vision-capable routed model reads scanned pages.
+Extracts existing text directly. An image-capable model can transcribe scanned PDF pages and eligible Word images. Turning this off keeps direct text available.
+
+## knowledge.visionModels
+
+Vision extraction models.
+
+- Default: `[]`
+- Scope: Workspace only
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Knowledge
+
+Choose model IDs in preference order for scanned documents. An empty list uses the session's eligible pinned model, then the configured Low pool.
 
 ## knowledge.lessonRecurrenceThreshold
 
