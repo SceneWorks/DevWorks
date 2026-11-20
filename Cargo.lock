@@ -1344,8 +1344,8 @@ dependencies = [
  "devworks-adapters",
  "devworks-core",
  "devworks-extension-protocol",
+ "devworks-semantic-helper",
  "ed25519-dalek",
- "libc",
  "protobuf",
  "scip",
  "serde",
@@ -1355,11 +1355,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-semantic-helper"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "devworks-core",
+ "devworks-extension-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "devworks-test-support"
 version = "0.1.0"
 dependencies = [
  "devworks-core",
  "serde_json",
+]
+
+[[package]]
+name = "devworks-typescript-pack"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

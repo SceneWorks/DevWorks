@@ -10,6 +10,11 @@ mod common;
 mod contributions;
 #[path = "packages/rust_pack.rs"]
 mod rust_pack;
+#[path = "packages/semantic_fixture.rs"]
+mod semantic_fixture;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "packages/typescript_pack.rs"]
+mod typescript_pack;
 #[path = "packages/workflow.rs"]
 mod workflow;
 use common::*;

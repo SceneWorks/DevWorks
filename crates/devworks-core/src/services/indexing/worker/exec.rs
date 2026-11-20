@@ -517,7 +517,7 @@ impl Exec<'_> {
         }
         let registry_binding = read_snapshot(&*env.store, &ReadOptions::default(), |read| {
             let projects = read.projects().repository_projects(&repo_id)?;
-            semantic::registry_binding(read.packages(), &cfg, &projects)
+            semantic::registry_binding(&env, read.packages(), &cfg, &projects)
         })
         .map_err(Stop::storage)?;
         self.semantic_packs = semantic::select(&env, &cfg, &repo_id, &registry_binding)?;
@@ -968,7 +968,7 @@ impl Exec<'_> {
             let projects = tx.projects().repository_projects(&repo)?;
             if stored.manifest["configDigest"].as_str() != Some(config.digest.as_str())
                 || stored.manifest["semanticRegistryBinding"].as_str().unwrap_or("")
-                    != semantic::registry_binding(tx.packages(), &config, &projects)?
+                    != semantic::registry_binding(&env, tx.packages(), &config, &projects)?
             {
                 return Ok(Err(Stop::transient(
                     "index_configuration_changed",

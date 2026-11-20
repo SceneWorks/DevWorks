@@ -517,8 +517,12 @@ pub(crate) fn refresh(
         // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
         let member_projects = tx.projects().repository_projects(&r.id)?;
-        let planned =
-            super::worker::semantic::registry_binding(tx.packages(), &effective, &member_projects)?;
+        let planned = super::worker::semantic::registry_binding(
+            env,
+            tx.packages(),
+            &effective,
+            &member_projects,
+        )?;
         let recorded = o
             .view_id
             .as_ref()
@@ -1032,7 +1036,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             let config = effective_config(s.indexing(), s.projects(), &repo_id)?;
             let projects = s.projects().repository_projects(&repo_id)?;
             let binding =
-                super::worker::semantic::registry_binding(s.packages(), &config, &projects)?;
+                super::worker::semantic::registry_binding(&env, s.packages(), &config, &projects)?;
             let base = s.indexing().generation(&snap.base_generation)?;
             let base_binding = base
                 .as_ref()
@@ -1267,10 +1271,11 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     );
     let snap2 = snap.clone();
     let ttl = env.settings.overlay_ttl_ms;
+    let semantic_env = env.clone();
     let published = exec.fenced(WritePriority::Authoritative, move |tx, r| {
         let config = effective_config_tx(tx, &repo2)?;
         let projects = tx.projects().repository_projects(&repo2)?;
-        if config.digest != cfg.digest || super::worker::semantic::registry_binding(tx.packages(), &config, &projects)? != semantic_binding {
+        if config.digest != cfg.digest || super::worker::semantic::registry_binding(&semantic_env, tx.packages(), &config, &projects)? != semantic_binding {
             return Ok(Err("the index configuration or semantic package changed during the build"));
         }
         let current = tx.indexing().published(&repo2)?;

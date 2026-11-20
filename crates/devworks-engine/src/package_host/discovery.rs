@@ -6,7 +6,8 @@ use super::{PackageHost, child_environment};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::locks::LockExt;
 use devworks_core::ports::packages::{
-    IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeObservation,
+    IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeExecutable,
+    RuntimeObservation,
 };
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{ReadOptions, read_snapshot};
@@ -146,6 +147,22 @@ pub fn parse_version(output: &str) -> Option<String> {
     None
 }
 
+/// Follow a version manager to the provider's executable while its normal environment is
+/// present. The package later starts that exact binary with a cleared environment.
+fn probed_node(output: &str) -> Option<(String, RuntimeExecutable)> {
+    let report = output.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        (value.get("version").is_some() && value.get("executable").is_some()).then_some(value)
+    })?;
+    let version = parse_version(report["version"].as_str()?)?;
+    let program = Path::new(report["executable"].as_str()?);
+    if !program.is_absolute() {
+        return None;
+    }
+    let executable = RuntimeExecutable::inspect(program).ok()?;
+    Some((version, executable))
+}
+
 impl PackageHost {
     /// Every runtime to probe: the known ones and every runtime a recorded version declares.
     fn declared_runtimes(&self) -> BTreeSet<String> {
@@ -172,9 +189,14 @@ impl PackageHost {
         out
     }
 
-    /// Probes one runtime: `<runtime> --version` as an owned process, bounded by
-    /// [`super::HostConfig::runtime_timeout`].
-    fn probe(&self, runtime: &str, search_path: Option<&str>) -> RuntimeObservation {
+    /// Probes one runtime with an owned process. Node also reports its executable behind any
+    /// version-manager shim. Each probe is bounded by [`super::HostConfig::runtime_timeout`].
+    fn probe(
+        &self,
+        runtime: &str,
+        search_path: Option<&str>,
+        executable: &mut Option<RuntimeExecutable>,
+    ) -> RuntimeObservation {
         let mut env = child_environment();
         let var = |env: &[(String, String)], k: &str| {
             env.iter()
@@ -191,11 +213,17 @@ impl PackageHost {
         let Some(program) = resolve_command(runtime, &path, var(&env, "PATHEXT").as_deref()) else {
             return RuntimeObservation::Missing(format!("`{runtime}` was not found on PATH"));
         };
-        let mut spec = ProcessSpec::new(&[
-            program.to_string_lossy().into_owned(),
-            "--version".to_owned(),
-        ])
-        .expect("argv");
+        let launch_identity = RuntimeExecutable::inspect(&program).ok();
+        let mut argv = vec![program.to_string_lossy().into_owned()];
+        if runtime == "node" {
+            argv.extend([
+                "--print".to_owned(),
+                "JSON.stringify({version:process.version,executable:process.execPath})".to_owned(),
+            ]);
+        } else {
+            argv.push("--version".to_owned());
+        }
+        let mut spec = ProcessSpec::new(&argv).expect("argv");
         spec.clear_env = true;
         spec.env = env;
         spec.capture_output = true;
@@ -264,12 +292,34 @@ impl PackageHost {
             Some(devworks_core::services::process::StopOutcome::Reaped {
                 exit_code: Some(0),
                 ..
-            }) => match parse_version(&text) {
-                Some(v) => RuntimeObservation::Found(v),
-                None => {
-                    RuntimeObservation::Missing(format!("`{runtime} --version` printed no version"))
+            }) => {
+                let current = RuntimeExecutable::inspect(&program).ok();
+                if current != launch_identity {
+                    return RuntimeObservation::Missing(
+                        "the runtime changed during its probe".into(),
+                    );
                 }
-            },
+                if runtime == "node"
+                    && let Some((version, binary)) = probed_node(&text)
+                {
+                    *executable = Some(binary);
+                    return RuntimeObservation::Found(version);
+                }
+                match parse_version(&text) {
+                    Some(version) if runtime == "node" && version.starts_with("24.") => {
+                        RuntimeObservation::Missing(
+                            "Node 24 did not identify its executable".into(),
+                        )
+                    }
+                    Some(version) => {
+                        *executable = current;
+                        RuntimeObservation::Found(version)
+                    }
+                    None => RuntimeObservation::Missing(format!(
+                        "the `{runtime}` probe printed no version"
+                    )),
+                }
+            }
             _ => RuntimeObservation::Missing(format!("`{runtime} --version` failed")),
         }
     }
@@ -281,11 +331,16 @@ impl PackageHost {
             return BTreeMap::new();
         };
         let mut seen = BTreeMap::new();
+        let mut executables = BTreeMap::new();
         for r in self.declared_runtimes() {
             if self.is_stopping() {
                 return seen;
             }
-            let o = self.probe(&r, ports.search_path.as_deref());
+            let mut executable = None;
+            let o = self.probe(&r, ports.search_path.as_deref(), &mut executable);
+            if let Some(executable) = executable {
+                executables.insert(r.clone(), executable);
+            }
             if self.is_stopping() {
                 return seen;
             }
@@ -294,7 +349,7 @@ impl PackageHost {
         if self.is_stopping() {
             return seen;
         }
-        ports.cache.set(seen.clone());
+        ports.cache.set_probed(seen.clone(), executables);
         let _ = self.service.observe_now("RuntimeProbe");
         seen
     }
