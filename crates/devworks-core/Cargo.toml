@@ -17,6 +17,9 @@ base64 = "=0.22.1"
 jiff = "=0.2.39"
 # Exact bounded tariff ratios; this version already exists in the workspace lockfile.
 num-rational = "=0.4.2"
+# Parse CommonMark source offsets without enabling the renderer or CLI.
+pulldown-cmark = { version = "=0.13.6", default-features = false }
+unicode-normalization = "=0.1.26"
 schemars.workspace = true
 semver.workspace = true
 serde.workspace = true

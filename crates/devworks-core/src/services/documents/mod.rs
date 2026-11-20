@@ -1,4 +1,6 @@
 //! Exact-version document custody. The artifact repository owns scope, bytes and retention.
+pub mod extraction;
+
 use crate::{
     context::InvocationContext,
     gateway::{AdmittedCommand, AdmittedQuery},
