@@ -206,6 +206,11 @@ impl DocumentEvidence {
             DataScope::Workspace => ArtifactScope::Workspace,
             DataScope::Project { project_id } => ArtifactScope::Project(project_id.clone()),
         });
+        if let Some(project) = scope.as_ref().and_then(ArtifactScope::project)
+            && !read.project_exists(project)?
+        {
+            return Ok(false);
+        }
         for source in &self.sources {
             if !is_visible(retrieval::visible_version(
                 read,

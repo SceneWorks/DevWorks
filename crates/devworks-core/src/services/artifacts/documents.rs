@@ -100,6 +100,11 @@ pub(crate) fn document_list(
     after: Option<&ListPosition>,
     limit: u16,
 ) -> Result<Vec<StoredArtifact>, StorageError> {
+    if let Some(project) = scope.project()
+        && !snapshot.artifacts().project_exists(project)?
+    {
+        return Err(StorageError::ScopeDenied);
+    }
     let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
     let actor = (!viewer.sees_owned(None)).then_some(ctx.principal());
     snapshot
