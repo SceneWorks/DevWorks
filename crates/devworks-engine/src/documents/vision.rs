@@ -19,13 +19,14 @@ use devworks_core::{
     services::{
         artifacts::ArtifactService,
         documents::vision::{
-            DocumentVision, MAX_TRANSCRIPTION_BYTES, REQUEST_DEADLINE_MS, TRANSCRIPTION_TOKENS,
-            VisionEvidence, VisionExecution, VisionInvocation,
+            self, DocumentVision, MAX_TRANSCRIPTION_BYTES, REQUEST_DEADLINE_MS,
+            TRANSCRIPTION_TOKENS, VisionEvidence, VisionExecution, VisionInvocation,
         },
         prices::CatalogPriceResolver,
         router::{
             AuxiliaryRequest, InferenceRouter, Purpose, RequestAdmission,
             accounting::{AttemptSelection, PinFence, ReportCategory},
+            choice_of,
         },
         usage::{
             accounting::{self, AttemptEnd, AttemptRequest},
@@ -70,27 +71,43 @@ impl NativeVision {
     ) -> Result<Option<NativeInvocation>, StorageError> {
         let info = self.store.info();
         read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-            let intent = RouteIntent::Tier {
-                tier: TierName::Low,
-            };
-            let required_capabilities = vec!["vision".to_owned()];
-            let Ok(route) = self.router.route_auxiliary(
-                read,
-                &AuxiliaryRequest {
-                    purpose: Purpose::Vision,
-                    session_id: ctx.session_id().cloned(),
-                    intent: intent.clone(),
-                    effort: EffortName::Default,
-                    required_capabilities: required_capabilities.clone(),
-                },
-            )?
-            else {
-                return Ok(None);
-            };
-            // This profile cannot enforce the bounded output sent for an individual image.
-            if route.endpoint_profile == "CodexSubscriptionResponses" {
+            let policy = vision::policy(read.configuration())?;
+            if !policy.enabled {
                 return Ok(None);
             }
+            let use_pin = policy.models.is_empty();
+            let intents = if use_pin {
+                vec![RouteIntent::Tier {
+                    tier: TierName::Low,
+                }]
+            } else {
+                policy
+                    .models
+                    .into_iter()
+                    .map(|model_id| RouteIntent::Model { model_id })
+                    .collect()
+            };
+            let required_capabilities = vec!["vision".to_owned()];
+            let mut selected = None;
+            for intent in intents {
+                let result = self.router.route_auxiliary(
+                    read,
+                    &AuxiliaryRequest {
+                        purpose: Purpose::Vision,
+                        session_id: ctx.session_id().filter(|_| use_pin).cloned(),
+                        intent: intent.clone(),
+                        effort: EffortName::Default,
+                        required_capabilities: required_capabilities.clone(),
+                    },
+                )?;
+                if let Ok(route) = result {
+                    selected = Some((intent, route));
+                    break;
+                }
+            }
+            let Some((mut intent, route)) = selected else {
+                return Ok(None);
+            };
             let owner = match auxiliary::ownership(read, &info, ctx) {
                 Ok(owner) => owner,
                 Err(auxiliary::AuxiliaryError::Unavailable(_)) => return Ok(None),
@@ -106,6 +123,7 @@ impl NativeVision {
                         .session_pin(session)?
                         .filter(|pin| pin.pin_id == id)
                         .ok_or(StorageError::ScopeDenied)?;
+                    intent = choice_of(&current)?.intent;
                     Some(PinFence {
                         id,
                         revision: current.revision,
@@ -123,9 +141,11 @@ impl NativeVision {
             });
             let revision =
                 |value| Revision::new(value).map_err(|_| invalid("document vision revision"));
+            let unresolved = route.endpoint_profile == "OpenRouterChat"
+                && devworks_core::ports::router::is_open_router_auto(&route.upstream_model_id);
             let provider = PriceQuery {
                 catalog_model_id: route.model_id.clone(),
-                provider_model_id: Some(route.upstream_model_id),
+                provider_model_id: (!unresolved).then_some(route.upstream_model_id),
                 connection_id: route.connection_id.clone(),
                 endpoint_profile: route.endpoint_profile,
                 service_tier: None,
@@ -237,17 +257,16 @@ impl NativeVision {
                 .operations()
                 .operation(&route.operation_id)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if route.purpose != Purpose::Vision.as_str()
-                || operation.payload["actorId"] != json!(ctx.principal())
-                || route.project_id.as_ref() != ctx.project_id()
-            {
+            if route.purpose != Purpose::Vision.as_str() {
                 return Err(StorageError::ScopeDenied);
             }
             let mut owned = None;
             for journal in &operation.attempts {
                 if let Some(attempt) = read.usage().inference_attempt(&journal.id.0)? {
                     if accounting::snapshot(&attempt)?.admission_key != work.request
-                        || attempt.actor_id != *ctx.principal()
+                        || operation.payload["actorId"] != json!(attempt.actor_id)
+                        || attempt.project_id != route.project_id
+                        || attempt.session_id != route.session_id
                         || attempt.purpose != Purpose::Vision.as_str()
                         || attempt.request_id != work.request
                     {
@@ -285,11 +304,10 @@ impl NativeVision {
         }
         let result = providers.recorded_result(&work.request, &work.request)?;
         if result.outcome != Some(AttemptEnd::Completed) {
-            let reason = if result.faults.iter().any(|fault| fault == "VisionTextLimit") {
-                "VisionTextLimit"
-            } else {
-                "VisionResultIncomplete"
-            };
+            let reason = ["VisionTextLimit", "VisionAuthorityChanged"]
+                .into_iter()
+                .find(|code| result.faults.iter().any(|fault| fault == code))
+                .unwrap_or("VisionResultIncomplete");
             return Ok(Some(failed(reason)));
         }
         let Some(output) = result.result_artifact else {
@@ -318,9 +336,9 @@ impl NativeVision {
         {
             return Err(StorageError::ScopeDenied);
         }
-        let upstream_model = attempt
-            .provider_model_id
-            .ok_or_else(|| invalid("missing vision provider model"))?;
+        let Some(upstream_model) = attempt.provider_model_id else {
+            return Ok(Some(failed("VisionModelUnresolved")));
+        };
         Ok(Some(VisionExecution::Recorded(Box::new(VisionEvidence {
             operation: attempt.operation_id,
             request: work.request.clone(),

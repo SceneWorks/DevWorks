@@ -916,13 +916,23 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             DOCUMENT_VISION_KEY,
             "Vision extraction fallback",
-            "Extracts existing text directly. When a scanned PDF page or eligible Word image has \
-                no text, an image-capable model from the current route or the configured Low pool \
-                can transcribe it. Turning this off keeps direct text available.",
+            "Extracts existing text directly. An image-capable model can transcribe scanned PDF \
+                pages and eligible Word images. Turning this off keeps direct text available.",
             Knowledge,
             WORKSPACE,
             ValueKind::Bool,
             true,
+            NextAdmission
+        ),
+        setting!(
+            DOCUMENT_VISION_MODELS_KEY,
+            "Vision extraction models",
+            "Choose model IDs in preference order for scanned documents. An empty list uses \
+                the session's eligible pinned model, then the configured Low pool.",
+            Knowledge,
+            WORKSPACE,
+            ValueKind::ModelList,
+            Vec::<String>::new(),
             NextAdmission
         ),
         setting!(
@@ -1081,6 +1091,8 @@ fn build() -> Vec<SettingDescriptor> {
 
 /// Whether indexing may use a configured vision model for an image-only source.
 pub const DOCUMENT_VISION_KEY: &str = "knowledge.visionExtraction";
+/// Preferred image-capable models for the document indexer.
+pub const DOCUMENT_VISION_MODELS_KEY: &str = "knowledge.visionModels";
 /// Where artifact contents live (a harness policy shown for transparency).
 pub const ARTIFACT_LOCATION_KEY: &str = "storage.artifactLocation";
 /// Artifact retention: until explicit deletion (a harness policy; no automatic expiry).

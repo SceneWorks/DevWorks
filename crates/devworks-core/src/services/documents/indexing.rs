@@ -467,17 +467,39 @@ impl DocumentIndexer {
             // A retry observes the original paid request under its original owner. It may not
             // create a new delivery (and hence a new provider identity) while custody is open.
             let saved = Job::from_delivery(&entry)?;
-            saved.restore(tx, &entry, self.extractor.revision())?;
-            let after = tx.queue().requeue(&entry.id, 0)?;
-            record_run(
-                tx,
-                &after,
-                &saved,
-                ctx.principal(),
-                "DocumentIndexReconciliationRequested",
-                None,
-            )?;
-            return Ok(cancel_record(&after, Some(prior)));
+            match saved.restore(tx, &entry, self.extractor.revision()) {
+                Ok(_) => {
+                    let after = tx.queue().requeue(&entry.id, 0)?;
+                    record_run(
+                        tx,
+                        &after,
+                        &saved,
+                        ctx.principal(),
+                        "DocumentIndexReconciliationRequested",
+                        None,
+                    )?;
+                    return Ok(cancel_record(&after, Some(prior)));
+                }
+                Err(StorageError::ViewUnavailable | StorageError::ScopeDenied)
+                    if prior.diagnostic.as_ref().is_some_and(|reason| {
+                        reason.as_str() == routed_vision::OUTCOME_UNKNOWN
+                    }) && saved.extraction_revision == self.extractor.revision()
+                        && same_source(&source, &saved.source) =>
+                {
+                    // The new owner can observe the same exact document's retained vision
+                    // custody. The old delivery cannot act under its revoked source fences.
+                    let retired = tx.queue().cancel(&entry.id)?;
+                    record_run(
+                        tx,
+                        &retired,
+                        &saved,
+                        ctx.principal(),
+                        "DocumentIndexAuthorityChanged",
+                        None,
+                    )?;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         if let Some(prior) = &prior
             && matches!(

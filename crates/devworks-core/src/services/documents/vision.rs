@@ -84,6 +84,7 @@ impl VisionRaster {
 #[derive(Clone, Debug)]
 pub struct VisionPolicy {
     pub enabled: bool,
+    pub models: Vec<Id>,
     pub witness: String,
 }
 
@@ -93,28 +94,35 @@ pub fn policy(
     use crate::{
         ports::storage::ConfigScope,
         settings::{
-            catalog::{DOCUMENT_VISION_KEY, descriptor},
+            catalog::{DOCUMENT_VISION_KEY, DOCUMENT_VISION_MODELS_KEY, descriptor},
             model::{chain, current_chain},
         },
     };
     let layers = current_chain(read, &ConfigScope::Workspace)?;
-    let entry = chain(
-        descriptor(DOCUMENT_VISION_KEY).expect("registered document vision setting"),
-        &layers,
-    )
-    .map_err(|_| StorageError::InvalidRecord("invalid document vision setting".into()))?
-    .into_iter()
-    .next()
-    .ok_or_else(|| StorageError::InvalidRecord("missing document vision setting".into()))?;
-    let enabled = entry.value.value.0.as_bool().ok_or_else(|| {
+    let effective = |key| {
+        chain(
+            descriptor(key).expect("registered document vision setting"),
+            &layers,
+        )
+        .map_err(|_| StorageError::InvalidRecord("invalid document vision setting".into()))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| StorageError::InvalidRecord("missing document vision setting".into()))
+    };
+    let toggle = effective(DOCUMENT_VISION_KEY)?;
+    let selection = effective(DOCUMENT_VISION_MODELS_KEY)?;
+    let enabled = toggle.value.value.0.as_bool().ok_or_else(|| {
         StorageError::InvalidRecord("document vision must be enabled or disabled".into())
     })?;
-    let witness = canonical_digest(
-        &serde_json::to_value(entry)
-            .map_err(|_| StorageError::InvalidRecord("document vision setting identity".into()))?,
-    )
-    .map_err(|_| StorageError::InvalidRecord("document vision setting digest".into()))?;
-    Ok(VisionPolicy { enabled, witness })
+    let models = serde_json::from_value(selection.value.value.0.clone())
+        .map_err(|_| StorageError::InvalidRecord("document vision model selection".into()))?;
+    let witness = canonical_digest(&serde_json::json!([enabled, &models]))
+        .map_err(|_| StorageError::InvalidRecord("document vision setting digest".into()))?;
+    Ok(VisionPolicy {
+        enabled,
+        models,
+        witness,
+    })
 }
 
 /// The routed result keeps the exact producer, model and output artifact. Its text becomes

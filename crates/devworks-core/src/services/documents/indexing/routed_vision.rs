@@ -145,7 +145,7 @@ impl DocumentIndexer {
             .flatten()
             .any(|unit| matches!(unit.outcome, VisionOutcome::Unknown));
         let producer = self.vision.read_locked().clone();
-        if !policy.enabled || producer.is_none() {
+        if (!policy.enabled && !unresolved) || producer.is_none() {
             if unresolved {
                 return Ok(VisionIndex {
                     checkpoint: checkpoint.clone(),
@@ -171,7 +171,7 @@ impl DocumentIndexer {
             .collect::<BTreeMap<_, _>>();
         let pending = targets
             .iter()
-            .filter(|target| !units.contains_key(target.id().as_str()))
+            .filter(|target| policy.enabled && !units.contains_key(target.id().as_str()))
             .cloned()
             .collect::<Vec<_>>();
         if !pending.is_empty() {
@@ -223,7 +223,7 @@ impl DocumentIndexer {
                     Err(diagnostic) => unit.outcome = VisionOutcome::Failed { diagnostic },
                 }
                 if unit.raster.is_none() {
-                    self.store_vision_unit(entry, job, &unit, &policy.witness)?;
+                    self.store_vision_unit(entry, job, &unit, Some(&policy.witness))?;
                 }
                 units.insert(id.as_str().to_owned(), unit);
                 Ok(())
@@ -255,12 +255,26 @@ impl DocumentIndexer {
         ]);
         let mut held = false;
         let mut diagnostic = None;
-        for target in &targets {
+        let (unsettled, remaining): (Vec<_>, Vec<_>) = targets.iter().partition(|target| {
+            units
+                .get(target.id().as_str())
+                .is_some_and(|unit| matches!(unit.outcome, VisionOutcome::Unknown))
+        });
+        for target in unsettled.into_iter().chain(remaining) {
             if cancellation.is_cancelled() {
                 return Err(StorageError::Cancelled);
             }
             let id = target.id();
-            let unit = units.get_mut(id.as_str()).ok_or_else(invalid)?;
+            let Some(unit) = units.get_mut(id.as_str()) else {
+                if !policy.enabled {
+                    continue;
+                }
+                return Err(invalid());
+            };
+            let observe_only = matches!(unit.outcome, VisionOutcome::Unknown);
+            if !policy.enabled && !observe_only {
+                continue;
+            }
             if let VisionOutcome::Failed { diagnostic: reason } = &unit.outcome {
                 diagnostic.get_or_insert_with(|| reason.clone());
             }
@@ -271,8 +285,10 @@ impl DocumentIndexer {
             if held && matches!(unit.outcome, VisionOutcome::Ready) {
                 continue;
             }
-            let observe_only = matches!(unit.outcome, VisionOutcome::Unknown);
             if unit.material.is_none() {
+                if observe_only {
+                    return Err(invalid());
+                }
                 let raster = unit.raster.clone().ok_or_else(invalid)?;
                 let bytes = vision::material(raster);
                 *unit = self.capture_vision(
@@ -309,11 +325,33 @@ impl DocumentIndexer {
                     VisionOutcome::Failed { diagnostic: reason }
                 }
             };
-            self.store_vision_unit(entry, job, unit, &policy.witness)?;
+            let witness = (!observe_only && !matches!(unit.outcome, VisionOutcome::Unknown))
+                .then_some(policy.witness.as_str());
+            self.store_vision_unit(entry, job, unit, witness)?;
+        }
+        if !policy.enabled {
+            return Ok(VisionIndex {
+                checkpoint: checkpoint.clone(),
+                diagnostic: Some(code(if held {
+                    OUTCOME_UNKNOWN
+                } else {
+                    "VisionDisabled"
+                })),
+                held,
+                witness: None,
+            });
         }
         let populated =
             self.compose_vision(entry, job, checkpoint, (&targets, &units), cancellation)?;
         let witness = (populated.id != checkpoint.id).then_some(policy.witness);
+        if diagnostic.is_none()
+            && populated
+                .coverage
+                .gaps
+                .contains(&code("VisionNoTranscription"))
+        {
+            diagnostic = Some(code("VisionNoTranscription"));
+        }
         Ok(VisionIndex {
             checkpoint: populated,
             diagnostic: if held {
@@ -397,13 +435,13 @@ impl DocumentIndexer {
         entry: &QueueEntry,
         job: &Job,
         unit: &VisionUnit,
-        witness: &str,
+        witness: Option<&str>,
     ) -> Result<(), StorageError> {
-        let (unit, witness) = (unit.clone(), witness.to_owned());
+        let (unit, witness) = (unit.clone(), witness.map(str::to_owned));
         self.fenced(entry, job, move |tx, _, _| {
-            // Retain an ambiguous settlement even if the setting changed after admission.
-            // This writes no text or request material and remains exact-source fenced.
-            if !matches!(unit.outcome, VisionOutcome::Unknown) {
+            // Observing or retaining an ambiguous result cannot send or publish bytes and
+            // remains exact-source fenced even when the extraction setting has changed.
+            if let Some(witness) = witness {
                 settings_hold(tx.configuration(), &witness)?;
             }
             tx.documents().put_document_vision_unit(&unit)
@@ -482,6 +520,8 @@ impl DocumentIndexer {
                     )?;
                     let text = std::str::from_utf8(&raw).map_err(|_| invalid())?;
                     if text.trim().is_empty() {
+                        gaps.push(code("VisionNoTranscription"));
+                        complete = false;
                         continue;
                     }
                     let normalized = match normalize_text(text, remaining, &control) {

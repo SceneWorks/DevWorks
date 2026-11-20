@@ -22,7 +22,7 @@ use devworks_core::{
         },
         usage::accounting,
     },
-    settings::catalog::{DOCUMENT_VISION_KEY, descriptor},
+    settings::catalog::{DOCUMENT_VISION_KEY, DOCUMENT_VISION_MODELS_KEY, descriptor},
 };
 use devworks_engine::documents::{indexing::consumer, vision::NativeVision};
 
@@ -110,12 +110,25 @@ fn push_vision_reply(f: &Fx, text: &str) {
 }
 
 fn settings(tx: &mut dyn WriteTransaction, enabled: Option<bool>) -> Result<(), StorageError> {
+    settings_routes(tx, enabled, &["model"], &[])
+}
+
+fn settings_routes(
+    tx: &mut dyn WriteTransaction,
+    enabled: Option<bool>,
+    low: &[&str],
+    preferred: &[&str],
+) -> Result<(), StorageError> {
     let tier = "routing.tierLow.members";
-    let mut values =
-        json!({tier:{"schema":descriptor(tier).unwrap().schema_ref(),"value":["model"]}});
+    let mut values = json!({tier:{"schema":descriptor(tier).unwrap().schema_ref(),"value":low}});
     if let Some(enabled) = enabled {
         values[DOCUMENT_VISION_KEY] = json!({
             "schema":descriptor(DOCUMENT_VISION_KEY).unwrap().schema_ref(),"value":enabled
+        });
+    }
+    if !preferred.is_empty() {
+        values[DOCUMENT_VISION_MODELS_KEY] = json!({
+            "schema":descriptor(DOCUMENT_VISION_MODELS_KEY).unwrap().schema_ref(),"value":preferred
         });
     }
     let scope = ConfigScope::Workspace;
@@ -553,6 +566,8 @@ fn uncertain_vision_retries_observe_the_original_attempt() {
                 .passages
                 .is_empty()
         );
+        let enabled = (n == 1).then_some(false);
+        write(f.store.as_ref(), move |tx| settings(tx, enabled)).unwrap();
         let retry = fixture.index(
             &f,
             &note,
@@ -654,7 +669,7 @@ fn disabling_vision_during_a_send_preserves_direct_text() {
     let fixture = VisionFixture::new(&f, true, None, false);
     let note = fixture.import(&f);
     let source = note.current_version.as_ref().unwrap();
-    fixture.index(&f, &note, "documents.index", "disable-during-vision");
+    let run = fixture.index(&f, &note, "documents.index", "disable-during-vision");
     let store = f.store.clone();
     f.http.lock().unwrap().after_open = Some(Arc::new(move || {
         write(store.as_ref(), |tx| settings(tx, Some(false))).unwrap();
@@ -666,6 +681,10 @@ fn disabling_vision_during_a_send_preserves_direct_text() {
     })
     .unwrap();
     assert_eq!(index.stage, DocumentIndexStage::Partial, "{index:?}");
+    assert_eq!(index.diagnostic, Some(id("VisionAuthorityChanged")));
+    let queue = read(f.store.as_ref(), |r| r.queue().entry(&run.id)).unwrap();
+    assert_eq!(queue.state, QueueState::Completed, "{queue:?}");
+
     assert_eq!(
         fixture.find(&f, "fenced-direct", "botanical").passages[0].text,
         DIRECT
@@ -726,12 +745,7 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         owns(&plan, table, ProjectPurgeRowAction::Delete);
     }
     for item in &refs {
-        let key = devworks_core::fingerprint::sha256_hex(
-            json!([item.artifact_id]).to_string().as_bytes(),
-        );
-        assert!(plan.rows.iter().any(|row| row.table == "artifacts"
-            && row.key_digest == key
-            && row.action == ProjectPurgeRowAction::Delete));
+        assert_purge_artifact(&plan, item, ProjectPurgeRowAction::Delete);
     }
     let workspace = fixture.context.clone().with_lineage(None, None, None);
     let share = command(
@@ -760,6 +774,9 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         "usage_attempts",
         ProjectPurgeRowAction::Delete,
     );
+    for item in &refs {
+        assert_purge_artifact(&shared_plan, item, ProjectPurgeRowAction::Keep);
+    }
     command(
         &f,
         &fixture.cases,
@@ -771,6 +788,10 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
                 "expectedScopeRevision":shared.scope_revision}
         }),
     );
+    let former_owner = read(f.store.as_ref(), |r| r.projects().purge_planning(project)).unwrap();
+    for item in &refs {
+        assert_purge_artifact(&former_owner, item, ProjectPurgeRowAction::Keep);
+    }
     let moved = read(f.store.as_ref(), |r| {
         r.projects().purge_planning(&ProjectId(id(OTHER_PROJECT)))
     })
@@ -779,12 +800,7 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         owns(&moved, table, ProjectPurgeRowAction::Delete);
     }
     for item in &refs {
-        let key = devworks_core::fingerprint::sha256_hex(
-            json!([item.artifact_id]).to_string().as_bytes(),
-        );
-        assert!(moved.rows.iter().any(|row| row.table == "artifacts"
-            && row.key_digest == key
-            && row.action == ProjectPurgeRowAction::Delete));
+        assert_purge_artifact(&moved, item, ProjectPurgeRowAction::Delete);
         assert!(
             f.artifacts
                 .read_exact(f.store.as_ref(), &fixture.context, item, 65536)
@@ -797,4 +813,321 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
     })
     .unwrap();
     assert_eq!(attempt.project_id.as_ref(), Some(project));
+}
+
+fn assert_purge_artifact(
+    plan: &ProjectPurgePlanning,
+    artifact: &ArtifactRef,
+    action: ProjectPurgeRowAction,
+) {
+    let key = devworks_core::fingerprint::sha256_hex(
+        json!([artifact.artifact_id]).to_string().as_bytes(),
+    );
+    let row = plan
+        .rows
+        .iter()
+        .find(|row| row.table == "artifacts" && row.key_digest == key);
+    assert_eq!(
+        row.map(|row| &row.action),
+        Some(&action),
+        "{}: {:?}",
+        artifact.artifact_id.as_str(),
+        plan.unresolved
+    );
+}
+
+#[test]
+fn model_selection_skips_profiles_without_output_limits() {
+    for preferred in [false, true] {
+        let f = Fx::new(
+            "CodexSubscriptionResponses",
+            recorded_reply(TRANSCRIPTION),
+            false,
+        );
+        let fixture = VisionFixture::new(&f, true, None, false);
+        write(f.store.as_ref(), move |tx| {
+            let mut alternative = tx.router().connection(&id("connection"))?.unwrap();
+            alternative.id = id("compatible-connection");
+            alternative.profile = "CompatibleChat".into();
+            alternative.endpoint = "http://localhost:11434/v1".into();
+            alternative.credential_ref = None;
+            alternative.credential_revision = 0;
+            alternative.credential_epoch = None;
+            alternative.account_digest = None;
+            tx.router().put_connection(&alternative, None)?;
+            let mut model = tx.router().route_model(&id("model"))?.unwrap();
+            model.id = id("compatible-model");
+            model.connection_id = Some(alternative.id);
+            model.endpoint_profile = alternative.profile;
+            model.revision = 1;
+            model.position = 2;
+            tx.router().put_route_model(&model, None)?;
+            let options = ["model", "compatible-model"];
+            if preferred {
+                settings_routes(tx, None, &["missing-model"], &options)
+            } else {
+                settings_routes(tx, None, &options, &[])
+            }
+        })
+        .unwrap();
+        let note = fixture.import(&f);
+        fixture.index(&f, &note, "documents.index", "fallback-route");
+        fixture.run(&f);
+        assert_eq!(sent(&f), 1);
+        assert_eq!(
+            fixture
+                .find(&f, "fallback-transcription", "greenhouse")
+                .passages[0]
+                .text,
+            TRANSCRIPTION
+        );
+        let script = f.http.lock().unwrap();
+        let requests = script.requests.lock().unwrap();
+        assert!(requests[0].url.as_str().ends_with("/chat/completions"));
+    }
+}
+
+#[test]
+fn native_vision_admits_an_eligible_session_pin_with_its_original_intent() {
+    use devworks_core::protocol::records::RouteIntent;
+    let f = Fx::new("CompatibleChat", recorded_reply(TRANSCRIPTION), false);
+    let mut fixture = VisionFixture::new(&f, true, None, false);
+    let actor = fixture.context.principal().clone();
+    let project = fixture.context.project_id().cloned();
+    let session = id("vision-session");
+    let session_id = session.clone();
+    write(f.store.as_ref(), move |tx| {
+        tx.sessions().insert_session(&StoredSession {
+            id: session_id.clone(),
+            conversation_id: id("vision-conversation"),
+            agent_id: actor.clone(),
+            project_id: project,
+            root_id: None,
+            title: "Vision fixture session".into(),
+            context_epoch: 0,
+            revision: 1,
+            created_by: actor,
+            created_at_ms: T0,
+            closed_at_ms: None,
+            closed_by: None,
+            next_sequence: 1,
+            checkpoint_sequence: 0,
+        })?;
+        tx.router().put_session_pin(
+            &StoredPin {
+                session_id,
+                pin_id: id("vision-pin"),
+                revision: 1,
+                model_id: id("model"),
+                connection_id: id("connection"),
+                upstream_model_id: Some("fixture-model".into()),
+                endpoint_profile: Some("CompatibleChat".into()),
+                identity_origin: "Resolved".into(),
+                intent: devworks_core::services::router::intent_key(&RouteIntent::Model {
+                    model_id: id("model"),
+                }),
+                requested_effort: "Default".into(),
+                effective_effort: "Default".into(),
+                required_capabilities: vec![],
+                replaced_pin_id: None,
+                reason: "Initial".into(),
+                updated_at_ms: T0,
+            },
+            None,
+        )?;
+        settings_routes(tx, None, &["missing-model"], &[])
+    })
+    .unwrap();
+    fixture.context = fixture.context.with_session(session.clone());
+    let note = fixture.import(&f);
+    fixture.index(&f, &note, "documents.index", "use-exact-pin");
+    fixture.run(&f);
+    assert_eq!(sent(&f), 1);
+    assert_eq!(
+        fixture.find(&f, "pin-transcription", "greenhouse").passages[0].text,
+        TRANSCRIPTION
+    );
+    let current = read(f.store.as_ref(), |r| r.router().session_pin(&session)).unwrap();
+    assert_eq!(current.revision, 1);
+}
+
+#[test]
+fn nonblank_scan_with_empty_output_stays_partial() {
+    let f = Fx::new("CompatibleChat", recorded_reply("   "), false);
+    let fixture = VisionFixture::new(&f, true, None, false);
+    let note = fixture.import(&f);
+    fixture.index(&f, &note, "documents.index", "empty-transcription");
+    fixture.run(&f);
+    let version = &note.current_version.as_ref().unwrap().version_id;
+    let index = read(f.store.as_ref(), |r| r.documents().document_index(version)).unwrap();
+    assert_eq!(index.stage, DocumentIndexStage::Partial, "{index:?}");
+    assert_eq!(index.diagnostic, Some(id("VisionNoTranscription")));
+    assert_eq!(sent(&f), 1);
+    assert_eq!(
+        fixture.find(&f, "empty-scan-direct", "botanical").passages[0].text,
+        DIRECT
+    );
+}
+
+struct ChangeRouteAfterPlan {
+    store: Arc<dyn ApplicationStore>,
+    reads: AtomicUsize,
+}
+
+impl ApplicationStore for ChangeRouteAfterPlan {
+    fn info(&self) -> StoreInfo {
+        self.store.info()
+    }
+
+    fn submit_write(
+        &self,
+        options: WriteOptions,
+        job: Box<dyn WriteJob>,
+    ) -> Result<(), StorageError> {
+        self.store.submit_write(options, job)
+    }
+
+    fn read(
+        &self,
+        options: &ReadOptions,
+        work: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.store.read(options, work)?;
+        // The executor first queries its original request, then reads the quote and plan.
+        if self.reads.fetch_add(1, Ordering::SeqCst) == 1 {
+            configure_fixture_image_model(self.store.as_ref(), false);
+        }
+        Ok(())
+    }
+}
+
+fn configure_fixture_image_model(store: &dyn ApplicationStore, enabled: bool) {
+    write(store, move |tx| {
+        let mut model = tx.router().route_model(&id("model"))?.unwrap();
+        let revision = model.revision;
+        model.image_input = enabled;
+        tx.router().put_route_model(&model, Some(revision))?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn refused_native_admission_leaves_exact_capture_reusable() {
+    let f = Fx::new("CompatibleChat", recorded_reply(TRANSCRIPTION), false);
+    let fixture = VisionFixture::new(&f, true, None, false);
+    let native = Arc::new(NativeVision::new(
+        Arc::new(ChangeRouteAfterPlan {
+            store: f.store.clone(),
+            reads: AtomicUsize::new(0),
+        }),
+        f.artifacts.clone(),
+        Arc::new(InferenceRouter::new(
+            f.h.ids.clone(),
+            f.h.clock(),
+            f.connections.clone(),
+        )),
+        &f.driver,
+        runtime().handle().clone(),
+    ));
+    fixture.indexer.set_vision(native);
+    let note = fixture.import(&f);
+    fixture.index(&f, &note, "documents.index", "lost-eligibility");
+    fixture.run(&f);
+    assert_eq!(sent(&f), 0);
+    let version = note.current_version.as_ref().unwrap().version_id.clone();
+    let request = write(f.store.as_ref(), move |tx| {
+        let direct = tx
+            .documents()
+            .document_extraction_by_key(&version, "direct:1")?
+            .unwrap();
+        let unit = tx
+            .documents()
+            .document_vision_unit(&direct.id, &VisionTarget::Pdf { page: 2 }.id())?
+            .unwrap();
+        assert!(unit.material.is_some());
+        assert!(
+            matches!(unit.outcome, VisionOutcome::Ready),
+            "{:?}",
+            unit.outcome
+        );
+        Ok(devworks_core::services::documents::vision::request_id(
+            &unit,
+        ))
+    })
+    .unwrap();
+    assert!(read(f.store.as_ref(), |r| r.router().route_request(&request)).is_none());
+    configure_fixture_image_model(f.store.as_ref(), true);
+    fixture.indexer.set_vision(fixture.native.clone());
+    fixture.index(&f, &note, "documents.retry", "restored-eligibility");
+    fixture.run(&f);
+    assert_eq!(sent(&f), 1);
+    assert_eq!(fixture.renders.load(Ordering::SeqCst), 1);
+    let admitted = read(f.store.as_ref(), |r| r.router().route_request(&request)).unwrap();
+    assert_eq!(admitted.purpose, "Vision");
+    assert_eq!(
+        fixture
+            .find(&f, "retry-transcription", "greenhouse")
+            .passages[0]
+            .text,
+        TRANSCRIPTION
+    );
+}
+
+#[test]
+fn moved_source_observes_a_held_vision_attempt_without_rebasing_its_owner() {
+    let f = Fx::new("CompatibleChat", recorded_reply(TRANSCRIPTION), false);
+    let mut fixture = VisionFixture::new(&f, true, None, false);
+    fixture.indexer.set_vision(Arc::new(LoseAcknowledgement {
+        native: fixture.native.clone(),
+        calls: AtomicUsize::new(0),
+    }));
+    let note = fixture.import(&f);
+    let original = fixture.index(&f, &note, "documents.index", "old-source-custody");
+    fixture.run(&f);
+    let entry = read(f.store.as_ref(), |r| r.queue().entry(&original.id)).unwrap();
+    assert_eq!(entry.state, QueueState::Reconciling, "{entry:?}");
+    let workspace = fixture.context.clone().with_lineage(None, None, None);
+    let moved = command(
+        &f,
+        &fixture.cases,
+        &workspace,
+        "documents.move",
+        json!({
+            "protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"move-held-vision",
+            "command":{"kind":"Move","artifactId":note.id,"targetProjectId":OTHER_PROJECT,
+                "expectedScopeRevision":note.scope_revision}
+        }),
+    );
+    let OperationResult::DocumentsMove {
+        value: devworks_core::protocol::records::DocumentResult::Current(moved),
+    } = moved
+    else {
+        panic!("{moved:?}")
+    };
+    fixture.context = principal(f.store.as_ref(), "new-vision-owner", PrincipalKind::Human)
+        .with_lineage(Some(ProjectId(id(OTHER_PROJECT))), None, None);
+    fixture.indexer.set_vision(fixture.native.clone());
+    let observing = fixture.index(&f, &moved, "documents.retry", "observe-after-move");
+    assert_ne!(observing.id, original.id);
+    fixture.run(&f);
+    let observed = read(f.store.as_ref(), |r| r.queue().entry(&observing.id)).unwrap();
+    assert_eq!(observed.state, QueueState::Completed, "{observed:?}");
+    assert_eq!(sent(&f), 1);
+    assert_eq!(fixture.renders.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture.find(&f, "moved-vision", "greenhouse").passages[0].text,
+        TRANSCRIPTION
+    );
+    let fresh_owner_plan = read(f.store.as_ref(), |r| {
+        r.projects()
+            .purge_planning(fixture.context.project_id().unwrap())
+    })
+    .unwrap();
+    assert!(
+        !fresh_owner_plan
+            .rows
+            .iter()
+            .any(|row| row.table == "usage_attempts")
+    );
 }

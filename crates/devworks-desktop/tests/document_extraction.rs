@@ -155,7 +155,7 @@ fn word_vision_renders_only_supported_image_only_placements() {
     let indexed = processor.extract(input, &control).unwrap();
     assert_eq!(indexed.blocks.len(), 1);
     assert_eq!(indexed.blocks[0].text, "With visible text");
-    assert_eq!(indexed.coverage.state, CoverageState::Partial);
+    assert!(matches!(indexed.coverage.state, CoverageState::Partial));
     assert!(matches!(
         indexed.vision_targets.as_slice(),
         [VisionTarget::Word {

@@ -400,6 +400,12 @@ fn content_partitions(
             Reason::OwnedLineage,
         ),
         (
+            "artifacts",
+            "id IN(SELECT id FROM retainedVisionEvidence) AND id NOT IN(SELECT id FROM ownedDocumentInferenceArtifacts)",
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+        (
             "artifact_shares",
             "project_id=?1",
             Action::Delete,

@@ -349,7 +349,8 @@ pub(crate) fn visible_in(
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
     if artifact.provenance["principalKind"] == "Host"
-        && DerivedKind::of(&artifact.provenance).is_some_and(DerivedKind::is_document_custody)
+        && let Some(kind) =
+            DerivedKind::of(&artifact.provenance).filter(|kind| kind.is_document_custody())
     {
         let Ok(source) = serde_json::from_value::<ArtifactRef>(
             artifact.provenance["derived"]["documentSource"].clone(),
@@ -364,7 +365,13 @@ pub(crate) fn visible_in(
         }) else {
             return Ok(false);
         };
-        return Ok(viewer.sees_owned(artifact.owner.as_ref())
+        let source_owned = matches!(
+            kind,
+            DerivedKind::DocumentVisionInput | DerivedKind::DocumentVisionOutput
+        );
+        let entitled = viewer.authorized.is_some()
+            && (source_owned || viewer.sees_owned(artifact.owner.as_ref()));
+        return Ok(entitled
             && visible_in(read, viewer, &document, project)?
             && read.version(&source.version_id)?.is_some_and(|version| {
                 version.live()

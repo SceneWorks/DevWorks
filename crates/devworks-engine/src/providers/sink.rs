@@ -1188,15 +1188,25 @@ impl ProviderSink {
                 } else {
                     ("Provider sampled text", ArtifactKind::SampledText)
                 };
-                let artifact = self.artifact(
+                match self.artifact(
                     attempt,
                     summary.as_bytes(),
                     title,
                     "text/plain; charset=utf-8",
                     kind,
                     fence,
-                )?;
-                self.result.locked().result_artifact = Some(artifact);
+                ) {
+                    Ok(artifact) => self.result.locked().result_artifact = Some(artifact),
+                    Err(StorageError::ScopeDenied) if vision => {
+                        // Preserve the known closed outcome and metered usage while discarding
+                        // the bytes the document's current authority no longer permits.
+                        let mut result = self.result.locked();
+                        result.outcome = Some(AttemptEnd::Incomplete);
+                        result.faults.push("VisionAuthorityChanged".into());
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             self.result.locked().outcome = Some(outcome);
             return Ok(());
