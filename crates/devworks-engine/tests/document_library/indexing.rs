@@ -156,6 +156,11 @@ fn index_frame(operation: &str, key: &str, doc: &DocumentDetail) -> Value {
     })
 }
 
+fn cancel_frame(key: &str, run: &Id) -> Value {
+    json!({"protocol":"1.0-draft.1","requestKey":key,
+        "command":{"kind":"Cancel","operationId":run}})
+}
+
 fn run_id(reply: CommandReply<DomainDecision>) -> (IndexRunRecord, bool) {
     let CommandReply::Recorded {
         receipt, replayed, ..
@@ -277,12 +282,12 @@ fn invalid_native_text_reports_a_terminal_failure_without_an_index() {
     let broken = imported(&f, b"\xffinvalid text");
     let exact = broken.current_version.as_ref().unwrap();
     let a = f.scoped("document-a");
-    run_id(f.command(
+    let (first, _) = run_id(f.command(
         &a,
         "documents.index",
         index_frame("documents.index", "bad-source", &broken),
     ));
-    drive(&f, indexer);
+    drive(&f, indexer.clone());
     let status = state(&f, &exact.version_id);
     assert_eq!(status.stage, DocumentIndexStage::Failed);
     assert_eq!(status.diagnostic, Some(id("TextInvalidEncoding")));
@@ -293,6 +298,36 @@ fn invalid_native_text_reports_a_terminal_failure_without_an_index() {
         if matches!(detail.extraction_state, ItemState::Failed)
             && detail.coverage.gaps == [id("TextInvalidEncoding")])
     );
+    let first_entry = read(f.store.as_ref(), |r| r.queue().entry(&first.id)).unwrap();
+    assert_eq!(first_entry.state, QueueState::Failed);
+    assert_eq!(
+        first_entry.last_error.as_deref(),
+        Some("TextInvalidEncoding")
+    );
+    let (retry, _) = run_id(f.command(
+        &a,
+        "documents.retry",
+        index_frame("documents.retry", "bad-source-retry", &broken),
+    ));
+    drive(&f, indexer);
+    assert_eq!(state(&f, &exact.version_id).latest, retry.id);
+    let status = f.command(
+        &a,
+        "indexing.cancel",
+        cancel_frame("cancel-ended-run", &first.id),
+    );
+    let CommandReply::Recorded { receipt, .. } = status else {
+        panic!("{status:?}")
+    };
+    let DomainDecision::NoChange {
+        result: OperationResult::IndexingCancel { value },
+    } = receipt.decision
+    else {
+        panic!("{:?}", receipt.decision)
+    };
+    assert_eq!(value.id, first.id);
+    assert_eq!(value.state, devworks_core::protocol::OperationState::Failed);
+    assert_eq!(value.diagnostics.0[0].code.0, "TextInvalidEncoding");
 }
 
 #[test]
@@ -380,11 +415,15 @@ fn cancellation_after_extract_leaves_the_prior_publication_and_retained_blocks()
         state(&f, &exact.version_id).stage,
         DocumentIndexStage::Extracted
     );
-    let run = retry.id.clone();
-    write(f.store.as_ref(), move |tx| {
-        tx.queue().cancel(&run).map(drop)
-    })
-    .unwrap();
+    let OperationResult::IndexingCancel { value } = applied(f.command(
+        &a,
+        "indexing.cancel",
+        cancel_frame("cancel-in-flight", &retry.id),
+    )) else {
+        panic!("expected native index cancellation")
+    };
+    assert_eq!(value.id, retry.id);
+    assert_eq!(value.stage.0, "Cancelling");
     release.send(()).unwrap();
     runtime.block_on(within("cancel reindex", dispatcher.idle()));
     let view = state(&f, &exact.version_id);
@@ -556,6 +595,17 @@ fn disable_and_remove_preserve_extraction_until_explicit_version_deletion() {
         panic!("expected removed index")
     };
     assert!(!removed.retrieval_enabled);
+    assert!(matches!(
+        removed.extraction_state,
+        devworks_core::protocol::records::ItemState::Healthy
+    ));
+    assert!(matches!(removed.coverage.state, CoverageState::Complete));
+    let detail = result(f.read_ref(&a, "documents.read", exact, 10));
+    assert!(
+        matches!(detail, OperationResult::DocumentsRead { value: DocumentResult::Current(detail) }
+        if matches!(detail.extraction_state, devworks_core::protocol::records::ItemState::Healthy)
+            && matches!(detail.coverage.state, CoverageState::Complete))
+    );
     let view = state(&f, &exact.version_id);
     assert_eq!(view.stage, DocumentIndexStage::Removed);
     assert!(view.published.is_none());

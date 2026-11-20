@@ -53,6 +53,11 @@ pub trait DocumentRead {
         version: &Id,
         revision: &Revision,
     ) -> Result<Option<DocumentCheckpoint>, StorageError>;
+    /// Most recent retained extraction for display when this version has no published index.
+    fn latest_document_checkpoint(
+        &self,
+        version: &Id,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError>;
     /// Read only after authorizing the exact retained version and checkpoint.
     fn document_passage(
         &self,

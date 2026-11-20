@@ -884,6 +884,12 @@ impl DocumentRead for Unmodelled {
     ) -> Result<Option<DocumentCheckpoint>, StorageError> {
         unmodelled()
     }
+    fn latest_document_checkpoint(
+        &self,
+        _: &Id,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
     fn document_passage(&self, _: &Id, _: &Id) -> Result<Option<ExtractedBlock>, StorageError> {
         unmodelled()
     }

@@ -6,7 +6,7 @@ pub mod pdf;
 use crate::{
     context::InvocationContext,
     gateway::{AdmittedCommand, AdmittedQuery},
-    operations::{OperationInput, documents as ops},
+    operations::{OperationInput, documents as ops, indexing as index_ops},
     ports::{
         CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
         storage::{
@@ -17,7 +17,7 @@ use crate::{
     },
     protocol::{
         CorrelationId, DomainErrorCode, DomainFault, Id,
-        data::{ArtifactCommand, ArtifactQuery, Coverage, CoverageState, DataScope},
+        data::{ArtifactCommand, ArtifactQuery, Coverage, CoverageState, DataScope, IndexCommand},
         records::{
             DocumentDetail, DocumentLibraryPage, DocumentListResult, DocumentRecord,
             DocumentResult, ItemState,
@@ -89,6 +89,13 @@ impl DocumentLibrary {
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<DomainDecision, Failure> {
+        if let OperationInput::Indexing(index_ops::Input::Cancel(input)) = command.input()
+            && let IndexCommand::Cancel { operation_id } = &input.command
+        {
+            return indexing::cancel_if_document(tx, ctx, &operation_id.0)?.ok_or_else(|| {
+                crate::services::kernel::not_found("index_run", &operation_id.0).into()
+            });
+        }
         let OperationInput::Documents(input) = command.input() else {
             return Err(invalid());
         };
@@ -473,6 +480,17 @@ fn index_metadata(
         return Ok(());
     };
     view.coverage.gaps.clear();
+    if index.stage == DocumentIndexStage::Removed
+        && let Some(checkpoint) = read.latest_document_checkpoint(&version.version_id)?
+    {
+        view.coverage = checkpoint.coverage;
+        view.extraction_state = match view.coverage.state {
+            CoverageState::Complete => ItemState::Healthy,
+            CoverageState::Partial => ItemState::Partial,
+            CoverageState::Unavailable => ItemState::Unavailable,
+        };
+        return Ok(());
+    }
     view.extraction_state = match index.stage {
         DocumentIndexStage::Ready => ItemState::Healthy,
         DocumentIndexStage::Partial => ItemState::Partial,
@@ -496,12 +514,13 @@ fn index_metadata(
                     .is_some_and(|entry| entry.state == QueueState::Cancelled)
                 {
                     code("IndexCancelled")
-                } else if entry
-                    .as_ref()
-                    .is_some_and(|entry| entry.state == QueueState::Failed)
-                {
+                } else if entry.as_ref().is_some_and(|entry| {
+                    matches!(entry.state, QueueState::Failed | QueueState::Dismissed)
+                }) {
                     view.extraction_state = ItemState::Failed;
                     code("IndexFailed")
+                } else if queue.is_some() && entry.is_none() {
+                    code("IndexUnavailable")
                 } else {
                     code("IndexPending")
                 },

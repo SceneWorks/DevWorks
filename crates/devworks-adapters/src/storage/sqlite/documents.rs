@@ -155,6 +155,28 @@ macro_rules! document_reads {
             ) -> Result<Option<DocumentCheckpoint>, StorageError> {
                 checkpoint(self.conn, version, revision)
             }
+            fn latest_document_checkpoint(
+                &self,
+                version: &Id,
+            ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+                let revision: Option<i64> = db(self
+                    .conn
+                    .query_row(
+                        "SELECT revision FROM document_extractions WHERE version_id=?1
+                     ORDER BY revision DESC LIMIT 1",
+                        [version.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional())?;
+                match revision {
+                    Some(revision) => checkpoint(
+                        self.conn,
+                        version,
+                        &Revision::new(revision).map_err(corrupt)?,
+                    ),
+                    None => Ok(None),
+                }
+            }
             fn document_passage(
                 &self,
                 checkpoint: &Id,

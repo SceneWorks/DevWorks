@@ -13,7 +13,8 @@ use crate::{
         RevisionDimension, RootId, StoreId,
         data::{CitationSource, Coverage, CoverageState},
         provider::ArtifactRef,
-        records::IndexRunRecord,
+        records::{Diagnostic, IndexRunRecord, Severity},
+        results::{DomainDecision, OperationResult},
         support::{BoundedList, BoundedText},
     },
     services::{
@@ -204,6 +205,143 @@ pub(super) fn writable_document(
     Ok(artifact)
 }
 
+/// Repository and document indexing share the existing cancel command and result contract.
+/// An ordinary repository run ID is left to the repository coordinator.
+pub(crate) fn cancel_if_document(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    run: &Id,
+) -> Result<Option<DomainDecision>, Failure> {
+    let Some(entry) = tx
+        .queue()
+        .entry(run)?
+        .filter(|entry| entry.consumer == CONSUMER)
+    else {
+        return Ok(None);
+    };
+    let job = Job::from_delivery(&entry)?;
+    writable_document(tx, ctx, &job.source.artifact_id)?;
+    let changed = matches!(
+        entry.state,
+        QueueState::Ready | QueueState::Claimed | QueueState::Reconciling
+    ) && !entry.cancel_requested;
+    let after = if changed {
+        let after = tx.queue().cancel(run)?;
+        if after.state == QueueState::Cancelled {
+            mark_cancelled(tx, &after, &job)?;
+        }
+        record_run(
+            tx,
+            &after,
+            &job,
+            ctx.principal(),
+            "DocumentIndexCancelRequested",
+            None,
+        )?;
+        after
+    } else {
+        entry
+    };
+    let latest = tx
+        .documents()
+        .document_index(&job.source.version_id)?
+        .filter(|index| index.latest == *run);
+    let value = cancel_record(&after, latest.as_ref());
+    let result = OperationResult::IndexingCancel { value };
+    Ok(Some(if changed {
+        DomainDecision::Applied { result }
+    } else {
+        DomainDecision::NoChange { result }
+    }))
+}
+
+fn cancel_record(entry: &QueueEntry, index: Option<&DocumentIndexVersion>) -> IndexRunRecord {
+    let state = super::super::queue::delivery_state(entry, None);
+    let stage = match entry.state {
+        QueueState::Claimed if entry.cancel_requested => "Cancelling",
+        QueueState::Cancelled => "Cancelled",
+        QueueState::Failed | QueueState::Dismissed => "Failed",
+        QueueState::Completed
+            if index.is_some_and(|index| index.stage == DocumentIndexStage::Partial) =>
+        {
+            "Partial"
+        }
+        QueueState::Completed => "Published",
+        QueueState::Claimed => "Extracting",
+        QueueState::Reconciling => "Held",
+        QueueState::Ready => "Queued",
+    };
+    let gap = index
+        .and_then(|index| index.diagnostic.clone())
+        .or_else(|| {
+            matches!(entry.state, QueueState::Failed | QueueState::Dismissed).then(|| {
+                entry
+                    .last_error
+                    .as_deref()
+                    .and_then(|error| Id::new(error).ok())
+                    .unwrap_or_else(|| code("IndexFailed"))
+            })
+        });
+    let diagnostics = gap
+        .into_iter()
+        .map(|id| Diagnostic {
+            code: BoundedText(id.as_str().into()),
+            id,
+            severity: Severity::Warning,
+            component: BoundedText("DocumentIndex".into()),
+            message: BoundedText("The document index did not publish.".into()),
+            correlation_id: None,
+            evidence: None,
+        })
+        .collect();
+    IndexRunRecord {
+        id: entry.id.clone(),
+        revision: rev(entry.revision),
+        repository_ids: BoundedList(vec![]),
+        stage: BoundedText(stage.into()),
+        state,
+        completed_units: counter(i64::from(entry.state == QueueState::Completed)),
+        total_units: None,
+        output_views: BoundedList(vec![]),
+        diagnostics: BoundedList(diagnostics),
+    }
+}
+
+fn mark_cancelled(
+    tx: &mut dyn WriteTransaction,
+    entry: &QueueEntry,
+    job: &Job,
+) -> Result<(), StorageError> {
+    if let Some(mut index) = tx.documents().document_index(&job.source.version_id)?
+        && index.latest == entry.id
+        && index.stage != DocumentIndexStage::Removed
+    {
+        index.stage = DocumentIndexStage::Cancelled;
+        index.diagnostic = Some(code("IndexCancelled"));
+        tx.documents().put_document_index(&index)?;
+    }
+    Ok(())
+}
+
+/// Let generic before-dispatch cancellation update the same exact version.
+pub struct QueueHook;
+
+impl crate::services::queue::ConsumerHook for QueueHook {
+    fn consumer(&self) -> &'static str {
+        CONSUMER
+    }
+    fn cancelled(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        entry: &QueueEntry,
+    ) -> Result<(), StorageError> {
+        if entry.state == QueueState::Cancelled {
+            mark_cancelled(tx, entry, &Job::from_delivery(entry)?)?;
+        }
+        Ok(())
+    }
+}
+
 /// The shared job service owns admission and processing. An explicit host composition supplies
 /// the native extractor before the feature is made available to product UI and tools.
 pub struct DocumentIndexer {
@@ -279,11 +417,11 @@ impl DocumentIndexer {
             project_id: artifact.scope.project().cloned(),
             root_id: ctx.root_id().cloned(),
             operation_id: None,
-            aggregate_kind: "document".into(),
-            aggregate_id: document.as_str().into(),
-            aggregate_revision: artifact.revision,
+            aggregate_kind: "document_index_run".into(),
+            aggregate_id: run.as_str().into(),
+            aggregate_revision: 1,
             kind: "DocumentIndexQueued".into(),
-            payload: json!({"runId":run,"versionId":id}),
+            payload: json!({"documentId":document,"versionId":id}),
         })?;
         tx.queue().enqueue(NewQueueEntry {
             id: run.clone(),
@@ -472,13 +610,18 @@ impl DocumentIndexer {
                 tx.documents()
                     .set_document_retrieval(&saved.source.artifact_id, true)?;
             }
-            settle(
-                tx,
-                &claimed,
-                &saved,
-                "DocumentIndexPublished",
+            let event = if index.stage == DocumentIndexStage::Partial {
+                "DocumentIndexPartiallyPublished"
+            } else {
+                "DocumentIndexPublished"
+            };
+            record_run(tx, &claimed, &saved, &saved.actor, event, None)?;
+            tx.queue().settle(
+                &claimed.id,
+                &claimed.fence().ok_or_else(invalid)?,
                 Settlement::Completed,
-            )
+            )?;
+            Ok(())
         })
     }
 
@@ -497,28 +640,45 @@ impl DocumentIndexer {
             if interrupted && !cancelled {
                 return Err(StorageError::Cancelled); // owner shutdown; preserve the checkpoint
             }
+            let fence = entry.fence().ok_or_else(invalid)?;
+            if cancelled {
+                mark_cancelled(tx, &entry, &job)?;
+                record_run(
+                    tx,
+                    &actual,
+                    &job,
+                    &job.actor,
+                    "DocumentIndexCancelled",
+                    None,
+                )?;
+                tx.queue()
+                    .settle(&entry.id, &fence, Settlement::Cancelled)?;
+                return Ok(());
+            }
+            let reason = reason.unwrap_or_else(|| code("IndexFailed"));
             if let Some(mut index) = tx.documents().document_index(&job.source.version_id)?
                 && index.latest == entry.id
                 && index.stage != DocumentIndexStage::Removed
             {
-                index.stage = if cancelled {
-                    DocumentIndexStage::Cancelled
-                } else {
-                    DocumentIndexStage::Failed
-                };
-                index.diagnostic = if cancelled {
-                    Some(code("IndexCancelled"))
-                } else {
-                    reason
-                };
+                index.stage = DocumentIndexStage::Failed;
+                index.diagnostic = Some(reason.clone());
                 tx.documents().put_document_index(&index)?;
             }
-            let (event, outcome) = if cancelled {
-                ("DocumentIndexCancelled", Settlement::Cancelled)
-            } else {
-                ("DocumentIndexFailed", Settlement::Completed)
-            };
-            settle(tx, &entry, &job, event, outcome)
+            record_run(
+                tx,
+                &actual,
+                &job,
+                &job.actor,
+                "DocumentIndexFailed",
+                Some(&reason),
+            )?;
+            tx.queue().fail(
+                &entry.id,
+                &fence,
+                reason.as_str(),
+                FailureDisposition::Terminal,
+            )?;
+            Ok(())
         })
     }
 }
@@ -546,29 +706,29 @@ fn current_claim(
         })
 }
 
-fn settle(
+fn record_run(
     tx: &mut dyn WriteTransaction,
     entry: &QueueEntry,
     job: &Job,
+    actor: &ActorId,
     event: &str,
-    outcome: Settlement,
+    diagnostic: Option<&Id>,
 ) -> Result<(), StorageError> {
     let origin = tx.history().event(&entry.event_id)?.ok_or_else(invalid)?;
     let event_id = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
         id: event_id,
-        actor: job.actor.clone(),
+        actor: actor.clone(),
         project_id: origin.project_id,
         root_id: entry.root_id.clone(),
         operation_id: None,
-        aggregate_kind: "document".into(),
-        aggregate_id: job.source.artifact_id.as_str().into(),
-        aggregate_revision: job.artifact_revision,
+        aggregate_kind: "document_index_run".into(),
+        aggregate_id: entry.id.as_str().into(),
+        aggregate_revision: entry.revision,
         kind: event.into(),
-        payload: json!({"runId":entry.id, "versionId":job.source.version_id}),
+        payload: json!({"documentId":job.source.artifact_id,
+            "versionId":job.source.version_id,"diagnostic":diagnostic}),
     })?;
-    tx.queue()
-        .settle(&entry.id, &entry.fence().ok_or_else(invalid)?, outcome)?;
     Ok(())
 }
 
