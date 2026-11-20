@@ -889,7 +889,7 @@ pub enum RetrievalInput {
         float32_le: ArtifactRef,
     },
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum RetrievalMode {
     Lexical,
     Vector,

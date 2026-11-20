@@ -59,6 +59,8 @@ impl DocumentProcessor for TextDocuments {
 struct LoseFirstAcknowledgement {
     native: Arc<NativeEmbeddings>,
     first: AtomicBool,
+    first_observation: AtomicBool,
+    send_calls: AtomicUsize,
 }
 impl ConventionEmbeddings for LoseFirstAcknowledgement {
     fn is_available(&self) -> bool {
@@ -77,6 +79,7 @@ impl ConventionEmbeddings for LoseFirstAcknowledgement {
         ctx: &InvocationContext,
         request: EmbeddingRequest,
     ) -> Result<EmbeddedBatch, EmbeddingFailure> {
+        self.send_calls.fetch_add(1, Ordering::SeqCst);
         let result = self.native.embed(ctx, request)?;
         if self.first.swap(false, Ordering::SeqCst) {
             Err(EmbeddingFailure::Unknown {
@@ -93,6 +96,13 @@ impl ConventionEmbeddings for LoseFirstAcknowledgement {
         ctx: &InvocationContext,
         request: EmbeddingRequest,
     ) -> Result<EmbeddedBatch, EmbeddingFailure> {
+        if self.first_observation.swap(false, Ordering::SeqCst) {
+            return Err(EmbeddingFailure::Unknown {
+                request_id: request.request_id,
+                reason: "The original closed outcome is not visible on the first observation"
+                    .into(),
+            });
+        }
         self.native.observe(ctx, request)
     }
 }
@@ -290,10 +300,13 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
     let b = human
         .clone()
         .with_lineage(Some(ProjectId(id("documents-b"))), None, None);
-    embeddings.set_embeddings(Some(Arc::new(LoseFirstAcknowledgement {
+    let controlled = Arc::new(LoseFirstAcknowledgement {
         native,
         first: AtomicBool::new(true),
-    })));
+        first_observation: AtomicBool::new(true),
+        send_calls: AtomicUsize::new(0),
+    });
+    embeddings.set_embeddings(Some(controlled.clone()));
     let indexer = Arc::new(
         DocumentIndexer::new(
             f.store.clone(),
@@ -324,7 +337,7 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
         "mode":"Command","requestKey":"native-index","body":{"kind":"documents.index",
             "documentId":note.id,"versionId":exact.version_id,"expectedRevision":note.revision}}),
     );
-    let OperationResult::DocumentsIndex { .. } = result else {
+    let OperationResult::DocumentsIndex { value: run } = result else {
         panic!("{result:?}")
     };
     push(&f);
@@ -332,6 +345,52 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
     runtime()
         .block_on(within("document embeddings", dispatcher.run_until_idle()))
         .unwrap();
+    let pending = read(f.store.as_ref(), |r| r.queue().entry(&run.id)).unwrap();
+    assert_eq!(pending.state, QueueState::Reconciling);
+    assert_eq!(
+        pending.last_error.as_deref(),
+        Some("EmbeddingOutcomeUnknown")
+    );
+    let partial = read(f.store.as_ref(), |r| {
+        r.documents().document_index(&exact.version_id)
+    })
+    .unwrap();
+    assert_eq!(partial.stage, DocumentIndexStage::Partial);
+    let direct = page(search(
+        &f,
+        &cases,
+        &a,
+        "held-direct-text",
+        json!({"kind":"Text","text":"botanical"}),
+        ("Hybrid", true),
+        &[],
+    ));
+    assert!(matches!(direct.effective_mode, RetrievalMode::Lexical));
+    assert_eq!(direct.passages[0].text, "Exact botanical passage.");
+
+    let retry = command(
+        &f,
+        &cases,
+        &a,
+        "documents.retry",
+        json!({"protocol":"1.0-draft.1",
+        "mode":"Command","requestKey":"native-reconcile-index","body":{"kind":"documents.retry",
+            "documentId":note.id,"versionId":exact.version_id,"expectedRevision":note.revision}}),
+    );
+    let OperationResult::DocumentsRetry { value: resumed } = retry else {
+        panic!("{retry:?}")
+    };
+    assert_eq!(
+        resumed.id, run.id,
+        "a held outcome may only observe its original delivery"
+    );
+    runtime()
+        .block_on(within(
+            "document embedding observation",
+            dispatcher.run_until_idle(),
+        ))
+        .unwrap();
+
     let status = read(f.store.as_ref(), |r| {
         r.documents().document_index(&exact.version_id)
     })
@@ -340,7 +399,12 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
     assert_eq!(
         sent(&f),
         2,
-        "one probe and one index batch despite the lost acknowledgement"
+        "one probe and one index batch across the held outcome and its reconciliation"
+    );
+    assert_eq!(
+        controlled.send_calls.load(Ordering::SeqCst),
+        1,
+        "reconciliation uses observation only"
     );
     let indexed = captured(&f, "DocumentIndex");
     assert_eq!(indexed.len(), 1);
@@ -366,6 +430,35 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
     .unwrap();
     let input_artifact: ArtifactRef =
         serde_json::from_value(capture_metadata.input_refs[0].clone()).unwrap();
+    let outputs = read(f.store.as_ref(), |r| {
+        r.history().page(
+            &EventFilter::Aggregate {
+                kind: "provider_output".into(),
+                id: attempt.attempt_id.as_str().into(),
+            },
+            0,
+            10,
+        )
+    });
+    let output_refs: Vec<ArtifactRef> = serde_json::from_value(
+        outputs
+            .events
+            .iter()
+            .find(|event| event.kind == "ProviderEmbeddingResultRecorded")
+            .unwrap()
+            .payload["artifacts"]
+            .clone(),
+    )
+    .unwrap();
+    assert_eq!(output_refs.len(), 2);
+    for output in &output_refs {
+        let (_, provenance) = f
+            .artifacts
+            .read_exact(f.store.as_ref(), &a, output, 65536)
+            .unwrap();
+        assert_eq!(provenance["derived"]["kind"], "DocumentEmbeddingOutput");
+        assert_eq!(provenance["derived"]["documentSource"], json!(exact));
+    }
     let captured_bytes = f
         .artifacts
         .read_exact(f.store.as_ref(), &a, &input_artifact, 4096)
@@ -494,6 +587,48 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
     assert!(fallback.passages.is_empty());
     assert_eq!(sent(&f), 3);
 
+    for fallback in [false, true] {
+        let (store, document) = (f.store.clone(), note.id.clone());
+        f.http.lock().unwrap().after_open = Some(Arc::new(move || {
+            let document = document.clone();
+            write(store.as_ref(), move |tx| {
+                tx.documents().set_document_retrieval(&document, false)
+            })
+            .unwrap();
+        }));
+        push(&f);
+        let result = search(
+            &f,
+            &cases,
+            &a,
+            if fallback {
+                "mode-with-fallback"
+            } else {
+                "mode-without-fallback"
+            },
+            json!({"kind":"Text","text":"lexical term"}),
+            ("Hybrid", fallback),
+            &[],
+        );
+        f.http.lock().unwrap().after_open = None;
+        if fallback {
+            let result = page(result);
+            assert_eq!(result.effective_mode, RetrievalMode::Lexical);
+            assert!(result.space.is_none());
+            assert_eq!(result.passages[0].text, "A lexical term.");
+        } else {
+            assert!(
+                matches!(&result, DomainQueryReply::Rejected { fault, .. }
+                if fault.code == DomainErrorCode::ViewUnavailable),
+                "{result:?}"
+            );
+        }
+        let document = note.id.clone();
+        write(f.store.as_ref(), move |tx| {
+            tx.documents().set_document_retrieval(&document, true)
+        })
+        .unwrap();
+    }
     command(
         &f,
         &cases,
@@ -583,8 +718,8 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
     assert_eq!(historical.passages[0].text, "Exact botanical passage.");
     assert_eq!(
         sent(&f),
-        3,
-        "typed vectors and empty scopes never start provider work"
+        5,
+        "only the two explicitly requested text queries added provider work"
     );
 
     let current = read(f.store.as_ref(), |r| r.artifacts().artifact(&note.id)).unwrap();
@@ -616,14 +751,52 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
             moved_plan.unresolved
         );
     }
-    let copied_key = devworks_core::fingerprint::sha256_hex(
-        json!([input_artifact.artifact_id]).to_string().as_bytes(),
-    );
-    assert!(
-        moved_plan.rows.iter().any(|row| row.table == "artifacts"
-            && row.key_digest == copied_key
-            && row.action == ProjectPurgeRowAction::Delete),
-        "purge follows the moved original to its captured input bytes: {:?}",
-        moved_plan.unresolved
-    );
+    for artifact in std::iter::once(&input_artifact).chain(&output_refs) {
+        assert!(matches!(
+            f.artifacts
+                .read_exact(f.store.as_ref(), &a, artifact, 65536),
+            Err(devworks_core::services::artifacts::lifecycle::ExactReadRefusal::NotFound)
+        ));
+        let key = devworks_core::fingerprint::sha256_hex(
+            json!([artifact.artifact_id]).to_string().as_bytes(),
+        );
+        assert!(
+            moved_plan.rows.iter().any(|row| row.table == "artifacts"
+                && row.key_digest == key
+                && row.action == ProjectPurgeRowAction::Delete),
+            "the moved document owns captured input and output bytes: {:?}",
+            moved_plan.unresolved
+        );
+    }
+}
+
+#[test]
+fn deselecting_a_qualified_space_invalidates_the_native_send_fence() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (ctx, _native, _index) = qualify(&f);
+    let resolved = read(f.store.as_ref(), |read| {
+        embedding_spaces::resolve_selected_read(read, &ctx)
+    });
+    let connection_revision = resolved.binding().unwrap().connection().revision;
+    let fences = [devworks_core::ports::AuthorityFence::QualifiedEmbedding {
+        source_digest: resolved.source_digest().to_owned(),
+    }];
+    write(f.store.as_ref(), move |tx| {
+        assert!(devworks_core::authority::service::inference_fences_hold(
+            tx, &ctx, &fences
+        )?);
+        let selection = tx.router().embedding_selection()?;
+        tx.router()
+            .select_embedding_candidate(selection.revision, None)?;
+        assert_eq!(
+            tx.router().connection(&id("connection"))?.unwrap().revision,
+            connection_revision
+        );
+        assert!(!devworks_core::authority::service::inference_fences_hold(
+            tx, &ctx, &fences
+        )?);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(sent(&f), 1, "only the qualification probe used transport");
 }

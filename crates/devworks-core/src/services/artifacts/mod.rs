@@ -349,7 +349,7 @@ pub(crate) fn visible_in(
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
     if artifact.provenance["principalKind"] == "Host"
-        && DerivedKind::DocumentEmbeddingInput.is_in(&artifact.provenance)
+        && DerivedKind::of(&artifact.provenance).is_some_and(DerivedKind::is_document_embedding)
     {
         let Ok(source) = serde_json::from_value::<ArtifactRef>(
             artifact.provenance["derived"]["documentSource"].clone(),
@@ -359,7 +359,8 @@ pub(crate) fn visible_in(
         let Some(document) = read.artifact(&source.artifact_id)?.filter(|document| {
             document.state == ArtifactState::Live
                 && document.provenance["managedDocument"].as_bool() == Some(true)
-                && !DerivedKind::DocumentEmbeddingInput.is_in(&document.provenance)
+                && !DerivedKind::of(&document.provenance)
+                    .is_some_and(DerivedKind::is_document_embedding)
         }) else {
             return Ok(false);
         };
@@ -570,6 +571,11 @@ pub(crate) fn retained_convention(
                     .as_str()
                     .is_some_and(|s| !s.is_empty())
                 && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
+        }
+        DerivedKind::DocumentEmbeddingOutput => {
+            id("requestId")
+                && id("attemptId")
+                && serde_json::from_value::<ArtifactRef>(derived["documentSource"].clone()).is_ok()
         }
         DerivedKind::HelpTopic
         | DerivedKind::Instruction

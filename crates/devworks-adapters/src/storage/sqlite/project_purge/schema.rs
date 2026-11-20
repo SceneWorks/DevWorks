@@ -63,7 +63,7 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// that block's retained version. FTS5 segments follow the projection and are maintained
 /// by the virtual table when a canonical lexical row changes.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "c6324f9ec7c5e0bd166c1e8664c4ccc0f774a512605f1a213a7ee3377a220c18";
+    "82d42f73f2db15e209de82c4233b388f3bca87369f0a4e93cb0edebeca3f1e17";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

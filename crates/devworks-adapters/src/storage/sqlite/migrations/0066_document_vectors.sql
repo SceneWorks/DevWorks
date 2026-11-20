@@ -21,6 +21,7 @@ CREATE TABLE document_vectors (
  FOREIGN KEY(space_id,dimensions) REFERENCES embedding_spaces(id,dimensions)
 ) STRICT;
 CREATE INDEX document_vectors_extraction ON document_vectors(extraction_id,space_id);
+CREATE INDEX document_vectors_space ON document_vectors(space_id,block_id);
 
 -- The derivative rows must be removed before migration 64's tombstone trigger retires
 -- their extraction. Project purge already removes every prepared row in dependency order.

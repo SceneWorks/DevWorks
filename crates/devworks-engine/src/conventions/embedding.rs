@@ -779,6 +779,11 @@ impl NativeEmbeddings {
             deadline_ms: timeout,
         })?;
         invocation.source_fences = request.fences.clone();
+        invocation
+            .source_fences
+            .push(devworks_core::ports::AuthorityFence::QualifiedEmbedding {
+                source_digest: resolved.source_digest().to_owned(),
+            });
         let completed = self.produce(ctx, provider, invocation, token.clone(), observe, || {
             token.is_cancelled() || start.elapsed() >= Duration::from_millis(u64::from(timeout))
         });

@@ -81,6 +81,8 @@ pub struct DocumentCandidate {
 
 pub struct DocumentRankingBatch {
     pub candidates: Vec<DocumentCandidate>,
+    /// A compatible vector was scored inside the bounded eligible prefix.
+    pub used_vectors: bool,
     pub work_limited: bool,
 }
 

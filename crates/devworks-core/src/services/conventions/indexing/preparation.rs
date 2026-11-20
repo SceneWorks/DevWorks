@@ -161,6 +161,18 @@ impl IndexService {
         origin: &EmbeddingOrigin,
         configuration_source_digest: &str,
     ) -> Result<(), StorageError> {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            self.validate_query_custody_in(read, ctx, origin, configuration_source_digest)
+        })
+    }
+
+    pub(crate) fn validate_query_custody_in(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        origin: &EmbeddingOrigin,
+        configuration_source_digest: &str,
+    ) -> Result<(), StorageError> {
         let EmbeddingOrigin::Query {
             query_id,
             fingerprint,
@@ -173,19 +185,17 @@ impl IndexService {
             "context": stable_context(ctx)?,
             "configuration": configuration_source_digest
         }))?;
-        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-            let Some(op) = self.query_preparation(read, ctx, query_id, fingerprint)? else {
-                return Ok(());
-            };
-            if op.payload["origin"]["scopeDigest"] != scope_digest.as_str()
-                || op.payload["contextDigest"] != context_digest
-                || op.payload["requestId"]
-                    != json!(identity("cemb_", &query_key(ctx, query_id, fingerprint)?))
-            {
-                return Err(StorageError::CursorExpired);
-            }
-            Ok(())
-        })
+        let Some(op) = self.query_preparation(read, ctx, query_id, fingerprint)? else {
+            return Ok(());
+        };
+        if op.payload["origin"]["scopeDigest"] != scope_digest.as_str()
+            || op.payload["contextDigest"] != context_digest
+            || op.payload["requestId"]
+                != json!(identity("cemb_", &query_key(ctx, query_id, fingerprint)?))
+        {
+            return Err(StorageError::CursorExpired);
+        }
+        Ok(())
     }
     /// Exact winner refs are reused across retries; concurrent losing files never become
     /// artifact rows. No source/provider bytes are read inside the publishing transaction.
@@ -334,7 +344,12 @@ impl IndexService {
             source,
             cancellation.clone(),
         );
-        let prior = self.write(move |tx| {
+        let options = WriteOptions {
+            cancellation: Some(cancellation.clone()),
+            deadline_ms,
+            ..WriteOptions::host_state()
+        };
+        let prior = self.write_options(options.clone(), move |tx| {
             if cancelled.is_cancelled() || deadline_ms.is_some_and(|d| tx.now_ms() >= d) {
                 return Err(StorageError::Cancelled);
             }
@@ -487,7 +502,7 @@ impl IndexService {
             cancellation.clone(),
         );
         let now = self.clock.now_ms().get();
-        let result = self.write(move |tx| {
+        let result = self.write_options(options, move |tx| {
             if cancellation.is_cancelled() || deadline_ms.is_some_and(|d| tx.now_ms() >= d) {
                 return Err(StorageError::Cancelled);
             }

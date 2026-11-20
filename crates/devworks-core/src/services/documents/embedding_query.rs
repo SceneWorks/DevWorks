@@ -6,7 +6,7 @@ use crate::{
     gateway::AdmittedQuery,
     ports::{
         Preparation,
-        storage::{ReadSnapshot, StorageError, WriteOptions},
+        storage::{ReadOptions, ReadSnapshot, StorageError, WriteOptions},
     },
     protocol::{
         DomainErrorCode,
@@ -97,6 +97,11 @@ pub(super) fn prepare(
         };
     };
     let env = Preparation::new(runtime.store.as_ref(), env.cancellation, Some(deadline_ms));
+    let origin = EmbeddingOrigin::Query {
+        query_id: query.query_id().0.clone(),
+        fingerprint: query.fingerprint().as_str().into(),
+        scope_digest: query.fingerprint().as_str().into(),
+    };
     let (configuration, space, searchable) = env.read(|read| {
         Ok((|| {
             if !crate::authority::authorization_holds(read, query.authorization())? {
@@ -110,25 +115,22 @@ pub(super) fn prepare(
                 matches!(request.input, RetrievalInput::Vector { .. })
                     || runtime.native_available(),
             );
+            runtime.validate_query_custody_in(read, ctx, &origin, &configuration.source_digest)?;
             let space = resolved.binding().map(|binding| binding.space().clone());
             let searchable = match (&configuration.space, &space) {
-                (Some(_), Some(space)) => read.documents().has_document_vectors(
-                    &scope,
-                    (!viewer.sees_owned(None)).then_some(ctx.principal()),
-                    exact.as_deref(),
-                    &space.space_id,
-                )?,
+                (Some(_), Some(space)) if matches!(request.input, RetrievalInput::Text { .. }) => {
+                    read.documents().has_document_vectors(
+                        &scope,
+                        (!viewer.sees_owned(None)).then_some(ctx.principal()),
+                        exact.as_deref(),
+                        &space.space_id,
+                    )?
+                }
                 _ => false,
             };
             Ok::<_, Failure>((configuration, space, searchable))
         })())
     })??;
-    let origin = EmbeddingOrigin::Query {
-        query_id: query.query_id().0.clone(),
-        fingerprint: query.fingerprint().as_str().into(),
-        scope_digest: query.fingerprint().as_str().into(),
-    };
-    runtime.validate_query_custody(ctx, &origin, &configuration.source_digest)?;
     let (Some(selected), Some(space)) = (configuration.space, space) else {
         return if allow_fallback {
             Ok(prepared)
@@ -150,19 +152,33 @@ pub(super) fn prepare(
                 .into());
             }
             let (bytes, _) = artifacts
-                .read_exact(
+                .read_exact_with_options(
                     runtime.store.as_ref(),
                     ctx,
                     float32_le,
                     u64::from(space.dimensions) * 4,
+                    &ReadOptions {
+                        cancellation: env.cancellation.cloned(),
+                        deadline_ms: Some(deadline_ms),
+                    },
                 )
                 .map_err(|error| match error {
                     ExactReadRefusal::Storage(error) => Failure::Storage(error),
                     _ => unavailable().into(),
                 })?;
-            let vector = bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("four bytes")))
+            let (chunks, trailing) = bytes.as_chunks::<4>();
+            if !trailing.is_empty() {
+                return Err(Refusal::new(
+                    DomainErrorCode::InvalidArgument,
+                    "document_query_vector",
+                    None,
+                )
+                .into());
+            }
+            let vector = chunks
+                .iter()
+                .copied()
+                .map(f32::from_le_bytes)
                 .collect::<Vec<_>>();
             (vector, Some(float32_le.clone()))
         }

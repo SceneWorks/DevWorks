@@ -743,7 +743,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 57,
         minimum_writer: 66,
         sql: include_str!("migrations/0066_document_vectors.sql"),
-        expected_sha256: "a1d3886312c07151390a705c032484f64ecd762b16c0965801ee2e9e79ba149e",
+        expected_sha256: "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
         rebuilds_tables: false,
     },
 ];

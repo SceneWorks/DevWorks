@@ -168,6 +168,8 @@ pub enum AuthorityFence {
     Principal { actor: ActorId, revision: i64 },
     /// The claimed document index delivery still owns this exact source and lease.
     DocumentIndex { run: Id, generation: i64 },
+    /// Qualified selection required at native embedding admission and egress.
+    QualifiedEmbedding { source_digest: String },
     /// Digest of the access-relevant effective policy of the invocation's scope.
     Policy {
         project_id: Option<ProjectId>,

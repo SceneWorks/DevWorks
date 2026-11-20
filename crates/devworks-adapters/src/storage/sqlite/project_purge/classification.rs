@@ -388,7 +388,7 @@ fn content_partitions(
         ),
         (
             "artifacts",
-            "id IN(SELECT id FROM ownedDocumentInputArtifacts)",
+            "id IN(SELECT id FROM ownedDocumentEmbeddingArtifacts)",
             Action::Delete,
             Reason::OwnedLineage,
         ),

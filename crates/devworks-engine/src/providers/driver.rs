@@ -721,6 +721,12 @@ impl NativeProviders {
             owner: self.clone(),
             context: context.clone(),
             request: request.clone(),
+            document_index: source_fences.iter().find_map(|fence| match fence {
+                devworks_core::ports::AuthorityFence::DocumentIndex { run, generation } => {
+                    Some((run.clone(), *generation))
+                }
+                _ => None,
+            }),
             instruction_targets,
             shared,
             result: result.clone(),
@@ -1295,7 +1301,11 @@ impl OwnedInferenceSource for LazySource {
                     if let Some(fence) = &context_head_fence {
                         fence.check(tx)?;
                     }
-                    if !devworks_core::authority::fences_hold(tx, &source_fences)? {
+                    if !devworks_core::authority::service::inference_fences_hold(
+                        tx,
+                        &context,
+                        &source_fences,
+                    )? {
                         return Err(StorageError::ScopeDenied);
                     }
                     let connection = tx
@@ -1351,6 +1361,7 @@ struct LazySink {
     owner: Arc<NativeProviders>,
     context: InvocationContext,
     request: InferenceRequest,
+    document_index: Option<(devworks_core::protocol::Id, i64)>,
     instruction_targets: Option<InstructionTargets>,
     shared: SharedPrepared,
     result: ResultChannel,
@@ -1390,6 +1401,7 @@ impl LazySink {
                         InferenceInput::Generation { context, .. } => Some(context.clone()),
                         InferenceInput::Embedding { .. } => None,
                     },
+                    document_index: self.document_index.clone(),
                     instruction_targets: self.instruction_targets.clone(),
                 },
                 embedding,

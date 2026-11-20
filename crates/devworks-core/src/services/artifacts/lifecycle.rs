@@ -456,13 +456,40 @@ impl ArtifactService {
         reference: &ArtifactRef,
         max: u64,
     ) -> Result<(Vec<u8>, Value), ExactReadRefusal> {
+        self.read_exact_with_options(store, ctx, reference, max, &ReadOptions::default())
+    }
+
+    /// Read a local exact artifact within the caller's snapshot and I/O deadline.
+    pub fn read_exact_with_options(
+        &self,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        reference: &ArtifactRef,
+        max: u64,
+        options: &ReadOptions,
+    ) -> Result<(Vec<u8>, Value), ExactReadRefusal> {
+        let check = || {
+            if options
+                .cancellation
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+                || options
+                    .deadline_ms
+                    .is_some_and(|deadline| self.clock.now_ms().get() >= deadline)
+            {
+                Err(ExactReadRefusal::Storage(StorageError::Cancelled))
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
         let digest = String::from(reference.sha256.clone());
         let length = reference.byte_length.get() as u64;
         if length > max {
             return Err(ExactReadRefusal::TooLarge { bytes: length, max });
         }
         let hold = self.readers.acquire(&digest);
-        let found = read_snapshot(store, &ReadOptions::default(), |s| {
+        let found = read_snapshot(store, options, |s| {
             let read = s.artifacts();
             let viewer = Viewer::resolve(s.authority(), ctx)?;
             let Some(a) = read.artifact(&reference.artifact_id)? else {
@@ -486,16 +513,24 @@ impl ArtifactService {
         let Some((generation, provenance)) = found else {
             return Err(ExactReadRefusal::NotFound);
         };
-        let mut reader = self
+        check()?;
+        let reader = self
             .files
             .open(&digest, &generation, length)
             .map_err(|_| ExactReadRefusal::Unreadable)?;
+        let mut reader = reader.take(max.saturating_add(1));
         let mut bytes = Vec::with_capacity(length as usize);
-        reader
-            .by_ref()
-            .take(max + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ExactReadRefusal::Unreadable)?;
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            check()?;
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return Err(ExactReadRefusal::Unreadable),
+            }
+        }
+        check()?;
         drop(hold);
         if bytes.len() as u64 != length || sha256_hex(&bytes) != digest {
             return Err(ExactReadRefusal::Unreadable);

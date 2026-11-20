@@ -61,7 +61,9 @@ pub(super) fn search(
         query_id: request.query_id.clone(),
         stamp: stamp(snapshot, ctx),
         generation_ids: vec![],
-        space: dense.map(|dense| dense.space.clone()),
+        space: dense
+            .filter(|_| effective_mode != RetrievalMode::Lexical)
+            .map(|dense| dense.space.clone()),
         effective_mode,
         completion,
         passages: vec![],
@@ -117,7 +119,7 @@ fn rank(
             );
         }
     };
-    let effective_mode = match (dense.is_some(), words.is_empty()) {
+    let mut effective_mode = match (dense.is_some(), words.is_empty()) {
         (false, _) => RetrievalMode::Lexical,
         (true, false) => RetrievalMode::Hybrid,
         (true, true) => RetrievalMode::Vector,
@@ -146,6 +148,16 @@ fn rank(
             max_blocks,
             max_results: request.limits.max_results,
         })?;
+    if effective_mode == RetrievalMode::Hybrid && !batch.used_vectors {
+        // The last compatible posting can disappear during provider work, or lie outside
+        // the allowed prefix. These scores are sparse-only and retain their existing bound.
+        if !request.lexical_fallback {
+            return Err(
+                Refusal::new(DomainErrorCode::ViewUnavailable, "document_embedding", None).into(),
+            );
+        }
+        effective_mode = RetrievalMode::Lexical;
+    }
     let limit = usize::from(request.limits.max_results);
     let completion = if batch.work_limited {
         QueryCompletion::WorkLimit
@@ -358,8 +370,11 @@ fn check_result_scope(
     let (scope, viewer) = audience(snapshot, ctx, request)?;
     // Even a passage omitted by the limit can influence the ranking or completion. Repeat the
     // bounded selection on the publication snapshot without reopening any passage text.
-    let (candidates, completion, _) = rank(snapshot, ctx, request, &scope, &viewer, dense)?;
-    if candidates.len() != result.passages.len() || completion != result.completion {
+    let (candidates, completion, mode) = rank(snapshot, ctx, request, &scope, &viewer, dense)?;
+    if candidates.len() != result.passages.len()
+        || completion != result.completion
+        || mode != result.effective_mode
+    {
         return Ok(false);
     }
     for (candidate, passage) in candidates.iter().zip(&result.passages) {

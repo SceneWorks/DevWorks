@@ -165,10 +165,11 @@ fn has_vectors(
 ) -> Result<bool, StorageError> {
     let exact = exact_versions.map(|ids| encode(&ids)).transpose()?;
     let sql = format!(
-        "SELECT EXISTS (SELECT 1 {SCOPED_POSTINGS} AND EXISTS(
-          SELECT 1 FROM document_vectors d WHERE d.block_id=b.id AND d.space_id=?4
-            AND EXISTS (SELECT 1 FROM document_embedding_runs r
-              WHERE r.extraction_id=e.id AND r.space_id=?4 AND r.complete=1)))"
+        "SELECT EXISTS (SELECT 1 FROM document_vectors d INDEXED BY document_vectors_space
+           WHERE d.space_id=?4 AND EXISTS(
+             SELECT 1 {SCOPED_POSTINGS} AND l.block_id=d.block_id
+               AND EXISTS (SELECT 1 FROM document_embedding_runs r
+                           WHERE r.extraction_id=e.id AND r.space_id=?4 AND r.complete=1)))"
     );
     db(db(conn.prepare_cached(&sql))?.query_row(
         params![
@@ -235,7 +236,7 @@ fn ranked(
            SELECT * FROM scores WHERE score>0
             ORDER BY score DESC,version_id,ordinal,block LIMIT (?6+1)
          )
-         SELECT (SELECT COUNT(*) FROM eligible)>?5, r.checkpoint,r.block,r.generation
+         SELECT (SELECT COUNT(*) FROM eligible)>?5, r.checkpoint,r.block,r.generation, EXISTS(SELECT 1 FROM dense)
            FROM (SELECT 1) LEFT JOIN ranked r ON TRUE
           ORDER BY r.score DESC,r.version_id,r.ordinal,r.block",
     );
@@ -255,9 +256,11 @@ fn ranked(
     let mut batch = DocumentRankingBatch {
         candidates: Vec::new(),
         work_limited: false,
+        used_vectors: false,
     };
     while let Some(row) = db(rows.next())? {
         batch.work_limited = db(row.get(0))?;
+        batch.used_vectors = db(row.get(4))?;
         if let Some(checkpoint) = db(row.get::<_, Option<String>>(1))? {
             batch.candidates.push(DocumentCandidate {
                 checkpoint: id_of(checkpoint)?,
