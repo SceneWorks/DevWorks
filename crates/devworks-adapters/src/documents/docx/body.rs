@@ -1,6 +1,6 @@
 use super::{
     DocxError, DocxLimits, WordBody, WordCell, WordCoverageIssue, WordLink, WordLinkTarget,
-    WordMerge, WordParagraph,
+    WordMerge, WordParagraph, WordStoryKind,
     fields::{self, MAX_CODE_BYTES},
     numbering::Numbering,
     opc::{self, Relationships, Target},
@@ -52,6 +52,7 @@ struct TableRow {
     number: u32,
     column: u32,
     horizontal: Option<Id>,
+    deleted: bool,
     next_vertical: BTreeMap<(u32, u32), Id>,
 }
 
@@ -59,6 +60,7 @@ struct Table {
     id: u32,
     row: TableRow,
     cell: Option<WordCell>,
+    deleted_cell: bool,
     vertical: BTreeMap<(u32, u32), Id>,
 }
 
@@ -68,6 +70,7 @@ struct FieldCapture {
 }
 
 struct Reader<'a, 'scope> {
+    kind: WordStoryKind,
     source: &'a ExtractionInput<'scope>,
     relations: &'a Relationships,
     styles: &'a Styles,
@@ -93,14 +96,16 @@ struct Reader<'a, 'scope> {
 
 pub(super) fn read(
     bytes: &[u8],
-    part: &str,
+    part: (&str, WordStoryKind),
     source: &ExtractionInput<'_>,
     relations: &Relationships,
     styles: (&Styles, &Numbering),
     limits: &DocxLimits,
     control: &ExtractionControl<'_>,
 ) -> Result<WordBody, DocxError> {
+    let (part, kind) = part;
     let mut reader = Reader {
+        kind,
         source,
         relations,
         styles: styles.0,
@@ -112,6 +117,7 @@ pub(super) fn read(
             paragraphs: Vec::new(),
             cells: Vec::new(),
             coverage_issues: Default::default(),
+            normalized_bytes: 0,
         },
         word: WORD,
         frames: Vec::new(),
@@ -144,6 +150,7 @@ pub(super) fn read(
         .body
         .cells
         .sort_by_key(|cell| (cell.table, cell.row, cell.column));
+    reader.body.normalized_bytes = reader.normalized_bytes;
     Ok(reader.body)
 }
 
@@ -185,7 +192,9 @@ impl Reader<'_, '_> {
                 Frame::Cell => self.finish_cell()?,
                 Frame::Row => {
                     let table = self.table()?;
-                    table.vertical = std::mem::take(&mut table.row.next_vertical);
+                    if !table.row.deleted {
+                        table.vertical = std::mem::take(&mut table.row.next_vertical);
+                    }
                 }
                 Frame::Table => {
                     self.tables.pop();
@@ -208,18 +217,46 @@ impl Reader<'_, '_> {
                 WORD_STRICT => WORD_STRICT,
                 _ => return Err(invalid),
             };
-            return if name.local == "document" {
-                Ok(Document)
-            } else {
-                Err(invalid)
-            };
+            if name.local != self.kind.root() {
+                return Err(invalid);
+            }
+            if self.kind == WordStoryKind::Main {
+                return Ok(Document);
+            }
+            self.inside_body = true;
+            self.seen_body = true;
+            return Ok(Body);
         }
-        if depth == 2 && name.is(self.word, "body") {
+        if depth == 2 && self.kind == WordStoryKind::Main && name.is(self.word, "body") {
             if std::mem::replace(&mut self.seen_body, true) {
                 return Err(invalid);
             }
             self.inside_body = true;
             return Ok(Body);
+        }
+        if depth == 2
+            && let Some(expected) = self.kind.entry_element()
+        {
+            if name.ns != self.word {
+                return Ok(Skip);
+            }
+            if name.local != expected {
+                return Err(invalid);
+            }
+            self.headings = Arc::from([]);
+            if !self.fields.is_empty() {
+                self.fields.clear();
+                self.body
+                    .coverage_issues
+                    .insert(WordCoverageIssue::FieldCode);
+            }
+            let separator = matches!(
+                self.kind,
+                WordStoryKind::Footnotes | WordStoryKind::Endnotes
+            ) && element
+                .attr(self.word, "type")
+                .is_some_and(|kind| kind != "normal");
+            return Ok(if separator { Skip } else { Wrapper });
         }
         if !self.inside_body {
             return Ok(Skip);
@@ -261,6 +298,11 @@ impl Reader<'_, '_> {
             return Ok(Skip);
         }
 
+        if (parent == Row && self.table()?.row.deleted && name.local != "trPr")
+            || (parent == Cell && self.table()?.deleted_cell && name.local != "tcPr")
+        {
+            return Ok(Skip);
+        }
         let frame = match (parent, name.local) {
             (Body | Cell, "p") => {
                 if self.paragraph.is_some() {
@@ -281,6 +323,7 @@ impl Reader<'_, '_> {
                     id: self.table_count,
                     row: TableRow::initial(),
                     cell: None,
+                    deleted_cell: false,
                     vertical: BTreeMap::new(),
                 });
                 Table
@@ -306,6 +349,14 @@ impl Reader<'_, '_> {
             }
             (Row, "trPr") => RowProperties,
             (Cell, "tcPr") => CellProperties,
+            (RowProperties, "del") => {
+                self.table()?.row.deleted = true;
+                Skip
+            }
+            (CellProperties, "cellDel") => {
+                self.table()?.deleted_cell = true;
+                Skip
+            }
             (RowProperties, "gridBefore") => {
                 let column = number(element.attr(self.word, "val").ok_or(invalid)?, 16_384)?;
                 self.table()?.row.column = column;
@@ -485,6 +536,7 @@ impl Reader<'_, '_> {
             format!("{}:{}:{row}:{column}", part.as_str(), table.id).as_bytes(),
         ))
         .expect("SHA256 is an opaque ID");
+        table.deleted_cell = false;
         table.cell = Some(WordCell {
             id,
             enclosing_cell,

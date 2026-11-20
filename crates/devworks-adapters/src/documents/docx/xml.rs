@@ -200,3 +200,11 @@ fn xml_space(scalar: char) -> bool {
 fn xml_char(scalar: char) -> bool {
     matches!(scalar, '\t' | '\n' | '\r' | ' '..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10ffff}')
 }
+
+pub(super) fn on_off(value: Option<&str>) -> Result<bool, DocxError> {
+    match value {
+        None | Some("1" | "true" | "on") => Ok(true),
+        Some("0" | "false" | "off") => Ok(false),
+        _ => Err(DocxError::InvalidBody),
+    }
+}

@@ -1,9 +1,12 @@
 //! Bounded WordprocessingML extraction, with no external relationship resolution.
 mod body;
 mod fields;
+mod images;
+mod markup;
 mod numbering;
 mod opc;
 mod package;
+mod stories;
 mod styles;
 mod xml;
 
@@ -14,6 +17,10 @@ use devworks_core::{
     },
 };
 use std::collections::BTreeSet;
+pub use stories::{
+    WordDocument, WordEdit, WordEditKind, WordEntry, WordImage, WordImagePlacement, WordPoint,
+    WordReference, WordReferenceKind, WordStory, WordStoryKind,
+};
 
 const DOCX_MEDIA: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
@@ -81,6 +88,13 @@ pub enum WordCoverageIssue {
     Drawing,
     RevisionMarkup,
     FieldCode,
+    UnsupportedRevision,
+    BrokenStoryReference,
+    ExternalImage,
+    UnsupportedImage,
+    UnsupportedImageLayout,
+    ImageBounds,
+    InvalidImage,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +155,7 @@ pub struct WordBody {
     pub paragraphs: Vec<WordParagraph>,
     pub cells: Vec<WordCell>,
     pub coverage_issues: BTreeSet<WordCoverageIssue>,
+    normalized_bytes: usize,
 }
 
 /// Reads only the managed bytes and returns immutable passage citations. Trips any resource or
@@ -169,7 +184,7 @@ impl DocxExtractor {
         &self,
         source: ExtractionInput<'_>,
         control: &ExtractionControl<'_>,
-    ) -> Result<WordBody, DocxError> {
+    ) -> Result<WordDocument, DocxError> {
         control.check()?;
         source.verify(self.limits.extraction.input_bytes)?;
         let media = source.version.media_type.split(';').next().unwrap().trim();
@@ -192,18 +207,15 @@ impl DocxExtractor {
         } else {
             numbering::Numbering::default()
         };
-        let xml = package.read(part, control)?;
-        let result = body::read(
-            &xml,
-            part,
+        stories::extract(
+            &mut package,
+            &manifest,
+            (part, &relations),
             &source,
-            &relations,
             (&styles, &numbering),
             &self.limits,
             control,
-        )?;
-        control.check()?;
-        Ok(result)
+        )
     }
 }
 
