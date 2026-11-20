@@ -20,6 +20,14 @@ use std::time::{Duration, Instant};
 
 const MAX_BYTES: u64 = super::artifact_io::MAX_ARTIFACT as u64;
 const BUDGET: Duration = Duration::from_secs(60);
+const TYPESCRIPT: &str = "devworks-typescript-semantic";
+
+fn node_runtime(
+    host: &PackageHost,
+) -> Option<(String, devworks_core::ports::packages::RuntimeExecutable)> {
+    let (version, executable) = host.runtimes.as_ref()?.cache.executable("node")?;
+    version.starts_with("24.").then_some((version, executable))
+}
 
 pub(crate) struct PackageSemantics(pub Weak<PackageHost>);
 
@@ -30,9 +38,22 @@ struct Pack {
     format: IndexFormat,
     repository_source: bool,
     languages: Vec<String>,
+    node: Option<(String, devworks_core::ports::packages::RuntimeExecutable)>,
 }
 
 impl SemanticCatalog for PackageSemantics {
+    fn runtime_binding(&self, package: &str) -> Option<String> {
+        if package != TYPESCRIPT {
+            return None;
+        }
+        let Some((version, executable)) = self.0.upgrade().and_then(|host| node_runtime(&host))
+        else {
+            return Some("unavailable".into());
+        };
+        let bytes = serde_json::to_vec(&(version, executable)).ok()?;
+        Some(sha256_hex(&bytes))
+    }
+
     fn enrichers(&self) -> Vec<Arc<dyn SemanticEnricher>> {
         let Some(host) = self.0.upgrade() else {
             return Vec::new();
@@ -70,6 +91,14 @@ impl SemanticCatalog for PackageSemantics {
                 {
                     continue;
                 }
+                let node = if inspection.package_id == TYPESCRIPT {
+                    let Some(runtime) = node_runtime(&host) else {
+                        continue;
+                    };
+                    Some(runtime)
+                } else {
+                    None
+                };
                 packs.push(Arc::new(Pack {
                     host: self.0.clone(),
                     inspection: inspection.clone(),
@@ -77,6 +106,7 @@ impl SemanticCatalog for PackageSemantics {
                     format,
                     repository_source: source_mode.is_some(),
                     languages: languages.iter().map(|id| id.as_str().to_owned()).collect(),
+                    node,
                 }));
             }
         }
@@ -170,6 +200,12 @@ impl SemanticEnricher for Pack {
             "captureDigest":request.capture_digest,"files":files});
         if self.repository_source {
             source["sourceMode"] = json!("Repository");
+        }
+        if let Some((version, executable)) = &self.node {
+            if node_runtime(&host).as_ref() != self.node.as_ref() {
+                return Err("the selected Node runtime changed".into());
+            }
+            source["runtime"] = json!({"version": version, "executable": executable});
         }
         let bytes = serde_json::to_vec(&source).map_err(|error| error.to_string())?;
         if bytes.len() as u64 > MAX_BYTES {

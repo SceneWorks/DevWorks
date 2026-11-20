@@ -327,6 +327,10 @@ pub struct EnrichmentSource<'a> {
 /// Current package contributions are resolved at snapshot selection, not cached at app boot.
 pub trait SemanticCatalog: Send + Sync {
     fn enrichers(&self) -> Vec<std::sync::Arc<dyn SemanticEnricher>>;
+    /// A stable cached runtime observation included with a package's registry binding.
+    fn runtime_binding(&self, _package: &str) -> Option<String> {
+        None
+    }
     fn descriptors(
         &self,
         snapshot: &dyn crate::ports::storage::ReadSnapshot,

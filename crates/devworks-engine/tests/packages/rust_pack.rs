@@ -1,158 +1,9 @@
 //! The real, separately built Rust pack through install, managed process launch, indexing and
 //! immutable graph generations on the qualified native target.
+use super::semantic_fixture::{configure, git, index, invocations, overlay, published};
 use super::*;
-use devworks_core::ports::storage::StoredGeneration;
-use devworks_core::ports::storage::WORKSPACE_SCOPE_KEY;
 
-fn git(root: &std::path::Path, args: &[&str]) {
-    let outcome = std::process::Command::new("git")
-        .args([
-            "-c",
-            "user.name=DW-27 fixture",
-            "-c",
-            "user.email=fixture@devworks.test",
-        ])
-        .args(args)
-        .current_dir(root)
-        .output()
-        .unwrap();
-    assert!(
-        outcome.status.success(),
-        "{}",
-        String::from_utf8_lossy(&outcome.stderr)
-    );
-}
-
-fn published(app: &App, repository: &Id, previous: Option<&Id>) -> StoredGeneration {
-    let until = Instant::now() + PATIENCE * 4;
-    loop {
-        if let Some(current) = read(&*app.store, |snapshot| {
-            let indexing = snapshot.indexing();
-            let Some(pointer) = indexing.published(repository)? else {
-                return Ok(None);
-            };
-            let view = indexing.view(&pointer.view_id)?.expect("published view");
-            indexing.generation(&view.baseline_id)
-        }) && previous != Some(&current.id)
-        {
-            return current;
-        }
-        assert!(Instant::now() < until, "the repository did not publish");
-        super::event_intents::drive(app, Duration::from_millis(30));
-    }
-}
-
-fn invocations(app: &App) -> usize {
-    read(&*app.store, |snapshot| {
-        snapshot.history().page(
-            &EventFilter::Aggregate {
-                kind: "package".into(),
-                id: "devworks-rust-semantic".into(),
-            },
-            0,
-            500,
-        )
-    })
-    .events
-    .iter()
-    .filter(|event| event.kind == "PackageInvoked")
-    .count()
-}
-
-fn source_revision(app: &App) -> String {
-    read(&*app.store, |snapshot| {
-        Ok(snapshot
-            .indexing()
-            .source_config(WORKSPACE_SCOPE_KEY)?
-            .map_or(1, |config| config.revision))
-    })
-    .to_string()
-}
-
-fn overlay(app: &App, repository: &Id) -> StoredGeneration {
-    let frame = json!({"protocol":"1.0-draft.1","schemaRevision":2,
-        "requestKey":app.key("rust-overlay"),"command":{"kind":"RefreshOverlay",
-        "repositoryId":repository,"ref":"refs/heads/rust-review",
-        "expectedSourceRevision":source_revision(app)}});
-    let OperationResult::IndexingRefreshOverlay { value } = applied(
-        app.app()
-            .command(
-                &app.user,
-                "indexing.refresh_overlay",
-                frame.to_string().as_bytes(),
-            )
-            .unwrap(),
-    ) else {
-        panic!("expected an overlay run")
-    };
-    let until = Instant::now() + PATIENCE;
-    loop {
-        let run =
-            read(&*app.store, |snapshot| snapshot.indexing().run(&value.id)).expect("overlay run");
-        if let Some(view) = run.output_view_id {
-            return read(&*app.store, |snapshot| {
-                let index = snapshot.indexing();
-                let view = index.view(&view)?.expect("overlay view");
-                index.generation(&view.branch_id.expect("branch generation"))
-            })
-            .expect("semantic branch generation");
-        }
-        assert!(Instant::now() < until, "{run:?}");
-        super::event_intents::drive(app, Duration::from_millis(30));
-    }
-}
-
-fn index(app: &App, repository: &Id, operation: &str) {
-    let revision = source_revision(app);
-    let frame = json!({
-        "protocol":"1.0-draft.1","mode":"Command","requestKey":app.key("rust-pack-index"),
-        "body":{"kind":operation,"scope":{"kind":"Workspace"},
-            "repositoryIds":[repository],"expectedSourceRevision":revision,
-            "views":{"kind":"Published","repositoryIds":[repository]}}
-    });
-    applied(
-        app.app()
-            .command(&app.user, operation, frame.to_string().as_bytes())
-            .unwrap(),
-    );
-}
-
-fn configure(app: &App) {
-    let descriptor =
-        devworks_core::settings::catalog::descriptor("repositories.baseDirectory").unwrap();
-    let value = serde_json::from_value(json!({
-        "key":"repositories.baseDirectory",
-        "value":{"schema":descriptor.schema_ref(),"value":app.sources.to_string_lossy()}
-    }))
-    .unwrap();
-    let user = app.user.clone();
-    write(&*app.store, move |tx| {
-        devworks_core::settings::service::apply_human_assignments(
-            tx,
-            &user,
-            &ConfigScope::Workspace,
-            &[value],
-            json!({}),
-        )
-        .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))
-    })
-    .unwrap();
-    let frame = json!({
-        "protocol":"1.0-draft.1","mode":"Command","requestKey":app.key("configure"),
-        "body":{"kind":"indexing.configure_sources","scope":{"kind":"Workspace"},"expectedRevision":"1",
-            "config":{"structuralLanguages":[],"semanticPackageIds":["devworks-rust-semantic"],
-                "excludePatterns":[],"maxFileBytes":"524288"}}
-    });
-    applied(
-        app.app()
-            .command(
-                &app.user,
-                "indexing.configure_sources",
-                frame.to_string().as_bytes(),
-            )
-            .unwrap(),
-    );
-}
+const PACKAGE: &str = "devworks-rust-semantic";
 
 #[test]
 #[ignore = "native macOS arm64 qualification requires the pinned rust-analyzer and signed release helper"]
@@ -164,7 +15,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     app.indexing = true;
     app.probe_path = Some(std::env::var("PATH").expect("qualified toolchain PATH"));
     app.boot();
-    configure(&app);
+    configure(&app, PACKAGE);
     let artifact = app.save(&app.user, &bytes);
     package(app.lifecycle(
         &app.user,
@@ -311,7 +162,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
         }),
         "{nested_nodes:?}"
     );
-    let compiled = invocations(&app);
+    let compiled = invocations(&app, PACKAGE);
     assert_eq!(compiled, 1, "one compiler invocation per captured layer");
     assert!(!build_marker.exists(), "the pack executed a build script");
     assert!(
@@ -327,7 +178,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     );
     assert_eq!(reused.source_digest, initial.source_digest);
     assert_eq!(
-        invocations(&app),
+        invocations(&app, PACKAGE),
         compiled,
         "a matching complete source reuses its semantic rows"
     );
@@ -347,7 +198,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "changed and deleted"]);
     git(&root, &["branch", "rust-review"]);
-    let branch = overlay(&app, &repository);
+    let branch = overlay(&app, &repository, "refs/heads/rust-review");
     assert_eq!(
         branch.manifest["packs"][0]["id"], "devworks-rust-semantic",
         "{branch:?}"
@@ -396,11 +247,11 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     std::fs::write(root.join("app/Cargo.toml"), "[package]\nname='fixture-app'\nversion='1.2.3'\nedition='2024'\n[dependencies]\nfixture-shared={path='../../outside'}\n").unwrap();
     git(&root, &["add", "-A"]);
     git(&root, &["commit", "-qm", "invalid dependency path"]);
-    let before_failure = invocations(&app);
+    let before_failure = invocations(&app, PACKAGE);
     index(&app, &repository, "indexing.index");
     let failed_pack = published(&app, &repository, Some(&changed.id));
     assert_eq!(
-        invocations(&app),
+        invocations(&app, PACKAGE),
         before_failure + 1,
         "one attempt for a deterministic pack failure"
     );
@@ -412,7 +263,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     index(&app, &repository, "indexing.index");
     let reused_failure = published(&app, &repository, Some(&failed_pack.id));
     assert_eq!(
-        invocations(&app),
+        invocations(&app, PACKAGE),
         before_failure + 1,
         "ordinary refresh reuses the recorded failure"
     );
@@ -423,7 +274,7 @@ fn native_rust_pack_indexes_a_cargo_workspace_and_fences_changed_deleted_and_fai
     index(&app, &repository, "indexing.reindex");
     let explicit_rebuild = published(&app, &repository, Some(&reused_failure.id));
     assert_eq!(
-        invocations(&app),
+        invocations(&app, PACKAGE),
         before_failure + 2,
         "explicit rebuild retries the compiler once"
     );

@@ -24,7 +24,7 @@ pub(crate) fn select(
     let candidates = env.enrichers();
     read_snapshot(&*env.store, &ReadOptions::default(), |read| {
         let projects = read.projects().repository_projects(repository)?;
-        if registry_binding(read.packages(), config, &projects)? != expected_binding {
+        if registry_binding(env, read.packages(), config, &projects)? != expected_binding {
             return Ok(None);
         }
         let mut selected = Vec::new();
@@ -53,6 +53,7 @@ pub(crate) fn select(
 }
 
 pub(crate) fn registry_binding(
+    env: &IndexEnv,
     registry: &dyn crate::ports::storage::PackageRegistryRead,
     config: &EffectiveConfig,
     projects: &[crate::protocol::ProjectId],
@@ -67,7 +68,14 @@ pub(crate) fn registry_binding(
             })
             && let Some(digest) = record.active_digest
         {
-            bindings.push(format!("{id}@{digest}"));
+            let runtime = env
+                .package_semantics
+                .get()
+                .and_then(|catalog| catalog.runtime_binding(id));
+            bindings.push(match runtime {
+                Some(runtime) => format!("{id}@{digest}:{runtime}"),
+                None => format!("{id}@{digest}"),
+            });
         }
     }
     Ok(bindings.join(","))
@@ -100,25 +108,63 @@ fn source_unit(unit: &PlanUnit) -> bool {
     unit.oid.is_some() && matches!(unit.mode, MODE_STRUCTURAL | MODE_TEXT | MODE_TEXT_FALLBACK)
 }
 
-fn cargo_context(unit: &PlanUnit) -> bool {
+const TYPESCRIPT_CONTEXT: &str = "typescript-context";
+
+fn typescript_context(key: &str) -> bool {
+    let name = key.rsplit('/').next().unwrap_or(key);
     matches!(
-        unit.key.rsplit('/').next(),
-        Some("Cargo.toml" | "Cargo.lock")
-    )
+        name,
+        "package.json"
+            | "angular.json"
+            | "tauri.conf.json"
+            | "tauri.conf.json5"
+            | "Tauri.toml"
+            | "Cargo.toml"
+    ) || name.ends_with(".html")
+        || name.ends_with(".rs")
+        || name.starts_with("next.config.")
+        || name.starts_with("vite.config.")
+        || (name.starts_with("tsconfig") || name.starts_with("jsconfig")) && name.ends_with(".json")
 }
 
-pub(crate) fn repository_language(packs: &[Arc<dyn SemanticEnricher>], language: &str) -> bool {
-    packs.iter().any(|pack| {
-        let descriptor = pack.descriptor();
-        descriptor.repository_source && supports(&descriptor, language)
-    })
+/// Context files are admitted in the same immutable capture and only for the language
+/// family that uses them. An explicit context tag distinguishes them from source results.
+fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'static str> {
+    if !source_unit(unit) || !descriptor.repository_source {
+        return None;
+    }
+    let typescript = ["typescript", "tsx", "javascript"]
+        .iter()
+        .any(|language| supports(descriptor, language));
+    // The frozen Next pass validates these configs together in its auxiliary program.
+    let name = unit.key.rsplit('/').next().unwrap_or(&unit.key);
+    if typescript && matches!(name, "next.config.mjs" | "next.config.cjs") {
+        return Some(TYPESCRIPT_CONTEXT);
+    }
+    if let Some(language) = unit
+        .language
+        .filter(|language| supports(descriptor, language))
+    {
+        return Some(language);
+    }
+    if supports(descriptor, "rust")
+        && matches!(
+            unit.key.rsplit('/').next(),
+            Some("Cargo.toml" | "Cargo.lock")
+        )
+    {
+        return Some("cargo");
+    }
+    if typescript && typescript_context(&unit.key) {
+        return Some(TYPESCRIPT_CONTEXT);
+    }
+    None
 }
 
 pub(crate) fn repository_unit(packs: &[Arc<dyn SemanticEnricher>], unit: &PlanUnit) -> bool {
-    source_unit(unit)
-        && unit
-            .language
-            .is_some_and(|language| repository_language(packs, language))
+    packs
+        .iter()
+        .any(|pack| repository_input(&pack.descriptor(), unit).is_some())
 }
 
 pub(crate) fn prepare_repository(
@@ -139,20 +185,17 @@ pub(crate) fn prepare_repository(
         }
         let selected: Vec<_> = plan
             .iter()
-            .filter(|unit| {
-                source_unit(unit)
-                    && (cargo_context(unit)
-                        || unit
-                            .language
-                            .is_some_and(|language| supports(&descriptor, language)))
-            })
+            .filter_map(|unit| repository_input(&descriptor, unit).map(|language| (unit, language)))
             .collect();
-        if !selected.iter().any(|unit| !cargo_context(unit)) {
+        if !selected
+            .iter()
+            .any(|(_, language)| supports(&descriptor, language))
+        {
             continue;
         }
         let bytes = selected
             .iter()
-            .fold(0u64, |sum, unit| sum.saturating_add(unit.size));
+            .fold(0u64, |sum, (unit, _)| sum.saturating_add(unit.size));
         let proposals = if selected.len() > MAX_REPOSITORY_FILES || bytes > MAX_REPOSITORY_BYTES {
             Err("repository source exceeds the semantic input budget".into())
         } else {
@@ -160,9 +203,12 @@ pub(crate) fn prepare_repository(
             let committed: Vec<_> = selected
                 .iter()
                 .copied()
-                .filter(|unit| !local.is_some_and(|local| local.contains_key(&unit.key)))
+                .filter(|(unit, _)| !local.is_some_and(|local| local.contains_key(&unit.key)))
                 .collect();
-            let oids: Vec<_> = committed.iter().map(|unit| unit.digest.clone()).collect();
+            let oids: Vec<_> = committed
+                .iter()
+                .map(|(unit, _)| unit.digest.clone())
+                .collect();
             let buffers = if oids.is_empty() {
                 Vec::new()
             } else {
@@ -173,7 +219,7 @@ pub(crate) fn prepare_repository(
             for (unit, bytes) in committed.into_iter().zip(buffers) {
                 contents.push((unit, bytes));
             }
-            for unit in selected {
+            for (unit, language) in selected {
                 if stop() {
                     return Err(Stop::Cancelled);
                 }
@@ -187,18 +233,14 @@ pub(crate) fn prepare_repository(
                 if expected != &format!("sha256:{}", sha256_hex(&bytes)) {
                     return Err(changed(&unit.key));
                 }
-                contents.push((unit, bytes));
+                contents.push(((unit, language), bytes));
             }
-            contents.sort_by(|(left, _), (right, _)| left.key.cmp(&right.key));
+            contents.sort_by(|(left, _), (right, _)| left.0.key.cmp(&right.0.key));
             let files: Vec<_> = contents
                 .iter()
-                .map(|(unit, bytes)| EnrichmentSource {
+                .map(|((unit, language), bytes)| EnrichmentSource {
                     unit: &unit.key,
-                    language: if cargo_context(unit) {
-                        "cargo"
-                    } else {
-                        unit.language.expect("selected language")
-                    },
+                    language,
                     bytes,
                 })
                 .collect();
@@ -312,7 +354,15 @@ fn collect(
         },
         stop,
     )
-    .and_then(|proposals| validate(proposals, &selected))
+    .and_then(|proposals| {
+        let context: Vec<_> = batch
+            .files
+            .iter()
+            .filter(|file| descriptor.repository_source && file.language == TYPESCRIPT_CONTEXT)
+            .cloned()
+            .collect();
+        validate(proposals, &selected, &context)
+    })
 }
 
 fn note_failure(
@@ -336,21 +386,15 @@ fn apply(
     rows: &mut [UnitRows],
 ) {
     for (row, nodes, edges) in rows {
-        let Some(language) = row.payload["language"]
-            .as_str()
-            .filter(|language| supports(descriptor, language))
-            .filter(|_| {
-                matches!(
-                    row.payload["mode"].as_str(),
-                    Some(MODE_STRUCTURAL | MODE_TEXT_FALLBACK)
-                )
-            })
-        else {
-            continue;
-        };
+        let language = row.payload["language"].as_str();
+        let source_covered = language.is_some_and(|language| supports(descriptor, language))
+            && matches!(
+                row.payload["mode"].as_str(),
+                Some(MODE_STRUCTURAL | MODE_TEXT_FALLBACK)
+            );
         let proposals = match result {
             Ok(proposals) => proposals,
-            Err(error) => {
+            Err(error) if source_covered => {
                 let gap = json!(format!("semantic-{}: {error}", descriptor.id));
                 if let Some(incomplete) = row.payload["incomplete"].as_array_mut() {
                     incomplete.push(gap);
@@ -359,10 +403,14 @@ fn apply(
                 }
                 continue;
             }
+            Err(_) => continue,
         };
         let Some(proposal) = proposals.get(row.unit_key.as_str()) else {
             continue;
         };
+        if !source_covered && !descriptor.repository_source {
+            continue;
+        }
         let (proposed_nodes, proposed_edges) = super::units::rows_of(
             repository,
             &row.unit_key,
@@ -371,7 +419,7 @@ fn apply(
                 edges: proposal.edges.clone(),
                 ..FileExtract::default()
             },
-            Some(language),
+            language,
             None,
             &descriptor.id,
         );
@@ -401,10 +449,12 @@ fn apply(
 fn validate(
     enrichments: Vec<Enrichment>,
     files: &[EnrichmentSource<'_>],
+    context: &[EnrichmentSource<'_>],
 ) -> Result<BTreeMap<String, Enrichment>, String> {
+    let allowed = || files.iter().chain(context);
     let mut checked = BTreeMap::new();
     for result in enrichments {
-        let Some(file) = files.iter().find(|file| file.unit == result.unit_key) else {
+        let Some(file) = allowed().find(|file| file.unit == result.unit_key) else {
             return Err("output names a unit outside the source capture".into());
         };
         if result.nodes.is_empty()
@@ -455,7 +505,7 @@ fn validate(
             }
         }
         for edge in &result.edges {
-            let result_bound = |unit: &str| files.iter().any(|file| file.unit == unit);
+            let result_bound = |unit: &str| allowed().any(|file| file.unit == unit);
             let target_ok = match &edge.target {
                 EdgeTarget::Local(index) => *index < result.nodes.len(),
                 EdgeTarget::Symbol(symbol) => !symbol.is_empty() && symbol.len() <= 4096,
@@ -480,7 +530,7 @@ fn validate(
             return Err("duplicate semantic unit".into());
         }
     }
-    if checked.len() != files.len() {
+    if files.iter().any(|file| !checked.contains_key(file.unit)) {
         return Err("the pack did not account for every selected source unit".into());
     }
     Ok(checked)

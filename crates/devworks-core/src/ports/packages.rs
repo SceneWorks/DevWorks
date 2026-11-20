@@ -19,7 +19,8 @@
 use crate::locks::RwLockExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Largest bundle the host inspects (bytes).
@@ -358,12 +359,59 @@ pub enum RuntimeObservation {
     Missing(String),
 }
 
+/// The exact runtime executable a successful version probe observed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeExecutable {
+    pub program: PathBuf,
+    pub identity: String,
+}
+
+impl RuntimeExecutable {
+    pub fn inspect(path: &Path) -> std::io::Result<Self> {
+        let program = path.canonicalize()?;
+        let metadata = std::fs::metadata(&program)?;
+        if !metadata.is_file() {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        #[cfg(unix)]
+        let fields = {
+            use std::os::unix::fs::MetadataExt;
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}",
+                metadata.dev(),
+                metadata.ino(),
+                metadata.len(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec()
+            )
+        };
+        #[cfg(not(unix))]
+        let fields = format!(
+            "{}:{:?}:{:?}",
+            metadata.len(),
+            metadata.created().ok(),
+            metadata.modified().ok()
+        );
+        let identity = crate::fingerprint::sha256_hex(fields.as_bytes());
+        Ok(Self { program, identity })
+    }
+}
+
+#[derive(Default)]
+struct RuntimeSnapshot {
+    observations: BTreeMap<String, RuntimeObservation>,
+    executables: BTreeMap<String, RuntimeExecutable>,
+}
+
 /// Probed runtimes, refreshed by the package host off any UI or write thread (it runs each
 /// runtime's version command as an owned process with a short timeout) and read by the
 /// availability rules.
 #[derive(Default)]
 pub struct RuntimeCache {
-    seen: std::sync::RwLock<std::collections::BTreeMap<String, RuntimeObservation>>,
+    seen: std::sync::RwLock<RuntimeSnapshot>,
     refreshed_at: std::sync::atomic::AtomicU64,
 }
 impl RuntimeCache {
@@ -372,12 +420,29 @@ impl RuntimeCache {
     }
     /// Replaces the observations of a probe pass.
     pub fn set(&self, observed: std::collections::BTreeMap<String, RuntimeObservation>) {
-        *self.seen.write_locked() = observed;
+        self.set_probed(observed, BTreeMap::new());
+    }
+    pub fn set_probed(
+        &self,
+        observations: BTreeMap<String, RuntimeObservation>,
+        executables: BTreeMap<String, RuntimeExecutable>,
+    ) {
+        *self.seen.write_locked() = RuntimeSnapshot {
+            observations,
+            executables,
+        };
         self.refreshed_at
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     pub fn observations(&self) -> std::collections::BTreeMap<String, RuntimeObservation> {
-        self.seen.read_locked().clone()
+        self.seen.read_locked().observations.clone()
+    }
+    pub fn executable(&self, runtime: &str) -> Option<(String, RuntimeExecutable)> {
+        let cache = self.seen.read_locked();
+        let RuntimeObservation::Found(version) = cache.observations.get(runtime)? else {
+            return None;
+        };
+        Some((version.clone(), cache.executables.get(runtime)?.clone()))
     }
     /// How many probe passes have completed.
     pub fn passes(&self) -> u64 {
@@ -386,13 +451,13 @@ impl RuntimeCache {
 }
 impl RuntimeProbe for RuntimeCache {
     fn runtime(&self, runtime_id: &str) -> Option<String> {
-        match self.seen.read_locked().get(runtime_id) {
+        match self.seen.read_locked().observations.get(runtime_id) {
             Some(RuntimeObservation::Found(v)) => Some(v.clone()),
             _ => None,
         }
     }
     fn missing_reason(&self, runtime_id: &str) -> Option<String> {
-        match self.seen.read_locked().get(runtime_id) {
+        match self.seen.read_locked().observations.get(runtime_id) {
             Some(RuntimeObservation::Missing(why)) => Some(why.clone()),
             Some(RuntimeObservation::Found(_)) => None,
             None => Some("not probed yet".into()),
