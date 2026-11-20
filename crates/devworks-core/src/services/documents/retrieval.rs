@@ -9,7 +9,8 @@ use crate::{
     ports::{
         QueryAnswer,
         storage::{
-            ArtifactScope, DocumentLexicalQuery, ReadSnapshot, StorageError, StoredArtifact,
+            ArtifactScope, DocumentCandidate, DocumentLexicalQuery, ReadSnapshot, StorageError,
+            StoredArtifact,
         },
     },
     protocol::{
@@ -48,12 +49,7 @@ pub(super) fn search(
 ) -> Result<RetrievalPage, Failure> {
     request.validate().map_err(|_| invalid())?;
     let (scope, viewer) = audience(snapshot, ctx, request)?;
-    let exact = exact_indexes(snapshot, &viewer, &scope, &request.versions)?;
-    let input = lexical_input(request)?;
-    let words = words(input)
-        .into_iter()
-        .map(|word| format!("\"{word}\""))
-        .collect::<Vec<_>>();
+    let (candidates, completion) = ranked_lexical(snapshot, ctx, request, &scope, &viewer)?;
     let mut result = RetrievalPage {
         protocol: request.protocol.clone(),
         query_id: request.query_id.clone(),
@@ -61,33 +57,10 @@ pub(super) fn search(
         generation_ids: vec![],
         space: None,
         effective_mode: RetrievalMode::Lexical,
-        completion: QueryCompletion::Complete,
+        completion,
         passages: vec![],
     };
-    if words.is_empty() {
-        return Ok(result);
-    }
-    // A visited unit is an eligible posting checked for one distinct search word.
-    let max_blocks = request.limits.max_visited / words.len() as u32;
-    let batch = snapshot
-        .documents()
-        .document_lexical(&DocumentLexicalQuery {
-            scope: &scope,
-            owner: (!viewer.sees_owned(None)).then_some(ctx.principal()),
-            exact_versions: exact.as_deref(),
-            words: &words,
-            max_blocks,
-            max_results: request.limits.max_results,
-        })?;
-    let limit = usize::from(request.limits.max_results);
-    result.completion = if batch.work_limited {
-        QueryCompletion::WorkLimit
-    } else if batch.candidates.len() > limit {
-        QueryCompletion::ResultLimit
-    } else {
-        QueryCompletion::Complete
-    };
-    for (index, candidate) in batch.candidates.into_iter().take(limit).enumerate() {
+    for (index, candidate) in candidates.into_iter().enumerate() {
         let passage = snapshot
             .documents()
             .document_passage(&candidate.checkpoint, &candidate.block)?
@@ -108,6 +81,45 @@ pub(super) fn search(
         });
     }
     Ok(result)
+}
+
+fn ranked_lexical(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    request: &RetrievalRequest,
+    scope: &ArtifactScope,
+    viewer: &Viewer<'_>,
+) -> Result<(Vec<DocumentCandidate>, QueryCompletion), Failure> {
+    let exact = exact_indexes(snapshot, viewer, scope, &request.versions)?;
+    let words = words(lexical_input(request)?)
+        .into_iter()
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return Ok((vec![], QueryCompletion::Complete));
+    }
+    // A visited unit is an eligible posting checked for one distinct search word.
+    let max_blocks = request.limits.max_visited / words.len() as u32;
+    let mut batch = snapshot
+        .documents()
+        .document_lexical(&DocumentLexicalQuery {
+            scope,
+            owner: (!viewer.sees_owned(None)).then_some(ctx.principal()),
+            exact_versions: exact.as_deref(),
+            words: &words,
+            max_blocks,
+            max_results: request.limits.max_results,
+        })?;
+    let limit = usize::from(request.limits.max_results);
+    let completion = if batch.work_limited {
+        QueryCompletion::WorkLimit
+    } else if batch.candidates.len() > limit {
+        QueryCompletion::ResultLimit
+    } else {
+        QueryCompletion::Complete
+    };
+    batch.candidates.truncate(limit);
+    Ok((batch.candidates, completion))
 }
 
 fn lexical_input(request: &RetrievalRequest) -> Result<&str, Failure> {
@@ -266,26 +278,32 @@ pub(super) fn check_publication(
     query: &AdmittedQuery,
     answer: &QueryAnswer,
     snapshot: &dyn ReadSnapshot,
-) -> Result<bool, StorageError> {
+) -> Result<Option<Refusal>, StorageError> {
     if &snapshot.stamp().store_id != ctx.store_id()
         || snapshot.stamp().restore_epoch != ctx.restore_epoch().get()
     {
-        return Ok(false);
+        return Ok(Some(publication_denied()));
     }
     let checked = match (query.input(), &answer.result) {
         (
             OperationInput::Documents(ops::Input::Search(request)),
             OperationResult::DocumentsSearch { value },
-        ) => check_result_scope(snapshot, ctx, request, value),
+        ) => match check_result_scope(snapshot, ctx, request, value) {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(Failure::Refused(_) | Failure::Storage(StorageError::ScopeDenied)) => {
+                Err(publication_denied().into())
+            }
+            Err(Failure::Storage(error)) => Err(error.into()),
+        },
         (
             OperationInput::Documents(ops::Input::ResolveCitation(request)),
             OperationResult::DocumentsResolveCitation { .. },
-        ) => retained_checkpoint(snapshot, ctx, &request.citation).map(|_| true),
-        _ => Ok(false),
+        ) => retained_checkpoint(snapshot, ctx, &request.citation).map(|_| ()),
+        _ => Err(publication_denied().into()),
     };
     match checked {
-        Ok(allowed) => Ok(allowed),
-        Err(Failure::Refused(_) | Failure::Storage(StorageError::ScopeDenied)) => Ok(false),
+        Ok(()) => Ok(None),
+        Err(Failure::Refused(refusal)) => Ok(Some(refusal)),
         Err(Failure::Storage(error)) => Err(error),
     }
 }
@@ -297,8 +315,13 @@ fn check_result_scope(
     result: &RetrievalPage,
 ) -> Result<bool, Failure> {
     let (scope, viewer) = audience(snapshot, ctx, request)?;
-    let exact = exact_indexes(snapshot, &viewer, &scope, &request.versions)?;
-    for passage in &result.passages {
+    // Even a passage omitted by the limit can influence the ranking or completion. Repeat the
+    // bounded selection on the publication snapshot without reopening any passage text.
+    let (candidates, completion) = ranked_lexical(snapshot, ctx, request, &scope, &viewer)?;
+    if candidates.len() != result.passages.len() || completion != result.completion {
+        return Ok(false);
+    }
+    for (candidate, passage) in candidates.iter().zip(&result.passages) {
         let CitationSource::Managed {
             version,
             extraction_revision,
@@ -306,13 +329,10 @@ fn check_result_scope(
         else {
             return Ok(false);
         };
-        let artifact = visible_version(snapshot, &viewer, Some(&scope), version)?;
+        visible_version(snapshot, &viewer, Some(&scope), version)?;
         let (generation, revision) = published(snapshot, version)?;
-        let selected = exact.as_ref().map_or_else(
-            || artifact.current_version_id.as_ref() == Some(&version.version_id),
-            |ids| ids.contains(&version.version_id),
-        );
-        if !selected
+        if candidate.block != passage.chunk_id
+            || candidate.generation != generation
             || &revision != extraction_revision
             || !result.generation_ids.contains(&generation)
         {
@@ -320,6 +340,10 @@ fn check_result_scope(
         }
     }
     Ok(true)
+}
+
+fn publication_denied() -> Refusal {
+    Refusal::new(DomainErrorCode::PermissionDenied, "document_search", None)
 }
 
 fn unavailable() -> Refusal {

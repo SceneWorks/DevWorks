@@ -955,7 +955,7 @@ impl RetrievalRequest {
         Ok(())
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum QueryCompletion {
     Complete,
     ResultLimit,

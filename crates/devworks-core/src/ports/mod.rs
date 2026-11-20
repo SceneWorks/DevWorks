@@ -30,6 +30,7 @@ pub mod web;
 use crate::context::InvocationContext;
 use crate::fingerprint::Fingerprint;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::kernel::failure::Refusal;
 use crate::operations::OperationInput;
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::{
@@ -261,13 +262,14 @@ pub struct QueryAnswer {
     pub result: OperationResult,
 }
 /// Rechecks an answer's domain-specific authority and provenance on the gateway's publication
-/// snapshot. The check must not materialize unselected content.
+/// snapshot. An optional refusal prevents publication. The check must not materialize
+/// unselected content.
 pub type QueryPublicationCheck = fn(
     &InvocationContext,
     &AdmittedQuery,
     &QueryAnswer,
     &dyn ReadSnapshot,
-) -> Result<bool, StorageError>;
+) -> Result<Option<Refusal>, StorageError>;
 
 /// Read use cases publish against one read snapshot. Queries never mint grants, clear blockers
 /// or claim work. Owner-admitted auxiliary inference may reserve and account its actual

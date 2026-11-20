@@ -277,6 +277,12 @@ fn citation_resolution_is_negotiated_and_never_retargets_a_forged_locator_or_dig
         ),
         DomainQueryReply::Rejected { .. }
     ));
+    let mut omitted = cite_envelope(&citation, 11);
+    omitted.as_object_mut().unwrap().remove("schemaRevision");
+    assert!(matches!(
+        f.query(&a, "documents.resolve_citation", omitted),
+        DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::SchemaMismatch
+    ));
     let legacy = f.read_ref(&a, "documents.read", exact, 1);
     assert!(matches!(
         result(legacy),
@@ -307,6 +313,8 @@ fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
         store: Arc<dyn ApplicationStore>,
         document: Id,
         recipient: ProjectId,
+        expected_text: Option<&'static str>,
+        expected_completion: QueryCompletion,
     }
     impl QueryHandler for RevokeAfterQuery {
         fn publication_check(&self, query: &AdmittedQuery) -> Option<QueryPublicationCheck> {
@@ -321,7 +329,9 @@ fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
             let answer = self.library.query(ctx, query, snapshot)?;
             assert!(
                 matches!(&answer.result, OperationResult::DocumentsSearch { value }
-                if value.passages.len() == 1)
+                if value.passages.len() == usize::from(self.expected_text.is_some())
+                    && value.passages.first().map(|passage| passage.text.as_str()) == self.expected_text
+                    && value.completion == self.expected_completion)
             );
             let (document, recipient) = (self.document.clone(), self.recipient.clone());
             assert!(
@@ -339,10 +349,6 @@ fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
     let a = f.scoped("document-a");
     let b = f.scoped("document-b");
     let source = put(&f, &indexer, &a, "revocable", b"Revocable evidence.", None);
-    assert!(matches!(applied(f.command(&f.human, "documents.share",
-        json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"share-revocable",
-            "command":{"kind":"Share","artifactId":source.id,"targetProjectId":"document-b","expectedScopeRevision":source.scope_revision}}))),
-        OperationResult::DocumentsShare { .. }));
     let authority = HostAuthority {
         store: f.store.as_ref(),
         clock: &*h.clock,
@@ -353,22 +359,140 @@ fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
         ids: &*h.ids,
         authority: &authority,
     };
-    let handler = RevokeAfterQuery {
+    let recipient = b.project_id().unwrap().clone();
+    for (query, limit, visited, expected_text, completion) in [
+        (
+            "revocable",
+            10,
+            1_000,
+            Some("Revocable evidence."),
+            QueryCompletion::Complete,
+        ),
+        ("revocable absent", 10, 1, None, QueryCompletion::WorkLimit),
+        (
+            "revocable retained",
+            1,
+            1_000,
+            Some("Revocable retained evidence."),
+            QueryCompletion::ResultLimit,
+        ),
+    ] {
+        if limit == 1 {
+            put(
+                &f,
+                &indexer,
+                &b,
+                "retained",
+                expected_text.unwrap().as_bytes(),
+                None,
+            );
+        }
+        let (document, project) = (source.id.clone(), recipient.clone());
+        assert!(
+            write(f.store.as_ref(), move |tx| tx
+                .artifacts()
+                .add_share(&document, &project))
+            .unwrap()
+        );
+        let handler = RevokeAfterQuery {
+            library: DocumentLibrary::new(f.artifacts.clone(), h.ids.clone(), h.clock()),
+            store: f.store.clone(),
+            document: source.id.clone(),
+            recipient: recipient.clone(),
+            expected_text,
+            expected_completion: completion,
+        };
+        let reply = gateway
+            .query(
+                &b,
+                "documents.search",
+                envelope(&b, query, &[], limit, visited)
+                    .to_string()
+                    .as_bytes(),
+                &handler,
+            )
+            .unwrap();
+        assert!(
+            matches!(&reply, DomainQueryReply::Rejected { fault, .. }
+            if fault.code == DomainErrorCode::PermissionDenied),
+            "{reply:?}"
+        );
+    }
+}
+
+#[test]
+fn a_citation_tombstoned_after_the_read_returns_typed_unavailability() {
+    use devworks_core::{
+        gateway::AdmittedQuery,
+        ports::{QueryAnswer, QueryHandler, QueryPublicationCheck, storage::ReadSnapshot},
+        protocol::{DomainFault, Id},
+    };
+
+    struct TombstoneAfterQuery {
+        library: DocumentLibrary,
+        store: Arc<dyn ApplicationStore>,
+        version: Id,
+    }
+    impl QueryHandler for TombstoneAfterQuery {
+        fn publication_check(&self, query: &AdmittedQuery) -> Option<QueryPublicationCheck> {
+            self.library.publication_check(query)
+        }
+        fn query(
+            &self,
+            ctx: &InvocationContext,
+            query: &AdmittedQuery,
+            snapshot: &dyn ReadSnapshot,
+        ) -> Result<QueryAnswer, DomainFault> {
+            let answer = self.library.query(ctx, query, snapshot)?;
+            assert!(matches!(
+                &answer.result,
+                OperationResult::DocumentsResolveCitation { .. }
+            ));
+            let version = self.version.clone();
+            write(self.store.as_ref(), move |tx| {
+                tx.artifacts().tombstone_version(&version, 20)
+            })
+            .unwrap();
+            Ok(answer)
+        }
+    }
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let (f, indexer) = compose(&h);
+    let project = f.scoped("document-a");
+    let source = put(
+        &f,
+        &indexer,
+        &project,
+        "tombstoned",
+        b"A retained citation.",
+        None,
+    );
+    let citation = search(&f, &project, "citation", &[]).passages[0]
+        .citation
+        .clone();
+    let authority = HostAuthority {
+        store: f.store.as_ref(),
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: f.store.as_ref(),
+        ids: &*h.ids,
+        authority: &authority,
+    };
+    let handler = TombstoneAfterQuery {
         library: DocumentLibrary::new(f.artifacts.clone(), h.ids.clone(), h.clock()),
         store: f.store.clone(),
-        document: source.id,
-        recipient: b.project_id().unwrap().clone(),
+        version: source.current_version.unwrap().version_id,
     };
     let reply = gateway
         .query(
-            &b,
-            "documents.search",
-            envelope(&b, "revocable", &[], 10, 1000)
-                .to_string()
-                .as_bytes(),
+            &project,
+            "documents.resolve_citation",
+            cite_envelope(&citation, 11).to_string().as_bytes(),
             &handler,
         )
         .unwrap();
-    assert!(matches!(reply, DomainQueryReply::Rejected { fault, .. }
-        if fault.code == DomainErrorCode::PermissionDenied));
+    assert_unavailable(reply);
 }

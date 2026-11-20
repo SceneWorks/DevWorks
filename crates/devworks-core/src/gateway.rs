@@ -377,12 +377,21 @@ impl Gateway<'_> {
             };
             let holds = read_snapshot(self.store, &fresh, |s| {
                 if !crate::authority::authorization_holds(s, &authorization)? {
-                    return Ok(false);
+                    return Ok((false, None));
                 }
-                recheck.map_or(Ok(true), |check| check(ctx, &admitted, answer, s))
+                recheck
+                    .map_or(Ok(None), |check| check(ctx, &admitted, answer, s))
+                    .map(|refusal| (true, refusal))
             });
             match holds {
-                Ok(true) => {}
+                Ok((true, None)) => {}
+                Ok((true, Some(refusal))) => {
+                    return Ok(DomainQueryReply::Rejected {
+                        protocol: Protocol::Draft1,
+                        query_id: admitted.query_id,
+                        fault: refusal.fault(self.correlation()),
+                    });
+                }
                 Err(error) if recheck.is_some() => {
                     let (code, retry) = storage_fault(&error);
                     return Ok(self.query_fault(admitted.query_id, code, retry));
