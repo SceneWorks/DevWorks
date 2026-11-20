@@ -51,6 +51,10 @@ pub trait Dialogs {
     fn save_file(&mut self, _name: &str) -> Option<PathBuf> {
         None
     }
+    /// One source selected for the managed Documents library.
+    fn pick_document(&mut self) -> Option<PathBuf> {
+        self.pick_files().into_iter().next()
+    }
     /// One portable convention manifest selected by a human.
     fn pick_convention(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -66,7 +70,7 @@ pub struct NativeDialogs;
 impl Dialogs for NativeDialogs {
     fn save_file(&mut self, name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .set_title("Save convention source")
+            .set_title("Save source")
             .set_file_name(name)
             .save_file()
     }
@@ -75,6 +79,15 @@ impl Dialogs for NativeDialogs {
             .set_title("Attach images or files")
             .pick_files()
             .unwrap_or_default()
+    }
+    fn pick_document(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import a document")
+            .add_filter(
+                "Documents",
+                &["md", "markdown", "txt", "log", "pdf", "docx"],
+            )
+            .pick_file()
     }
     fn pick_convention(&mut self) -> Option<PathBuf> {
         rfd::FileDialog::new()
@@ -1266,6 +1279,13 @@ impl Shell {
             .remove(ScreenId::Work.key())
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+        let knowledge_import = screens
+            .get(ScreenId::Knowledge.key())
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok());
+        if knowledge_import.is_some() {
+            screens.remove(ScreenId::Knowledge.key());
+        }
         PendingMemory {
             conventions: screens
                 .remove(ScreenId::Conventions.key())
@@ -1277,9 +1297,7 @@ impl Shell {
             submitted: chat.submitted,
             removed_while_sending: chat.removed_while_sending,
             removed: chat.removed,
-            knowledge_import: screens
-                .remove(ScreenId::Knowledge.key())
-                .and_then(|v| serde_json::from_value(v).ok()),
+            knowledge_import,
             plans: work.plans,
             commands,
             screens,
@@ -1502,6 +1520,10 @@ impl Shell {
                 self.with_typed(|c: &mut crate::conventions_screen::ConventionsScreen, cx| {
                     c.import_dropped(cx, dropped)
                 });
+            } else if self.route == Route::Knowledge
+                && self.route_memory(Route::Knowledge).tab == crate::documents_screen::TAB
+            {
+                self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_documents(cx, dropped));
             } else if self.route == Route::Knowledge {
                 // A file dropped on an entry view is previewed before import.
                 self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_files(cx, dropped));

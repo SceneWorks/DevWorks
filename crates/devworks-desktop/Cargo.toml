@@ -34,6 +34,8 @@ tokio = { version = "=1.54.1", default-features = false, features = ["net", "rt"
 
 # Attachments open picked files without blocking on, or following into, special files
 # (O_NONBLOCK | O_NOFOLLOW). Already in the lockfile through the adapters.
+tempfile = "=3.27.0"
+
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.191"
 
@@ -44,7 +46,6 @@ test-support = []
 
 [dev-dependencies]
 lopdf = { version = "=0.47.0", default-features = false }
-tempfile = "=3.27.0"
 # Shared test doubles and seeding helpers (no production crate depends on it).
 devworks-test-support = { path = "../devworks-test-support" }
 devworks-desktop = { path = ".", features = ["test-support"] }

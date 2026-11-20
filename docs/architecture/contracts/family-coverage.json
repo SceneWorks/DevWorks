@@ -9192,6 +9192,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r10.schema.json",
               "completionSchema": "operation-completion.r10.schema.json"
+            },
+            {
+              "revision": 13,
+              "inputSchema": "domain-request.r12.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r13.schema.json",
+              "completionSchema": "operation-completion.r13.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9246,6 +9254,14 @@
               "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 13,
+              "inputSchema": "domain-request.r12.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": "domain-query-reply.r13.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -9298,6 +9314,14 @@
               "inputSchema": "artifact-query-request.r3.schema.json",
               "resultSchema": "operation-result.r10.schema.json",
               "queryReplySchema": "domain-query-reply.r10.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 13,
+              "inputSchema": "artifact-query-request.r3.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": "domain-query-reply.r13.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9397,6 +9421,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r10.schema.json",
               "completionSchema": "operation-completion.r10.schema.json"
+            },
+            {
+              "revision": 13,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r13.schema.json",
+              "completionSchema": "operation-completion.r13.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9451,6 +9483,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r10.schema.json",
               "completionSchema": "operation-completion.r10.schema.json"
+            },
+            {
+              "revision": 13,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r13.schema.json",
+              "completionSchema": "operation-completion.r13.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9605,6 +9645,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r10.schema.json",
               "completionSchema": "operation-completion.r10.schema.json"
+            },
+            {
+              "revision": 13,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r13.schema.json",
+              "completionSchema": "operation-completion.r13.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9659,6 +9707,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r10.schema.json",
               "completionSchema": "operation-completion.r10.schema.json"
+            },
+            {
+              "revision": 13,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r13.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r13.schema.json",
+              "completionSchema": "operation-completion.r13.schema.json"
             }
           ],
           "authority": "Existing host authority contract",

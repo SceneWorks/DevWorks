@@ -594,6 +594,19 @@ async fn compose(
                 github_http: Some(http),
             })
         });
+    let pdf_worker = std::env::current_exe().ok().and_then(|application| {
+        devworks_engine::documents::pdf::PdfWorker::beside_desktop(
+            &application,
+            Arc::new(NativeProcessHost),
+        )
+        .ok()
+        .map(Arc::new)
+    });
+    runtime_config.documents = Some(devworks_engine::documents::indexing::DocumentComposition {
+        processor: Arc::new(crate::document_extraction::NativeDocumentProcessor::new(
+            pdf_worker.clone(),
+        )),
+    });
     let composition = Composition {
         store: store.clone(),
         clock: clock.clone(),
@@ -711,14 +724,6 @@ async fn compose(
         ))
         .map_err(StartError::Principal)?;
     runtime.notification_wakeup();
-    let pdf_worker = std::env::current_exe().ok().and_then(|application| {
-        devworks_engine::documents::pdf::PdfWorker::beside_desktop(
-            &application,
-            Arc::new(NativeProcessHost),
-        )
-        .ok()
-        .map(Arc::new)
-    });
     Ok(Host {
         runtime,
         async_runtime: tokio::runtime::Handle::current(),

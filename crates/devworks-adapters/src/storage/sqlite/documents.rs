@@ -10,7 +10,7 @@ use devworks_core::{
         DocumentIndexVersion, DocumentRankingBatch, DocumentRankingQuery, DocumentRead,
         DocumentRepository, StorageError,
     },
-    protocol::{ActorId, Id, Revision},
+    protocol::{ActorId, Id, ProjectId, Revision},
     services::documents::{
         extraction::ExtractedBlock,
         vision::{VisionTarget, VisionUnit},
@@ -366,6 +366,48 @@ macro_rules! document_reads {
             ) -> Result<Option<DocumentIndexVersion>, StorageError> {
                 index(self.conn, version)
             }
+            fn document_publication_time(&self, run: &Id) -> Result<Option<i64>, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT created_at FROM events WHERE aggregate_kind='document_index_run'
+                       AND aggregate_id=?1 AND kind IN('DocumentIndexPublished','DocumentIndexPartiallyPublished',
+                         'DocumentIndexVisionHeld','DocumentIndexEmbeddingHeld')
+                       ORDER BY seq DESC LIMIT 1",
+                    [run.as_str()],
+                    |row| row.get(0),
+                ).optional())
+            }
+
+            fn document_version_attempts(
+                &self,
+                version: &Id,
+                project: Option<&ProjectId>,
+                limit: u16,
+            ) -> Result<Vec<Id>, StorageError> {
+                let mut statement = db(self.conn.prepare(
+                    "WITH requests(request_id) AS (
+                        SELECT json_extract(material.provenance_json,'$.derived.requestId')
+                        FROM document_extractions e
+                        JOIN document_vision_units u ON u.extraction_id=e.id
+                        JOIN artifacts material
+                          ON material.id=json_extract(u.record_json,'$.material.context.artifactId')
+                        WHERE e.version_id=?1
+                        UNION
+                        SELECT json_extract(payload_json,'$.requestId') FROM operations
+                        WHERE capability='conventions.embedding_prepare'
+                          AND json_extract(payload_json,'$.origin.kind')='DocumentIndex'
+                          AND json_extract(payload_json,'$.origin.source.versionId')=?1
+                    )
+                    SELECT a.attempt_id FROM requests q JOIN usage_attempts a ON a.request_id=q.request_id
+                    WHERE (?2 IS NULL OR a.project_id=?2)
+                    ORDER BY a.created_at DESC, a.attempt_id DESC LIMIT ?3"
+                ))?;
+                let rows = db(statement.query_map(
+                    params![version.as_str(), project.map(|id| id.0.as_str()), limit],
+                    |row| row.get::<_, String>(0),
+                ))?;
+                rows.map(|row| id_of(db(row)?)).collect()
+            }
+
             fn document_checkpoint(
                 &self,
                 version: &Id,

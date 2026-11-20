@@ -302,7 +302,7 @@ fn citation_resolution_is_negotiated_and_never_retargets_a_forged_locator_or_dig
 }
 
 #[test]
-fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
+fn gateway_rechecks_a_document_share_after_search_and_activity_snapshots() {
     use devworks_core::{
         gateway::AdmittedQuery,
         ports::{QueryAnswer, QueryHandler, QueryPublicationCheck, storage::ReadSnapshot},
@@ -327,12 +327,30 @@ fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
             snapshot: &dyn ReadSnapshot,
         ) -> Result<QueryAnswer, DomainFault> {
             let answer = self.library.query(ctx, query, snapshot)?;
-            assert!(
-                matches!(&answer.result, OperationResult::DocumentsSearch { value }
-                if value.passages.len() == usize::from(self.expected_text.is_some())
-                    && value.passages.first().map(|passage| passage.text.as_str()) == self.expected_text
-                    && value.completion == self.expected_completion)
-            );
+            match &answer.result {
+                OperationResult::DocumentsSearch { value } => {
+                    assert_eq!(
+                        value.passages.len(),
+                        usize::from(self.expected_text.is_some())
+                    );
+                    assert_eq!(
+                        value.passages.first().map(|passage| passage.text.as_str()),
+                        self.expected_text
+                    );
+                    assert_eq!(value.completion, self.expected_completion);
+                }
+                OperationResult::DocumentsRead {
+                    value: DocumentResult::Current(value),
+                } => {
+                    assert!(
+                        value
+                            .index_activity
+                            .as_ref()
+                            .is_some_and(|activity| activity.chunk_count.is_some())
+                    );
+                }
+                unexpected => panic!("{unexpected:?}"),
+            }
             let (document, recipient) = (self.document.clone(), self.recipient.clone());
             assert!(
                 write(self.store.as_ref(), move |tx| tx
@@ -418,6 +436,28 @@ fn gateway_rechecks_a_document_share_after_the_search_snapshot() {
             "{reply:?}"
         );
     }
+    let (document, project) = (source.id.clone(), recipient.clone());
+    assert!(
+        write(f.store.as_ref(), move |tx| tx
+            .artifacts()
+            .add_share(&document, &project))
+        .unwrap()
+    );
+    let exact = source.current_version.as_ref().unwrap();
+    let handler = RevokeAfterQuery {
+        library: DocumentLibrary::new(f.artifacts.clone(), h.ids.clone(), h.clock()),
+        store: f.store.clone(),
+        document: source.id.clone(),
+        recipient,
+        expected_text: None,
+        expected_completion: QueryCompletion::Complete,
+    };
+    let read = json!({"protocol":"1.0-draft.1","schemaRevision":13,"queryId":"document-activity-revoked",
+        "limit":20,"query":{"kind":"Read","artifactId":exact.artifact_id,"versionId":exact.version_id}});
+    let reply = gateway
+        .query(&b, "documents.read", read.to_string().as_bytes(), &handler)
+        .unwrap();
+    assert_unavailable(reply);
 }
 
 #[test]

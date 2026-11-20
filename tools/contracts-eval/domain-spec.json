@@ -1343,6 +1343,35 @@
         "coverage": "Coverage"
       }
     },
+    "DocumentIndexAttempt": {
+      "kind": "record",
+      "fields": {
+        "attempt_id": "Id",
+        "project_id": "?ProjectId",
+        "purpose": "Id",
+        "model_id": "Id",
+        "connection_id": "Id",
+        "endpoint_profile": "Id",
+        "provider_model": "?Label",
+        "input_tokens": "?Counter",
+        "output_tokens": "?Counter",
+        "priced_micro_usd": "?Counter",
+        "pricing_classification": "Id",
+        "monetary_complete": "bool",
+        "state": "Id"
+      }
+    },
+    "DocumentIndexActivity": {
+      "kind": "record",
+      "fields": {
+        "run_id": "Id",
+        "stage": "Id",
+        "indexed_at_ms": "?Counter",
+        "chunk_count": "?Counter",
+        "attempts": "Items<DocumentIndexAttempt>",
+        "more_attempts": "bool"
+      }
+    },
     "DocumentDetail": {
       "kind": "record",
       "fields": {
@@ -1363,8 +1392,10 @@
         "next_version_cursor": "?Cursor",
         "retrieval_enabled": "bool",
         "extraction_state": "ItemState",
-        "coverage": "Coverage"
-      }
+        "coverage": "Coverage",
+        "index_activity": "?DocumentIndexActivity"
+      },
+      "since": {"index_activity": 13}
     },
     "DocumentLibraryPage": {
       "kind": "record",
@@ -11641,13 +11672,13 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
-    "documents.import": [1, 10],
-    "documents.list": [1, 10],
-    "documents.read": [1, 10],
-    "documents.share": [1, 10],
-    "documents.move": [1, 10],
-    "documents.disable_retrieval": [1, 10],
-    "documents.remove_index": [1, 10],
+    "documents.import": [1, 10, 13],
+    "documents.list": [1, 10, 13],
+    "documents.read": [1, 10, 13],
+    "documents.share": [1, 10, 13],
+    "documents.move": [1, 10, 13],
+    "documents.disable_retrieval": [1, 10, 13],
+    "documents.remove_index": [1, 10, 13],
     "documents.resolve_citation": [11],
     "documents.index": [1, 12],
     "artifacts.save": [

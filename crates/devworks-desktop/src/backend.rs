@@ -390,6 +390,8 @@ pub enum TaskOutput {
     Preview { size: [usize; 2], rgba: Vec<u8> },
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
+    /// Exact original document text or a completed local export.
+    DocumentSource(Option<String>),
     /// A bounded convention editor or transfer task.
     Convention(crate::conventions_ops::TaskResult),
     /// Instruction text read or a staged draft (Roles and skills).

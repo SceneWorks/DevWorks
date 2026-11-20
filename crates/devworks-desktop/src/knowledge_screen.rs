@@ -399,6 +399,7 @@ pub enum Listed {
 
 #[derive(Default)]
 pub struct KnowledgeScreen {
+    pub documents: crate::documents_screen::DocumentsScreen,
     /// `None`: general (workspace) Knowledge; otherwise one of [`Self::projects`].
     pub project: Option<String>,
     /// The projects the user can see (ID, name), from the projects listing; the only scope
@@ -1496,15 +1497,16 @@ impl KnowledgeScreen {
         ui: &mut Ui,
         online: Result<(), &str>,
         actions: &mut Vec<KnowledgeAction>,
+        document_actions: &mut Vec<crate::documents_screen::Action>,
     ) {
         let screen = crate::route::Route::Knowledge.screen();
-        let mut st = (&mut *self, &mut *actions, online);
+        let mut st = (&mut *self, &mut *actions, &mut *document_actions, online);
         widgets::with_right_sidebar(
             ui,
             360.0,
             &mut st,
             |ui, st| {
-                let (s, a, online) = st;
+                let (s, a, documents, online) = st;
                 let tab = s.tab_memory();
                 let (_, tab) = widgets::pane(
                     ui,
@@ -1514,9 +1516,9 @@ impl KnowledgeScreen {
                         tabs: screen.subviews,
                         tab,
                     },
-                    &mut (&mut **s, &mut **a),
+                    &mut (&mut **s, &mut **a, &mut **documents),
                     |ui, st| {
-                        if widgets::secondary_button(ui, "New entry").clicked() {
+                        if tab == 0 && widgets::secondary_button(ui, "New entry").clicked() {
                             st.0.draft = Some(Draft::default());
                             st.0.draft_base = None;
                         }
@@ -1525,14 +1527,8 @@ impl KnowledgeScreen {
                         if tab == 2 {
                             return;
                         }
-                        if tab == 1 {
-                            widgets::state_block(
-                                ui,
-                                &ViewState::Unavailable {
-                                    what: "knowledge documents".into(),
-                                    owner: "DW-35".into(),
-                                },
-                            );
+                        if tab == crate::documents_screen::TAB {
+                            st.0.documents.main(ui, &st.0.projects, *online, st.2);
                             return;
                         }
                         st.0.entries(ui, *online, st.1);
@@ -1541,8 +1537,16 @@ impl KnowledgeScreen {
                 s.set_tab_memory(tab);
             },
             |ui, st| {
-                let (s, a, online) = st;
-                widgets::secondary_pane(ui, "Entry", |ui| s.detail_pane(ui, *online, a));
+                let (s, a, documents, online) = st;
+                if s.tab == crate::documents_screen::TAB {
+                    widgets::secondary_pane(ui, "Document", |ui| {
+                        if online.is_ok() {
+                            s.documents.detail(ui, &s.projects, documents);
+                        }
+                    });
+                } else {
+                    widgets::secondary_pane(ui, "Entry", |ui| s.detail_pane(ui, *online, a));
+                }
             },
         );
     }

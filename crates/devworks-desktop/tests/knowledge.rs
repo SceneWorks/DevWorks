@@ -172,9 +172,9 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
         has_text(&h, "Word search only"),
         "retrieval reports lexical-only mode, never vector search"
     );
-    // Documents belong to their own item and say so.
+    // Documents is its own native Knowledge tab.
     click(&mut h, Role::Button, "Documents");
-    assert!(has_text(&h, "DW-35"));
+    assert!(has_text(&h, "No documents in this scope."));
     click(&mut h, Role::Button, "Entries");
 
     // Manual creation of a decision.

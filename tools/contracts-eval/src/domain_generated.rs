@@ -3368,6 +3368,79 @@ impl Check for DocumentRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentIndexAttempt {
+    pub attempt_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub purpose: Id,
+    pub model_id: Id,
+    pub connection_id: Id,
+    pub endpoint_profile: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_model: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priced_micro_usd: Option<Counter>,
+    pub pricing_classification: Id,
+    pub monetary_complete: bool,
+    pub state: Id,
+}
+impl Check for DocumentIndexAttempt {
+    fn check(&self) -> Result<(), String> {
+        self.attempt_id.check()?;
+        self.project_id.check()?;
+        self.purpose.check()?;
+        self.model_id.check()?;
+        self.connection_id.check()?;
+        self.endpoint_profile.check()?;
+        self.provider_model.check()?;
+        self.input_tokens.check()?;
+        self.output_tokens.check()?;
+        self.priced_micro_usd.check()?;
+        self.pricing_classification.check()?;
+        self.monetary_complete.check()?;
+        self.state.check()?;
+        super::domain_rules::record(
+            "DocumentIndexAttempt",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentIndexActivity {
+    pub run_id: Id,
+    pub stage: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_count: Option<Counter>,
+    pub attempts: Items<DocumentIndexAttempt>,
+    pub more_attempts: bool,
+}
+impl Check for DocumentIndexActivity {
+    fn check(&self) -> Result<(), String> {
+        self.run_id.check()?;
+        self.stage.check()?;
+        self.indexed_at_ms.check()?;
+        self.chunk_count.check()?;
+        self.attempts.check()?;
+        self.more_attempts.check()?;
+        super::domain_rules::record(
+            "DocumentIndexActivity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentDetail {
     pub id: Id,
     pub revision: Revision,
@@ -3394,6 +3467,13 @@ pub struct DocumentDetail {
     pub retrieval_enabled: bool,
     pub extraction_state: ItemState,
     pub coverage: Coverage,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DocumentIndexActivity", extend("x-since" = 13))]
+    pub index_activity: Option<DocumentIndexActivity>,
 }
 impl Check for DocumentDetail {
     fn check(&self) -> Result<(), String> {
@@ -3415,11 +3495,20 @@ impl Check for DocumentDetail {
         self.retrieval_enabled.check()?;
         self.extraction_state.check()?;
         self.coverage.check()?;
+        self.index_activity.check()?;
         super::domain_rules::record(
             "DocumentDetail",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DocumentDetail {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 13 {
+            self.index_activity = None;
+        }
     }
 }
 
@@ -3446,6 +3535,12 @@ impl Check for DocumentLibraryPage {
     }
 }
 
+impl Revisioned for DocumentLibraryPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 #[schemars(extend("x-earlier" = {"name": "DocumentRecord", "before": 10}))]
@@ -3464,7 +3559,11 @@ impl Check for DocumentResult {
     }
 }
 impl Revisioned for DocumentResult {
-    fn retain_revision(&mut self, _revision: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::Legacy(_) if revision >= 10 => {
@@ -3496,7 +3595,11 @@ impl Check for DocumentListResult {
     }
 }
 impl Revisioned for DocumentListResult {
-    fn retain_revision(&mut self, _revision: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::Legacy(_) if revision >= 10 => {

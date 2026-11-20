@@ -137,6 +137,41 @@ pub(super) fn command(
     result
 }
 
+pub(super) fn inspect_document(
+    f: &Fx,
+    cases: &UseCases,
+    ctx: &InvocationContext,
+    source: &ArtifactRef,
+    revision: u32,
+) -> DocumentDetail {
+    let authority = HostAuthority {
+        store: f.store.as_ref(),
+        clock: &*f.h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: f.store.as_ref(),
+        ids: &*f.h.ids,
+        authority: &authority,
+    };
+    let raw = json!({"protocol":"1.0-draft.1","queryId":"inspect-version","schemaRevision":revision,
+        "query":{"kind":"Read","artifactId":source.artifact_id,"versionId":source.version_id},"limit":20});
+    let reply = cases
+        .query(&gateway, ctx, "documents.read", raw.to_string().as_bytes())
+        .unwrap();
+    let DomainQueryReply::Result {
+        result:
+            OperationResult::DocumentsRead {
+                value: devworks_core::protocol::records::DocumentResult::Current(value),
+            },
+        ..
+    } = reply
+    else {
+        panic!("{reply:?}")
+    };
+    value
+}
+
 pub(super) fn search(
     f: &Fx,
     cases: &UseCases,
@@ -406,6 +441,15 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
         controlled.send_calls.load(Ordering::SeqCst),
         1,
         "reconciliation uses observation only"
+    );
+    let view = inspect_document(&f, &cases, &a, exact, 13);
+    let activity = view.index_activity.unwrap();
+    assert_eq!(activity.chunk_count.unwrap().get(), 1);
+    assert_eq!(activity.attempts.0.len(), 1);
+    assert_eq!(activity.attempts.0[0].purpose.as_str(), "Embedding");
+    assert_eq!(
+        activity.attempts.0[0].input_tokens.as_ref().unwrap().get(),
+        3
     );
     let indexed = captured(&f, "DocumentIndex");
     assert_eq!(indexed.len(), 1);

@@ -1,4 +1,5 @@
 //! Exact-version document custody. The artifact repository owns scope, bytes and retention.
+mod activity;
 mod embedding_query;
 pub mod extraction;
 pub mod indexing;
@@ -60,6 +61,7 @@ pub const INDEX_OPERATIONS: &[&str] = &[
 ];
 pub const RETRIEVAL_OPERATIONS: &[&str] = &["documents.search", "documents.resolve_citation"];
 const DETAILS_REVISION: u32 = 10;
+const ACTIVITY_REVISION: u32 = 13;
 const LISTED_VERSIONS: u16 = 10;
 
 /// The artifact-backed document library. Its handlers can be tested through the gateway before
@@ -383,14 +385,18 @@ impl DocumentLibrary {
                                 .map_err(|_| StorageError::CursorExpired)
                         })
                         .transpose()?;
-                    DocumentResult::Current(read_detail(
+                    let mut detail = read_detail(
                         snapshot,
                         &artifact,
                         Some(&selected),
                         Some(&binding),
                         after,
                         request.limit,
-                    )?)
+                    )?;
+                    if query.schema_revision().0 >= ACTIVITY_REVISION && selected.live() {
+                        detail.index_activity = activity::read(snapshot, ctx, &selected.id)?;
+                    }
+                    DocumentResult::Current(detail)
                 } else {
                     if request.cursor.is_some() {
                         return Err(StorageError::CursorExpired.into());
@@ -482,7 +488,15 @@ impl QueryHandler for DocumentLibrary {
             query.input(),
             OperationInput::Documents(ops::Input::Search(_) | ops::Input::ResolveCitation(_))
         )
-        .then_some(retrieval::check_publication)
+        .then_some(retrieval::check_publication as QueryPublicationCheck)
+        .or_else(|| {
+            (query.schema_revision().0 >= ACTIVITY_REVISION
+                && matches!(
+                    query.input(),
+                    OperationInput::Documents(ops::Input::Read(_))
+                ))
+            .then_some(activity::check_publication as QueryPublicationCheck)
+        })
     }
 
     fn query(
@@ -701,6 +715,7 @@ fn detail(
             ],
             more_gaps: false,
         },
+        index_activity: None,
     })
 }
 
