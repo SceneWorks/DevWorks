@@ -375,8 +375,14 @@ impl PackageHost {
         ) {
             return Ok(text);
         }
-        if runtime == swift::SDK_RUNTIME || runtime == "swift" {
+        if runtime == swift::SDK_RUNTIME {
             return Err(swift_xcode_probe_failure(&text).into());
+        }
+        if cfg!(target_os = "macos") && runtime == "swift" {
+            let reason = swift_xcode_probe_failure(&text);
+            if reason == "swift-xcode-initialization-required" {
+                return Err(reason.into());
+            }
         }
         Err(format!("`{runtime}` version probe failed"))
     }
