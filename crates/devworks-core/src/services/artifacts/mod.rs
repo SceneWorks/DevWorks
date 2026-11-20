@@ -348,6 +348,32 @@ pub(crate) fn visible_in(
     artifact: &StoredArtifact,
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
+    if artifact.provenance["principalKind"] == "Host"
+        && DerivedKind::of(&artifact.provenance).is_some_and(DerivedKind::is_document_embedding)
+    {
+        let Ok(source) = serde_json::from_value::<ArtifactRef>(
+            artifact.provenance["derived"]["documentSource"].clone(),
+        ) else {
+            return Ok(false);
+        };
+        let Some(document) = read.artifact(&source.artifact_id)?.filter(|document| {
+            document.state == ArtifactState::Live
+                && document.provenance["managedDocument"].as_bool() == Some(true)
+                && !DerivedKind::of(&document.provenance)
+                    .is_some_and(DerivedKind::is_document_embedding)
+        }) else {
+            return Ok(false);
+        };
+        return Ok(viewer.sees_owned(artifact.owner.as_ref())
+            && visible_in(read, viewer, &document, project)?
+            && read.version(&source.version_id)?.is_some_and(|version| {
+                version.live()
+                    && version.artifact_id == document.id
+                    && version.blob_digest == source.sha256.as_str()
+                    && version.byte_count == source.byte_length.get()
+                    && version.media_type == source.media_type
+            }));
+    }
     if artifact.retention == ArtifactRetention::Receipt {
         if !viewer.sees_owned(artifact.owner.as_ref()) {
             return Ok(false);
@@ -537,7 +563,7 @@ pub(crate) fn retained_convention(
         DerivedKind::EmbeddingProbeInput => {
             id("candidateId") && id("operationId") && id("requestId") && id("admissionKey")
         }
-        DerivedKind::ConventionEmbeddingInput => {
+        DerivedKind::ConventionEmbeddingInput | DerivedKind::DocumentEmbeddingInput => {
             id("requestId")
                 && digest("contextDigest")
                 && digest("inputDigest")
@@ -545,6 +571,11 @@ pub(crate) fn retained_convention(
                     .as_str()
                     .is_some_and(|s| !s.is_empty())
                 && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
+        }
+        DerivedKind::DocumentEmbeddingOutput => {
+            id("requestId")
+                && id("attemptId")
+                && serde_json::from_value::<ArtifactRef>(derived["documentSource"].clone()).is_ok()
         }
         DerivedKind::HelpTopic
         | DerivedKind::Instruction

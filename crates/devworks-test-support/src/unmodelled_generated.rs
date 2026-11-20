@@ -894,14 +894,49 @@ impl DocumentRead for Unmodelled {
     fn document_passage(&self, _: &Id, _: &Id) -> Result<Option<ExtractedBlock>, StorageError> {
         unmodelled()
     }
-    fn document_lexical(
+    fn has_document_vectors(
         &self,
-        _: &DocumentLexicalQuery<'_>,
-    ) -> Result<DocumentLexicalBatch, StorageError> {
+        _: &ArtifactScope,
+        _: Option<&ActorId>,
+        _: Option<&[Id]>,
+        _: &Id,
+    ) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn rank_document_blocks(
+        &self,
+        _: &DocumentRankingQuery<'_>,
+    ) -> Result<DocumentRankingBatch, StorageError> {
         unmodelled()
     }
 }
 impl DocumentRepository for Unmodelled {
+    fn insert_document_embedding_run(
+        &mut self,
+        _: &DocumentEmbeddingRun,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn document_embedding_run(&self, _: &Id) -> Result<Option<DocumentEmbeddingRun>, StorageError> {
+        unmodelled()
+    }
+    fn pending_document_vectors(
+        &self,
+        _: &DocumentEmbeddingRun,
+        _: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError> {
+        unmodelled()
+    }
+    fn insert_document_vectors(
+        &mut self,
+        _: &DocumentEmbeddingRun,
+        _: &[(Id, Vec<f32>)],
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn complete_document_vectors(&mut self, _: &DocumentEmbeddingRun) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn set_document_retrieval(&mut self, _: &Id, _: bool) -> Result<(), StorageError> {
         unmodelled()
     }

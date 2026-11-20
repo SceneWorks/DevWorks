@@ -863,12 +863,12 @@ impl Citation {
         Ok(())
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Metric {
     L2,
     Cosine,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmbeddingSpace {
     pub space_id: Id,
@@ -889,7 +889,7 @@ pub enum RetrievalInput {
         float32_le: ArtifactRef,
     },
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum RetrievalMode {
     Lexical,
     Vector,

@@ -1,4 +1,5 @@
 //! Exact-version document custody. The artifact repository owns scope, bytes and retention.
+mod embedding_query;
 pub mod extraction;
 pub mod indexing;
 pub mod pdf;
@@ -9,8 +10,8 @@ use crate::{
     gateway::{AdmittedCommand, AdmittedQuery},
     operations::{OperationInput, documents as ops, indexing as index_ops},
     ports::{
-        Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer,
-        QueryHandler, QueryPublicationCheck,
+        Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
+        QueryAnswer, QueryHandler, QueryPublicationCheck,
         storage::{
             ArtifactRead, ArtifactScope, DocumentIndexStage, DocumentListFilter, DocumentRead,
             ListPosition, QueueRead, QueueState, ReadSnapshot, StorageError, StoredArtifact,
@@ -253,7 +254,13 @@ impl DocumentLibrary {
         let details = query.schema_revision().0 >= DETAILS_REVISION;
         let (result, scope_revision) = match input {
             ops::Input::Search(request) => {
-                let value = retrieval::search(snapshot, ctx, request)?;
+                let prepared = query.prepared::<embedding_query::PreparedSearch>();
+                let value = retrieval::search(
+                    snapshot,
+                    ctx,
+                    request,
+                    prepared.and_then(|prepared| prepared.dense.as_ref()),
+                )?;
                 return Ok(QueryAnswer {
                     stamp: value.stamp.clone(),
                     result: OperationResult::DocumentsSearch { value },
@@ -422,16 +429,45 @@ impl CommandHandler for DocumentLibrary {
 }
 
 impl QueryHandler for DocumentLibrary {
-    fn read_deadline_ms(&self, query: &AdmittedQuery) -> Option<i64> {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        query: &AdmittedQuery,
+        env: &Preparation<'_>,
+    ) -> Result<Option<Prepared>, DomainFault> {
         let OperationInput::Documents(ops::Input::Search(request)) = query.input() else {
-            return None;
+            return Ok(None);
         };
-        Some(
-            self.clock
-                .now_ms()
-                .get()
-                .saturating_add(i64::from(request.limits.deadline_ms.clamp(1, 300_000))),
+        let deadline = self
+            .clock
+            .now_ms()
+            .get()
+            .saturating_add(i64::from(request.limits.deadline_ms.clamp(1, 300_000)));
+        let deadline = env.deadline_ms.map_or(deadline, |host| host.min(deadline));
+        embedding_query::prepare(
+            self.indexer
+                .as_ref()
+                .and_then(|indexer| indexer.embeddings()),
+            &self.artifacts,
+            ctx,
+            query,
+            request,
+            env,
+            deadline,
         )
+        .map(|prepared| Some(Prepared::new(prepared)))
+        .map_err(|error| {
+            error.query_fault(
+                "document",
+                CorrelationId(self.ids.next_id(IdKind::Correlation)),
+            )
+        })
+    }
+
+    fn read_deadline_ms(&self, query: &AdmittedQuery) -> Option<i64> {
+        query
+            .prepared::<embedding_query::PreparedSearch>()
+            .map(|prepared| prepared.deadline_ms)
     }
 
     fn publication_check(&self, query: &AdmittedQuery) -> Option<QueryPublicationCheck> {

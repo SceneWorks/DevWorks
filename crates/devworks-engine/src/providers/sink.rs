@@ -48,6 +48,7 @@ pub type ResultChannel = Arc<Mutex<ProviderResult>>;
 
 pub struct SourceProvenance {
     pub context: Option<ArtifactRef>,
+    pub document_index: Option<(devworks_core::protocol::Id, i64)>,
     pub instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
 }
 
@@ -85,6 +86,7 @@ pub struct ProviderSink {
     last_sequence: Option<i64>,
     turn_start_sequence: Option<i64>,
     source_context: Option<ArtifactRef>,
+    document_index: Option<(devworks_core::protocol::Id, i64)>,
     instruction_targets: Option<Vec<(devworks_core::protocol::Id, Vec<String>)>>,
     sequence: i64,
     embedding: Option<(
@@ -132,6 +134,7 @@ impl ProviderSink {
             turn_start_sequence: None,
             source_context: source.context,
             instruction_targets: source.instruction_targets,
+            document_index: source.document_index,
             sequence: 0,
             embedding,
             vectors: BTreeMap::new(),
@@ -961,6 +964,7 @@ impl ProviderSink {
                 let context = self.context.clone();
                 let current = attempt.clone();
                 let binding = self.prepared.identity.binding.clone();
+                let document_index = self.document_index.clone();
                 let mut published = fence.publication(|| {
                     let mut staged = Vec::new();
                     for bytes in &bytes {
@@ -989,8 +993,26 @@ impl ProviderSink {
                             validate(tx, &context, &current)?;
                             validate_binding(tx, &binding)?;
                             use devworks_core::services::artifacts::host::HostArtifactPublication;
+                            let document_source = document_index
+                                .map(|(run, generation)| {
+                                    devworks_core::services::documents::indexing::embedding_source_in(
+                                        tx, &run, generation,
+                                    )?.ok_or(StorageError::ScopeDenied)
+                                })
+                                .transpose()?;
                             let mut references = Vec::new();
                             for (index, file) in pending.iter().enumerate() {
+                                let mut provenance = json!({
+                                    "requestId": current.request_id,
+                                    "attemptId": current.attempt_id,
+                                    "inputIndex": index,
+                                    "binding": binding
+                                });
+                                if let Some(source) = &document_source {
+                                    use devworks_core::kernel::derivation::DerivedKind;
+                                    provenance["kind"] = json!(DerivedKind::DocumentEmbeddingOutput.as_str());
+                                    provenance["documentSource"] = json!(source);
+                                }
                                 let version = native.commit_host_bytes_in_scope(
                                     tx,
                                     file,
@@ -1005,12 +1027,7 @@ impl ProviderSink {
                                         } else {
                                             "application/vnd.devworks.float32-le"
                                         },
-                                        provenance: json!({
-                                            "requestId": current.request_id,
-                                            "attemptId": current.attempt_id,
-                                            "inputIndex": index,
-                                            "binding": binding
-                                        }),
+                                        provenance,
                                         scope: current.project_id.clone().map_or(
                                             ArtifactScope::Workspace,
                                             ArtifactScope::Project,

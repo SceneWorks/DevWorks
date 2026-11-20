@@ -44,15 +44,32 @@ pub struct DocumentListFilter {
     pub current_only: bool,
 }
 
-pub struct DocumentLexicalQuery<'a> {
+pub struct DocumentRankingQuery<'a> {
     pub scope: &'a ArtifactScope,
     pub owner: Option<&'a ActorId>,
     /// Exact IDs already validated under the current snapshot, or current versions only.
     pub exact_versions: Option<&'a [Id]>,
     /// Safe, quoted FTS queries made from distinct search words.
     pub words: &'a [String],
+    pub dense: Option<DocumentVectorQuery<'a>>,
     pub max_blocks: u32,
     pub max_results: u16,
+}
+
+/// The exact qualified cosine space and finite, nonzero vector selected for one query.
+pub struct DocumentVectorQuery<'a> {
+    pub space: &'a Id,
+    pub vector: &'a [f32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentEmbeddingRun {
+    pub run: Id,
+    pub extraction: Id,
+    pub space: Option<Id>,
+    /// The selected configuration witness from the original preparation, even if unavailable.
+    pub configuration_digest: String,
+    pub complete: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -62,8 +79,10 @@ pub struct DocumentCandidate {
     pub generation: Id,
 }
 
-pub struct DocumentLexicalBatch {
+pub struct DocumentRankingBatch {
     pub candidates: Vec<DocumentCandidate>,
+    /// A compatible vector was scored inside the bounded eligible prefix.
+    pub used_vectors: bool,
     pub work_limited: bool,
 }
 
@@ -87,15 +106,46 @@ pub trait DocumentRead {
         checkpoint: &Id,
         block: &Id,
     ) -> Result<Option<ExtractedBlock>, StorageError>;
+    /// Whether this authorized published population has any vectors in the exact space.
+    fn has_document_vectors(
+        &self,
+        scope: &ArtifactScope,
+        owner: Option<&ActorId>,
+        exact_versions: Option<&[Id]>,
+        space: &Id,
+    ) -> Result<bool, StorageError>;
     /// Filter the authorized, published exact versions before matching and ranking. Return
     /// identities only. The caller opens selected passages within the same snapshot.
-    fn document_lexical(
+    fn rank_document_blocks(
         &self,
-        query: &DocumentLexicalQuery<'_>,
-    ) -> Result<DocumentLexicalBatch, StorageError>;
+        query: &DocumentRankingQuery<'_>,
+    ) -> Result<DocumentRankingBatch, StorageError>;
 }
 
 pub trait DocumentRepository: DocumentRead {
+    /// Capture the run's immutable route once, before any native embedding is started.
+    fn insert_document_embedding_run(
+        &mut self,
+        run: &DocumentEmbeddingRun,
+    ) -> Result<(), StorageError>;
+    fn document_embedding_run(
+        &self,
+        run: &Id,
+    ) -> Result<Option<DocumentEmbeddingRun>, StorageError>;
+    /// Up to 32 exact retained blocks missing vectors from the selected run's space.
+    fn pending_document_vectors(
+        &self,
+        run: &DocumentEmbeddingRun,
+        limit: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError>;
+    fn insert_document_vectors(
+        &mut self,
+        run: &DocumentEmbeddingRun,
+        vectors: &[(Id, Vec<f32>)],
+    ) -> Result<(), StorageError>;
+    /// The full vector population may become visible in the index publication transaction.
+    fn complete_document_vectors(&mut self, run: &DocumentEmbeddingRun)
+    -> Result<(), StorageError>;
     fn set_document_retrieval(&mut self, artifact: &Id, enabled: bool) -> Result<(), StorageError>;
     fn put_document_index(&mut self, index: &DocumentIndexVersion) -> Result<(), StorageError>;
     fn remove_document_index(&mut self, artifact: &Id) -> Result<bool, StorageError>;

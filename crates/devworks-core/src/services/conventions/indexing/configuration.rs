@@ -60,7 +60,16 @@ impl IndexService {
         let resolved = embedding_spaces::resolve_selected_read(read, ctx)?;
         Ok(resolved_configuration(&resolved, self.native_available()))
     }
-    pub(super) fn native_available(&self) -> bool {
+    pub(crate) fn configuration_in(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+    ) -> Result<EmbeddingConfiguration, StorageError> {
+        let resolved = embedding_spaces::resolve_selected_in(tx, ctx)?;
+        Ok(resolved_configuration(&resolved, self.native_available()))
+    }
+
+    pub(crate) fn native_available(&self) -> bool {
         self.embeddings
             .read_locked()
             .as_ref()

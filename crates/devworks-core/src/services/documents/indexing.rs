@@ -20,7 +20,14 @@ use crate::{
     services::{
         approvals,
         artifacts::{ArtifactService, lifecycle::ExactReadRefusal},
-        conventions::control,
+        conventions::{
+            control,
+            indexing::{
+                IndexService,
+                embedding::{EmbeddingFailure, EmbeddingOrigin, EmbeddingRequest},
+                preparation::InputPreparation,
+            },
+        },
         effect_job,
         kernel::{Failure, Refusal, counter, rev},
     },
@@ -37,6 +44,7 @@ const JOB_SCHEMA: u32 = 1;
 const SOURCE_LIMIT: u64 = 32 * 1024 * 1024;
 const NORMALIZED_LIMIT: usize = 16 * 1024 * 1024;
 const COUNT_LIMIT: usize = 16_384;
+const EMBEDDING_OUTCOME_UNKNOWN: &str = "EmbeddingOutcomeUnknown";
 
 pub struct DocumentExtraction {
     pub blocks: Vec<ExtractedBlock>,
@@ -256,7 +264,9 @@ pub(crate) fn cancel_if_document(
 }
 
 fn cancel_record(entry: &QueueEntry, index: Option<&DocumentIndexVersion>) -> IndexRunRecord {
-    let state = super::super::queue::delivery_state(entry, None);
+    let operation = (entry.last_error.as_deref() == Some(EMBEDDING_OUTCOME_UNKNOWN))
+        .then_some(OperationState::OutcomeUnknown);
+    let state = super::super::queue::delivery_state(entry, operation);
     let stage = match entry.state {
         QueueState::Claimed if entry.cancel_requested => "Cancelling",
         QueueState::Cancelled => "Cancelled",
@@ -348,6 +358,14 @@ pub struct DocumentIndexer {
     store: Arc<dyn ApplicationStore>,
     artifacts: Arc<ArtifactService>,
     extractor: Arc<dyn DocumentProcessor>,
+    embeddings: Option<Arc<IndexService>>,
+}
+
+enum VectorPublication {
+    Absent,
+    Complete(DocumentEmbeddingRun),
+    Partial(Id),
+    Held,
 }
 
 impl DocumentIndexer {
@@ -360,7 +378,17 @@ impl DocumentIndexer {
             store,
             artifacts,
             extractor,
+            embeddings: None,
         }
+    }
+
+    pub fn with_embeddings(mut self, embeddings: Arc<IndexService>) -> Self {
+        self.embeddings = Some(embeddings);
+        self
+    }
+
+    pub(super) fn embeddings(&self) -> Option<&IndexService> {
+        self.embeddings.as_deref()
     }
 
     pub(super) fn admit(
@@ -376,6 +404,32 @@ impl DocumentIndexer {
         check_revision(&artifact, expected)?;
         let source = version(tx, document, id)?;
         let prior = tx.documents().document_index(id)?;
+        if let Some(prior) = &prior
+            && prior
+                .diagnostic
+                .as_ref()
+                .is_some_and(|id| id.as_str() == EMBEDDING_OUTCOME_UNKNOWN)
+            && let Some(entry) = tx.queue().entry(&prior.latest)?
+            && entry.state == QueueState::Reconciling
+        {
+            if command.descriptor().name != "documents.retry" {
+                return Err(StorageError::Busy.into());
+            }
+            // A retry observes the original paid request under its original owner. It may not
+            // create a new delivery (and hence a new provider identity) while custody is open.
+            let saved = Job::from_delivery(&entry)?;
+            saved.restore(tx, &entry, self.extractor.revision())?;
+            let after = tx.queue().requeue(&entry.id, 0)?;
+            record_run(
+                tx,
+                &after,
+                &saved,
+                ctx.principal(),
+                "DocumentIndexReconciliationRequested",
+                None,
+            )?;
+            return Ok(cancel_record(&after, Some(prior)));
+        }
         if let Some(prior) = &prior
             && matches!(
                 prior.stage,
@@ -456,13 +510,9 @@ impl DocumentIndexer {
 
     /// The caller runs this off the dispatcher runtime. The lease and authoritative source
     /// are checked before opening bytes, before checkpointing, and before publication.
-    pub fn run(
-        &self,
-        entry: &QueueEntry,
-        cancelled: &(dyn Fn() -> bool + Send + Sync),
-    ) -> Result<(), StorageError> {
+    pub fn run(&self, entry: &QueueEntry, cancellation: &Cancellation) -> Result<(), StorageError> {
         let job = Job::from_delivery(entry)?;
-        match self.process(entry, &job, cancelled) {
+        match self.process(entry, &job, cancellation) {
             Err(StorageError::Cancelled) => self.finish(entry, &job, None, true),
             Err(StorageError::ViewUnavailable | StorageError::ScopeDenied) => {
                 self.finish(entry, &job, Some(code("SourceChanged")), false)
@@ -475,19 +525,26 @@ impl DocumentIndexer {
         &self,
         entry: &QueueEntry,
         job: &Job,
-        cancelled: &(dyn Fn() -> bool + Send + Sync),
+        cancellation: &Cancellation,
     ) -> Result<(), StorageError> {
         let (version, revision) = (
             job.source.version_id.clone(),
             job.extraction_revision.clone(),
         );
-        let (context, checkpoint) = self.fenced(entry, job, move |tx, ctx, _| {
-            Ok((
-                ctx,
-                tx.documents().document_checkpoint(&version, &revision)?,
-            ))
+        let (context, checkpoint) = self.fenced(entry, job, move |tx, ctx, mut index| {
+            let checkpoint = tx.documents().document_checkpoint(&version, &revision)?;
+            if checkpoint.is_some()
+                && matches!(
+                    index.stage,
+                    DocumentIndexStage::Queued | DocumentIndexStage::Partial
+                )
+            {
+                index.stage = DocumentIndexStage::Extracted;
+                tx.documents().put_document_index(&index)?;
+            }
+            Ok((ctx, checkpoint))
         })?;
-        if cancelled() {
+        if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
         if checkpoint.is_none() {
@@ -507,7 +564,7 @@ impl DocumentIndexer {
                     }
                 };
             let control = ExtractionControl {
-                cancelled,
+                cancelled: &|| cancellation.is_cancelled(),
                 deadline: Instant::now() + Duration::from_secs(30),
             };
             let output = self.extractor.extract(
@@ -518,7 +575,7 @@ impl DocumentIndexer {
                 },
                 &control,
             );
-            if cancelled() {
+            if cancellation.is_cancelled() {
                 return Err(StorageError::Cancelled);
             }
             match output {
@@ -526,10 +583,11 @@ impl DocumentIndexer {
                 Err(reason) => return self.finish(entry, job, Some(reason), false),
             }
         }
-        if cancelled() {
+        if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        self.publish(entry, job)
+        let vectors = self.embed_document(entry, job, cancellation)?;
+        self.publish(entry, job, vectors)
     }
 
     fn fenced<T: Send + 'static>(
@@ -591,36 +649,254 @@ impl DocumentIndexer {
         })
     }
 
-    fn publish(&self, entry: &QueueEntry, job: &Job) -> Result<(), StorageError> {
-        let (claimed, saved) = (entry.clone(), job.clone());
-        self.fenced(entry, job, move |tx, _, mut index| {
+    /// Checkpoints every completed provider batch under the same lease and original routing
+    /// witness. The producer observes its exact existing journal before sending.
+    fn embed_document(
+        &self,
+        entry: &QueueEntry,
+        job: &Job,
+        cancellation: &Cancellation,
+    ) -> Result<VectorPublication, StorageError> {
+        let Some(embeddings) = &self.embeddings else {
+            return Ok(VectorPublication::Absent);
+        };
+        let (runtime, run, version, revision) = (
+            embeddings.clone(),
+            entry.id.clone(),
+            job.source.version_id.clone(),
+            job.extraction_revision.clone(),
+        );
+        let (plan, context, selection, mut observe_only) =
+            self.fenced(entry, job, move |tx, ctx, index| {
+                let observe_only = index
+                    .diagnostic
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == EMBEDDING_OUTCOME_UNKNOWN);
+                let selection = runtime.configuration_in(tx, &ctx)?;
+                let checkpoint = tx
+                    .documents()
+                    .document_checkpoint(&version, &revision)?
+                    .ok_or(StorageError::ViewUnavailable)?;
+                let plan = match tx.documents().document_embedding_run(&run)? {
+                    Some(plan) if plan.extraction == checkpoint.id => plan,
+                    Some(_) => return Err(invalid()),
+                    None => {
+                        let space = if let Some(space) = &selection.space {
+                            tx.conventions().put_convention_embedding_space(space)?;
+                            Some(Id::new(space.id.clone()).map_err(|_| invalid())?)
+                        } else {
+                            None
+                        };
+                        let plan = DocumentEmbeddingRun {
+                            run,
+                            extraction: checkpoint.id,
+                            space,
+                            configuration_digest: selection.source_digest.clone(),
+                            complete: false,
+                        };
+                        tx.documents().insert_document_embedding_run(&plan)?;
+                        plan
+                    }
+                };
+                Ok((plan, ctx, selection, observe_only))
+            })?;
+        if plan.space.is_none() {
+            return Ok(VectorPublication::Absent);
+        }
+        let Some(space) = selection.space.filter(|space| {
+            plan.space
+                .as_ref()
+                .is_some_and(|id| id.as_str() == space.id)
+                && plan.configuration_digest == selection.source_digest
+        }) else {
+            return Ok(if observe_only {
+                VectorPublication::Held
+            } else {
+                VectorPublication::Partial(code("EmbeddingRouteChanged"))
+            });
+        };
+        let mut fences = job.fences.clone();
+        fences.push(AuthorityFence::DocumentIndex {
+            run: entry.id.clone(),
+            generation: entry.generation,
+        });
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(StorageError::Cancelled);
+            }
+            let snapshot = plan.clone();
+            let blocks = self.fenced(entry, job, move |tx, _, _| {
+                tx.documents().pending_document_vectors(&snapshot, 32)
+            })?;
+            let Some((first_block, _)) = blocks.first() else {
+                return Ok(VectorPublication::Complete(plan));
+            };
+            let origin = EmbeddingOrigin::DocumentIndex {
+                run_id: plan.run.clone(),
+                extraction_id: plan.extraction.clone(),
+                source: job.source.clone(),
+                first_block: first_block.clone(),
+            };
+            let texts = blocks
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>();
+            let input = InputPreparation {
+                context: &context,
+                origin: &origin,
+                embedding_space: &space.id,
+                configuration_source_digest: &plan.configuration_digest,
+                texts: &texts,
+                fences: &fences,
+                cancellation,
+                deadline_ms: None,
+            };
+            let prepared = if observe_only {
+                match embeddings.existing_embedding_inputs(input) {
+                    Ok(inputs) => inputs,
+                    Err(StorageError::CursorExpired) => return Ok(VectorPublication::Held),
+                    Err(error) => return Err(error),
+                }
+            } else {
+                embeddings.prepare_embedding_inputs(input)?
+            };
+            let request_id = prepared.request_id.clone();
+            let request = EmbeddingRequest {
+                request_id: request_id.clone(),
+                origin,
+                space: space.clone(),
+                configuration_source_digest: plan.configuration_digest.clone(),
+                preparation_operation: prepared.operation_id,
+                input_refs: prepared.input_refs,
+                fences: fences.clone(),
+                cancellation: cancellation.clone(),
+                deadline_ms: None,
+            };
+            let outcome = if observe_only {
+                match embeddings.observe_batch(&prepared.context, request) {
+                    outcome @ (Ok(_) | Err(EmbeddingFailure::Cancelled)) => outcome,
+                    Err(_) => return Ok(VectorPublication::Held),
+                }
+            } else {
+                match embeddings.embed_batch(&prepared.context, request.clone()) {
+                    Err(unknown @ EmbeddingFailure::Unknown { .. }) => {
+                        // The original journal can close just before acknowledgement is lost.
+                        // Observation cannot send or infer a result from a missing route.
+                        match embeddings.observe_batch(&prepared.context, request) {
+                            outcome @ (Ok(_) | Err(EmbeddingFailure::Cancelled)) => outcome,
+                            Err(_) => Err(unknown),
+                        }
+                    }
+                    outcome => outcome,
+                }
+            };
+            let vectors = match outcome {
+                Ok(outcome)
+                    if outcome.request_id == request_id
+                        && outcome.space == space
+                        && outcome.vectors.len() == blocks.len() =>
+                {
+                    outcome.vectors
+                }
+                Ok(_) => return Err(invalid()),
+                Err(EmbeddingFailure::Cancelled) => return Err(StorageError::Cancelled),
+                Err(EmbeddingFailure::Storage(error)) => return Err(error),
+                Err(EmbeddingFailure::Unknown { .. }) => {
+                    return Ok(VectorPublication::Held);
+                }
+                Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::NotStarted { .. }) => {
+                    return Ok(VectorPublication::Partial(code(
+                        "EmbeddingRouteUnavailable",
+                    )));
+                }
+            };
+            let vectors = blocks
+                .into_iter()
+                .map(|(id, _)| id)
+                .zip(vectors)
+                .collect::<Vec<_>>();
+            let snapshot = plan.clone();
+            self.fenced(entry, job, move |tx, _, mut index| {
+                tx.documents()
+                    .insert_document_vectors(&snapshot, &vectors)?;
+                if observe_only {
+                    index.diagnostic = None;
+                    tx.documents().put_document_index(&index)?;
+                }
+                Ok(())
+            })?;
+            observe_only = false;
+        }
+    }
+
+    fn publish(
+        &self,
+        entry: &QueueEntry,
+        job: &Job,
+        vectors: VectorPublication,
+    ) -> Result<(), StorageError> {
+        let (claimed, saved, runtime) = (entry.clone(), job.clone(), self.embeddings.clone());
+        self.fenced(entry, job, move |tx, ctx, mut index| {
             let extraction = tx
                 .documents()
                 .document_checkpoint(&saved.source.version_id, &saved.extraction_revision)?
                 .filter(|value| value.source_digest == saved.source.sha256.as_str())
                 .ok_or_else(invalid)?;
-            index.stage = if matches!(extraction.coverage.state, CoverageState::Complete) {
+            let held = matches!(vectors, VectorPublication::Held);
+            let diagnostic = match vectors {
+                VectorPublication::Absent => None,
+                VectorPublication::Partial(reason) => Some(reason),
+                VectorPublication::Held => Some(code(EMBEDDING_OUTCOME_UNKNOWN)),
+                VectorPublication::Complete(run) => {
+                    let selection = runtime
+                        .as_ref()
+                        .ok_or_else(invalid)?
+                        .configuration_in(tx, &ctx)?;
+                    if selection.source_digest == run.configuration_digest {
+                        tx.documents().complete_document_vectors(&run)?;
+                        None
+                    } else {
+                        Some(code("EmbeddingRouteChanged"))
+                    }
+                }
+            };
+            index.stage = if diagnostic.is_none()
+                && matches!(extraction.coverage.state, CoverageState::Complete)
+            {
                 DocumentIndexStage::Ready
             } else {
                 DocumentIndexStage::Partial
             };
             index.published = Some((claimed.id.clone(), extraction.revision));
+            index.diagnostic = diagnostic.clone();
             tx.documents().put_document_index(&index)?;
             if saved.current_version.as_ref() == Some(&saved.source.version_id) {
                 tx.documents()
                     .set_document_retrieval(&saved.source.artifact_id, true)?;
             }
-            let event = if index.stage == DocumentIndexStage::Partial {
+            let event = if held {
+                "DocumentIndexEmbeddingHeld"
+            } else if index.stage == DocumentIndexStage::Partial {
                 "DocumentIndexPartiallyPublished"
             } else {
                 "DocumentIndexPublished"
             };
-            record_run(tx, &claimed, &saved, &saved.actor, event, None)?;
-            tx.queue().settle(
-                &claimed.id,
-                &claimed.fence().ok_or_else(invalid)?,
-                Settlement::Completed,
+            record_run(
+                tx,
+                &claimed,
+                &saved,
+                &saved.actor,
+                event,
+                diagnostic.as_ref(),
             )?;
+            let fence = claimed.fence().ok_or_else(invalid)?;
+            if held {
+                tx.queue()
+                    .hold(&claimed.id, &fence, EMBEDDING_OUTCOME_UNKNOWN)?;
+            } else {
+                tx.queue()
+                    .settle(&claimed.id, &fence, Settlement::Completed)?;
+            }
             Ok(())
         })
     }
@@ -681,6 +957,90 @@ impl DocumentIndexer {
             Ok(())
         })
     }
+}
+
+fn active_embedding_claim(
+    entry: &QueueEntry,
+    generation: i64,
+    boot: Option<&Id>,
+    now: i64,
+) -> bool {
+    entry.consumer == CONSUMER
+        && entry.state == QueueState::Claimed
+        && entry.generation == generation
+        && entry.claim_boot_id.as_ref() == boot
+        && entry.lease_until_ms.is_some_and(|expiry| expiry > now)
+        && !entry.cancel_requested
+}
+
+/// Resolves the exact source still owned by the native indexing delivery.
+pub fn embedding_source_in(
+    tx: &mut dyn WriteTransaction,
+    run: &Id,
+    generation: i64,
+) -> Result<Option<ArtifactRef>, StorageError> {
+    let boot = tx.store().boot_id.clone();
+    let now = tx.now_ms();
+    let Some(entry) = tx
+        .queue()
+        .entry(run)?
+        .filter(|entry| active_embedding_claim(entry, generation, boot.as_ref(), now))
+    else {
+        return Ok(None);
+    };
+    let job = Job::from_delivery(&entry)?;
+    match job.restore(tx, &entry, job.extraction_revision.clone()) {
+        Ok(_) => Ok(tx
+            .documents()
+            .document_index(&job.source.version_id)?
+            .is_some_and(|index| {
+                index.latest == entry.id && index.stage == DocumentIndexStage::Extracted
+            })
+            .then_some(job.source)),
+        Err(
+            StorageError::ScopeDenied | StorageError::ViewUnavailable | StorageError::Cancelled,
+        ) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub(crate) fn embedding_fence_read(
+    read: &dyn ReadSnapshot,
+    run: &Id,
+    generation: i64,
+) -> Result<bool, StorageError> {
+    let Some(entry) = read.queue().entry(run)?.filter(|entry| {
+        active_embedding_claim(
+            entry,
+            generation,
+            read.stamp().boot_id.as_ref(),
+            read.stamp().now_ms,
+        )
+    }) else {
+        return Ok(false);
+    };
+    let job = Job::from_delivery(&entry)?;
+    let artifacts = read.artifacts();
+    let current = artifacts.artifact(&job.source.artifact_id)?;
+    let source = artifacts.version(&job.source.version_id)?;
+    Ok(job.store_id == read.stamp().store_id
+        && job.restore_epoch == read.stamp().restore_epoch
+        && current.is_some_and(|artifact| {
+            matches!(artifact.state, ArtifactState::Live)
+                && artifact.revision == job.artifact_revision
+                && artifact.scope_revision == job.scope_revision
+                && artifact.reference_revision == job.reference_revision
+                && artifact.current_version_id == job.current_version
+        })
+        && source.is_some_and(|version| {
+            version.live() && same_source(&job.source, &version_ref(&version))
+        })
+        && read
+            .documents()
+            .document_index(&job.source.version_id)?
+            .is_some_and(|index| {
+                index.latest == entry.id && index.stage == DocumentIndexStage::Extracted
+            }))
 }
 
 fn current_claim(
