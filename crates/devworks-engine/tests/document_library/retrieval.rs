@@ -250,7 +250,7 @@ fn relevance_work_and_result_limits_use_only_eligible_postings() {
     fallback["mode"] = json!("Hybrid");
     let refused = f.query(&b, "documents.search", fallback.clone());
     assert!(
-        matches!(refused, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::UnsupportedTarget)
+        matches!(refused, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::ViewUnavailable)
     );
     fallback["lexicalFallback"] = json!(true);
     let fallback = searched(f.query(&b, "documents.search", fallback));

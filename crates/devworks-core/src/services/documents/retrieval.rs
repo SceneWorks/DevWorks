@@ -1,6 +1,10 @@
 //! Scope and exact source validation precede lexical ranking. A citation always opens its
 //! retained extraction revision. Current search and historical search use published indexes.
-use super::{indexing::same_source, version_ref};
+use super::{
+    embedding_query::{PreparedSearch, QueryEmbedding},
+    indexing::same_source,
+    version_ref,
+};
 use crate::{
     context::InvocationContext,
     fingerprint::sha256_hex,
@@ -9,8 +13,8 @@ use crate::{
     ports::{
         QueryAnswer,
         storage::{
-            ArtifactScope, DocumentCandidate, DocumentLexicalQuery, ReadSnapshot, StorageError,
-            StoredArtifact,
+            ArtifactScope, DocumentCandidate, DocumentRankingQuery, DocumentVectorQuery,
+            ReadSnapshot, StorageError, StoredArtifact,
         },
     },
     protocol::{
@@ -46,17 +50,19 @@ pub(super) fn search(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     request: &RetrievalRequest,
+    dense: Option<&QueryEmbedding>,
 ) -> Result<RetrievalPage, Failure> {
-    request.validate().map_err(|_| invalid())?;
+    validate_search(request)?;
     let (scope, viewer) = audience(snapshot, ctx, request)?;
-    let (candidates, completion) = ranked_lexical(snapshot, ctx, request, &scope, &viewer)?;
+    let (candidates, completion, effective_mode) =
+        rank(snapshot, ctx, request, &scope, &viewer, dense)?;
     let mut result = RetrievalPage {
         protocol: request.protocol.clone(),
         query_id: request.query_id.clone(),
         stamp: stamp(snapshot, ctx),
         generation_ids: vec![],
-        space: None,
-        effective_mode: RetrievalMode::Lexical,
+        space: dense.map(|dense| dense.space.clone()),
+        effective_mode,
         completion,
         passages: vec![],
     };
@@ -83,30 +89,60 @@ pub(super) fn search(
     Ok(result)
 }
 
-fn ranked_lexical(
+fn rank(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     request: &RetrievalRequest,
     scope: &ArtifactScope,
     viewer: &Viewer<'_>,
-) -> Result<(Vec<DocumentCandidate>, QueryCompletion), Failure> {
+    dense: Option<&QueryEmbedding>,
+) -> Result<(Vec<DocumentCandidate>, QueryCompletion, RetrievalMode), Failure> {
     let exact = exact_indexes(snapshot, viewer, scope, &request.versions)?;
-    let words = words(lexical_input(request)?)
-        .into_iter()
-        .map(|word| format!("\"{word}\""))
-        .collect::<Vec<_>>();
-    if words.is_empty() {
-        return Ok((vec![], QueryCompletion::Complete));
+    let words = match (&request.input, &request.mode, dense) {
+        (RetrievalInput::Text { text }, RetrievalMode::Lexical | RetrievalMode::Hybrid, _)
+        | (RetrievalInput::Text { text }, RetrievalMode::Vector, None)
+            if dense.is_some()
+                || matches!(request.mode, RetrievalMode::Lexical)
+                || request.lexical_fallback =>
+        {
+            words(text)
+                .into_iter()
+                .map(|word| format!("\"{word}\""))
+                .collect()
+        }
+        (_, _, Some(_)) => Vec::new(),
+        _ => {
+            return Err(
+                Refusal::new(DomainErrorCode::ViewUnavailable, "document_embedding", None).into(),
+            );
+        }
+    };
+    let effective_mode = match (dense.is_some(), words.is_empty()) {
+        (false, _) => RetrievalMode::Lexical,
+        (true, false) => RetrievalMode::Hybrid,
+        (true, true) => RetrievalMode::Vector,
+    };
+    if let Some(dense) = dense {
+        dense.check(snapshot, ctx)?;
     }
-    // A visited unit is an eligible posting checked for one distinct search word.
-    let max_blocks = request.limits.max_visited / words.len() as u32;
+    let work_per_block = words.len() as u32 + u32::from(dense.is_some());
+    if work_per_block == 0 {
+        return Ok((vec![], QueryCompletion::Complete, effective_mode));
+    }
+    // A sparse term check and a dense similarity each consume one visited unit. Score only
+    // the selected postings within the same bound, before opening any passage content.
+    let max_blocks = request.limits.max_visited / work_per_block;
     let mut batch = snapshot
         .documents()
-        .document_lexical(&DocumentLexicalQuery {
+        .rank_document_blocks(&DocumentRankingQuery {
             scope,
             owner: (!viewer.sees_owned(None)).then_some(ctx.principal()),
             exact_versions: exact.as_deref(),
             words: &words,
+            dense: dense.map(|dense| DocumentVectorQuery {
+                space: &dense.space.space_id,
+                vector: &dense.vector,
+            }),
             max_blocks,
             max_results: request.limits.max_results,
         })?;
@@ -119,10 +155,11 @@ fn ranked_lexical(
         QueryCompletion::Complete
     };
     batch.candidates.truncate(limit);
-    Ok((batch.candidates, completion))
+    Ok((batch.candidates, completion, effective_mode))
 }
 
-fn lexical_input(request: &RetrievalRequest) -> Result<&str, Failure> {
+pub(super) fn validate_search(request: &RetrievalRequest) -> Result<(), Failure> {
+    request.validate().map_err(|_| invalid())?;
     if !matches!(request.sources.as_slice(), [RetrievalSource::Document]) {
         return Err(
             Refusal::new(DomainErrorCode::UnsupportedTarget, "document_source", None).into(),
@@ -130,25 +167,20 @@ fn lexical_input(request: &RetrievalRequest) -> Result<&str, Failure> {
     }
     if !(1..=1_000_000).contains(&request.limits.max_visited)
         || !(1..=300_000).contains(&request.limits.deadline_ms)
+        || matches!(
+            (&request.input, &request.mode),
+            (
+                RetrievalInput::Vector { .. },
+                RetrievalMode::Lexical | RetrievalMode::Hybrid
+            )
+        )
     {
         return Err(invalid().into());
     }
-    match &request.input {
-        RetrievalInput::Text { text }
-            if matches!(request.mode, RetrievalMode::Lexical) || request.lexical_fallback =>
-        {
-            Ok(text)
-        }
-        _ => Err(Refusal::new(
-            DomainErrorCode::UnsupportedTarget,
-            "document_search_mode",
-            None,
-        )
-        .into()),
-    }
+    Ok(())
 }
 
-fn audience<'a>(
+pub(super) fn audience<'a>(
     snapshot: &dyn ReadSnapshot,
     ctx: &'a InvocationContext,
     request: &RetrievalRequest,
@@ -160,7 +192,7 @@ fn audience<'a>(
     Ok((scope, Viewer::resolve(snapshot.authority(), ctx)?))
 }
 
-fn exact_indexes(
+pub(super) fn exact_indexes(
     snapshot: &dyn ReadSnapshot,
     viewer: &Viewer<'_>,
     scope: &ArtifactScope,
@@ -288,7 +320,15 @@ pub(super) fn check_publication(
         (
             OperationInput::Documents(ops::Input::Search(request)),
             OperationResult::DocumentsSearch { value },
-        ) => match check_result_scope(snapshot, ctx, request, value) {
+        ) => match check_result_scope(
+            snapshot,
+            ctx,
+            request,
+            value,
+            query
+                .prepared::<PreparedSearch>()
+                .and_then(|prepared| prepared.dense.as_ref()),
+        ) {
             Ok(true) => Ok(()),
             Ok(false) | Err(Failure::Refused(_) | Failure::Storage(StorageError::ScopeDenied)) => {
                 Err(publication_denied().into())
@@ -313,11 +353,12 @@ fn check_result_scope(
     ctx: &InvocationContext,
     request: &RetrievalRequest,
     result: &RetrievalPage,
+    dense: Option<&QueryEmbedding>,
 ) -> Result<bool, Failure> {
     let (scope, viewer) = audience(snapshot, ctx, request)?;
     // Even a passage omitted by the limit can influence the ranking or completion. Repeat the
     // bounded selection on the publication snapshot without reopening any passage text.
-    let (candidates, completion) = ranked_lexical(snapshot, ctx, request, &scope, &viewer)?;
+    let (candidates, completion, _) = rank(snapshot, ctx, request, &scope, &viewer, dense)?;
     if candidates.len() != result.passages.len() || completion != result.completion {
         return Ok(false);
     }

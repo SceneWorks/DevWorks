@@ -89,6 +89,7 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema65-extension.json"
     ),
+    policy_document!("documentVectorExtension", Tables, "schema66-extension.json"),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {
@@ -346,7 +347,10 @@ fn content_lineage(reference: &ColumnReference) -> bool {
         ("artifact_links", "artifact_versions") => "artifact_version_id",
         ("document_retrieval_preferences", "artifacts") => "artifact_id",
         ("document_extractions" | "document_index_versions", "artifact_versions") => "version_id",
-        ("document_extracted_blocks", "document_extractions") => "extraction_id",
+        (
+            "document_extracted_blocks" | "document_embedding_runs" | "document_vectors",
+            "document_extractions",
+        ) => "extraction_id",
         ("document_lexical_rows", "document_extracted_blocks") => "block_id",
         _ => return false,
     };
@@ -381,6 +385,12 @@ fn content_partitions(
             "retention='Explicit' AND (scope_kind='Workspace' OR current_project_id<>?1)",
             Action::Keep,
             Reason::IndependentPublication,
+        ),
+        (
+            "artifacts",
+            "id IN(SELECT id FROM ownedDocumentInputArtifacts)",
+            Action::Delete,
+            Reason::OwnedLineage,
         ),
         (
             "artifact_shares",

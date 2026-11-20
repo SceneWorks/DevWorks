@@ -16,6 +16,7 @@ pub enum DerivedKind {
     ConventionImport,
     EmbeddingProbeInput,
     ConventionEmbeddingInput,
+    DocumentEmbeddingInput,
     ProviderNativeContinuation,
 }
 
@@ -30,6 +31,7 @@ impl DerivedKind {
             Self::ConventionImport => "ConventionImport",
             Self::EmbeddingProbeInput => "EmbeddingProbeInput",
             Self::ConventionEmbeddingInput => "ConventionEmbeddingInput",
+            Self::DocumentEmbeddingInput => "DocumentEmbeddingInput",
             Self::ProviderNativeContinuation => "ProviderNativeContinuation",
         }
     }
@@ -43,6 +45,7 @@ impl DerivedKind {
             Self::ConventionImport,
             Self::EmbeddingProbeInput,
             Self::ConventionEmbeddingInput,
+            Self::DocumentEmbeddingInput,
             Self::ProviderNativeContinuation,
         ]
         .into_iter()

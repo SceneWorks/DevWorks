@@ -166,6 +166,8 @@ pub enum AuthorityFence {
     GitWorktree { id: Id, digest: String },
     /// The principal binding revision authority resolved.
     Principal { actor: ActorId, revision: i64 },
+    /// The claimed document index delivery still owns this exact source and lease.
+    DocumentIndex { run: Id, generation: i64 },
     /// Digest of the access-relevant effective policy of the invocation's scope.
     Policy {
         project_id: Option<ProjectId>,

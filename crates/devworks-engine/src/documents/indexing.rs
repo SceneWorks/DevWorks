@@ -7,7 +7,7 @@ use crate::{
     effect_consumer::STANDARD_RETRY,
 };
 use devworks_core::{
-    ports::storage::{StorageError, WriteTransaction},
+    ports::storage::{Cancellation, StorageError, WriteTransaction},
     services::documents::indexing::{CONSUMER, DocumentIndexer, DocumentProcessor},
 };
 use std::sync::Arc;
@@ -30,10 +30,25 @@ impl AsyncDeliveryHandler for IndexWorker {
     fn start(&self, job: AsyncDelivery) -> AsyncFuture {
         let indexer = self.0.clone();
         Box::pin(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                indexer.run(&job.delivery.entry, &|| *job.cancelled.borrow())
-            })
-            .await;
+            let mut cancelled = job.cancelled;
+            let cancellation = Cancellation::new();
+            if *cancelled.borrow() {
+                cancellation.cancel();
+            }
+            let token = cancellation.clone();
+            let mut work =
+                tokio::task::spawn_blocking(move || indexer.run(&job.delivery.entry, &token));
+            let result = loop {
+                tokio::select! {
+                    result = &mut work => break result,
+                    changed = cancelled.changed() => {
+                        if changed.is_err() || *cancelled.borrow() {
+                            cancellation.cancel();
+                            break work.await;
+                        }
+                    }
+                }
+            };
             match result {
                 Ok(Ok(())) => AsyncOutcome::Committed,
                 Ok(Err(StorageError::InvalidRecord(_))) => {

@@ -950,11 +950,10 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     };
     let use_cases = if let Some(ports) = &config.documents {
         use devworks_core::services::documents::{DocumentLibrary, indexing::DocumentIndexer};
-        let indexer = Arc::new(DocumentIndexer::new(
-            store.clone(),
-            artifacts.clone(),
-            ports.processor.clone(),
-        ));
+        let indexer = Arc::new(
+            DocumentIndexer::new(store.clone(), artifacts.clone(), ports.processor.clone())
+                .with_embeddings(conventions.indexing()),
+        );
         consumers.push(crate::documents::indexing::consumer(indexer.clone()));
         use_cases.with_document_library(Arc::new(
             DocumentLibrary::new(artifacts.clone(), ids.clone(), clock.clone())

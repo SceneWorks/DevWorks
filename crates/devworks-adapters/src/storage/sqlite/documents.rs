@@ -6,10 +6,11 @@ use super::{
 };
 use devworks_core::{
     ports::storage::{
-        DocumentCandidate, DocumentCheckpoint, DocumentIndexVersion, DocumentLexicalBatch,
-        DocumentLexicalQuery, DocumentRead, DocumentRepository, StorageError,
+        ArtifactScope, DocumentCandidate, DocumentCheckpoint, DocumentEmbeddingRun,
+        DocumentIndexVersion, DocumentRankingBatch, DocumentRankingQuery, DocumentRead,
+        DocumentRepository, StorageError,
     },
-    protocol::{Id, Revision},
+    protocol::{ActorId, Id, Revision},
     services::documents::extraction::ExtractedBlock,
 };
 use rusqlite::{Connection, OptionalExtension, params};
@@ -137,21 +138,8 @@ fn passage(
     .transpose()
 }
 
-fn lexical(
-    conn: &Connection,
-    query: &DocumentLexicalQuery<'_>,
-) -> Result<DocumentLexicalBatch, StorageError> {
-    if query.words.is_empty()
-        || !(1..=500).contains(&query.max_results)
-        || query.max_blocks > 1_000_000
-    {
-        return Err(invalid("document lexical query bounds"));
-    }
-    let exact = query.exact_versions.map(|ids| encode(&ids)).transpose()?;
-    let mut statement = db(conn.prepare_cached(
-        "WITH eligible AS MATERIALIZED (
-           SELECT l.id AS posting, b.id AS block, e.id AS checkpoint, e.version_id,
-                  b.ordinal, i.published_generation AS generation
+// Both the population check and ranking use the same authorized published posting set.
+const SCOPED_POSTINGS: &str = "
              FROM document_lexical_rows l JOIN document_extracted_blocks b ON b.id=l.block_id
              JOIN document_extractions e ON e.id=b.extraction_id
              JOIN document_index_versions i ON i.version_id=e.version_id AND i.published_revision=e.revision
@@ -166,23 +154,94 @@ fn lexical(
                      SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
                   AND (?2 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL OR a.owner_actor_id=?2)))
               AND ((?3 IS NULL AND v.id=a.current_version_id)
-                  OR (?3 IS NOT NULL AND v.id IN (SELECT value FROM json_each(?3))))
+                  OR (?3 IS NOT NULL AND v.id IN (SELECT value FROM json_each(?3))))";
+
+fn has_vectors(
+    conn: &Connection,
+    scope: &ArtifactScope,
+    owner: Option<&ActorId>,
+    exact_versions: Option<&[Id]>,
+    space: &Id,
+) -> Result<bool, StorageError> {
+    let exact = exact_versions.map(|ids| encode(&ids)).transpose()?;
+    let sql = format!(
+        "SELECT EXISTS (SELECT 1 {SCOPED_POSTINGS} AND EXISTS(
+          SELECT 1 FROM document_vectors d WHERE d.block_id=b.id AND d.space_id=?4
+            AND EXISTS (SELECT 1 FROM document_embedding_runs r
+              WHERE r.extraction_id=e.id AND r.space_id=?4 AND r.complete=1)))"
+    );
+    db(db(conn.prepare_cached(&sql))?.query_row(
+        params![
+            scope.project().map(|p| p.0.as_str()),
+            owner.map(|a| a.0.as_str()),
+            exact,
+            space.as_str(),
+        ],
+        |r| r.get(0),
+    ))
+}
+
+fn ranked(
+    conn: &Connection,
+    query: &DocumentRankingQuery<'_>,
+) -> Result<DocumentRankingBatch, StorageError> {
+    if (query.words.is_empty() && query.dense.is_none())
+        || !(1..=500).contains(&query.max_results)
+        || query.max_blocks > 1_000_000
+    {
+        return Err(invalid("document ranking query bounds"));
+    }
+    let exact = query.exact_versions.map(|ids| encode(&ids)).transpose()?;
+    let (space, vector) = if let Some(dense) = &query.dense {
+        let dimensions = cosine_dimensions(conn, dense.space)?;
+        (
+            Some(dense.space.as_str()),
+            Some(vector_blob(dense.vector, dimensions)?),
+        )
+    } else {
+        (None, None)
+    };
+    let sql = format!(
+        "WITH eligible AS MATERIALIZED (
+           SELECT l.id AS posting, b.id AS block, e.id AS checkpoint, e.version_id,
+                  b.ordinal, i.published_generation AS generation
+           {SCOPED_POSTINGS}
+              AND (?7 IS NULL OR json_array_length(?4)>0 OR EXISTS(
+                    SELECT 1 FROM document_vectors d WHERE d.block_id=b.id AND d.space_id=?7
+                      AND EXISTS(SELECT 1 FROM document_embedding_runs r
+                                 WHERE r.extraction_id=e.id AND r.space_id=?7 AND r.complete=1)))
             ORDER BY e.version_id,b.ordinal,b.id LIMIT (?5+1)
          ), tested AS MATERIALIZED (
            SELECT * FROM eligible ORDER BY version_id,ordinal,block LIMIT ?5
-         ), ranked AS MATERIALIZED (
-           SELECT e.*,COUNT(*) AS score
+         ), lexical AS MATERIALIZED (
+           SELECT e.posting,COUNT(*) AS score
              FROM tested e CROSS JOIN json_each(?4) word
             WHERE EXISTS(SELECT 1 FROM document_lexical_fts
                           WHERE rowid=e.posting AND document_lexical_fts MATCH word.value)
             GROUP BY e.posting
+         ), dense AS MATERIALIZED (
+           SELECT e.posting,max(0.0,1.0-vec_distance_cosine(d.vector,?8)) AS score
+             FROM tested e JOIN document_vectors d ON d.block_id=e.block AND d.space_id=?7
+            WHERE EXISTS(SELECT 1 FROM document_embedding_runs r
+                         WHERE r.extraction_id=e.checkpoint AND r.space_id=?7 AND r.complete=1)
+         ), scores AS MATERIALIZED (
+           SELECT e.*, CASE WHEN ?7 IS NULL THEN COALESCE(l.score,0)
+             WHEN json_array_length(?4)=0 THEN COALESCE(d.score,0)
+             ELSE 0.35*COALESCE(l.score,0)/json_array_length(?4)+0.65*COALESCE(d.score,0)
+             END score
+             FROM tested e LEFT JOIN lexical l ON l.posting=e.posting
+                  LEFT JOIN dense d ON d.posting=e.posting
+         ), ranked AS MATERIALIZED (
+           SELECT * FROM scores WHERE score>0
             ORDER BY score DESC,version_id,ordinal,block LIMIT (?6+1)
          )
          SELECT (SELECT COUNT(*) FROM eligible)>?5, r.checkpoint,r.block,r.generation
            FROM (SELECT 1) LEFT JOIN ranked r ON TRUE
           ORDER BY r.score DESC,r.version_id,r.ordinal,r.block",
-    ))?;
-    // No global FTS ranking statistics, or passage text, enter the candidate selection.
+    );
+    let mut statement = db(conn.prepare_cached(&sql))?;
+    // Only scoped, tested rows participate in matching or sqlite-vec scoring. Lexical
+    // scores use the request's term count so another posting cannot shift the scale.
     let mut rows = db(statement.query(params![
         query.scope.project().map(|project| project.0.as_str()),
         query.owner.map(|actor| actor.0.as_str()),
@@ -190,8 +249,10 @@ fn lexical(
         encode(&query.words)?,
         query.max_blocks,
         query.max_results,
+        space,
+        vector,
     ]))?;
-    let mut batch = DocumentLexicalBatch {
+    let mut batch = DocumentRankingBatch {
         candidates: Vec::new(),
         work_limited: false,
     };
@@ -206,6 +267,71 @@ fn lexical(
         }
     }
     Ok(batch)
+}
+
+fn cosine_dimensions(conn: &Connection, space: &Id) -> Result<u32, StorageError> {
+    db(conn
+        .query_row(
+            "SELECT dimensions FROM embedding_spaces WHERE id=?1
+               AND metric='Cosine' AND element_type='Float32'",
+            [space.as_str()],
+            |row| row.get(0),
+        )
+        .optional())?
+    .ok_or_else(|| invalid("unknown document embedding space"))
+}
+
+fn vector_blob(vector: &[f32], dimensions: u32) -> Result<Vec<u8>, StorageError> {
+    let square_norm = vector
+        .iter()
+        .map(|value| f64::from(*value).powi(2))
+        .sum::<f64>();
+    if vector.len() != dimensions as usize || !square_norm.is_finite() || square_norm == 0.0 {
+        return Err(invalid(
+            "document vector must match its space and have a finite nonzero norm",
+        ));
+    }
+    // Use a unit vector for the rebuildable cosine index. The native journal keeps the
+    // original Float32 artifact, including its exact byte digest.
+    let norm = square_norm.sqrt();
+    Ok(vector
+        .iter()
+        .flat_map(|value| ((f64::from(*value) / norm) as f32).to_le_bytes())
+        .collect())
+}
+
+fn embedding_run(
+    conn: &Connection,
+    run: &Id,
+) -> Result<Option<DocumentEmbeddingRun>, StorageError> {
+    let row = db(conn.query_row(
+        "SELECT extraction_id,space_id,configuration_digest,complete FROM document_embedding_runs
+           WHERE run_id=?1",
+        [run.as_str()],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get(2)?, r.get(3)?)),
+    ).optional())?;
+    row.map(|(extraction, space, configuration_digest, complete)| {
+        Ok(DocumentEmbeddingRun {
+            run: run.clone(),
+            extraction: id_of(extraction)?,
+            space: space.map(id_of).transpose()?,
+            configuration_digest,
+            complete,
+        })
+    })
+    .transpose()
+}
+
+fn pending_space<'a>(
+    conn: &Connection,
+    run: &'a DocumentEmbeddingRun,
+) -> Result<&'a Id, StorageError> {
+    if run.complete || embedding_run(conn, &run.run)?.as_ref() != Some(run) {
+        return Err(invalid("document vector preparation changed"));
+    }
+    run.space
+        .as_ref()
+        .ok_or_else(|| invalid("document run has no qualified space"))
 }
 
 macro_rules! document_reads {
@@ -256,11 +382,21 @@ macro_rules! document_reads {
             ) -> Result<Option<ExtractedBlock>, StorageError> {
                 passage(self.conn, checkpoint, block)
             }
-            fn document_lexical(
+            fn has_document_vectors(
                 &self,
-                query: &DocumentLexicalQuery<'_>,
-            ) -> Result<DocumentLexicalBatch, StorageError> {
-                lexical(self.conn, query)
+                scope: &ArtifactScope,
+                owner: Option<&ActorId>,
+                exact_versions: Option<&[Id]>,
+                space: &Id,
+            ) -> Result<bool, StorageError> {
+                has_vectors(self.conn, scope, owner, exact_versions, space)
+            }
+
+            fn rank_document_blocks(
+                &self,
+                query: &DocumentRankingQuery<'_>,
+            ) -> Result<DocumentRankingBatch, StorageError> {
+                ranked(self.conn, query)
             }
         }
     };
@@ -269,6 +405,116 @@ document_reads!(Snapshot<'_>);
 document_reads!(Unit<'_>);
 
 impl DocumentRepository for Unit<'_> {
+    fn insert_document_embedding_run(
+        &mut self,
+        run: &DocumentEmbeddingRun,
+    ) -> Result<(), StorageError> {
+        if run.complete {
+            return Err(invalid(
+                "document vector completion must follow its full population",
+            ));
+        }
+        // The current queue claim is validated by the caller. Retained vector metadata follows
+        // the extraction independently of eventual cleanup of the delivery.
+        let inserted = db(self.conn.execute(
+            "INSERT INTO document_embedding_runs (run_id,extraction_id,space_id,configuration_digest)
+             SELECT id,?2,?3,?4 FROM queue_entries WHERE id=?1 AND consumer='document_index'
+               AND state='Claimed'",
+            params![run.run.as_str(), run.extraction.as_str(), run.space.as_ref().map(Id::as_str),
+                run.configuration_digest],
+        ))?;
+        if inserted != 1 {
+            return Err(invalid(
+                "document embeddings require their claimed delivery",
+            ));
+        }
+        Ok(())
+    }
+
+    fn document_embedding_run(
+        &self,
+        run: &Id,
+    ) -> Result<Option<DocumentEmbeddingRun>, StorageError> {
+        embedding_run(self.conn, run)
+    }
+
+    fn pending_document_vectors(
+        &self,
+        run: &DocumentEmbeddingRun,
+        limit: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError> {
+        if !(1..=32).contains(&limit) {
+            return Err(invalid("document vector batch limit"));
+        }
+        let space = pending_space(self.conn, run)?;
+        let mut statement = db(self.conn.prepare_cached(
+            "SELECT b.id,b.text FROM document_extracted_blocks b
+              WHERE b.extraction_id=?1 AND NOT EXISTS (
+                SELECT 1 FROM document_vectors d WHERE d.block_id=b.id AND d.space_id=?2)
+              ORDER BY b.ordinal,b.id LIMIT ?3",
+        ))?;
+        let rows = db(statement.query_map(
+            params![run.extraction.as_str(), space.as_str(), limit],
+            |row| Ok((row.get::<_, String>(0)?, row.get(1)?)),
+        ))?;
+        rows.map(|row| {
+            let (id, text) = db(row)?;
+            Ok((id_of(id)?, text))
+        })
+        .collect()
+    }
+
+    fn insert_document_vectors(
+        &mut self,
+        run: &DocumentEmbeddingRun,
+        vectors: &[(Id, Vec<f32>)],
+    ) -> Result<(), StorageError> {
+        if !(1..=32).contains(&vectors.len()) {
+            return Err(invalid("document vector batch population"));
+        }
+        let space = pending_space(self.conn, run)?;
+        let dimensions = cosine_dimensions(self.conn, space)?;
+        let mut statement = db(self.conn.prepare_cached(
+            "INSERT INTO document_vectors (extraction_id,space_id,dimensions,block_id,vector)
+             SELECT extraction_id,?2,?3,id,?5 FROM document_extracted_blocks
+               WHERE extraction_id=?1 AND id=?4",
+        ))?;
+        for (block, vector) in vectors {
+            let inserted = db(statement.execute(params![
+                run.extraction.as_str(),
+                space.as_str(),
+                dimensions,
+                block.as_str(),
+                vector_blob(vector, dimensions)?
+            ]))?;
+            if inserted != 1 {
+                return Err(invalid(
+                    "document vector block differs from the captured extraction",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn complete_document_vectors(
+        &mut self,
+        run: &DocumentEmbeddingRun,
+    ) -> Result<(), StorageError> {
+        let space = pending_space(self.conn, run)?;
+        let changed = db(self.conn.execute(
+            "UPDATE document_embedding_runs SET complete=1 WHERE run_id=?1 AND
+             (SELECT block_count FROM document_extractions WHERE id=?2)=
+             (SELECT COUNT(*) FROM document_vectors WHERE extraction_id=?2 AND space_id=?3)",
+            params![run.run.as_str(), run.extraction.as_str(), space.as_str()],
+        ))?;
+        if changed != 1 {
+            return Err(invalid(
+                "cannot publish an incomplete document vector population",
+            ));
+        }
+        Ok(())
+    }
+
     fn set_document_retrieval(&mut self, artifact: &Id, enabled: bool) -> Result<(), StorageError> {
         db(self.conn.execute(
             "INSERT INTO document_retrieval_preferences (artifact_id,enabled) VALUES (?1,?2)
@@ -306,6 +552,16 @@ impl DocumentRepository for Unit<'_> {
              (SELECT id FROM artifact_versions WHERE artifact_id=?1 AND deleted_at IS NULL)",
             [artifact.as_str()],
         ))?;
+        for table in ["document_embedding_runs", "document_vectors"] {
+            db(self.conn.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE extraction_id IN (
+                  SELECT e.id FROM document_extractions e JOIN artifact_versions v
+                    ON v.id=e.version_id WHERE v.artifact_id=?1)"
+                ),
+                [artifact.as_str()],
+            ))?;
+        }
         Ok(changed != 0)
     }
 

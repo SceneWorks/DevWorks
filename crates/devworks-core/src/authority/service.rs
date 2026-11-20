@@ -1041,6 +1041,9 @@ pub fn fences_hold(
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(tx.authority(), actor, *revision)?
             }
+            AuthorityFence::DocumentIndex { run, generation } => {
+                crate::services::documents::indexing::embedding_fence_in(tx, run, *generation)?
+            }
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(tx.configuration(), project_id.as_ref(), digest)?
             }
@@ -1092,6 +1095,9 @@ pub fn authorization_holds(
             }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(s.authority(), actor, *revision)?
+            }
+            AuthorityFence::DocumentIndex { run, generation } => {
+                crate::services::documents::indexing::embedding_fence_read(s, run, *generation)?
             }
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(s.configuration(), project_id.as_ref(), digest)?
