@@ -714,6 +714,7 @@ impl Exec<'_> {
             semantic::prepare_repository(
                 self,
                 semantic::SemanticBatch {
+                    repository_name: &repo.name,
                     root: &dir,
                     commit: &head,
                     capture: None,
@@ -893,6 +894,7 @@ impl Exec<'_> {
                     self,
                     &packs,
                     semantic::SemanticBatch {
+                        repository_name: name,
                         root: dir,
                         commit: &commit,
                         capture: None,

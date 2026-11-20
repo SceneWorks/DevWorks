@@ -1119,7 +1119,20 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
-        prepare_layer_semantics(exec, &root, h, None, &units, &plan, None, &stop)?;
+        prepare_layer_semantics(
+            exec,
+            super::worker::semantic::SemanticBatch {
+                repository_name: &repo.name,
+                root: &root,
+                commit: h,
+                capture: None,
+                files: &[],
+            },
+            &units,
+            &plan,
+            None,
+            &stop,
+        )?;
         let stored = new_layer(exec, &repo_id, LAYER_BRANCH, h, &snap, &layers)?;
         exec.shares.clear();
         let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
@@ -1218,9 +1231,13 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             .collect();
         prepare_layer_semantics(
             exec,
-            &root,
-            head.as_deref().unwrap_or_default(),
-            Some(&capture),
+            super::worker::semantic::SemanticBatch {
+                repository_name: &repo.name,
+                root: &root,
+                commit: head.as_deref().unwrap_or_default(),
+                capture: Some(&capture),
+                files: &[],
+            },
             &units,
             &plan,
             Some(&expected),
@@ -1520,9 +1537,7 @@ fn composed_inventory(
 #[allow(clippy::too_many_arguments)]
 fn prepare_layer_semantics(
     exec: &mut Exec<'_>,
-    root: &Path,
-    commit: &str,
-    capture: Option<&str>,
+    batch: super::worker::semantic::SemanticBatch<'_>,
     units: &[LayerUnit],
     plan: &[PlanUnit],
     local: Option<&BTreeMap<String, String>>,
@@ -1536,18 +1551,7 @@ fn prepare_layer_semantics(
             LayerUnit::Replace(unit) if semantic::repository_unit(&exec.semantic_packs, unit)
         )
     }) {
-        semantic::prepare_repository(
-            exec,
-            semantic::SemanticBatch {
-                root,
-                commit,
-                capture,
-                files: &[],
-            },
-            plan,
-            local,
-            stop,
-        )?;
+        semantic::prepare_repository(exec, batch, plan, local, stop)?;
     }
     Ok(())
 }
@@ -1825,6 +1829,7 @@ fn stage_layer(
             exec,
             &packs,
             super::worker::semantic::SemanticBatch {
+                repository_name: name,
                 root,
                 commit: &commit,
                 capture: capture.as_deref(),

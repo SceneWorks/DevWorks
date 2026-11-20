@@ -6,7 +6,7 @@ use devworks_core::ports::indexing::{
     EdgeTarget, Enrichment, EnrichmentRequest, EnrichmentSource, ExtractedEdge, ExtractedNode,
     PackDescriptor, Resolution, SemanticCatalog, SemanticEnricher, Span,
 };
-use devworks_core::ports::packages::{Inspection, dotnet};
+use devworks_core::ports::packages::{Inspection, dotnet, swift};
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_extension_protocol::package::{
     Contribution, ContributionEvent, ContributionMeta, IndexFormat, InvocationOutcome,
@@ -39,6 +39,17 @@ fn dotnet_runtime(host: &PackageHost) -> Option<dotnet::Runtime> {
     dotnet::Runtime::detect(&executable).ok()
 }
 
+fn swift_runtime(host: &PackageHost) -> Option<swift::Runtime> {
+    let cache = &host.runtimes.as_ref()?.cache;
+    let runtime = cache.swift()?;
+    if runtime.current() {
+        Some(runtime)
+    } else {
+        cache.invalidate_swift(&runtime);
+        None
+    }
+}
+
 pub(crate) struct PackageSemantics(pub Weak<PackageHost>);
 
 struct Pack {
@@ -50,6 +61,7 @@ struct Pack {
     languages: Vec<String>,
     node: Option<(String, devworks_core::ports::packages::RuntimeExecutable)>,
     dotnet: Option<dotnet::Runtime>,
+    swift: Option<swift::Runtime>,
 }
 
 impl SemanticCatalog for PackageSemantics {
@@ -59,6 +71,9 @@ impl SemanticCatalog for PackageSemantics {
             TYPESCRIPT => node_runtime(&host).and_then(|runtime| serde_json::to_vec(&runtime).ok()),
             dotnet::PACKAGE => {
                 dotnet_runtime(&host).and_then(|runtime| serde_json::to_vec(&runtime).ok())
+            }
+            swift::PACKAGE => {
+                swift_runtime(&host).and_then(|runtime| serde_json::to_vec(&runtime).ok())
             }
             _ => return None,
         };
@@ -118,6 +133,14 @@ impl SemanticCatalog for PackageSemantics {
                 } else {
                     None
                 };
+                let swift = if inspection.package_id == swift::PACKAGE {
+                    let Some(runtime) = swift_runtime(&host) else {
+                        continue;
+                    };
+                    Some(runtime)
+                } else {
+                    None
+                };
                 packs.push(Arc::new(Pack {
                     host: self.0.clone(),
                     inspection: inspection.clone(),
@@ -127,6 +150,7 @@ impl SemanticCatalog for PackageSemantics {
                     languages: languages.iter().map(|id| id.as_str().to_owned()).collect(),
                     node,
                     dotnet,
+                    swift,
                 }));
             }
         }
@@ -237,6 +261,13 @@ impl SemanticEnricher for Pack {
             if dotnet_runtime(&host).as_ref() != Some(runtime) || !runtime.current() {
                 return Err("dotnet-runtime-changed".into());
             }
+            source["runtime"] = serde_json::to_value(runtime).map_err(|error| error.to_string())?;
+        }
+        if let Some(runtime) = &self.swift {
+            if swift_runtime(&host).as_ref() != Some(runtime) {
+                return Err("swift-runtime-changed".into());
+            }
+            source["repositoryName"] = json!(request.repository_name);
             source["runtime"] = serde_json::to_value(runtime).map_err(|error| error.to_string())?;
         }
         let bytes = serde_json::to_vec(&source).map_err(|error| error.to_string())?;
@@ -360,6 +391,11 @@ impl SemanticEnricher for Pack {
             && (dotnet_runtime(&host).as_ref() != Some(runtime) || !runtime.current())
         {
             return Err("dotnet-runtime-changed".into());
+        }
+        if let Some(runtime) = &self.swift
+            && swift_runtime(&host).as_ref() != Some(runtime)
+        {
+            return Err("swift-runtime-changed".into());
         }
         if !host.contribution_current(request.principal, "Semantic", (package, digest))? {
             return Err("the producer version changed before the index could be accepted".into());

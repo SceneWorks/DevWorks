@@ -1,5 +1,5 @@
 //! Resource limits and cleanup for a compiler in the helper's own process group.
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -188,21 +188,44 @@ pub fn run(
     cancelled: &AtomicBool,
     failure: &'static str,
 ) -> Result<(), Failure> {
-    budget(deadline, cancelled, memory)?;
+    if run_checked(command, deadline, cancelled, failure, || Ok(()))?.success() {
+        Ok(())
+    } else {
+        Err(Failure::stop(failure))
+    }
+}
+
+/// Run an owned child with an additional bounded observer. A reaped exit status is available
+/// to a producer that isolates ordinary compiler diagnostics to one workspace target.
+pub fn run_checked(
+    command: &mut Command,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    failure: &'static str,
+    mut observe: impl FnMut() -> Result<(), Failure>,
+) -> Result<ExitStatus, Failure> {
+    let mut check = || {
+        budget(deadline, cancelled, memory)?;
+        observe()
+    };
+    check()?;
     let mut child = command.stdin(Stdio::null()).spawn().map_err(|_| failure)?;
     let result = loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => break Ok(()),
-            Ok(Some(_)) | Err(_) => break Err(Failure::stop(failure)),
+            Ok(Some(status)) => break Ok(status),
+            Err(_) => break Err(Failure::stop(failure)),
             Ok(None) => {}
         }
-        if let Err(error) = budget(deadline, cancelled, memory) {
+        if let Err(error) = check() {
             break Err(error);
         }
         std::thread::sleep(SAMPLE);
     };
     stop_compiler_children(&mut child);
-    result
+    result.and_then(|status| {
+        observe()?;
+        Ok(status)
+    })
 }
 
 #[cfg(test)]
@@ -221,5 +244,65 @@ mod tests {
         cancel.store(true, Ordering::Release);
         let cancelled = budget(until, &cancel, || Ok(0)).unwrap_err();
         assert_eq!(cancelled.code, "cancelled");
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn swift_checked_process_preserves_exit_and_observes_a_cleaned_child() {
+        use std::os::unix::process::CommandExt;
+
+        const OWNED_TEST: &str = "DEVWORKS_TEST_OWNED_SEMANTIC_PROCESS";
+        if std::env::var_os(OWNED_TEST).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "process::tests::swift_checked_process_preserves_exit_and_observes_a_cleaned_child"])
+                .env(OWNED_TEST, "1")
+                .process_group(0)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        assert!(owned_group());
+        let cancel = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut samples = Vec::new();
+        let status = run_checked(
+            Command::new("/usr/bin/false").arg(""),
+            deadline,
+            &cancel,
+            "failed",
+            || {
+                let mut members = [0; 16];
+                samples.push(group_members(&mut members)?);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(!status.success());
+        assert!(samples.len() >= 2);
+        assert_eq!(samples.last().copied(), Some(1));
+
+        let mut checks = 0;
+        let error = run_checked(
+            Command::new("/bin/sleep").arg("3"),
+            deadline,
+            &cancel,
+            "failed",
+            || {
+                checks += 1;
+                if checks > 1 {
+                    Err(Failure::stop("observer-refused"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "observer-refused");
+        assert_eq!(group_members(&mut [0; 16]).unwrap(), 1);
     }
 }

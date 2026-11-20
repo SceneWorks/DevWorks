@@ -17,6 +17,7 @@
 //! None of these is a security boundary for the package's own code: an installed native helper
 //! runs with the desktop user's rights (see `crate::services::packages`, "Trust model").
 pub mod dotnet;
+pub mod swift;
 
 use crate::locks::RwLockExt;
 use serde::{Deserialize, Serialize};
@@ -406,6 +407,7 @@ impl RuntimeExecutable {
 struct RuntimeSnapshot {
     observations: BTreeMap<String, RuntimeObservation>,
     executables: BTreeMap<String, RuntimeExecutable>,
+    swift: Option<swift::Runtime>,
 }
 
 /// Probed runtimes, refreshed by the package host off any UI or write thread (it runs each
@@ -429,9 +431,19 @@ impl RuntimeCache {
         observations: BTreeMap<String, RuntimeObservation>,
         executables: BTreeMap<String, RuntimeExecutable>,
     ) {
+        self.set_probed_with_swift(observations, executables, None);
+    }
+
+    pub fn set_probed_with_swift(
+        &self,
+        observations: BTreeMap<String, RuntimeObservation>,
+        executables: BTreeMap<String, RuntimeExecutable>,
+        swift: Option<swift::Runtime>,
+    ) {
         *self.seen.write_locked() = RuntimeSnapshot {
             observations,
             executables,
+            swift,
         };
         self.refreshed_at
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -446,6 +458,22 @@ impl RuntimeCache {
         };
         Some((version.clone(), cache.executables.get(runtime)?.clone()))
     }
+    pub fn swift(&self) -> Option<swift::Runtime> {
+        self.seen.read_locked().swift.clone()
+    }
+
+    /// Invalidate the checked witness without overwriting a concurrent discovery result.
+    pub fn invalidate_swift(&self, checked: &swift::Runtime) {
+        let mut cache = self.seen.write_locked();
+        if cache.swift.as_ref() == Some(checked) {
+            cache.swift = None;
+            cache.observations.insert(
+                swift::SDK_RUNTIME.into(),
+                RuntimeObservation::Missing("swift-runtime-changed".into()),
+            );
+        }
+    }
+
     /// How many probe passes have completed.
     pub fn passes(&self) -> u64 {
         self.refreshed_at.load(std::sync::atomic::Ordering::SeqCst)
