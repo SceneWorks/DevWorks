@@ -3,16 +3,21 @@
 use super::retrieval;
 use crate::{
     context::InvocationContext,
-    ports::storage::{ArtifactRead, ArtifactScope, StorageError, StoredSession, WriteTransaction},
+    ports::storage::{
+        ArtifactRead, ArtifactScope, ReadSnapshot, StorageError, StoredArtifact, StoredSession,
+        WriteTransaction,
+    },
     protocol::{
-        data::{Citation, DataScope},
+        Id,
+        data::{Citation, DataScope, DocumentVersions},
         provider::ArtifactRef,
     },
     services::{
         artifacts::{
             Viewer,
             documents::{active_project, document_scope},
-            reference_from_transcript,
+            preview::preview_id,
+            reference_from_transcript, version_ref, visible,
         },
         kernel::Failure,
     },
@@ -22,6 +27,69 @@ use std::collections::HashSet;
 
 /// The session context source kind for an exact, scoped document tool result.
 pub const CONTEXT_SOURCE_KIND: &str = "document_retrieval";
+/// JSON that must keep its exact source dependencies when reused in provider context.
+pub const MEDIA_TYPE: &str = "application/vnd.devworks.document-evidence+json";
+
+/// The published corpus eligible for one admitted search. This includes sources omitted by
+/// the result limit because they can still change rank or completion. The witness is internal
+/// to tool dispatch, and does not change the public retrieval result.
+pub struct DocumentSearchWitness {
+    scope: DataScope,
+    versions: Option<Vec<Id>>,
+    digest: String,
+}
+
+impl DocumentSearchWitness {
+    pub fn capture(
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        scope: &DataScope,
+        versions: &DocumentVersions,
+    ) -> Result<Option<Self>, StorageError> {
+        let Some(resolved) = resolved_scope(document_scope(read.authority(), ctx, scope))? else {
+            return Ok(None);
+        };
+        let viewer = Viewer::resolve(read.authority(), ctx)?;
+        let versions = match versions {
+            DocumentVersions::Current => None,
+            DocumentVersions::Exact { versions } => Some(
+                versions
+                    .iter()
+                    .map(|source| source.version_id.clone())
+                    .collect::<Vec<_>>(),
+            ),
+        };
+        let owner = (!viewer.sees_owned(None)).then_some(ctx.principal());
+        let digest =
+            read.documents()
+                .document_corpus_digest(&resolved, owner, versions.as_deref())?;
+        Ok(Some(Self {
+            scope: scope.clone(),
+            versions,
+            digest,
+        }))
+    }
+
+    pub fn scope(&self) -> &DataScope {
+        &self.scope
+    }
+
+    pub fn holds(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+    ) -> Result<bool, StorageError> {
+        let Some(scope) = resolved_scope(document_scope(tx.authority(), ctx, &self.scope))? else {
+            return Ok(false);
+        };
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
+        let owner = (!viewer.sees_owned(None)).then_some(ctx.principal());
+        Ok(tx
+            .documents()
+            .document_corpus_digest(&scope, owner, self.versions.as_deref())?
+            == self.digest)
+    }
+}
 
 /// Host provenance for the authorized input scope and exact source versions of a saved result.
 /// The result bytes also retain every passage's locator, digest and extraction revision.
@@ -51,10 +119,80 @@ impl DocumentEvidence {
         let Some(sources) = authorized_sources(tx, ctx, scope.as_ref(), citations)? else {
             return Ok(None);
         };
-        for source in &sources {
+        let evidence = Self { scope, sources };
+        evidence.retain(tx, ctx, session)?;
+        Ok(Some(evidence))
+    }
+
+    /// If an exact artifact read copies a previous tool result, preserve its original
+    /// source dependencies. Both the result artifact and its sources must still be readable.
+    pub fn inherit_from(
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        session: &StoredSession,
+        reference: &ArtifactRef,
+    ) -> Result<Option<Self>, StorageError> {
+        let artifact = tx
+            .artifacts()
+            .artifact(&reference.artifact_id)?
+            .filter(|artifact| artifact.state == crate::ports::storage::ArtifactState::Live)
+            .ok_or(StorageError::ScopeDenied)?;
+        let viewer = Viewer::resolve(tx.authority(), ctx)?;
+        if !visible(tx.artifacts(), &viewer, &artifact)? {
+            return Err(StorageError::ScopeDenied);
+        }
+        if let Some(evidence) = Self::of_artifact(&artifact)? {
+            let exact = if reference.version_id.as_str().starts_with("pv-") {
+                tx.artifacts()
+                    .versions(&artifact.id)?
+                    .into_iter()
+                    .any(|version| {
+                        version.live()
+                            && preview_id(version.id.as_str()) == reference.version_id.as_str()
+                    })
+            } else {
+                tx.artifacts()
+                    .version(&reference.version_id)?
+                    .is_some_and(|version| {
+                        version.live()
+                            && super::indexing::same_source(&version_ref(&version), reference)
+                    })
+            };
+            if !exact {
+                return Err(StorageError::ScopeDenied);
+            }
+            evidence.retain(tx, ctx, session)?;
+            return Ok(Some(evidence));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn of_artifact(artifact: &StoredArtifact) -> Result<Option<Self>, StorageError> {
+        if artifact.provenance["principalKind"] != "Host"
+            || artifact.provenance["derived"]["kind"] != "ToolResult"
+        {
+            return Ok(None);
+        }
+        artifact.provenance["derived"]
+            .get("documentEvidence")
+            .map(|provenance| {
+                serde_json::from_value(provenance.clone()).map_err(|_| {
+                    StorageError::InvalidRecord("tool result document evidence".into())
+                })
+            })
+            .transpose()
+    }
+
+    fn retain(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        session: &StoredSession,
+    ) -> Result<(), StorageError> {
+        for source in &self.sources {
             reference_from_transcript(tx, ctx, source, &session.id, session.root_id.clone())?;
         }
-        Ok(Some(Self { scope, sources }))
+        Ok(())
     }
 
     /// Reading a saved tool result must still satisfy the original query scope and the reader's
@@ -115,10 +253,14 @@ fn authorized_sources(
     }
 }
 
-fn is_visible<T>(result: Result<T, Failure>) -> Result<bool, StorageError> {
+fn resolved_scope<T>(result: Result<T, Failure>) -> Result<Option<T>, StorageError> {
     match result {
-        Ok(_) => Ok(true),
-        Err(Failure::Refused(_) | Failure::Storage(StorageError::ScopeDenied)) => Ok(false),
+        Ok(value) => Ok(Some(value)),
+        Err(Failure::Refused(_) | Failure::Storage(StorageError::ScopeDenied)) => Ok(None),
         Err(Failure::Storage(error)) => Err(error),
     }
+}
+
+fn is_visible<T>(result: Result<T, Failure>) -> Result<bool, StorageError> {
+    Ok(resolved_scope(result)?.is_some())
 }

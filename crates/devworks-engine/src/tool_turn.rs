@@ -15,10 +15,11 @@ use devworks_core::{
     protocol::{
         ActorId, AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice,
         Revision, StoreId,
-        data::{Citation, DataScope},
+        data::Citation,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
         },
+        records::ArtifactReadContent,
         results::{DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult},
         support::{DomainErrorCode, DomainFault},
     },
@@ -26,7 +27,9 @@ use devworks_core::{
     registry::{Envelope, Mode, OperationDescriptor, SchemaRevision},
     services::{
         artifacts::{ArtifactService, host::HostArtifactPublication, version_ref},
-        documents::evidence::{CONTEXT_SOURCE_KIND, DocumentEvidence},
+        documents::evidence::{
+            CONTEXT_SOURCE_KIND, DocumentEvidence, DocumentSearchWitness, MEDIA_TYPE,
+        },
         sessions::{
             transcript::{
                 BatchOutcome, ContextSourceInput, SessionBatch, SessionWriter, SourceDisposition,
@@ -927,7 +930,9 @@ fn continuation_context_at_epoch(
                         });
                 let mut blocks = Vec::with_capacity(refs.len());
                 for reference in refs {
-                    if document && reference.media_type == "application/json" {
+                    if reference.media_type == MEDIA_TYPE
+                        || (document && reference.media_type == "application/json")
+                    {
                         blocks.push(ResultBlock::DocumentEvidence {
                             artifact: reference,
                         });
@@ -2021,50 +2026,53 @@ pub(crate) fn dispatch_step(
             }
         }
         match result {
-            Ok((descriptor, Mode::Query, raw)) => match engine.query_with(
-                ctx,
-                descriptor.name,
-                &raw,
-                &ReadOptions {
-                    cancellation: cancellation.cloned(),
-                    deadline_ms: None,
-                },
-            ) {
-                Ok(reply @ DomainQueryReply::Result { .. }) => {
-                    document = DocumentToolOutput::from_query(descriptor, &raw, &reply)?;
-                    completed(serde_json::to_vec(&reply).map_err(invalid)?)
-                }
-                Ok(DomainQueryReply::Rejected { fault, .. }) => {
-                    if fault.code == DomainErrorCode::Cancelled
-                        && cancellation.is_some_and(Cancellation::is_cancelled)
-                    {
-                        // The marker was already durable. Keep this call available for recovery;
-                        // a cancellation cannot retroactively prove no query effect occurred.
-                        return Err(StorageError::Cancelled);
+            Ok((descriptor, Mode::Query, raw)) => {
+                let search = capture_document_search(store, ctx, descriptor, &raw)?;
+                match engine.query_with(
+                    ctx,
+                    descriptor.name,
+                    &raw,
+                    &ReadOptions {
+                        cancellation: cancellation.cloned(),
+                        deadline_ms: None,
+                    },
+                ) {
+                    Ok(reply @ DomainQueryReply::Result { .. }) => {
+                        document = DocumentToolOutput::from_query(descriptor, search, &reply)?;
+                        completed(serde_json::to_vec(&reply).map_err(invalid)?)
                     }
-                    if fault.code == DomainErrorCode::ApprovalRequired {
-                        // A saved-operation approval carries and replays commands only, so no
-                        // approval can be staged for a query. Answer the call at once: the query
-                        // did not run and only a person can run it.
-                        failed(QUERY_APPROVAL_REQUIRED)
-                    } else if let Some(blocked) = blocked_outcome(&fault)? {
-                        (blocked, None)
-                    } else if needs_recovery(fault.retry) {
+                    Ok(DomainQueryReply::Rejected { fault, .. }) => {
+                        if fault.code == DomainErrorCode::Cancelled
+                            && cancellation.is_some_and(Cancellation::is_cancelled)
+                        {
+                            // The marker was already durable. Keep this call available for recovery;
+                            // a cancellation cannot retroactively prove no query effect occurred.
+                            return Err(StorageError::Cancelled);
+                        }
+                        if fault.code == DomainErrorCode::ApprovalRequired {
+                            // A saved-operation approval carries and replays commands only, so no
+                            // approval can be staged for a query. Answer the call at once: the query
+                            // did not run and only a person can run it.
+                            failed(QUERY_APPROVAL_REQUIRED)
+                        } else if let Some(blocked) = blocked_outcome(&fault)? {
+                            (blocked, None)
+                        } else if needs_recovery(fault.retry) {
+                            return Err(StorageError::unavailable(
+                                Unavailable::UnsupportedRuntime,
+                                "tool query requires retry or reconciliation",
+                            ));
+                        } else {
+                            failed(&format!("domain_{:?}", fault.code))
+                        }
+                    }
+                    Err(_) => {
                         return Err(StorageError::unavailable(
                             Unavailable::UnsupportedRuntime,
-                            "tool query requires retry or reconciliation",
+                            "tool query gateway failed before a durable response",
                         ));
-                    } else {
-                        failed(&format!("domain_{:?}", fault.code))
                     }
                 }
-                Err(_) => {
-                    return Err(StorageError::unavailable(
-                        Unavailable::UnsupportedRuntime,
-                        "tool query gateway failed before a durable response",
-                    ));
-                }
-            },
+            }
             Ok((descriptor, Mode::Command, raw)) => {
                 let reply = if defer_receive && descriptor.name == "agents.receive" {
                     match engine.begin_receive(
@@ -2112,53 +2120,73 @@ struct ResponsePayload {
     document: Option<DocumentToolOutput>,
 }
 
-/// Only typed responses from the selected document gateway can become document evidence.
-struct DocumentToolOutput {
+fn capture_document_search(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
     descriptor: &'static OperationDescriptor,
-    scope: Option<DataScope>,
-    citations: Vec<Citation>,
+    raw: &[u8],
+) -> Result<Option<DocumentSearchWitness>, StorageError> {
+    if descriptor.name != "documents.search" {
+        return Ok(None);
+    }
+    let decoded = admission::decode(
+        Selection {
+            operation: descriptor.name,
+            mode: Mode::Query,
+        },
+        raw,
+    )
+    .map_err(|_| invalid("selected document query lost its scope"))?;
+    let OperationInput::Documents(documents::Input::Search(request)) = decoded.input else {
+        return Err(invalid("document result does not match the selected query"));
+    };
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        DocumentSearchWitness::capture(read, ctx, &request.scope, &request.versions)
+    })
+}
+
+/// Only typed responses from the selected document gateway can become document evidence.
+enum DocumentToolOutput {
+    Retrieval {
+        descriptor: &'static OperationDescriptor,
+        search: Option<DocumentSearchWitness>,
+        citations: Vec<Citation>,
+    },
+    ArtifactText {
+        descriptor: &'static OperationDescriptor,
+        reference: ArtifactRef,
+    },
 }
 
 impl DocumentToolOutput {
     fn from_query(
         descriptor: &'static OperationDescriptor,
-        raw: &[u8],
+        search: Option<DocumentSearchWitness>,
         reply: &DomainQueryReply,
     ) -> Result<Option<Self>, StorageError> {
         let DomainQueryReply::Result { result, .. } = reply else {
             return Ok(None);
         };
-        let (scope, citations) = match result {
-            OperationResult::DocumentsSearch { value } => {
-                let decoded = admission::decode(
-                    Selection {
-                        operation: descriptor.name,
-                        mode: Mode::Query,
-                    },
-                    raw,
-                )
-                .map_err(|_| invalid("selected document query lost its scope"))?;
-                let OperationInput::Documents(documents::Input::Search(request)) = decoded.input
-                else {
-                    return Err(invalid("document result does not match the selected query"));
-                };
-                (
-                    Some(request.scope),
-                    value
-                        .passages
-                        .iter()
-                        .map(|passage| passage.citation.clone())
-                        .collect(),
-                )
-            }
-            OperationResult::DocumentsResolveCitation { value } => {
-                (None, vec![value.citation.clone()])
+        let citations = match result {
+            OperationResult::DocumentsSearch { value } => value
+                .passages
+                .iter()
+                .map(|passage| passage.citation.clone())
+                .collect(),
+            OperationResult::DocumentsResolveCitation { value } => vec![value.citation.clone()],
+            OperationResult::ArtifactsRead {
+                value: ArtifactReadContent::Text { artifact, .. },
+            } => {
+                return Ok(Some(Self::ArtifactText {
+                    descriptor,
+                    reference: artifact.clone(),
+                }));
             }
             _ => return Ok(None),
         };
-        Ok(Some(Self {
+        Ok(Some(Self::Retrieval {
             descriptor,
-            scope,
+            search,
             citations,
         }))
     }
@@ -2169,10 +2197,14 @@ impl DocumentToolOutput {
         ctx: &InvocationContext,
         session: &StoredSession,
     ) -> Result<Option<DocumentEvidence>, StorageError> {
+        let descriptor = match self {
+            Self::Retrieval { descriptor, .. } | Self::ArtifactText { descriptor, .. } => {
+                descriptor
+            }
+        };
         let policy = policy::resolve_policy(tx.configuration(), ctx.project_id())?;
         let principal = tx.authority().principal(ctx.principal())?;
-        let binding = self
-            .descriptor
+        let binding = descriptor
             .binding(Mode::Query)
             .ok_or_else(|| invalid("missing evidence query binding"))?;
         if !matches!(
@@ -2180,15 +2212,35 @@ impl DocumentToolOutput {
                 ctx,
                 principal.as_ref(),
                 &policy,
-                self.descriptor,
+                descriptor,
                 binding,
                 binding.effect,
             ),
             Verdict::Allow
         ) {
-            return Ok(None);
+            return Err(StorageError::ScopeDenied);
         }
-        DocumentEvidence::record(tx, ctx, session, self.scope.clone(), &self.citations)
+        match self {
+            Self::Retrieval {
+                search, citations, ..
+            } => {
+                if descriptor.name == "documents.search" {
+                    let Some(search) = search else {
+                        return Err(StorageError::ScopeDenied);
+                    };
+                    if !search.holds(tx, ctx)? {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                }
+                let scope = search.as_ref().map(|search| search.scope().clone());
+                DocumentEvidence::record(tx, ctx, session, scope, citations)?
+                    .map(Some)
+                    .ok_or(StorageError::ScopeDenied)
+            }
+            Self::ArtifactText { reference, .. } => {
+                DocumentEvidence::inherit_from(tx, ctx, session, reference)
+            }
+        }
     }
 }
 
@@ -2220,23 +2272,24 @@ fn record_response(
         let mut outcome = outcome.clone();
         let session =
             authorized_session(&mut *tx, &ctx, &session_id, SessionActors::AgentsAndHosts)?;
-        let evidence = payload
+        let recheck = payload
             .document
             .as_ref()
-            .map(|document| document.record(tx, &ctx, &session))
-            .transpose()?;
+            .map_or(Ok(None), |document| document.record(tx, &ctx, &session));
         let mut provenance = json!({"kind":"ToolResult","sessionId":session_id,"call":key});
         let mut document_source = None;
-        let can_publish = match evidence {
-            Some(None) => {
-                outcome = failed("document_evidence_unavailable").0;
-                false
-            }
-            Some(Some(evidence)) => {
+        let document_result = matches!(&recheck, Ok(Some(_)));
+        let can_publish = match recheck {
+            Ok(None) => true,
+            Ok(Some(evidence)) => {
                 provenance["documentEvidence"] = serde_json::to_value(evidence).map_err(invalid)?;
                 true
             }
-            None => true,
+            Err(StorageError::ScopeDenied) => {
+                outcome = failed("document_evidence_unavailable").0;
+                false
+            }
+            Err(error) => return Err(error),
         };
         let published = can_publish && staged_for_write.is_some();
         if let Some(staged) = staged_for_write.as_ref().filter(|_| can_publish) {
@@ -2249,14 +2302,18 @@ fn record_response(
                 staged,
                 HostArtifactPublication {
                     title: "Tool result",
-                    media_type: "application/json",
+                    media_type: if document_result {
+                        MEDIA_TYPE
+                    } else {
+                        "application/json"
+                    },
                     provenance,
                     scope,
                     owner: ctx.principal().clone(),
                 },
             )?;
             let reference = version_ref(&version);
-            if payload.document.is_some() {
+            if document_result {
                 document_source = Some(ContextSourceInput {
                     source_id: version.artifact_id,
                     kind: CONTEXT_SOURCE_KIND.into(),

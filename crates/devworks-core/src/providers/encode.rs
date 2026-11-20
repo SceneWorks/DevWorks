@@ -5,7 +5,7 @@ use super::{
     materialize::{self, Materials},
     *,
 };
-use crate::protocol::provider::{ArtifactRef, InferenceInput, InferenceRequest};
+use crate::protocol::provider::{ArtifactRef, InferenceInput, InferencePurpose, InferenceRequest};
 use crate::protocol::records::OpenRouterConstraints;
 use serde_json::{Value, json};
 
@@ -114,7 +114,10 @@ pub fn prepare(
             let tools = materialize::tools(materials, tools, |tool| {
                 encoder.charge_json(&(&tool.schema, &tool.description, &tool.wire_name))
             })?;
-            encoder.materialize_document_results(&mut context)?;
+            encoder.materialize_document_results(
+                &mut context,
+                matches!(request.purpose, InferencePurpose::Compaction),
+            )?;
             let body = encoder.generation(
                 &context,
                 request,
@@ -474,6 +477,7 @@ impl Encoder<'_> {
     fn materialize_document_results(
         &self,
         context: &mut ProviderContext,
+        compacting: bool,
     ) -> Result<(), ProviderError> {
         for block in context
             .messages
@@ -486,13 +490,17 @@ impl Encoder<'_> {
             {
                 for result in content {
                     if let ResultBlock::DocumentEvidence { artifact } = result {
-                        let text = match self.text(artifact, "document_evidence_utf8") {
-                            Ok(text) => text,
-                            Err(ProviderError::MaterialUnavailable) => {
-                                *is_error = true;
-                                "Document evidence is unavailable in the current scope.".into()
+                        let text = if compacting {
+                            "Exact document evidence is stored in session history.".into()
+                        } else {
+                            match self.text(artifact, "document_evidence_utf8") {
+                                Ok(text) => text,
+                                Err(ProviderError::MaterialUnavailable) => {
+                                    *is_error = true;
+                                    "Document evidence is unavailable in the current scope.".into()
+                                }
+                                Err(error) => return Err(error),
                             }
-                            Err(error) => return Err(error),
                         };
                         *result = ResultBlock::Text { text };
                     }

@@ -306,7 +306,11 @@ fn gateway_rechecks_a_document_share_after_search_and_activity_snapshots() {
     use devworks_core::{
         gateway::AdmittedQuery,
         ports::{QueryAnswer, QueryHandler, QueryPublicationCheck, storage::ReadSnapshot},
-        protocol::{DomainFault, Id},
+        protocol::{
+            DomainFault, Id,
+            data::{DataScope, DocumentVersions},
+        },
+        services::documents::evidence::DocumentSearchWitness,
     };
     struct RevokeAfterQuery {
         library: DocumentLibrary,
@@ -412,6 +416,21 @@ fn gateway_rechecks_a_document_share_after_search_and_activity_snapshots() {
                 .add_share(&document, &project))
             .unwrap()
         );
+        let witness = read(f.store.as_ref(), |snapshot| {
+            DocumentSearchWitness::capture(
+                snapshot,
+                &b,
+                &DataScope::Project {
+                    project_id: recipient.clone(),
+                },
+                &DocumentVersions::Current,
+            )
+        })
+        .unwrap();
+        let ctx = b.clone();
+        let witness = Arc::new(witness);
+        let before = witness.clone();
+        assert!(write(f.store.as_ref(), move |tx| before.holds(tx, &ctx)).unwrap());
         let handler = RevokeAfterQuery {
             library: DocumentLibrary::new(f.artifacts.clone(), h.ids.clone(), h.clock()),
             store: f.store.clone(),
@@ -435,6 +454,8 @@ fn gateway_rechecks_a_document_share_after_search_and_activity_snapshots() {
             if fault.code == DomainErrorCode::PermissionDenied),
             "{reply:?}"
         );
+        let ctx = b.clone();
+        assert!(!write(f.store.as_ref(), move |tx| witness.holds(tx, &ctx)).unwrap());
     }
     let (document, project) = (source.id.clone(), recipient.clone());
     assert!(

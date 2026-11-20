@@ -425,17 +425,10 @@ pub(crate) fn visible_in(
         }
     };
     if visible
-        && artifact.provenance["principalKind"] == "Host"
-        && artifact.provenance["derived"]["kind"] == "ToolResult"
-        && let Some(provenance) = artifact.provenance["derived"].get("documentEvidence")
+        && let Some(evidence) =
+            crate::services::documents::evidence::DocumentEvidence::of_artifact(artifact)?
     {
-        let evidence = serde_json::from_value::<
-            crate::services::documents::evidence::DocumentEvidence,
-        >(provenance.clone())
-        .map_err(|_| StorageError::InvalidRecord("tool result document evidence".into()))?;
-        if !evidence.visible_to(read, viewer)? {
-            return Ok(false);
-        }
+        return evidence.visible_to(read, viewer);
     }
     Ok(visible)
 }

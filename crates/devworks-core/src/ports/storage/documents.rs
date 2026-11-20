@@ -90,6 +90,15 @@ pub struct DocumentRankingBatch {
 }
 
 pub trait DocumentRead {
+    /// Identity of the authorized published source versions. The tool-response writer uses
+    /// it to reject a ranking if even a non-returned source lost or gained visibility.
+    fn document_corpus_digest(
+        &self,
+        scope: &ArtifactScope,
+        owner: Option<&ActorId>,
+        exact_versions: Option<&[Id]>,
+    ) -> Result<String, StorageError>;
+
     /// Explicit retrieval preference. Live documents default to enabled before their first index.
     fn document_retrieval_enabled(&self, artifact: &Id) -> Result<bool, StorageError>;
     fn document_index(&self, version: &Id) -> Result<Option<DocumentIndexVersion>, StorageError>;
