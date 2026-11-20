@@ -28,9 +28,11 @@ use devworks_core::protocol::Id;
 use devworks_core::protocol::OperationId;
 use devworks_core::protocol::OperationState;
 use devworks_core::protocol::ProjectId;
+use devworks_core::protocol::Revision;
 use devworks_core::protocol::RootId;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
+use devworks_core::services::documents::extraction::ExtractedBlock;
 use serde_json::Value;
 
 impl ArtifactRead for Unmodelled {
@@ -87,7 +89,7 @@ impl ArtifactRead for Unmodelled {
         &self,
         _: &ArtifactScope,
         _: Option<&ActorId>,
-        _: Option<bool>,
+        _: devworks_core::ports::storage::DocumentListFilter,
         _: Option<&ListPosition>,
         _: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError> {
@@ -865,6 +867,42 @@ impl DiagnosticRepository for Unmodelled {
         unmodelled()
     }
     fn prune_diagnostics(&mut self, _: i64, _: i64) -> Result<PrunedDiagnostics, StorageError> {
+        unmodelled()
+    }
+}
+impl DocumentRead for Unmodelled {
+    fn document_retrieval_enabled(&self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn document_index(&self, _: &Id) -> Result<Option<DocumentIndexVersion>, StorageError> {
+        unmodelled()
+    }
+    fn document_checkpoint(
+        &self,
+        _: &Id,
+        _: &Revision,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn document_passage(&self, _: &Id, _: &Id) -> Result<Option<ExtractedBlock>, StorageError> {
+        unmodelled()
+    }
+}
+impl DocumentRepository for Unmodelled {
+    fn set_document_retrieval(&mut self, _: &Id, _: bool) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_document_index(&mut self, _: &DocumentIndexVersion) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn remove_document_index(&mut self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn insert_document_checkpoint(
+        &mut self,
+        _: &DocumentCheckpoint,
+        _: &[ExtractedBlock],
+    ) -> Result<(), StorageError> {
         unmodelled()
     }
 }

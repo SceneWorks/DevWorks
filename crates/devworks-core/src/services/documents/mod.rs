@@ -1,5 +1,6 @@
 //! Exact-version document custody. The artifact repository owns scope, bytes and retention.
 pub mod extraction;
+pub mod indexing;
 pub mod pdf;
 
 use crate::{
@@ -9,7 +10,8 @@ use crate::{
     ports::{
         CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
         storage::{
-            ArtifactRead, ArtifactScope, ListPosition, ReadSnapshot, StorageError, StoredArtifact,
+            ArtifactRead, ArtifactScope, DocumentIndexStage, DocumentListFilter, DocumentRead,
+            ListPosition, QueueRead, QueueState, ReadSnapshot, StorageError, StoredArtifact,
             StoredVersion, WriteTransaction,
         },
     },
@@ -36,6 +38,7 @@ use crate::{
         kernel::{Failure, Refusal, counter, decided, rev},
     },
 };
+use indexing::{DocumentIndexer, check_revision, code, writable_document};
 use std::sync::Arc;
 
 pub const LIBRARY_OPERATIONS: &[&str] = &[
@@ -45,6 +48,12 @@ pub const LIBRARY_OPERATIONS: &[&str] = &[
     "documents.share",
     "documents.move",
 ];
+pub const INDEX_OPERATIONS: &[&str] = &[
+    "documents.index",
+    "documents.retry",
+    "documents.disable_retrieval",
+    "documents.remove_index",
+];
 const DETAILS_REVISION: u32 = 10;
 const LISTED_VERSIONS: u16 = 10;
 
@@ -53,11 +62,25 @@ const LISTED_VERSIONS: u16 = 10;
 pub struct DocumentLibrary {
     artifacts: Arc<ArtifactService>,
     ids: Arc<dyn IdSource>,
+    indexer: Option<Arc<DocumentIndexer>>,
 }
 
 impl DocumentLibrary {
     pub fn new(artifacts: Arc<ArtifactService>, ids: Arc<dyn IdSource>) -> Self {
-        Self { artifacts, ids }
+        Self {
+            artifacts,
+            ids,
+            indexer: None,
+        }
+    }
+
+    pub fn with_indexer(mut self, indexer: Arc<DocumentIndexer>) -> Self {
+        self.indexer = Some(indexer);
+        self
+    }
+
+    pub(crate) fn has_indexer(&self) -> bool {
+        self.indexer.is_some()
     }
 
     fn change(
@@ -83,7 +106,7 @@ impl DocumentLibrary {
                 };
                 let artifact =
                     import_document(tx, ctx, &scope, &input.source, &input.title.0, replacement)?;
-                let value = document_result(tx.artifacts(), &artifact, details)?;
+                let value = document_result(tx, &artifact, details)?;
                 (OperationResult::DocumentsImport { value }, true)
             }
             ops::Input::Share(request) => {
@@ -106,7 +129,7 @@ impl DocumentLibrary {
                     expected_scope_revision,
                 )?;
                 let artifact = checked_document(tx, ctx, artifact_id)?;
-                let value = document_result(tx.artifacts(), &artifact, details)?;
+                let value = document_result(tx, &artifact, details)?;
                 (OperationResult::DocumentsShare { value }, result.changed)
             }
             ops::Input::Move(request) => {
@@ -126,8 +149,72 @@ impl DocumentLibrary {
                     target_project_id,
                     expected_scope_revision,
                 )?;
-                let value = document_result(tx.artifacts(), &artifact, details)?;
+                let value = document_result(tx, &artifact, details)?;
                 (OperationResult::DocumentsMove { value }, changed)
+            }
+            ops::Input::Index(input) => {
+                let indexer = self.indexer.as_ref().ok_or_else(invalid)?;
+                let value = indexer.admit(
+                    tx,
+                    ctx,
+                    command,
+                    &input.document_id,
+                    &input.version_id,
+                    &input.expected_revision,
+                )?;
+                (OperationResult::DocumentsIndex { value }, true)
+            }
+            ops::Input::Retry(input) => {
+                let indexer = self.indexer.as_ref().ok_or_else(invalid)?;
+                let value = indexer.admit(
+                    tx,
+                    ctx,
+                    command,
+                    &input.document_id,
+                    &input.version_id,
+                    &input.expected_revision,
+                )?;
+                (OperationResult::DocumentsRetry { value }, true)
+            }
+            ops::Input::DisableRetrieval(request) | ops::Input::RemoveIndex(request) => {
+                let (id, expected, disable) = match (&request.command, input) {
+                    (
+                        ArtifactCommand::DisableRetrieval {
+                            artifact_id,
+                            expected_revision,
+                        },
+                        ops::Input::DisableRetrieval(_),
+                    ) => (artifact_id, expected_revision, true),
+                    (
+                        ArtifactCommand::RemoveIndex {
+                            artifact_id,
+                            expected_revision,
+                        },
+                        ops::Input::RemoveIndex(_),
+                    ) => (artifact_id, expected_revision, false),
+                    _ => return Err(invalid()),
+                };
+                let mut artifact = writable_document(tx, ctx, id)?;
+                check_revision(&artifact, expected)?;
+                let changed = if disable {
+                    // An explicit disable fences earlier reindex requests even when a prior
+                    // command already disabled the document.
+                    tx.documents().set_document_retrieval(id, false)?;
+                    true
+                } else {
+                    tx.documents().remove_document_index(id)?
+                };
+                if changed {
+                    artifact.revision = expected.checked_next().ok_or_else(invalid)?.get();
+                    tx.artifacts().update_artifact(&artifact)?;
+                }
+                let value = document_result(tx, &artifact, details)?;
+                let result = if disable {
+                    OperationResult::DocumentsDisableRetrieval { value }
+                } else {
+                    OperationResult::DocumentsRemoveIndex { value }
+                };
+                (result, changed)
             }
             _ => return Err(invalid()),
         };
@@ -177,19 +264,15 @@ impl DocumentLibrary {
                 );
                 let fetch = |after: Option<&str>, limit| -> Result<_, Failure> {
                     let after = after.map(parse_position).transpose()?;
-                    if !details && input.retrieval_enabled == Some(false) {
-                        return Ok(Vec::new());
-                    }
-                    let current = if details {
-                        input.retrieval_enabled
-                    } else {
-                        Some(true)
+                    let filter = DocumentListFilter {
+                        retrieval_enabled: input.retrieval_enabled,
+                        current_only: !details,
                     };
                     Ok(document_list(
                         snapshot,
                         ctx,
                         &scope,
-                        current,
+                        filter,
                         after.as_ref(),
                         limit,
                     )?)
@@ -197,14 +280,7 @@ impl DocumentLibrary {
                 let page = cursor::page(&binding, &input.page, fetch, position)?;
                 let value = if details {
                     let page = page.try_into_page(|artifact| {
-                        detail(
-                            snapshot.artifacts(),
-                            &artifact,
-                            None,
-                            None,
-                            None,
-                            LISTED_VERSIONS,
-                        )
+                        read_detail(snapshot, &artifact, None, None, None, LISTED_VERSIONS)
                     })?;
                     DocumentListResult::Current(DocumentLibraryPage {
                         items: page.items,
@@ -214,8 +290,8 @@ impl DocumentLibrary {
                     })
                 } else {
                     DocumentListResult::Legacy(page.try_into_page(|artifact| {
-                        legacy(detail(
-                            snapshot.artifacts(),
+                        legacy(read_detail(
+                            snapshot,
                             &artifact,
                             None,
                             None,
@@ -263,8 +339,8 @@ impl DocumentLibrary {
                                 .map_err(|_| StorageError::CursorExpired)
                         })
                         .transpose()?;
-                    DocumentResult::Current(detail(
-                        snapshot.artifacts(),
+                    DocumentResult::Current(read_detail(
+                        snapshot,
                         &artifact,
                         Some(&selected),
                         Some(&binding),
@@ -278,8 +354,8 @@ impl DocumentLibrary {
                     if !selected.live() {
                         return Err(unavailable(version_id).into());
                     }
-                    DocumentResult::Legacy(legacy(detail(
-                        snapshot.artifacts(),
+                    DocumentResult::Legacy(legacy(read_detail(
+                        snapshot,
                         &artifact,
                         Some(&selected),
                         None,
@@ -343,16 +419,106 @@ fn checked_document(
 }
 
 fn document_result(
-    read: &dyn ArtifactRead,
+    tx: &mut dyn WriteTransaction,
     artifact: &StoredArtifact,
     current: bool,
 ) -> Result<DocumentResult, Failure> {
-    let view = detail(read, artifact, None, None, None, LISTED_VERSIONS)?;
+    let mut view = detail(tx.artifacts(), artifact, None, None, None, LISTED_VERSIONS)?;
+    index_metadata(&mut view, tx.documents(), None)?;
     Ok(if current {
         DocumentResult::Current(view)
     } else {
         DocumentResult::Legacy(legacy(view)?)
     })
+}
+
+fn read_detail(
+    snapshot: &dyn ReadSnapshot,
+    artifact: &StoredArtifact,
+    selected: Option<&StoredVersion>,
+    binding: Option<&CursorBinding>,
+    after: Option<i64>,
+    limit: u16,
+) -> Result<DocumentDetail, Failure> {
+    let mut view = detail(
+        snapshot.artifacts(),
+        artifact,
+        selected,
+        binding,
+        after,
+        limit,
+    )?;
+    index_metadata(&mut view, snapshot.documents(), Some(snapshot.queue()))?;
+    Ok(view)
+}
+
+fn index_metadata(
+    view: &mut DocumentDetail,
+    read: &dyn DocumentRead,
+    queue: Option<&dyn QueueRead>,
+) -> Result<(), StorageError> {
+    view.retrieval_enabled = view.retrieval_enabled && read.document_retrieval_enabled(&view.id)?;
+    if view.deleted_selected_version_id.is_some() {
+        view.coverage.gaps = vec![code("SelectedVersionDeleted")];
+        return Ok(());
+    }
+    let Some(version) = view
+        .selected_version
+        .as_ref()
+        .or(view.current_version.as_ref())
+    else {
+        return Ok(());
+    };
+    let Some(index) = read.document_index(&version.version_id)? else {
+        return Ok(());
+    };
+    view.coverage.gaps.clear();
+    view.extraction_state = match index.stage {
+        DocumentIndexStage::Ready => ItemState::Healthy,
+        DocumentIndexStage::Partial => ItemState::Partial,
+        DocumentIndexStage::Failed => ItemState::Failed,
+        _ => ItemState::Unavailable,
+    };
+    if let Some((_, revision)) = &index.published
+        && let Some(checkpoint) = read.document_checkpoint(&version.version_id, revision)?
+    {
+        view.coverage = checkpoint.coverage;
+    }
+    let note = match index.stage {
+        DocumentIndexStage::Queued | DocumentIndexStage::Extracted => {
+            let entry = queue
+                .map(|queue| queue.entry(&index.latest))
+                .transpose()?
+                .flatten();
+            Some(
+                if entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.state == QueueState::Cancelled)
+                {
+                    code("IndexCancelled")
+                } else if entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.state == QueueState::Failed)
+                {
+                    view.extraction_state = ItemState::Failed;
+                    code("IndexFailed")
+                } else {
+                    code("IndexPending")
+                },
+            )
+        }
+        DocumentIndexStage::Removed => Some(code("IndexRemoved")),
+        _ => index.diagnostic,
+    };
+    if let Some(note) = note {
+        view.coverage.more_gaps |= view.coverage.gaps.len() >= 128;
+        view.coverage.gaps.truncate(127);
+        view.coverage.gaps.push(note);
+        if matches!(view.coverage.state, CoverageState::Complete) {
+            view.coverage.state = CoverageState::Partial;
+        }
+    }
+    Ok(())
 }
 
 fn detail(

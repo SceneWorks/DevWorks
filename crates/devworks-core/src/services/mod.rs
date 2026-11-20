@@ -233,6 +233,11 @@ impl UseCases {
         for operation in documents::LIBRARY_OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }
+        if service.has_indexer() {
+            for operation in documents::INDEX_OPERATIONS {
+                self.register(operation, None, Some(service.clone()));
+            }
+        }
         self
     }
 

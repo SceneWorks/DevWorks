@@ -326,7 +326,7 @@ fn document_artifacts(
     conn: &Connection,
     scope: &ArtifactScope,
     actor: Option<&ActorId>,
-    current: Option<bool>,
+    filter: DocumentListFilter,
     after: Option<&ListPosition>,
     limit: u16,
 ) -> Result<Vec<StoredArtifact>, StorageError> {
@@ -340,7 +340,10 @@ fn document_artifacts(
                     SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
                     AND (?2 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL
                          OR a.owner_actor_id=?2)))
-             AND (?3 IS NULL OR (a.current_version_id IS NOT NULL)=?3)
+             AND (?3 IS NULL OR (a.current_version_id IS NOT NULL AND
+                 COALESCE((SELECT p.enabled FROM document_retrieval_preferences p
+                           WHERE p.artifact_id=a.id),1))=?3)
+             AND (NOT ?7 OR a.current_version_id IS NOT NULL)
              AND (?4 IS NULL OR a.created_at<?4 OR (a.created_at=?4 AND a.id<?5))
            ORDER BY a.created_at DESC,a.id DESC LIMIT ?6"
     )))?;
@@ -348,10 +351,11 @@ fn document_artifacts(
         params![
             scope.project().map(|value| value.0.as_str()),
             actor.map(|value| value.0.as_str()),
-            current,
+            filter.retrieval_enabled,
             after.map(|value| value.created_at_ms),
             after.map(|value| value.id.as_str()),
             limit,
+            filter.current_only,
         ],
         artifact_row,
     ))?;
@@ -586,11 +590,11 @@ macro_rules! artifact_reads {
                 &self,
                 scope: &ArtifactScope,
                 actor: Option<&ActorId>,
-                current: Option<bool>,
+                filter: DocumentListFilter,
                 after: Option<&ListPosition>,
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
-                document_artifacts(self.conn, scope, actor, current, after, limit)
+                document_artifacts(self.conn, scope, actor, filter, after, limit)
             }
             fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
                 tags(self.conn, artifact)

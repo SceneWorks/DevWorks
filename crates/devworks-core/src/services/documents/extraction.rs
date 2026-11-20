@@ -104,7 +104,7 @@ pub enum ExtractionError {
     BlockLimit,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Heading {
     pub level: u8,
     pub title: String,

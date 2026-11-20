@@ -314,6 +314,8 @@ pub struct RuntimeConfig {
     /// Optional selected container backend. Without a qualified host binding the family is absent.
     pub containers: Option<ContainerComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
+    /// The qualified native document extractor. An absent port leaves the feature unregistered.
+    pub documents: Option<crate::documents::indexing::DocumentComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
@@ -394,6 +396,7 @@ impl RuntimeConfig {
             containers: None,
             price_refresh: None,
             schemas: None,
+            documents: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -942,6 +945,20 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let use_cases = if let Some(service) = &schemas {
         consumers.push(crate::schemas::consumer(store.clone(), service.clone()));
         use_cases.with_schemas(service.clone())
+    } else {
+        use_cases
+    };
+    let use_cases = if let Some(ports) = &config.documents {
+        use devworks_core::services::documents::{DocumentLibrary, indexing::DocumentIndexer};
+        let indexer = Arc::new(DocumentIndexer::new(
+            store.clone(),
+            artifacts.clone(),
+            ports.processor.clone(),
+        ));
+        consumers.push(crate::documents::indexing::consumer(indexer.clone()));
+        use_cases.with_document_library(Arc::new(
+            DocumentLibrary::new(artifacts.clone(), ids.clone()).with_indexer(indexer),
+        ))
     } else {
         use_cases
     };

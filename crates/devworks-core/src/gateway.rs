@@ -1519,14 +1519,14 @@ impl ArtifactRead for HandlerTx<'_> {
         &self,
         scope: &ArtifactScope,
         actor: Option<&ActorId>,
-        current: Option<bool>,
+        filter: crate::ports::storage::DocumentListFilter,
         after: Option<&ListPosition>,
         limit: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError> {
         self.inner
             .borrow_mut()
             .artifacts()
-            .document_artifacts(scope, actor, current, after, limit)
+            .document_artifacts(scope, actor, filter, after, limit)
     }
     fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
         self.inner.borrow_mut().artifacts().tags(artifact)
@@ -1957,6 +1957,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn schemas(&mut self) -> &mut dyn crate::ports::storage::SchemaRepository {
         self.inner.get_mut().schemas()
+    }
+    fn documents(&mut self) -> &mut dyn crate::ports::storage::DocumentRepository {
+        self.inner.get_mut().documents()
     }
     fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
         self.inner.get_mut().help()
