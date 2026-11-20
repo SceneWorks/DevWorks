@@ -2777,6 +2777,9 @@ impl WriteTransaction for Lying<'_> {
     fn schemas(&mut self) -> &mut dyn SchemaRepository {
         self.inner.schemas()
     }
+    fn documents(&mut self) -> &mut dyn DocumentRepository {
+        self.inner.documents()
+    }
     fn help(&mut self) -> &mut dyn HelpRepository {
         self.inner.help()
     }

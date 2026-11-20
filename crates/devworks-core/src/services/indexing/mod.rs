@@ -887,6 +887,10 @@ impl IndexCoordinator {
         ctx: &InvocationContext,
         operation: &Id,
     ) -> Result<DomainDecision, Failure> {
+        if let Some(decision) = super::documents::indexing::cancel_if_document(tx, ctx, operation)?
+        {
+            return Ok(decision);
+        }
         let Some(named) = tx.indexing().run(operation)? else {
             return Err(not_found("index_run", operation).into());
         };

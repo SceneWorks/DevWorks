@@ -83,6 +83,7 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema62-extension.json"
     ),
+    policy_document!("documentIndexExtension", Tables, "schema64-extension.json"),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {
@@ -338,6 +339,9 @@ fn content_lineage(reference: &ColumnReference) -> bool {
     let column = match (edge.from_table.as_str(), edge.to_table.as_str()) {
         ("artifact_versions" | "artifact_tags", "artifacts") => "artifact_id",
         ("artifact_links", "artifact_versions") => "artifact_version_id",
+        ("document_retrieval_preferences", "artifacts") => "artifact_id",
+        ("document_extractions" | "document_index_versions", "artifact_versions") => "version_id",
+        ("document_extracted_blocks", "document_extractions") => "extraction_id",
         _ => return false,
     };
     reference.from_columns.len() == 1 && reference.from_columns[0] == column

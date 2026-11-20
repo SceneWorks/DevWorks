@@ -45,6 +45,7 @@ pub mod conventions_screen;
 pub mod conventions_transfer;
 pub mod decision_ops;
 pub mod decisions_screen;
+pub mod document_extraction;
 pub mod embedding_spaces_screen;
 pub mod files;
 pub mod frame;

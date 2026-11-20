@@ -391,9 +391,9 @@ pub enum OperationResult {
     #[serde(rename = "documents.retry")]
     DocumentsRetry { value: IndexRunRecord },
     #[serde(rename = "documents.disable_retrieval")]
-    DocumentsDisableRetrieval { value: DocumentRecord },
+    DocumentsDisableRetrieval { value: DocumentResult },
     #[serde(rename = "documents.remove_index")]
-    DocumentsRemoveIndex { value: DocumentRecord },
+    DocumentsRemoveIndex { value: DocumentResult },
     #[serde(rename = "artifacts.save")]
     ArtifactsSave { value: ArtifactRecord },
     #[serde(rename = "artifacts.list")]
@@ -1680,6 +1680,8 @@ impl Revisioned for OperationResult {
             Self::DocumentsRead { value } => value.retain_revision(revision),
             Self::DocumentsShare { value } => value.retain_revision(revision),
             Self::DocumentsMove { value } => value.retain_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.retain_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
@@ -1882,6 +1884,8 @@ impl Revisioned for OperationResult {
             Self::DocumentsRead { value } => value.check_revision(revision),
             Self::DocumentsShare { value } => value.check_revision(revision),
             Self::DocumentsMove { value } => value.check_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.check_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.check_revision(revision),
             Self::ConventionsList { value } => value.check_revision(revision),
             Self::ConventionsRead { value } => value.check_revision(revision),
             Self::ConventionsEdit { value } => value.check_revision(revision),

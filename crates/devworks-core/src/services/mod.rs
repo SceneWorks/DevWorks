@@ -115,6 +115,7 @@ pub fn queue_service() -> queue::QueueService {
     queue::QueueService::new(vec![
         Arc::new(artifacts::replies::ReplyQueueHook),
         Arc::new(schemas::indexing::QueueHook),
+        Arc::new(documents::indexing::QueueHook),
     ])
 }
 
@@ -232,6 +233,14 @@ impl UseCases {
     pub fn with_document_library(mut self, service: Arc<documents::DocumentLibrary>) -> Self {
         for operation in documents::LIBRARY_OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        if service.has_indexer() {
+            for operation in documents::INDEX_OPERATIONS {
+                self.register(operation, None, Some(service.clone()));
+            }
+            if !self.has_command("indexing.cancel") {
+                self.register("indexing.cancel", None, Some(service));
+            }
         }
         self
     }

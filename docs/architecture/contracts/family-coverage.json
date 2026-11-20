@@ -9577,7 +9577,7 @@
             "pointer": "/kind",
             "equals": "documents.disable_retrieval"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9589,6 +9589,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 10,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r10.schema.json",
+              "completionSchema": "operation-completion.r10.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9623,7 +9631,7 @@
             "pointer": "/kind",
             "equals": "documents.remove_index"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9635,6 +9643,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 10,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r10.schema.json",
+              "completionSchema": "operation-completion.r10.schema.json"
             }
           ],
           "authority": "Existing host authority contract",

@@ -34,6 +34,7 @@ mod connections;
 mod conventions;
 mod decisions;
 mod diagnostics;
+mod documents;
 mod embedding;
 mod evals;
 mod git;

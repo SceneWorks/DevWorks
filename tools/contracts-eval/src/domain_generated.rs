@@ -27226,9 +27226,9 @@ pub enum OperationResult {
     #[serde(rename = "documents.move")]
     DocumentsMove { value: DocumentResult },
     #[serde(rename = "documents.disable_retrieval")]
-    DocumentsDisableRetrieval { value: DocumentRecord },
+    DocumentsDisableRetrieval { value: DocumentResult },
     #[serde(rename = "documents.remove_index")]
-    DocumentsRemoveIndex { value: DocumentRecord },
+    DocumentsRemoveIndex { value: DocumentResult },
     #[serde(rename = "artifacts.save")]
     ArtifactsSave { value: ArtifactRecord },
     #[serde(rename = "artifacts.reference")]
@@ -28252,6 +28252,8 @@ impl Revisioned for OperationResult {
             Self::AddonsUninstall { value } => value.retain_revision(revision),
             Self::DocumentsShare { value } => value.retain_revision(revision),
             Self::DocumentsMove { value } => value.retain_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.retain_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::DocumentsRead { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
@@ -28379,6 +28381,8 @@ impl Revisioned for OperationResult {
             Self::RepositoriesNodes { value } => value.check_revision(revision),
             Self::DocumentsShare { value } => value.check_revision(revision),
             Self::DocumentsMove { value } => value.check_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.check_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.check_revision(revision),
             Self::DocumentsRead { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
             Self::CodeArchitecture { value } => value.check_revision(revision),

@@ -1,5 +1,7 @@
 //! Native gateway and SQLite exercise the document library before product cutover.
 mod common;
+#[path = "document_library/indexing.rs"]
+mod indexing;
 use common::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,

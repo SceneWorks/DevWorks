@@ -5477,50 +5477,6 @@
       "$ref": "#/$defs/DocumentLibraryPage",
       "x-since": 10
     },
-    "DocumentRecord": {
-      "additionalProperties": false,
-      "properties": {
-        "coverage": {
-          "$ref": "#/$defs/Coverage"
-        },
-        "currentVersion": {
-          "$ref": "#/$defs/ArtifactRef"
-        },
-        "extractionState": {
-          "$ref": "#/$defs/ItemState"
-        },
-        "id": {
-          "$ref": "#/$defs/Id"
-        },
-        "retainedVersions": {
-          "$ref": "#/$defs/List_ArtifactRef_0_500"
-        },
-        "retrievalEnabled": {
-          "type": "boolean"
-        },
-        "revision": {
-          "$ref": "#/$defs/Revision"
-        },
-        "scope": {
-          "$ref": "#/$defs/DataScope"
-        },
-        "title": {
-          "$ref": "#/$defs/Text1To256"
-        }
-      },
-      "required": [
-        "id",
-        "revision",
-        "scope",
-        "title",
-        "currentVersion",
-        "retainedVersions",
-        "retrievalEnabled",
-        "extractionState",
-        "coverage"
-      ],
-      "type": "object"
-    },
     "DocumentResult": {
       "$ref": "#/$defs/DocumentDetail",
       "x-since": 10
@@ -18453,7 +18409,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/DocumentRecord"
+              "$ref": "#/$defs/DocumentResult"
             }
           },
           "required": [
@@ -18470,7 +18426,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/DocumentRecord"
+              "$ref": "#/$defs/DocumentResult"
             }
           },
           "required": [

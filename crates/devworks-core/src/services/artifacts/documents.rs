@@ -96,7 +96,7 @@ pub(crate) fn document_list(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     scope: &ArtifactScope,
-    current: Option<bool>,
+    filter: crate::ports::storage::DocumentListFilter,
     after: Option<&ListPosition>,
     limit: u16,
 ) -> Result<Vec<StoredArtifact>, StorageError> {
@@ -104,7 +104,7 @@ pub(crate) fn document_list(
     let actor = (!viewer.sees_owned(None)).then_some(ctx.principal());
     snapshot
         .artifacts()
-        .document_artifacts(scope, actor, current, after, limit)
+        .document_artifacts(scope, actor, filter, after, limit)
 }
 
 /// Append a live managed version using the source's already journaled blob generation.

@@ -56,8 +56,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// foreign key to instruction_revisions and one to knowledge_claims, and no other table changes.
 /// Migration 63 adds file scan progress to watchers. The watcher retains its existing project
 /// and session ownership. The new column adds no reference to another row.
+/// Migration 64 adds retrieval preferences and three per-version document index tables. The
+/// document lineage propagates from the managed artifact version to its extraction and text.
+/// Explicit version tombstones remove derived rows, and project purge classifies each row.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "a6bd0b588f47b675472fa142791b0a8b8b2f716658547c3bc834dad8ab71e02e";
+    "1906abd376b620b7e8ce02918c41eb1d822e701cc03d52f1f3f8151c51fbb70b";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

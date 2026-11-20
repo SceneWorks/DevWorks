@@ -351,7 +351,7 @@ pub trait ArtifactRead {
         &self,
         scope: &ArtifactScope,
         actor: Option<&ActorId>,
-        current: Option<bool>,
+        filter: super::DocumentListFilter,
         after: Option<&ListPosition>,
         limit: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError>;
