@@ -6,7 +6,7 @@
 //!
 //! Cargo and SwiftPM manifests are read as repository-level groups (a member's output depends on
 //! the others: workspace inheritance, in-repository path dependencies, the shallowest definition
-//! of a package): see [`extract_group`]. A `.csproj` and a `go.mod` are read on their own.
+//! of a package): see [`extract_group`]. A `.csproj`, a `.vbproj` and a `go.mod` are read on their own.
 //!
 //! Node qualified names, keys and properties are the retained ones (`package:{key}@{version}`,
 //! `cargo:registry:crates.io:serde`, `swiftpm:scm:github.com/apple/swift-log`,
@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub const CARGO: &str = "cargo";
 /// Group of `Package.swift`, `Package.resolved` and Xcode `project.pbxproj` files.
 pub const SWIFTPM: &str = "swiftpm";
-/// Group of `.csproj` files (each read on its own; the group supplies the repository name the
+/// Group of `.csproj` and `.vbproj` files (each read on its own; the group supplies the repository name the
 /// `DotnetProject` identity carries).
 pub const DOTNET: &str = "dotnet";
 
@@ -70,7 +70,7 @@ pub fn languages() -> Vec<LanguageInfo> {
         manifest!(
             "msbuild-project",
             "MSBuild project",
-            &[".csproj"],
+            &[".csproj", ".vbproj"],
             "the project and its NuGet package references"
         ),
         manifest!("go-module", "Go module", &["go.mod"], "the module identity"),
@@ -86,7 +86,11 @@ pub fn group_of(path: &str) -> Option<&'static str> {
             Some(CARGO)
         }
         "Package.swift" | "Package.resolved" | "project.pbxproj" => Some(SWIFTPM),
-        n if n.to_ascii_lowercase().ends_with(".csproj") => Some(DOTNET),
+        n if n.to_ascii_lowercase().ends_with(".csproj")
+            || n.to_ascii_lowercase().ends_with(".vbproj") =>
+        {
+            Some(DOTNET)
+        }
         _ => None,
     }
 }
@@ -171,7 +175,7 @@ pub fn extract_file(language: &str, path: &str, source: &[u8]) -> Option<FileExt
 }
 
 // ---------------------------------------------------------------------------------------------
-// .csproj (NuGetReferenceExtractor and the pipeline's DotnetProject node)
+// .csproj/.vbproj (NuGetReferenceExtractor and the pipeline's DotnetProject node)
 
 /// `PackageReference` elements with no namespace (the retained `XDocument.Descendants`
 /// match): each `Include`/`Version` pair. `Err` when the document is not well-formed XML.
@@ -213,7 +217,7 @@ pub fn package_references(xml: &str) -> Result<Vec<(String, String)>, String> {
 
 fn nuget(x: &mut FileExtract, path: &str, source: &[u8], repository: &str) {
     let name = path.rsplit('/').next().unwrap_or(path);
-    let project = name.strip_suffix(".csproj").unwrap_or(name);
+    let project = name.rsplit_once('.').map_or(name, |(project, _)| project);
     let span = x.nodes[0].span;
     let project_qn = format!("{repository}:project:{project}");
     x.nodes.push(node(

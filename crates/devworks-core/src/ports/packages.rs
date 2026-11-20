@@ -16,6 +16,8 @@
 //!
 //! None of these is a security boundary for the package's own code: an installed native helper
 //! runs with the desktop user's rights (see `crate::services::packages`, "Trust model").
+pub mod dotnet;
+
 use crate::locks::RwLockExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -1308,6 +1308,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-dotnet-pack"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devworks-engine"
 version = "0.1.0"
 dependencies = [

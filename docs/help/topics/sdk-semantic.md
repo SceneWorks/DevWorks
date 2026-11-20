@@ -27,3 +27,5 @@ A repository-aware producer declares `sourceMode: "Repository"`. It receives the
 The DevWorks Rust semantic pack uses the macOS arm64 build of rust-analyzer 1.98.0. It reports Cargo symbols and references for supported snapshots whose dependencies are available offline. Missing prerequisites or a compiler fault appears as a coverage gap.
 
 The DevWorks TypeScript semantic pack uses Node 24 on macOS arm64. Its signed bundle includes the compiler and records JavaScript, TypeScript, local npm workspace, React, Angular, HTTP call, and Tauri relationships from the captured source. Indexing continues with structural results when the pack is disabled or its runtime is missing.
+
+The DevWorks .NET semantic pack uses Roslyn for C# and Visual Basic on macOS arm64 with an installed .NET 10.0.2xx SDK and .NET 10 runtime. It binds source and in-tree project references using installed framework reference metadata. Indexed project builds and generators stay outside the runtime path. Coverage reports missing reference assemblies, unavailable prerequisites and unsupported project settings. Structural C# and text Visual Basic indexing remain available.

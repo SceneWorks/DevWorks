@@ -108,6 +108,7 @@ fn source_unit(unit: &PlanUnit) -> bool {
     unit.oid.is_some() && matches!(unit.mode, MODE_STRUCTURAL | MODE_TEXT | MODE_TEXT_FALLBACK)
 }
 
+const DOTNET_CONTEXT: &str = "dotnet-context";
 const TYPESCRIPT_CONTEXT: &str = "typescript-context";
 
 fn typescript_context(key: &str) -> bool {
@@ -121,7 +122,7 @@ fn typescript_context(key: &str) -> bool {
         || (name.starts_with("tsconfig") || name.starts_with("jsconfig")) && name.ends_with(".json")
 }
 
-fn typescript_path(key: &str) -> bool {
+fn bounded_source_path(key: &str) -> bool {
     key.len() <= 240
         && !key.contains([':', '\\'])
         && !key
@@ -138,11 +139,26 @@ fn repository_input(descriptor: &PackDescriptor, unit: &PlanUnit) -> Option<&'st
     let typescript = ["typescript", "tsx", "javascript"]
         .iter()
         .any(|language| supports(descriptor, language));
-    if typescript && !typescript_path(&unit.key) {
+    if typescript && !bounded_source_path(&unit.key) {
         return None;
     }
     // The frozen Next pass validates these configs together in its auxiliary program.
     let name = unit.key.rsplit('/').next().unwrap_or(&unit.key);
+    if descriptor.id == crate::ports::packages::dotnet::PACKAGE {
+        if !crate::ports::packages::dotnet::source_path(&unit.key) {
+            return None;
+        }
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".csproj")
+            || lower.ends_with(".vbproj")
+            || matches!(
+                lower.as_str(),
+                "directory.build.props" | "directory.build.targets" | "directory.packages.props"
+            )
+        {
+            return Some(DOTNET_CONTEXT);
+        }
+    }
     if typescript && matches!(name, "next.config.mjs" | "next.config.cjs") {
         return Some(TYPESCRIPT_CONTEXT);
     }
@@ -396,7 +412,10 @@ fn apply(
             && matches!(
                 row.payload["mode"].as_str(),
                 Some(MODE_STRUCTURAL | MODE_TEXT_FALLBACK)
-            );
+            )
+            || (descriptor.id == crate::ports::packages::dotnet::PACKAGE
+                && language == Some("visual-basic")
+                && row.payload["mode"] == MODE_TEXT);
         let proposals = match result {
             Ok(proposals) => proposals,
             Err(error) if source_covered => {
@@ -428,6 +447,24 @@ fn apply(
             None,
             &descriptor.id,
         );
+        if descriptor.id == crate::ports::packages::dotnet::PACKAGE
+            && let Some(gap) = proposal.nodes[0]
+                .properties
+                .get("coverageGap")
+                .and_then(Value::as_str)
+            && matches!(
+                gap,
+                "dotnet-source-excluded"
+                    | "dotnet-external-assemblies-unavailable"
+                    | "dotnet-project-reference-unavailable"
+            )
+        {
+            if let Some(incomplete) = row.payload["incomplete"].as_array_mut() {
+                incomplete.push(json!(gap));
+            } else {
+                row.payload["incomplete"] = json!([gap]);
+            }
+        }
         let known_nodes: BTreeSet<_> = nodes.iter().map(|n| n.node_id.clone()).collect();
         let known_edges: BTreeSet<_> = edges.iter().map(|e| e.edge_id.clone()).collect();
         nodes.extend(
