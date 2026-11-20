@@ -7,7 +7,7 @@ use devworks_core::fingerprint::sha256_hex;
 use devworks_core::locks::LockExt;
 use devworks_core::ports::packages::{
     IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeExecutable,
-    RuntimeObservation,
+    RuntimeObservation, dotnet,
 };
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{ReadOptions, read_snapshot};
@@ -215,7 +215,17 @@ impl PackageHost {
         };
         let launch_identity = RuntimeExecutable::inspect(&program).ok();
         let mut argv = vec![program.to_string_lossy().into_owned()];
-        if runtime == "node" {
+        let list_sdks = runtime == "dotnet"
+            && launch_identity.as_ref().is_some_and(|binary| {
+                binary
+                    .program
+                    .parent()
+                    .is_some_and(|dir| dir.join("sdk").is_dir())
+            });
+        if list_sdks {
+            // Listing installed SDKs does not select or load an SDK from an ambient global.json.
+            argv.push("--list-sdks".to_owned());
+        } else if runtime == "node" {
             argv.extend([
                 "--print".to_owned(),
                 "JSON.stringify({version:process.version,executable:process.execPath})".to_owned(),
@@ -283,7 +293,7 @@ impl PackageHost {
         }
         if finished.is_none() {
             return RuntimeObservation::Missing(format!(
-                "`{runtime} --version` did not answer within {} ms",
+                "`{runtime}` did not answer within {} ms",
                 timeout.as_millis()
             ));
         }
@@ -305,7 +315,17 @@ impl PackageHost {
                     *executable = Some(binary);
                     return RuntimeObservation::Found(version);
                 }
-                match parse_version(&text) {
+                let version = if list_sdks {
+                    text.lines()
+                        .filter_map(|line| {
+                            semver::Version::parse(line.split_whitespace().next()?).ok()
+                        })
+                        .max()
+                        .map(|version| version.to_string())
+                } else {
+                    parse_version(&text)
+                };
+                match version {
                     Some(version) if runtime == "node" && version.starts_with("24.") => {
                         RuntimeObservation::Missing(
                             "Node 24 did not identify its executable".into(),
@@ -320,7 +340,7 @@ impl PackageHost {
                     )),
                 }
             }
-            _ => RuntimeObservation::Missing(format!("`{runtime} --version` failed")),
+            _ => RuntimeObservation::Missing(format!("`{runtime}` version probe failed")),
         }
     }
 
@@ -333,6 +353,9 @@ impl PackageHost {
         let mut seen = BTreeMap::new();
         let mut executables = BTreeMap::new();
         for r in self.declared_runtimes() {
+            if r == dotnet::SDK_RUNTIME {
+                continue;
+            }
             if self.is_stopping() {
                 return seen;
             }
@@ -349,6 +372,12 @@ impl PackageHost {
         if self.is_stopping() {
             return seen;
         }
+        let sdk = executables
+            .get("dotnet")
+            .and_then(dotnet::Runtime::detect)
+            .map(|runtime| RuntimeObservation::Found(runtime.sdk_version))
+            .unwrap_or_else(|| RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()));
+        seen.insert(dotnet::SDK_RUNTIME.into(), sdk);
         ports.cache.set_probed(seen.clone(), executables);
         let _ = self.service.observe_now("RuntimeProbe");
         seen

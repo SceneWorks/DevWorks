@@ -8,6 +8,9 @@
 mod common;
 #[path = "packages/contributions.rs"]
 mod contributions;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "packages/dotnet_pack.rs"]
+mod dotnet_pack;
 #[path = "packages/rust_pack.rs"]
 mod rust_pack;
 #[path = "packages/semantic_fixture.rs"]
