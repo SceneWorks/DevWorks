@@ -1,5 +1,6 @@
 //! Exact-version document custody. The artifact repository owns scope, bytes and retention.
 pub mod extraction;
+pub mod pdf;
 
 use crate::{
     context::InvocationContext,

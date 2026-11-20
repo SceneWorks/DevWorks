@@ -273,6 +273,7 @@ pub struct Host {
     web: Arc<WebService>,
     /// The native outgoing MCP client the runtime installed at boot.
     mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>>,
+    pdf_worker: Option<Arc<devworks_engine::documents::pdf::PdfWorker>>,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
@@ -281,6 +282,10 @@ impl Host {
     /// The native outgoing MCP client, once the runtime installed it.
     pub fn mcp_clients(&self) -> Option<Arc<NativeMcpClients>> {
         self.mcp_clients.get().cloned()
+    }
+    /// The document worker belongs to the installed desktop app and shares its launch budget.
+    pub fn pdf_worker(&self) -> Option<&Arc<devworks_engine::documents::pdf::PdfWorker>> {
+        self.pdf_worker.as_ref()
     }
     pub fn report(&self) -> &BootReport {
         self.runtime.report()
@@ -706,6 +711,14 @@ async fn compose(
         ))
         .map_err(StartError::Principal)?;
     runtime.notification_wakeup();
+    let pdf_worker = std::env::current_exe().ok().and_then(|application| {
+        devworks_engine::documents::pdf::PdfWorker::beside_desktop(
+            &application,
+            Arc::new(NativeProcessHost),
+        )
+        .ok()
+        .map(Arc::new)
+    });
     Ok(Host {
         runtime,
         async_runtime: tokio::runtime::Handle::current(),
@@ -727,6 +740,7 @@ async fn compose(
         switchable,
         web,
         mcp_clients,
+        pdf_worker,
     })
 }
 

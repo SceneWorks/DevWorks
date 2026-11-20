@@ -103,6 +103,9 @@ quick-xml = "=0.41.0"
 zip = { version = "=9.2.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # Identify encrypted Word packages without opening their streams.
 cfb = "=0.16.0"
+# Pure-Rust PDF text and raster backends. Embedded standard fonts avoid host font lookup.
+lopdf = { version = "=0.47.0", default-features = false }
+hayro = { version = "=0.9.0", default-features = false, features = ["embed-fonts"] }
 toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "preserve_order"] }
 # The retained Terraform, ColdFusion and SQL-normalization extractors are regular-expression
 # scanners; their expressions are ported as written (leftmost-first semantics, as .NET's). Already

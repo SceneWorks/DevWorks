@@ -162,6 +162,44 @@ pub(super) fn spawn(spec: &ProcessSpec) -> Result<Box<dyn ProcessTree>, ProcessE
             cmd.pre_exec(establish_child_policy);
         }
     }
+    if let Some(memory) = spec.memory_limit_bytes {
+        #[cfg(target_os = "linux")]
+        {
+            if memory == 0 {
+                return Err(ProcessError::EnforcementUnavailable(
+                    "zero memory limit".into(),
+                ));
+            }
+            let limit = libc::rlimit {
+                rlim_cur: memory as libc::rlim_t,
+                rlim_max: memory as libc::rlim_t,
+            };
+            // SAFETY: only the forked child changes a kernel resource limit using initialized
+            // stack storage. No allocation or lock occurs before exec.
+            unsafe {
+                cmd.pre_exec(move || {
+                    if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let mut observed = limit;
+                    if libc::getrlimit(libc::RLIMIT_AS, &mut observed) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if observed.rlim_cur != limit.rlim_cur || observed.rlim_max != limit.rlim_max {
+                        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+                    }
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = memory;
+            return Err(ProcessError::EnforcementUnavailable(
+                "process address-space limit unavailable".into(),
+            ));
+        }
+    }
     cmd.args(&spec.args);
     if spec.clear_env {
         cmd.env_clear();
@@ -414,6 +452,24 @@ impl ProcessTree for UnixTree {
             self.poll().map(|s| s.empty)
         }
     }
+    #[cfg(target_os = "macos")]
+    fn resident_memory_bytes(&self) -> Option<u64> {
+        let mut task = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: the buffer and size match the PROC_PIDTASKINFO flavor. Read it only after
+        // the kernel returned the full record, for the still-owned child PID.
+        let observed = unsafe {
+            libc::proc_pidinfo(
+                self.identity.pid as libc::c_int,
+                libc::PROC_PIDTASKINFO,
+                0,
+                task.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        (observed == size).then(|| unsafe { task.assume_init().pti_resident_size })
+    }
+
     fn take_control(&mut self) -> Option<ControlChannel> {
         self.control.take()
     }

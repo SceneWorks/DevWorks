@@ -25,3 +25,7 @@ crates/devworks-core/src/operations/*.rs linguist-generated
 crates/devworks-core/src/registry/catalog.rs linguist-generated
 tools/contracts-eval/src/domain_generated.rs linguist-generated
 crates/devworks-test-support/src/unmodelled_generated.rs linguist-generated
+
+# Byte-exact synthetic PDF and raster fixtures.
+crates/devworks-desktop/tests/fixtures/pdf/*.pdf binary
+crates/devworks-desktop/tests/fixtures/pdf/*.png binary
