@@ -28,6 +28,9 @@ pub enum SettingsSlot {
     McpCommand,
     /// Deletes MCP secrets a configuration change left unreferenced.
     McpRelease,
+    IncomingMcpLoad,
+    IncomingMcpSave,
+    IncomingMcpCredential,
     /// A page of `router.connections` for Settings → Provider connections (load generation).
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.

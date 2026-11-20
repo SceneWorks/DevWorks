@@ -846,6 +846,16 @@ pub(crate) fn decide_in(
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
+    let external = if ctx.principal_kind() == PrincipalKind::McpClient
+        && !matches!(verdict, Verdict::Deny(_))
+    {
+        let fence =
+            crate::services::mcp_inbound::access::authorize(s, ctx, request).map_err(deny)?;
+        fences.push(AuthorityFence::ExternalMcp(Box::new(fence)));
+        true
+    } else {
+        false
+    };
     if let Some((id, digest)) = ownership {
         fences.push(AuthorityFence::GitWorktree { id, digest });
     }
@@ -862,6 +872,11 @@ pub(crate) fn decide_in(
             Ok(Authorization::with_grants(resume.uses).fenced_by(fences))
         }
         Verdict::Deny(reason) => Err(deny(reason)),
+        Verdict::NeedsGrant {
+            kind: GrantKind::Operation,
+            exact: false,
+            reason: DenialReason::GrantRequired,
+        } if external => Ok(Authorization::direct().fenced_by(fences)),
         Verdict::NeedsGrant {
             kind,
             exact,
@@ -1031,6 +1046,7 @@ pub fn fences_hold(
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
+            AuthorityFence::ExternalMcp(fence) => fence.holds_in(tx)?,
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
@@ -1083,6 +1099,7 @@ pub fn authorization_holds(
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::ExternalMcp(fence) => fence.holds(s)?,
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
             }

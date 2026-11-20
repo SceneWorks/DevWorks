@@ -158,6 +158,7 @@ pub struct InvocationContext {
     human_decision: Option<String>,
     human_project_purge: Option<String>,
     reviewed_operation: Option<ReviewedOperation>,
+    mcp_client_proof: Option<crate::services::mcp_inbound::access::ClientProof>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
 /// [`InvocationContext`]. It is created from the store itself, so only code the composition
@@ -272,7 +273,21 @@ impl InvocationContext {
             human_decision: None,
             human_project_purge: None,
             reviewed_operation: None,
+            mcp_client_proof: None,
         }
+    }
+
+    pub(crate) fn set_mcp_client_proof(
+        &mut self,
+        proof: crate::services::mcp_inbound::access::ClientProof,
+    ) {
+        self.mcp_client_proof = Some(proof);
+    }
+
+    pub(crate) fn mcp_client_proof(
+        &self,
+    ) -> Option<&crate::services::mcp_inbound::access::ClientProof> {
+        self.mcp_client_proof.as_ref()
     }
 
     /// Whether trusted human ingress bound this exact, complete decision. This is not a grant

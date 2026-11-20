@@ -9972,7 +9972,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         }),
         modes: &[ModeBinding {
             mode: Mode::Query,
-            authority: AuthorityClass::ScopedRead,
+            authority: AuthorityClass::HumanConfiguration,
             effect: EffectClass::ReadOnly,
             input_type: "mcp_server::StatusInput",
             decode: decode_mcp_server_status_query,
@@ -9984,7 +9984,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         revisions: &[SchemaRevision(1)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
+        human_only: true,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
@@ -10010,7 +10010,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         revisions: &[SchemaRevision(1)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
+        human_only: true,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
@@ -10024,7 +10024,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         }),
         modes: &[ModeBinding {
             mode: Mode::Query,
-            authority: AuthorityClass::ScopedRead,
+            authority: AuthorityClass::HumanConfiguration,
             effect: EffectClass::ReadOnly,
             input_type: "mcp_server::ClientsInput",
             decode: decode_mcp_server_clients_query,
@@ -10036,7 +10036,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         revisions: &[SchemaRevision(1)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
+        human_only: true,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
@@ -10062,7 +10062,7 @@ pub(super) static CATALOG: [OperationDescriptor; 382] = [
         revisions: &[SchemaRevision(1)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
+        human_only: true,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {

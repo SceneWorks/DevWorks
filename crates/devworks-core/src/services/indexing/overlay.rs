@@ -45,7 +45,7 @@ use super::{
     IndexEnv, OVERLAY_AGGREGATE, RUN_AGGREGATE, digest, effective_config, effective_config_tx,
     history, new_run, record_of, section_config, section_key,
 };
-use crate::context::InvocationContext;
+use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::locks::LockExt;
 use crate::ports::IdKind;
@@ -421,6 +421,7 @@ pub(crate) fn refresh(
     repository: &Id,
     requested: Requested<'_>,
     expected: i64,
+    authorization: &crate::ports::Authorization,
 ) -> Result<DomainDecision, Failure> {
     let r = visible_repository(tx.projects(), ctx, repository)?;
     if let Some(own) = ctx.project_id() {
@@ -628,8 +629,13 @@ pub(crate) fn refresh(
         ctx.project_id(),
         (RUN_AGGREGATE, &run.id, run.revision),
         "IndexRunQueued",
-        json!({"kind": RUN_OVERLAY, "repositoryId": r.id.as_str(), "overlayId": overlay_id.as_str(),
-            "principalKind": ctx.principal_kind().as_str().to_string()}),
+        super::run_queue_payload(
+            authorization,
+            json!({
+                "kind": RUN_OVERLAY, "repositoryId": r.id.as_str(), "overlayId": overlay_id.as_str(),
+                "principalKind": ctx.principal_kind().as_str(),
+            }),
+        )?,
     )?;
     Ok(DomainDecision::Applied {
         result: OperationResult::IndexingRefreshOverlay {
@@ -854,9 +860,18 @@ pub(crate) fn observe_all(
             )?;
             for r in &page {
                 for o in s.indexing().overlays(&r.id)? {
-                    if matches!(o.state.as_str(), OVERLAY_READY | OVERLAY_STALE) {
-                        out.push(o);
+                    if !matches!(o.state.as_str(), OVERLAY_READY | OVERLAY_STALE) {
+                        continue;
                     }
+                    if let Some(run_id) = &o.run_id
+                        && let Some(run) = s.indexing().run(run_id)?
+                        && s.actors().actor_kind(&run.requested_by)?
+                            == Some(PrincipalKind::McpClient)
+                    {
+                        // Only a fresh explicit invocation can schedule a client-owned refresh.
+                        continue;
+                    }
+                    out.push(o);
                 }
             }
             if page.len() < MAX_PAGE as usize {

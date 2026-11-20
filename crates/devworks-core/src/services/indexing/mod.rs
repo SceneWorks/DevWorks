@@ -359,6 +359,17 @@ fn history(
     Ok(())
 }
 
+fn run_queue_payload(
+    authorization: &crate::ports::Authorization,
+    mut payload: Value,
+) -> Result<Value, StorageError> {
+    if crate::services::mcp_inbound::access::command_fence(authorization).is_some() {
+        payload["externalAuthority"] = serde_json::to_value(authorization.fences())
+            .map_err(|_| StorageError::InvalidRecord("index run authority".into()))?;
+    }
+    Ok(payload)
+}
+
 /// A new queued run.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_run(
@@ -603,6 +614,7 @@ impl IndexCoordinator {
         expected: i64,
         views: &ViewSelection,
         rebuild: bool,
+        authorization: &crate::ports::Authorization,
     ) -> Result<DomainDecision, Failure> {
         let project = request_scope(tx.projects(), ctx, scope, true)?;
         if repository_ids.len() > MAX_REQUEST_REPOSITORIES {
@@ -671,6 +683,16 @@ impl IndexCoordinator {
             }
             match tx.indexing().active_run(&r.id, None)? {
                 Some(mut existing) => {
+                    // An external client has authority to record its own work. Coalesce only
+                    // when the existing run is visible in the same exact project and owned by
+                    // the same client. An upgrade would change the already recorded authority.
+                    if ctx.principal_kind() == crate::context::PrincipalKind::McpClient
+                        && (existing.project_id.as_ref() != ctx.project_id()
+                            || &existing.requested_by != ctx.principal()
+                            || rebuild && existing.kind == RUN_INDEX)
+                    {
+                        return Err(refuse(DomainErrorCode::Conflict, "index_run", None));
+                    }
                     if rebuild && existing.kind == RUN_INDEX && existing.state == RUN_QUEUED {
                         let expected = existing.revision;
                         existing.kind = RUN_REINDEX.into();
@@ -699,17 +721,21 @@ impl IndexCoordinator {
                         batch = Some(run.id.clone());
                     }
                     tx.indexing().insert_run(&run)?;
+                    let payload = run_queue_payload(
+                        authorization,
+                        json!({
+                            "kind": kind, "repositoryId": r.id.as_str(),
+                            "configRevision": current.revision, "configDigest": effective.digest,
+                            "principalKind": ctx.principal_kind().as_str(),
+                        }),
+                    )?;
                     history(
                         tx,
                         ctx.principal(),
                         project.as_ref().map(|p| &p.id),
                         (RUN_AGGREGATE, &run.id, run.revision),
                         "IndexRunQueued",
-                        json!({
-                            "kind": kind, "repositoryId": r.id.as_str(),
-                            "configRevision": current.revision, "configDigest": effective.digest,
-                            "principalKind": ctx.principal_kind().as_str().to_string(),
-                        }),
+                        payload,
                     )?;
                     changed = true;
                     runs.push(run);
@@ -1189,6 +1215,7 @@ impl CommandHandler for IndexCoordinator {
                 i.expected_source_revision.get(),
                 &i.views,
                 false,
+                command.authorization(),
             ),
             OperationInput::Indexing(iops::Input::Reindex(i)) => self.index(
                 tx,
@@ -1198,6 +1225,7 @@ impl CommandHandler for IndexCoordinator {
                 i.expected_source_revision.get(),
                 &i.views,
                 true,
+                command.authorization(),
             ),
             OperationInput::Indexing(iops::Input::ConfigureSources(i)) => {
                 self.configure(tx, ctx, i)
@@ -1232,6 +1260,7 @@ impl CommandHandler for IndexCoordinator {
                             repository_id,
                             requested,
                             expected_source_revision.get(),
+                            command.authorization(),
                         ),
                         None => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
                     }

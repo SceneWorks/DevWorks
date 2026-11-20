@@ -228,7 +228,7 @@ impl Exec<'_> {
                 {
                     return Ok(Err(Stop::Lost));
                 }
-                if cur.cancel_requested_at_ms.is_some() {
+                if cur.cancel_requested_at_ms.is_some() || !index_run_authorized(tx, &cur)? {
                     return Ok(Err(Stop::Cancelled));
                 }
                 let mut next = cur.clone();
@@ -416,6 +416,7 @@ impl Exec<'_> {
     // Baseline
 
     pub(super) fn baseline(&mut self) -> Result<(), Stop> {
+        self.stage("resolving")?;
         let env = self.w.env.clone();
         let repo_id = self.run.repository_id.clone();
         let (repo, source) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
@@ -445,7 +446,6 @@ impl Exec<'_> {
             }
             Err(e) => return Err(Stop::det("source_missing", format!("{location}: {e}"))),
         }
-        self.stage("resolving")?;
         let ctx = self.ctx.clone();
         let stop_flag = self.stop.clone();
         let stopping = &self.w.stopping;

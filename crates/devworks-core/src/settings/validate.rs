@@ -401,6 +401,18 @@ pub fn looks_like_credential(s: &str) -> bool {
     }
     s.split(|c: char| c.is_whitespace() || "\"'`,;=()[]{}<>".contains(c))
         .any(|token| {
+            if let Some((client, nonce)) = token
+                .strip_prefix("dw-mcp1.")
+                .and_then(|token| token.trim_end_matches('.').split_once('.'))
+            {
+                return !client.is_empty()
+                    && client.len() <= 128
+                    && nonce.len() == 43
+                    && client
+                        .bytes()
+                        .chain(nonce.bytes())
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'));
+            }
             token.len() >= 20
                 && PREFIXES.iter().any(|p| token.starts_with(p))
                 && token[2..]

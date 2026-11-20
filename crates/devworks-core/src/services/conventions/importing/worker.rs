@@ -428,7 +428,9 @@ impl ImportService {
                 d.expected_scope_revision,
                 resources,
             )?;
-            index.record_changed(tx, &ctx, &row)?;
+            if ctx.principal_kind() != crate::context::PrincipalKind::McpClient {
+                index.record_changed(tx, &ctx, &row)?;
+            }
             let id = EventId(tx.new_id(IdKind::Event));
             tx.history().append(NewEvent {
                 id,
