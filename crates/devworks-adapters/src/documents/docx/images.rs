@@ -1,12 +1,10 @@
 //! Native raster verification for embedded Word pictures. Output is a static PNG without source
 //! metadata. Source digests and relationship placements are kept separately by the caller.
 use super::{DocxError, WordCoverageIssue};
+use crate::documents::raster::{MAX_PIXELS, PngError, encode_png};
 use devworks_core::services::documents::extraction::ExtractionControl;
-use image::{ImageEncoder, ImageFormat, ImageReader, Limits, codecs::png::PngEncoder};
-use std::io::{self, Cursor, Write};
-
-const MAX_PIXELS: u64 = 2_000_000;
-const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
+use image::{ImageFormat, ImageReader, Limits};
+use std::io::Cursor;
 
 pub(super) struct Raster {
     pub width: u32,
@@ -60,44 +58,15 @@ pub(super) fn read(
     if pixels.dimensions() != (width, height) {
         return Ok(Err(InvalidImage));
     }
-    let mut payload = BoundedPng::default();
-    let encoded = PngEncoder::new(&mut payload).write_image(
-        pixels.as_raw(),
-        width,
-        height,
-        image::ExtendedColorType::Rgba8,
-    );
+    let encoded = encode_png(pixels.as_raw(), width, height);
     control.check()?;
-    if payload.full {
-        return Ok(Err(ImageBounds));
-    }
-    if encoded.is_err() {
-        return Ok(Err(InvalidImage));
-    }
-    Ok(Ok(Raster {
-        width,
-        height,
-        payload: payload.bytes,
-    }))
-}
-
-#[derive(Default)]
-struct BoundedPng {
-    bytes: Vec<u8>,
-    full: bool,
-}
-
-impl Write for BoundedPng {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if data.len() > MAX_PAYLOAD - self.bytes.len() {
-            self.full = true;
-            return Err(io::Error::other("PNG exceeds payload bound"));
-        }
-        self.bytes.extend_from_slice(data);
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+    match encoded {
+        Ok(payload) => Ok(Ok(Raster {
+            width,
+            height,
+            payload,
+        })),
+        Err(PngError::Limit) => Ok(Err(ImageBounds)),
+        Err(PngError::Encoding) => Ok(Err(InvalidImage)),
     }
 }
