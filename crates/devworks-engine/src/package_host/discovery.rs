@@ -447,7 +447,9 @@ impl PackageHost {
         };
         let mut seen = BTreeMap::new();
         let mut executables = BTreeMap::new();
-        for r in self.declared_runtimes() {
+        let declared = self.declared_runtimes();
+        let managed_swift = declared.contains(swift::SDK_RUNTIME);
+        for r in declared {
             if r == dotnet::SDK_RUNTIME || r == swift::SDK_RUNTIME {
                 continue;
             }
@@ -475,12 +477,22 @@ impl PackageHost {
             None => RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()),
         };
         seen.insert(dotnet::SDK_RUNTIME.into(), sdk);
-        let (sdk, swift) = match self.swift_sdk() {
-            Ok(runtime) => (
+        let swift_initialization_failed = matches!(seen.get("swift"),
+            Some(RuntimeObservation::Missing(reason)) if reason == "swift-xcode-initialization-required");
+        let (sdk, swift) = match (managed_swift
+            || executables.contains_key("swift")
+            || swift_initialization_failed)
+            .then(|| self.swift_sdk())
+        {
+            Some(Ok(runtime)) => (
                 RuntimeObservation::Found(swift::VERSION.into()),
                 Some(runtime),
             ),
-            Err(reason) => (RuntimeObservation::Missing(reason), None),
+            Some(Err(reason)) => (RuntimeObservation::Missing(reason), None),
+            None => (
+                RuntimeObservation::Missing("swift-toolchain-unavailable".into()),
+                None,
+            ),
         };
         seen.insert(swift::SDK_RUNTIME.into(), sdk);
         if self.is_stopping() {
