@@ -304,6 +304,8 @@ pub struct Enrichment {
 #[derive(Clone, Debug)]
 pub struct EnrichmentRequest<'a> {
     pub repository_id: &'a str,
+    /// The captured name that qualifies repository-level manifest definitions.
+    pub repository_name: &'a str,
     /// The checkout the pack may read (never written).
     pub root: &'a Path,
     /// The exact commit, and the capture digest for a worktree layer.

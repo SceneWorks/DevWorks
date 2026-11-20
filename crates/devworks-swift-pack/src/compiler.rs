@@ -453,7 +453,7 @@ fn decode_result(root: &Path) -> Result<(), Failure> {
         )?;
         groups.push((module, records));
     }
-    let units = graph::project(&source.repository_id, &source.files, &groups, &plan.gaps)?;
+    let units = graph::project(&source.repository_name, &source.files, &groups, &plan.gaps)?;
     let file = std::fs::File::create(root.join("output.json")).map_err(|_| INVALID)?;
     let mut output = Output {
         file,

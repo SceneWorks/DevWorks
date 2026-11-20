@@ -267,6 +267,7 @@ impl SemanticEnricher for Pack {
             if swift_runtime(&host).as_ref() != Some(runtime) {
                 return Err("swift-runtime-changed".into());
             }
+            source["repositoryName"] = json!(request.repository_name);
             source["runtime"] = serde_json::to_value(runtime).map_err(|error| error.to_string())?;
         }
         let bytes = serde_json::to_vec(&source).map_err(|error| error.to_string())?;

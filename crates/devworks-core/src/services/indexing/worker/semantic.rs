@@ -9,6 +9,7 @@ pub(crate) type UnitRows = (StoredUnit, Vec<StoredNode>, Vec<StoredEdge>);
 
 #[derive(Clone, Copy)]
 pub(crate) struct SemanticBatch<'a> {
+    pub repository_name: &'a str,
     pub root: &'a Path,
     pub commit: &'a str,
     pub capture: Option<&'a str>,
@@ -417,6 +418,7 @@ fn collect(
     pack.enrich(
         &EnrichmentRequest {
             repository_id: exec.run.repository_id.as_str(),
+            repository_name: batch.repository_name,
             root: batch.root,
             commit: batch.commit,
             capture_digest: batch.capture,

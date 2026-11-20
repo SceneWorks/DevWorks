@@ -9,7 +9,8 @@ const MAX_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Source {
-    pub repository_id: String,
+    repository_id: String,
+    pub repository_name: String,
     commit: String,
     capture_digest: Option<String>,
     source_mode: SourceMode,
@@ -92,6 +93,9 @@ impl Source {
         let SourceMode::Repository = source.source_mode;
         if source.repository_id.is_empty()
             || source.repository_id.len() > 128
+            || source.repository_name.is_empty()
+            || source.repository_name.chars().count() > 512
+            || source.repository_name.contains('\0')
             || !(hex(&source.commit, 40) || hex(&source.commit, 64))
             || source
                 .capture_digest
