@@ -178,7 +178,7 @@ struct TurnProgress {
 
 async fn drive_agent_turn_once(
     engine: &TurnEngine,
-    agents: &devworks_core::services::agents::AgentService,
+    agents: &Arc<devworks_core::services::agents::AgentService>,
     ctx: &InvocationContext,
     coordinator: &AgentRecord,
     mut stop: watch::Receiver<bool>,
