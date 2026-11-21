@@ -63,7 +63,7 @@ use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
     ApplicationStore, AttemptBinding, Cancellation, DeliveryFilter, DeliveryKey, EventRecord,
     OperationRecord, QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
-    WriteTransaction, cancellation_applies, possibly_dispatched,
+    Wake, WriteTransaction, cancellation_applies, possibly_dispatched,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState};
 use serde_json::{Value, json};
@@ -157,7 +157,8 @@ pub enum EffectResult {
     /// The outcome cannot be established (lost response, timeout, opaque effect).
     Unknown(String),
 }
-pub type EffectFuture = Pin<Box<dyn Future<Output = EffectResult> + Send>>;
+pub type EffectFuture = ScopedEffectFuture<'static>;
+pub type ScopedEffectFuture<'a> = Pin<Box<dyn Future<Output = EffectResult> + Send + 'a>>;
 /// Resolves once an operation may be dispatched (see [`EffectExecutor::ready`]).
 pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -175,6 +176,15 @@ pub trait EffectExecutor: Send + Sync {
         _cancel: Cancellation,
     ) -> EffectFuture {
         self.execute(operation)
+    }
+    /// Effects that await another delivery may lend this worker's permit during the wait.
+    fn execute_with_capacity<'a>(
+        &self,
+        operation: OperationRecord,
+        cancel: Cancellation,
+        _capacity: EffectCapacity<'a>,
+    ) -> ScopedEffectFuture<'a> {
+        self.execute_cancellable(operation, cancel)
     }
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
@@ -389,14 +399,57 @@ struct Slot {
     idx: usize,
     permit: Option<OwnedSemaphorePermit>,
 }
+impl Slot {
+    fn release_permit(&mut self) {
+        let permit = self.permit.take().expect("running slot holds a permit");
+        self.inner.parked.fetch_add(1, Ordering::SeqCst);
+        drop(permit);
+        self.inner.wake.notify_one();
+    }
+
+    fn restore_permit(&mut self, permit: OwnedSemaphorePermit) {
+        self.permit = Some(permit);
+        self.inner.parked.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 impl Drop for Slot {
     fn drop(&mut self) {
         self.inner.in_flight.locked().remove(&self.id);
         self.inner.consumer_load.locked()[self.idx] -= 1;
-        drop(self.permit.take());
+        if self.permit.take().is_none() {
+            self.inner.parked.fetch_sub(1, Ordering::SeqCst);
+        }
         self.inner.status.send_modify(|v| *v = v.wrapping_add(1));
         // Capacity freed: more ready work may be claimable now.
         self.inner.wake.notify_one();
+    }
+}
+
+/// A dispatched effect's worker permit. Lending it leaves the existing claim and lease intact.
+pub struct EffectCapacity<'a>(&'a mut Slot);
+
+impl EffectCapacity<'_> {
+    pub(crate) async fn while_waiting<T>(
+        &mut self,
+        cancel: &Cancellation,
+        wait: impl Future<Output = T>,
+    ) -> Result<T, StorageError> {
+        self.0.release_permit();
+        let result = wait.await;
+        let wake = Arc::new(Wake::default());
+        cancel.wake_on_cancel(&wake);
+        let before = wake.generation();
+        if cancel.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        let permits = self.0.inner.permits.clone();
+        let permit = tokio::select! {
+            biased;
+            _ = wake.changed_after(before) => return Err(StorageError::Cancelled),
+            permit = permits.acquire_owned() => permit.map_err(|_| StorageError::Cancelled)?,
+        };
+        self.0.restore_permit(permit);
+        Ok(result)
     }
 }
 
@@ -728,7 +781,7 @@ impl Dispatcher {
             tokio::spawn(async move {
                 let mut slot = slot;
                 if me.park(idx, &entry, &mut slot).await {
-                    me.deliver(idx, entry).await;
+                    me.deliver(idx, entry, &mut slot).await;
                 }
             });
         }
@@ -866,10 +919,7 @@ impl Dispatcher {
         let Some(fence) = entry.fence() else {
             return true;
         };
-        drop(slot.permit.take());
-        self.inner.parked.fetch_add(1, Ordering::SeqCst);
-        // Capacity freed: other ready work may be claimed while this one waits.
-        self.inner.wake.notify_one();
+        slot.release_permit();
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
         // Ready, then a worker permit: one wait, so the lease is renewed (and a stop or a lost
@@ -894,7 +944,7 @@ impl Dispatcher {
             );
             match first(&mut admitted, pause).await {
                 Either::Left(Some(p)) => {
-                    slot.permit = Some(p);
+                    slot.restore_permit(p);
                     break;
                 }
                 Either::Left(None) => {
@@ -919,7 +969,6 @@ impl Dispatcher {
                 }
             }
         }
-        self.inner.parked.fetch_sub(1, Ordering::SeqCst);
         self.notify_status();
         proceed && !self.inner.stopping.load(Ordering::SeqCst)
     }
@@ -1088,7 +1137,7 @@ impl Dispatcher {
         self.inner.status.send_modify(|v| *v = v.wrapping_add(1));
     }
 
-    async fn deliver(&self, idx: usize, claimed: QueueEntry) {
+    async fn deliver(&self, idx: usize, claimed: QueueEntry, slot: &mut Slot) {
         let consumer = self.inner.consumers[idx].clone();
         let outcome = match (
             &consumer.async_handler,
@@ -1100,7 +1149,7 @@ impl Dispatcher {
                     .await
             }
             (None, Some(executor), Some(_)) => {
-                self.deliver_effect(&consumer, executor.clone(), claimed.clone())
+                self.deliver_effect(&consumer, executor.clone(), claimed.clone(), slot)
                     .await
             }
             _ => self.deliver_local(&consumer, claimed.clone()).await,
@@ -1285,6 +1334,7 @@ impl Dispatcher {
         consumer: &Consumer,
         executor: Arc<dyn EffectExecutor>,
         claimed: QueueEntry,
+        slot: &mut Slot,
     ) -> Result<Step, StorageError> {
         enum Begin {
             Dispatch(Box<OperationRecord>),
@@ -1361,7 +1411,11 @@ impl Dispatcher {
 
         // The effect runs outside any transaction; the lease is renewed while it runs.
         let cancellation = Cancellation::new();
-        let mut effect = executor.execute_cancellable(operation.clone(), cancellation.clone());
+        let mut effect = executor.execute_with_capacity(
+            operation.clone(),
+            cancellation.clone(),
+            EffectCapacity(slot),
+        );
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
         let fence = claimed
