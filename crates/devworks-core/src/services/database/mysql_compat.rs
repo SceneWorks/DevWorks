@@ -3,13 +3,13 @@ use super::executor::scope_context;
 use super::statement::DataMode;
 use crate::context::InvocationContext;
 use crate::operations::database::{MysqlReadonlyQueryInput, ReadInput};
+use crate::ports::database::data::{ReadResult, Scalar};
 use crate::ports::storage::{ReadSnapshot, StorageError, StoredSchemaSource};
-use crate::protocol::records::{
-    DatabaseLegacyRows, DbEngine, DbReadResult, DbScalar, SchemaExposureMode,
-};
-use crate::protocol::support::{BoundedList, DynamicJson, Limit, PositiveCounter};
-use crate::services::kernel::counter;
+use crate::protocol::provider::ArtifactRef;
+use crate::protocol::records::{DatabaseLegacyRows, DbColumn, DbEngine, SchemaExposureMode};
+use crate::protocol::support::{BoundedList, BoundedText, DynamicJson, Limit, PositiveCounter};
 use crate::services::schemas::data;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -78,12 +78,7 @@ pub(super) fn select(
         .filter(|candidates| candidates.len() == 1)
         .map(|candidates| candidates[0])
         .ok_or(StorageError::ScopeDenied)?;
-    let count = input
-        .limit
-        .as_ref()
-        .and_then(|limit| limit.0.parse::<i64>().ok())
-        .unwrap_or(100)
-        .clamp(1, 500);
+    let count = input.limit.unwrap_or(100).clamp(1, 500);
     Ok(ReadInput {
         scope: input.scope.clone(),
         connection_id: selected.connection.id.clone(),
@@ -93,6 +88,7 @@ pub(super) fn select(
         row_limit: Limit::new(count as u32).ok_or(StorageError::ScopeDenied)?,
         timeout_ms: PositiveCounter("30000".into()),
         include_schema_digest: None,
+        schema_preview: None,
     })
 }
 
@@ -107,40 +103,55 @@ fn logical_endpoint(endpoint: &str) -> Option<(String, String)> {
     Some((host, database))
 }
 
-pub(super) fn rows(result: &DbReadResult) -> DatabaseLegacyRows {
-    let rows: Vec<_> = result
-        .rows
-        .0
-        .iter()
-        .map(|row| {
-            let mut map = BTreeMap::new();
-            for (column, cell) in result.columns.0.iter().zip(&row.cells.0) {
-                let value = match cell {
-                    DbScalar::Null {} => Value::Null,
-                    DbScalar::Boolean { value } => json!(value),
-                    DbScalar::Integer { value } => value
-                        .0
-                        .parse::<i64>()
-                        .map_or_else(|_| json!(value.0), |value| json!(value)),
-                    DbScalar::Decimal { value } => serde_json::from_str::<Value>(&value.0)
-                        .ok()
-                        .filter(|value| value.is_number())
-                        .unwrap_or_else(|| json!(value.0)),
-                    DbScalar::Text { value } => json!(value.0),
-                    DbScalar::Bytes { value } => json!(value),
-                };
-                // The retained source treats duplicate names as one field, case-insensitively.
-                let name = &column.name.0;
-                let entry = map
-                    .entry(name.to_lowercase())
-                    .or_insert_with(|| (name.clone(), Value::Null));
-                entry.1 = value;
-            }
-            DynamicJson(Value::Object(map.into_values().collect()))
-        })
-        .collect();
-    DatabaseLegacyRows {
-        row_count: counter(rows.len() as i64),
-        rows: BoundedList(rows),
+pub(super) fn rows(
+    result: &ReadResult,
+    artifacts: Option<&BTreeMap<String, ArtifactRef>>,
+) -> Option<DatabaseLegacyRows> {
+    let mut rows = Vec::with_capacity(result.rows.len());
+    for row in &result.rows {
+        let mut map = BTreeMap::new();
+        for (column, cell) in result.columns.iter().zip(row) {
+            let value = match cell {
+                Scalar::Null => Value::Null,
+                Scalar::Boolean(value) => json!(value),
+                Scalar::Integer(value) => json!(value),
+                Scalar::Decimal(value) => serde_json::from_str::<Value>(value)
+                    .ok()
+                    .filter(|value| value.is_number())
+                    .unwrap_or_else(|| json!(value)),
+                Scalar::Text(value) => json!(value),
+                Scalar::Bytes(value) => match artifacts {
+                    Some(artifacts) => {
+                        json!(artifacts.get(&crate::fingerprint::sha256_hex(value))?)
+                    }
+                    None => json!(STANDARD.encode(value)),
+                },
+            };
+            // The retained source keeps the first spelling and last value for duplicate names.
+            let name = &column.name;
+            let entry = map
+                .entry(name.to_lowercase())
+                .or_insert_with(|| (name.clone(), Value::Null));
+            entry.1 = value;
+        }
+        rows.push(DynamicJson(Value::Object(map.into_values().collect())));
     }
+    Some(DatabaseLegacyRows {
+        columns: artifacts.map(|_| {
+            BoundedList(
+                result
+                    .columns
+                    .iter()
+                    .map(|column| DbColumn {
+                        name: BoundedText(column.name.clone()),
+                        data_type: BoundedText(column.data_type.clone()),
+                        sensitive: false,
+                    })
+                    .collect(),
+            )
+        }),
+        truncated: artifacts.map(|_| result.truncated),
+        row_count: i32::try_from(rows.len()).ok()?,
+        rows: BoundedList(rows),
+    })
 }

@@ -21,6 +21,8 @@ pub struct DataScreen {
     pub query_generation: u64,
     pub result: Option<DbReadResult>,
     pub operation: Option<OperationId>,
+    pub operation_project: Option<String>,
+    pub submitted_project: Option<String>,
     pub operation_state: Option<OperationState>,
     pub rules: Option<DatabaseSensitiveRuleSet>,
     mode: Mode,
@@ -31,6 +33,7 @@ pub struct DataScreen {
     migration: String,
     provenance: String,
     guard_digest: bool,
+    schema_preview: String,
     confirm_write: bool,
     workspace_rules: bool,
     rule_id: String,
@@ -87,6 +90,9 @@ impl DataScreen {
             Mode::Read => {
                 body["includeSchemaDigest"] = json!(self.guard_digest);
                 body["rowLimit"] = json!(100);
+                if self.guard_digest && !self.schema_preview.trim().is_empty() {
+                    body["schemaPreview"] = json!(self.schema_preview);
+                }
                 typed(body, database::Input::Read)
             }
             Mode::Write => typed(body, database::Input::ExecuteWrite),
@@ -181,6 +187,7 @@ impl DataScreen {
         ui.checkbox(&mut self.workspace_rules, "Workspace defaults");
         if self.workspace_rules != previous {
             self.rules = None;
+            self.query_generation = self.query_generation.wrapping_add(1);
         }
         let connection = (!self.workspace_rules)
             .then(|| source.map(|source| source.id.clone()))
@@ -275,6 +282,12 @@ impl DatabasesScreen {
         if let Some(source) = &source {
             let (read, write) = DataScreen::permissions(source, self.project.as_deref());
             ui.heading(&source.name.0);
+            ui.label(match (read, write) {
+                (true, true) => "Read and write access",
+                (true, false) => "Read access",
+                (false, true) => "Write access",
+                (false, false) => "Data access disabled",
+            });
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut draft.mode, Mode::Read, "Read data");
                 ui.selectable_value(&mut draft.mode, Mode::Write, "Write data");
@@ -300,6 +313,16 @@ impl DatabasesScreen {
             match draft.mode {
                 Mode::Read => {
                     ui.checkbox(&mut draft.guard_digest, "Capture schema digest");
+                    if draft.guard_digest
+                        && !matches!(
+                            source.engine,
+                            devworks_core::protocol::records::DbEngine::Sqlite
+                        )
+                    {
+                        let preview = ui.label("SQL planned for the schema change");
+                        ui.add(egui::TextEdit::multiline(&mut draft.schema_preview).code_editor())
+                            .labelled_by(preview.id);
+                    }
                 }
                 Mode::Direct => {
                     ui.label("Reason for changing schema directly");

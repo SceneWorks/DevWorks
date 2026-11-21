@@ -61,16 +61,23 @@ fn request(engine: &DbEngine, mode: DataMode, sql: &str, params: Vec<Scalar>) ->
         "tls":"LoopbackPlaintext"
     }))
     .unwrap();
+    let plans = statement::check(engine, mode, sql).unwrap();
+    let targets = if matches!(mode, DataMode::Schema | DataMode::Migration) {
+        statement::schema_targets(&plans)
+    } else {
+        Vec::new()
+    };
     DataRequest {
         id: Id::new("database-fixture").unwrap(),
         mode,
         config,
         password: Some(Secret::new(password)),
         ca_certificate: None,
-        statements: statement::check(engine, mode, sql).unwrap(),
+        statements: plans,
         parameters: params,
         expected_schema_digest: None,
         include_schema_digest: false,
+        schema_targets: targets,
         limits: DataLimits {
             rows: 1,
             columns: 8,
@@ -125,6 +132,52 @@ fn fixture(engine: DbEngine, bind: &str) {
         );
     }
 
+    if matches!(&engine, DbEngine::SqlServer) {
+        let allowed = run(
+            DataMode::Read,
+            "SELECT dbo.dw_allowed_nested.item FROM dbo.dw_allowed_nested",
+            vec![],
+            Guard::default(),
+        );
+        match allowed {
+            Ok(DataOutcome::Read(value)) => assert!(value.rows == [vec![Scalar::Integer(1)]]),
+            Err(failure) => panic!("checked nested view: {failure:?}"),
+            _ => panic!("checked view returned a mutation"),
+        }
+    }
+    if matches!(&engine, DbEngine::Postgres) {
+        for sql in [
+            "SELECT x FROM dw_private AS x",
+            "SELECT x.visible FROM dw_private AS x(visible, renamed)",
+        ] {
+            assert!(matches!(
+                run(DataMode::Read, sql, vec![], Guard::default()),
+                Err(DataFailure::Refused(FailureKind::PermissionDenied))
+            ));
+        }
+        let cascade = run(
+            DataMode::Write,
+            "DELETE FROM dw_fk_parent WHERE id = 1",
+            vec![],
+            Guard::default(),
+        );
+        assert!(matches!(
+            cascade,
+            Err(DataFailure::Refused(FailureKind::UnsupportedStatement)
+                | DataFailure::RolledBack(FailureKind::UnsupportedStatement))
+        ));
+        for table in ["dw_fk_parent", "dw_fk_child"] {
+            let remaining = run(
+                DataMode::Read,
+                &format!("SELECT id FROM {table}"),
+                vec![],
+                Guard::default(),
+            );
+            assert!(matches!(remaining, Ok(DataOutcome::Read(value)) if
+                value.rows == [vec![Scalar::Integer(1)]]));
+        }
+    }
+
     let insert = "INSERT INTO dw_public (id, secret) VALUES (3, 'committed')";
     let result = run(
         DataMode::Write,
@@ -163,9 +216,12 @@ fn fixture(engine: DbEngine, bind: &str) {
         "constraint: {:?}",
         result.err()
     );
-    let read_schema = || {
+    let read_schema = |preview: &str| {
         let mut query = request(&engine, DataMode::Read, "SELECT 1 AS check_source", vec![]);
         query.include_schema_digest = true;
+        query.schema_targets = statement::schema_targets(
+            &statement::check(&engine, DataMode::Migration, preview).unwrap(),
+        );
         match runtime.block_on(NetworkDataAdapter.execute(query, Arc::new(Guard::default()))) {
             Ok(DataOutcome::Read(value)) => {
                 value.schema_digest.expect("native schema precondition")
@@ -179,7 +235,9 @@ fn fixture(engine: DbEngine, bind: &str) {
         command.expected_schema_digest = Some(expected);
         runtime.block_on(NetworkDataAdapter.execute(command, Arc::new(Guard::default())))
     };
-    let original = read_schema();
+    let change = "CREATE TABLE dw_ddl (id INTEGER PRIMARY KEY)";
+    let batch = "ALTER TABLE dw_ddl ADD added INT; INSERT INTO dw_ddl (id,added) VALUES (1,2)";
+    let original = read_schema(change);
     let stale = prepared(
         DataMode::Schema,
         "CREATE TABLE dw_ddl (id INTEGER PRIMARY KEY)",
@@ -211,7 +269,13 @@ fn fixture(engine: DbEngine, bind: &str) {
         "{:?}",
         direct.err()
     );
-    let new = read_schema();
+    let changed_since_preview = prepared(DataMode::Schema, change, original.clone());
+    assert!(matches!(
+        changed_since_preview,
+        Err(DataFailure::Refused(FailureKind::StaleSchema)
+            | DataFailure::RolledBack(FailureKind::StaleSchema))
+    ));
+    let new = read_schema(batch);
     assert_ne!(original, new);
     let migration = prepared(
         DataMode::Migration,

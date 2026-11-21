@@ -493,12 +493,14 @@ impl UseCases {
         }
         for command in [
             "database.execute_write",
-            "database.apply_migration",
             "database.direct_schema_change",
             "database.configure_sensitive_columns",
             "database.edit_sensitive_column_rules",
         ] {
             self.register(command, None, Some(service.clone()));
+        }
+        if service.versioned_migrations_available() {
+            self.register("database.apply_migration", None, Some(service));
         }
         self
     }

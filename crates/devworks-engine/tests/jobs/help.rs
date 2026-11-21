@@ -36,7 +36,7 @@ fn boot_help_with_metadata(
     files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
     schemas: Option<devworks_engine::schemas::SchemaComposition>,
 ) -> HelpApp {
-    boot_help_with_database(rt, h, files, schemas, None)
+    boot_help_with_database(rt, h, files, schemas, None, None)
 }
 fn boot_help_with_database(
     rt: &tokio::runtime::Runtime,
@@ -44,6 +44,7 @@ fn boot_help_with_database(
     files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
     schemas: Option<devworks_engine::schemas::SchemaComposition>,
     database: Option<devworks_engine::schemas::DatabaseComposition>,
+    git: Option<devworks_engine::git::GitComposition>,
 ) -> HelpApp {
     let store = h.open();
     let mut config = RuntimeConfig::new(id("help-job-dispatcher"));
@@ -59,8 +60,13 @@ fn boot_help_with_database(
         Arc::new(HostArtifactSources::new(h.clock(), h.ids.clone())),
         Arc::new(NativeFilesystem::new()),
     );
+    let process_host: Arc<dyn devworks_core::ports::process::ProcessHost> = if git.is_some() {
+        Arc::new(devworks_adapters::process::NativeProcessHost)
+    } else {
+        Arc::new(FakeHost::default())
+    };
     let composition = Composition {
-        git: None,
+        git,
         browser: None,
         packages: None,
         store: store.clone(),
@@ -71,7 +77,7 @@ fn boot_help_with_database(
             clock: h.clock(),
         }),
         artifacts,
-        process_host: Arc::new(FakeHost::default()),
+        process_host,
         runs: RunComposition::default(),
         knowledge: KnowledgeComposition::default(),
         application: Default::default(),

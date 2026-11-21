@@ -23,7 +23,10 @@ IN_CONTAINER = '/tmp/devworks-metadata'  # dev-host: allow-path a path inside th
 p = argparse.ArgumentParser()
 p.add_argument('--allow-emulation', action='store_true', help='Functional fixture development only; never native-x86 acceptance')
 p.add_argument('--version', choices=sorted(IMAGES), default='2022')
+p.add_argument('--data-only', action='store_true', help='Test the SQL Server 2022 data adapter')
 a = p.parse_args()
+if a.data_only and a.version != '2022':
+    p.error('--data-only requires SQL Server 2022')
 IMAGE = IMAGES[a.version]
 if platform.machine().lower() not in ('x86_64', 'amd64') and not a.allow_emulation:
     raise SystemExit('Native SQLServer qualification requires an actual x86_64 host')
@@ -56,6 +59,49 @@ def ready():
             time.sleep(1)
     raise RuntimeError('Isolated SQLServer fixture did not start within180s')
 
+def start():
+    run('docker', 'run', '--detach', '--rm', '--name', name, '--platform', 'linux/amd64',
+        '--publish', '127.0.0.1::1433', '--memory', '4g', '--cpus', '2',
+        '--env', 'ACCEPT_EULA=Y', '--env', 'MSSQL_PID=Developer',
+        '--env', f'MSSQL_SA_PASSWORD={PASSWORD}', IMAGE)
+
+def qualify_data():
+    started = False
+    try:
+        start()
+        started = True
+        ready()
+        sql('-Q', "CREATE DATABASE dw37_fixture")
+        sql('-d', 'dw37_fixture', '-Q', """
+            CREATE TABLE dbo.dw_public(id int NOT NULL PRIMARY KEY, secret varchar(40) NOT NULL);
+            INSERT dbo.dw_public VALUES(1,'public'),(2,'next');
+            CREATE TABLE dbo.dw_private(id int NOT NULL PRIMARY KEY, secret varchar(40) NOT NULL);
+            INSERT dbo.dw_private VALUES(1,'private');
+        """)
+        for statement in (
+            'CREATE VIEW dbo.dw_view AS SELECT secret FROM dbo.dw_private',
+            'CREATE VIEW dbo.dw_allowed AS SELECT id AS item FROM dbo.dw_public',
+            'CREATE VIEW dbo.dw_allowed_nested AS SELECT item FROM dbo.dw_allowed',
+        ):
+            sql('-d', 'dw37_fixture', '-Q', statement)
+        endpoint = run('docker', 'port', name, '1433/tcp').stdout.strip()
+        env = os.environ.copy()
+        env.update(DW37_TARGET=f'sqlserver://{endpoint}/dw37_fixture',
+                   DW37_USER='sa', DW37_PASSWORD=PASSWORD)
+        subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
+                        'database_data', 'sql_server_data', '--', '--exact', '--ignored'],
+                       cwd=ROOT, env=env, check=True)
+        print(json.dumps({'version': a.version, 'host': platform.machine(),
+                          'nativeX86': platform.machine().lower() in ('x86_64','amd64'),
+                          'image': IMAGE, 'dataCases': 1, 'inference': False}))
+    finally:
+        if started:
+            subprocess.run(['docker', 'rm', '--force', name], capture_output=True, check=False)
+
+if a.data_only:
+    qualify_data()
+    raise SystemExit(0)
+
 with tempfile.TemporaryDirectory(prefix='devworks-schema-sqlserver-') as folder:
     f = Path(folder)
     run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(f/'ca.key'),
@@ -68,10 +114,7 @@ with tempfile.TemporaryDirectory(prefix='devworks-schema-sqlserver-') as folder:
         '-days', '2', '-extfile', str(f/'server.ext'))
     started = False
     try:
-        run('docker', 'run', '--detach', '--rm', '--name', name, '--platform', 'linux/amd64',
-            '--publish', '127.0.0.1::1433', '--memory', '4g', '--cpus', '2',
-            '--env', 'ACCEPT_EULA=Y', '--env', 'MSSQL_PID=Developer',
-            '--env', f'MSSQL_SA_PASSWORD={PASSWORD}', IMAGE)
+        start()
         started = True
         ready()
         for file in ('ca.pem', 'server.pem', 'server.key'):

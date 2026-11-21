@@ -43,6 +43,13 @@ pub struct ReadInput {
     )]
     #[schemars(with = "bool", extend("x-since" = 2))]
     pub include_schema_digest: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 2))]
+    pub schema_preview: Option<Content>,
 }
 impl Check for ReadInput {
     fn check(&self) -> Result<(), String> {
@@ -54,6 +61,7 @@ impl Check for ReadInput {
         self.row_limit.check()?;
         self.timeout_ms.check()?;
         self.include_schema_digest.check()?;
+        self.schema_preview.check()?;
         Ok(())
     }
 }
@@ -64,6 +72,9 @@ impl Revisioned for ReadInput {
         }
         if revision < 2 {
             self.include_schema_digest = None;
+        }
+        if revision < 2 {
+            self.schema_preview = None;
         }
     }
 }
@@ -236,6 +247,30 @@ impl Revisioned for ConfigureSensitiveColumnsInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `database.mysql_readonly_query` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MysqlReadonlyQueryInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DataScope>,
+    pub source: Text,
+    pub sql: Content,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i32>,
+}
+impl Check for MysqlReadonlyQueryInput {
+    fn check(&self) -> Result<(), String> {
+        self.scope.check()?;
+        self.source.check()?;
+        self.sql.check()?;
+        self.limit.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for MysqlReadonlyQueryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `database.sensitive_columns` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -274,30 +309,6 @@ impl Revisioned for EditSensitiveColumnRulesInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
-/// `database.mysql_readonly_query` Query input.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MysqlReadonlyQueryInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<DataScope>,
-    pub source: Text,
-    pub sql: Content,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<SignedCounter>,
-}
-impl Check for MysqlReadonlyQueryInput {
-    fn check(&self) -> Result<(), String> {
-        self.scope.check()?;
-        self.source.check()?;
-        self.sql.check()?;
-        self.limit.check()?;
-        Ok(())
-    }
-}
-impl Revisioned for MysqlReadonlyQueryInput {
-    fn retain_revision(&mut self, _: u32) {}
-}
-
 /// An admitted input of the `database` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -311,12 +322,12 @@ pub enum Input {
     DirectSchemaChange(DirectSchemaChangeInput),
     /// `database.configure_sensitive_columns` (Command).
     ConfigureSensitiveColumns(ConfigureSensitiveColumnsInput),
+    /// `database.mysql_readonly_query` (Query).
+    MysqlReadonlyQuery(MysqlReadonlyQueryInput),
     /// `database.sensitive_columns` (Query).
     SensitiveColumns(SensitiveColumnsInput),
     /// `database.edit_sensitive_column_rules` (Command).
     EditSensitiveColumnRules(EditSensitiveColumnRulesInput),
-    /// `database.mysql_readonly_query` (Query).
-    MysqlReadonlyQuery(MysqlReadonlyQueryInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -326,9 +337,9 @@ impl Input {
             Self::ApplyMigration(_) => "database.apply_migration",
             Self::DirectSchemaChange(_) => "database.direct_schema_change",
             Self::ConfigureSensitiveColumns(_) => "database.configure_sensitive_columns",
+            Self::MysqlReadonlyQuery(_) => "database.mysql_readonly_query",
             Self::SensitiveColumns(_) => "database.sensitive_columns",
             Self::EditSensitiveColumnRules(_) => "database.edit_sensitive_column_rules",
-            Self::MysqlReadonlyQuery(_) => "database.mysql_readonly_query",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -338,9 +349,9 @@ impl Input {
             Self::ApplyMigration(_) => Mode::Command,
             Self::DirectSchemaChange(_) => Mode::Command,
             Self::ConfigureSensitiveColumns(_) => Mode::Command,
+            Self::MysqlReadonlyQuery(_) => Mode::Query,
             Self::SensitiveColumns(_) => Mode::Query,
             Self::EditSensitiveColumnRules(_) => Mode::Command,
-            Self::MysqlReadonlyQuery(_) => Mode::Query,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -351,9 +362,9 @@ impl Input {
             Self::ApplyMigration(i) => serde_json::to_value(i),
             Self::DirectSchemaChange(i) => serde_json::to_value(i),
             Self::ConfigureSensitiveColumns(i) => serde_json::to_value(i),
+            Self::MysqlReadonlyQuery(i) => serde_json::to_value(i),
             Self::SensitiveColumns(i) => serde_json::to_value(i),
             Self::EditSensitiveColumnRules(i) => serde_json::to_value(i),
-            Self::MysqlReadonlyQuery(i) => serde_json::to_value(i),
         }
     }
 }

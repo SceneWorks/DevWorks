@@ -3746,6 +3746,32 @@ pub(super) static CATALOG: [OperationDescriptor; 385] = [
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
+        name: "database.mysql_readonly_query",
+        family: "database",
+        owner: "DataExecutor",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "database.mysql_readonly_query",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "database::MysqlReadonlyQueryInput",
+            decode: decode_database_mysql_readonly_query_query,
+            input_schema: schema_of::<ops::database::MysqlReadonlyQueryInput>,
+        }],
+        result_type: "DatabaseLegacyRows",
+        result_schema: schema_of::<DatabaseLegacyRows>,
+        completion: false,
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
         name: "database.sensitive_columns",
         family: "database",
         owner: "DataExecutor",
@@ -3757,7 +3783,7 @@ pub(super) static CATALOG: [OperationDescriptor; 385] = [
         modes: &[ModeBinding {
             mode: Mode::Query,
             authority: AuthorityClass::ScopedRead,
-            effect: EffectClass::Local,
+            effect: EffectClass::ReadOnly,
             input_type: "database::SensitiveColumnsInput",
             decode: decode_database_sensitive_columns_query,
             input_schema: schema_of::<ops::database::SensitiveColumnsInput>,
@@ -3790,38 +3816,12 @@ pub(super) static CATALOG: [OperationDescriptor; 385] = [
         }],
         result_type: "DatabaseSensitiveRuleSet",
         result_schema: schema_of::<DatabaseSensitiveRuleSet>,
-        completion: false,
+        completion: true,
         revisions: &[SchemaRevision(1)],
         native_execution: false,
         approval_required: false,
         human_only: true,
         assignment_scope: AssignmentScope::Administration,
-    },
-    OperationDescriptor {
-        name: "database.mysql_readonly_query",
-        family: "database",
-        owner: "DataExecutor",
-        envelope: Envelope::Domain,
-        selector: Some(Selector {
-            pointer: "/body/kind",
-            equals: "database.mysql_readonly_query",
-        }),
-        modes: &[ModeBinding {
-            mode: Mode::Query,
-            authority: AuthorityClass::ScopedRead,
-            effect: EffectClass::ReadOnly,
-            input_type: "database::MysqlReadonlyQueryInput",
-            decode: decode_database_mysql_readonly_query_query,
-            input_schema: schema_of::<ops::database::MysqlReadonlyQueryInput>,
-        }],
-        result_type: "DatabaseLegacyRows",
-        result_schema: schema_of::<DatabaseLegacyRows>,
-        completion: false,
-        revisions: &[SchemaRevision(1)],
-        native_execution: false,
-        approval_required: false,
-        human_only: false,
-        assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
         name: "knowledge.search",
@@ -10442,9 +10442,9 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
         "database.apply_migration" => Some(136),
         "database.direct_schema_change" => Some(137),
         "database.configure_sensitive_columns" => Some(138),
-        "database.sensitive_columns" => Some(139),
-        "database.edit_sensitive_column_rules" => Some(140),
-        "database.mysql_readonly_query" => Some(141),
+        "database.mysql_readonly_query" => Some(139),
+        "database.sensitive_columns" => Some(140),
+        "database.edit_sensitive_column_rules" => Some(141),
         "knowledge.search" => Some(142),
         "knowledge.read" => Some(143),
         "knowledge.record" => Some(144),
@@ -12116,6 +12116,18 @@ fn decode_database_configure_sensitive_columns_command(
         |i| OperationInput::Database(ops::database::Input::ConfigureSensitiveColumns(i)),
     )
 }
+fn decode_database_mysql_readonly_query_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::database::MysqlReadonlyQueryInput>(
+        "database.mysql_readonly_query",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Database(ops::database::Input::MysqlReadonlyQuery(i)),
+    )
+}
 fn decode_database_sensitive_columns_query(
     v: Value,
     revision: SchemaRevision,
@@ -12138,18 +12150,6 @@ fn decode_database_edit_sensitive_column_rules_command(
         revision,
         v,
         |i| OperationInput::Database(ops::database::Input::EditSensitiveColumnRules(i)),
-    )
-}
-fn decode_database_mysql_readonly_query_query(
-    v: Value,
-    revision: SchemaRevision,
-) -> Result<Decoded, AdmissionError> {
-    decode_domain_body::<ops::database::MysqlReadonlyQueryInput>(
-        "database.mysql_readonly_query",
-        Mode::Query,
-        revision,
-        v,
-        |i| OperationInput::Database(ops::database::Input::MysqlReadonlyQuery(i)),
     )
 }
 fn decode_knowledge_search_query(

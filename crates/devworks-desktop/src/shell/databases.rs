@@ -86,6 +86,11 @@ impl Screen for DatabasesScreen {
             self.clear_explorer();
             self.connections.reset();
         }
+        if self.data.operation_project.as_deref() == Some(p) {
+            self.data.operation = None;
+            self.data.operation_project = None;
+            self.data.operation_state = None;
+        }
         if let Some(d) = &mut self.draft {
             if let Some(a) = d
                 .config
@@ -138,6 +143,7 @@ impl DatabasesCtl<'_, '_> {
             lists.relations.reset();
             lists.code_references.reset();
             *self.databases = Default::default();
+            self.databases.data.query_generation = lists.data.query_generation.wrapping_add(1);
             self.databases.connections = lists.connections;
             self.databases.scan = lists.scan;
             self.databases.objects = lists.objects;
@@ -669,12 +675,20 @@ impl DatabasesCtl<'_, '_> {
                     let ticket = self.databases.data.query_generation;
                     self.databases.error = None;
                     self.query(
-                        DatabasesSlot::DatabaseData(ticket),
+                        DatabasesSlot::DatabaseData(
+                            ticket,
+                            self.databases.project.clone(),
+                            self.databases.selected.clone(),
+                        ),
                         "Reading database data",
                         operation,
                         move |b| query(b, *input),
                     );
                 } else {
+                    self.databases
+                        .data
+                        .submitted_project
+                        .clone_from(&self.databases.project);
                     self.database_command(Some(*input));
                 }
             }
@@ -696,8 +710,11 @@ impl DatabasesCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(DatabasesSlot, Reply)> {
         match (slot, reply) {
-            (DatabasesSlot::DatabaseData(ticket), Reply::Query(result)) => {
-                if ticket != self.databases.data.query_generation {
+            (DatabasesSlot::DatabaseData(ticket, project, source), Reply::Query(result)) => {
+                if ticket != self.databases.data.query_generation
+                    || project != self.databases.project
+                    || source != self.databases.selected
+                {
                     return None;
                 }
                 match ops::query_result(result) {
@@ -960,6 +977,8 @@ impl DatabasesCtl<'_, '_> {
                         }
                         DomainDecision::Accepted { operation_id } => {
                             if operation.starts_with("database.") {
+                                self.databases.data.operation_project =
+                                    self.databases.data.submitted_project.take();
                                 self.databases.data.operation = Some(operation_id);
                                 self.databases.data.operation_state =
                                     Some(devworks_core::protocol::OperationState::IntentRecorded);

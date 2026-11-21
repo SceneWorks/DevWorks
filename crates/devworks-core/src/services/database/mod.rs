@@ -6,6 +6,7 @@ pub mod parameters;
 mod read;
 mod rules;
 pub mod sensitive;
+pub mod sql_server_view;
 pub mod statement;
 
 pub use executor::{DataExecutor, DatabaseReadRunner};
@@ -60,6 +61,25 @@ fn native_failure(error: DataFailure) -> DomainErrorCode {
         FailureKind::Cancelled | FailureKind::Deadline => DomainErrorCode::Cancelled,
         FailureKind::Unavailable => DomainErrorCode::ExternalFailure,
     }
+}
+
+/// Applies the selected data scope before the generic authority policy is evaluated.
+pub(crate) fn authority_scope(
+    context: &crate::context::InvocationContext,
+    input: &crate::operations::OperationInput,
+) -> Result<Option<crate::context::InvocationContext>, StorageError> {
+    use crate::operations::{OperationInput, database::Input};
+    let scope = match input {
+        OperationInput::Database(Input::Read(input)) => input.scope.as_ref(),
+        OperationInput::Database(Input::MysqlReadonlyQuery(input)) => input.scope.as_ref(),
+        OperationInput::Database(Input::ExecuteWrite(input)) => input.scope.as_ref(),
+        OperationInput::Database(Input::ApplyMigration(input)) => input.scope.as_ref(),
+        OperationInput::Database(Input::DirectSchemaChange(input)) => input.scope.as_ref(),
+        _ => None,
+    };
+    scope
+        .map(|scope| executor::scope_context(context, Some(scope)))
+        .transpose()
 }
 
 /// Source permission is checked before a command's receipt lookup, including replay-only grants.

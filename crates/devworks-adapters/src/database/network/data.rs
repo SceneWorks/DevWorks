@@ -204,6 +204,31 @@ pub(super) fn check_scope(
     Ok(())
 }
 
+pub(super) fn schema_scope(
+    request: &DataRequest,
+    target: &Target,
+    default_schema: &str,
+    scope: &NameScope,
+) -> Result<BTreeSet<(String, String)>, DataFailure> {
+    if request.schema_targets.is_empty() || request.schema_targets.len() > 128 {
+        return Err(refused(FailureKind::UnsupportedStatement));
+    }
+    request
+        .schema_targets
+        .iter()
+        .map(|relation| {
+            let (schema, name) = names(
+                &request.config.engine,
+                relation,
+                &target.catalog,
+                default_schema,
+            )?;
+            check_scope(request, scope, &schema, &name)?;
+            Ok((schema, name))
+        })
+        .collect()
+}
+
 pub(super) fn check_columns(
     engine: &DbEngine,
     catalog: &str,
@@ -216,8 +241,42 @@ pub(super) fn check_columns(
         DbEngine::Postgres => actual == normalized(engine, requested),
         _ => actual.eq_ignore_ascii_case(&requested.value),
     };
-    for table in tables {
-        for choice in &footprint.columns {
+    let ordinary = |name: &str| {
+        name.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    };
+    let collation_uncertain = !matches!(engine, DbEngine::Postgres)
+        && (!ordinary(catalog)
+            || tables.iter().any(|table| {
+                !ordinary(&table.schema)
+                    || !ordinary(&table.name)
+                    || table.aliases.iter().any(|alias| !ordinary(alias))
+                    || table.columns.iter().any(|col| !ordinary(col))
+            })
+            || footprint.columns.iter().any(|column| match column {
+                ColumnAccess::Named(path) | ColumnAccess::Wildcard(path) => {
+                    path.iter().any(|name| !ordinary(&name.value))
+                }
+            }));
+    let physical = |table: &PhysicalTable, column: &str| PhysicalColumn {
+        catalog: catalog.to_owned(),
+        schema: table.schema.clone(),
+        table: table.name.clone(),
+        column: column.to_owned(),
+    };
+    let all_columns = || {
+        tables
+            .iter()
+            .flat_map(|table| table.columns.iter().map(|column| physical(table, column)))
+    };
+    // Until the server proves collation-equivalent names, authorize all possible physical
+    // columns for uncertain spellings. This covers accent and width variants of quoted names.
+    if collation_uncertain && !footprint.columns.is_empty() {
+        return guard.check_columns(&all_columns().collect::<Vec<_>>());
+    }
+    for choice in &footprint.columns {
+        let mut resolved = false;
+        for table in tables {
             let (name, path) = match choice {
                 ColumnAccess::Named(path) => match path.split_last() {
                     Some((name, path)) => (Some(name), path),
@@ -247,18 +306,24 @@ pub(super) fn check_columns(
                 }
                 _ => return Err(refused(FailureKind::UnsupportedStatement)),
             };
+            let whole_row = matches!(engine, DbEngine::Postgres)
+                && path.is_empty()
+                && name.is_some_and(|name| {
+                    is_name(&table.name, name)
+                        || table.aliases.iter().any(|alias| is_name(alias, name))
+                });
             if candidate {
                 for column in &table.columns {
-                    if name.is_none_or(|name| is_name(column, name)) {
-                        checks.push(PhysicalColumn {
-                            catalog: catalog.to_owned(),
-                            schema: table.schema.clone(),
-                            table: table.name.clone(),
-                            column: column.clone(),
-                        });
+                    if whole_row || name.is_none_or(|name| is_name(column, name)) {
+                        resolved = true;
+                        checks.push(physical(table, column));
                     }
                 }
             }
+        }
+        if !resolved {
+            // Unknown binding or a derived name may refer to any column in the resolved scope.
+            return guard.check_columns(&all_columns().collect::<Vec<_>>());
         }
     }
     guard.check_columns(&checks)

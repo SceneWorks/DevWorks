@@ -69,7 +69,13 @@ pub struct Footprint {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Inspection {
-    TableListing(Option<Vec<Name>>),
+    TableListing {
+        catalog: Option<Vec<Name>>,
+        views_only: bool,
+    },
+    CatalogListing,
+    RoutineListing,
+    Variables(Option<String>),
     TableDefinition,
     QueryPlan,
 }
@@ -80,6 +86,8 @@ pub struct CheckedStatement {
     pub read: Footprint,
     pub bindings: Vec<String>,
     pub schema_change: bool,
+    pub renames_schema_identity: bool,
+    pub created_relation: Option<Vec<Name>>,
     pub inspection: Option<Inspection>,
 }
 
@@ -167,6 +175,8 @@ fn schema_statement(statement: &Statement, engine: &DbEngine) -> bool {
                 _ => false,
             };
             options_allowed
+                && (matches!(engine, DbEngine::Sqlite)
+                    || (!table.if_not_exists && !table.or_replace))
                 && !table.temporary
                 && !table.external
                 && table.location.is_none()
@@ -179,6 +189,8 @@ fn schema_statement(statement: &Statement, engine: &DbEngine) -> bool {
         }
         Statement::CreateView(view) => {
             !view.temporary
+                && (matches!(engine, DbEngine::Sqlite)
+                    || (!view.if_not_exists && !view.or_replace && !view.or_alter))
                 && !view.materialized
                 && !view.with_no_schema_binding
                 && view.params.is_none()
@@ -223,6 +235,27 @@ fn schema_statement(statement: &Statement, engine: &DbEngine) -> bool {
     }
 }
 
+fn rename_destination(table: &sqlparser::ast::AlterTable) -> Result<Option<Vec<Name>>, SqlRefusal> {
+    use sqlparser::ast::{AlterTableOperation, RenameTableNameKind};
+    let mut destination = None;
+    for operation in &table.operations {
+        if let AlterTableOperation::RenameTable {
+            table_name: RenameTableNameKind::As(name) | RenameTableNameKind::To(name),
+        } = operation
+        {
+            let new = simple_name(name)?;
+            if new.len() != 1 || destination.is_some() || table.operations.len() != 1 {
+                return Err(SqlRefusal::UnqualifiedRelation);
+            }
+            let mut path = simple_name(&table.name)?;
+            path.pop();
+            path.extend(new);
+            destination = Some(path);
+        }
+    }
+    Ok(destination)
+}
+
 fn read_statement(statement: &Statement, engine: &DbEngine) -> bool {
     match statement {
         Statement::Query(_) => true,
@@ -235,13 +268,39 @@ fn read_statement(statement: &Statement, engine: &DbEngine) -> bool {
         } => matches!(statement.as_ref(), Statement::Query(_)),
         Statement::ExplainTable { .. }
         | Statement::ShowTables { .. }
+        | Statement::ShowViews {
+            materialized: false,
+            ..
+        }
         | Statement::ShowColumns { .. }
+        | Statement::ShowDatabases { .. }
+        | Statement::ShowSchemas { .. }
+        | Statement::ShowFunctions { .. }
+        | Statement::ShowStatus { global: false, .. }
+        | Statement::ShowVariables { global: false, .. }
+        | Statement::ShowVariable { .. }
+        | Statement::ShowCollation { .. }
         | Statement::ShowCreate {
             obj_type:
                 sqlparser::ast::ShowCreateObject::Table | sqlparser::ast::ShowCreateObject::View,
             ..
         } => matches!(engine, DbEngine::MariaDb | DbEngine::MySql),
         _ => false,
+    }
+}
+
+fn supported_query_body(body: &sqlparser::ast::SetExpr) -> bool {
+    use sqlparser::ast::SetExpr;
+    match body {
+        SetExpr::Select(_) | SetExpr::Query(_) | SetExpr::Values(_) => true,
+        SetExpr::SetOperation { left, right, .. } => {
+            supported_query_body(left) && supported_query_body(right)
+        }
+        SetExpr::Insert(_)
+        | SetExpr::Update(_)
+        | SetExpr::Delete(_)
+        | SetExpr::Merge(_)
+        | SetExpr::Table(_) => false,
     }
 }
 
@@ -308,6 +367,15 @@ impl Visitor for Inspect<'_> {
                     self.qualify(name, None)?;
                 }
             }
+            Statement::AlterTable(table) => match rename_destination(table) {
+                Ok(Some(path)) => {
+                    self.footprint
+                        .relations
+                        .insert(Relation { path, alias: None });
+                }
+                Ok(None) => {}
+                Err(error) => return ControlFlow::Break(error),
+            },
             _ => {}
         }
         ControlFlow::Continue(())
@@ -321,7 +389,8 @@ impl Visitor for Inspect<'_> {
     }
 
     fn pre_visit_query(&mut self, query: &Query) -> ControlFlow<Self::Break> {
-        if !query.locks.is_empty()
+        if !supported_query_body(&query.body)
+            || !query.locks.is_empty()
             || query.for_clause.is_some()
             || query.settings.is_some()
             || query.format_clause.is_some()
@@ -420,6 +489,13 @@ impl Visitor for Inspect<'_> {
                 with_ordinality: false,
                 ..
             } if with_hints.is_empty() => {
+                if let Some(alias) = alias
+                    && !alias.columns.is_empty()
+                {
+                    self.footprint
+                        .columns
+                        .insert(ColumnAccess::Wildcard(vec![Name::from(&alias.name)]));
+                }
                 self.qualify(name, alias.as_ref().map(|alias| &alias.name))
             }
             TableFactor::Derived {
@@ -561,6 +637,20 @@ pub fn safe_builtin(name: &str) -> bool {
     )
 }
 
+/// Relations named by the schema operation, including any bound read or write dependencies.
+pub fn schema_targets(statements: &[CheckedStatement]) -> Vec<Relation> {
+    statements
+        .iter()
+        .flat_map(|statement| statement.read.relations.iter())
+        .map(|relation| Relation {
+            path: relation.path.clone(),
+            alias: None,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 pub fn check(
     engine: &DbEngine,
     mode: DataMode,
@@ -604,14 +694,35 @@ pub fn check(
                 return Err(SqlRefusal::InvalidBinding);
             }
             let inspection = match &statement {
-                Statement::ShowTables { show_options, .. } => {
+                Statement::ShowTables { show_options, .. }
+                | Statement::ShowViews { show_options, .. } => {
                     let scope = show_options
                         .show_in
                         .as_ref()
                         .and_then(|scope| scope.parent_name.as_ref());
-                    Some(Inspection::TableListing(
-                        scope.map(simple_name).transpose()?,
-                    ))
+                    Some(Inspection::TableListing {
+                        catalog: scope.map(simple_name).transpose()?,
+                        views_only: matches!(statement, Statement::ShowViews { .. }),
+                    })
+                }
+                Statement::ShowDatabases { .. } | Statement::ShowSchemas { .. } => {
+                    Some(Inspection::CatalogListing)
+                }
+                Statement::ShowFunctions { .. } => Some(Inspection::RoutineListing),
+                Statement::ShowVariables { .. } => Some(Inspection::Variables(None)),
+                Statement::ShowVariable { variable } => {
+                    let [name] = variable.as_slice() else {
+                        return Err(SqlRefusal::UnqualifiedExpression);
+                    };
+                    if name.value.is_empty()
+                        || !name
+                            .value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                    {
+                        return Err(SqlRefusal::UnqualifiedExpression);
+                    }
+                    Some(Inspection::Variables(Some(name.value.to_ascii_lowercase())))
                 }
                 Statement::ShowCreate { .. }
                 | Statement::ShowColumns { .. }
@@ -622,12 +733,42 @@ pub fn check(
             if matches!(engine, DbEngine::Postgres) {
                 let _ = VisitMut::visit(&mut statement, &mut QualifyPostgresBuiltins);
             }
+            let renames_schema_identity = match &statement {
+                Statement::AlterTable(table) => table.operations.iter().any(|change| {
+                    matches!(
+                        change,
+                        sqlparser::ast::AlterTableOperation::RenameColumn { .. }
+                            | sqlparser::ast::AlterTableOperation::RenameTable { .. }
+                            | sqlparser::ast::AlterTableOperation::ChangeColumn { .. }
+                    )
+                }),
+                _ => false,
+            };
+            let created_relation = match &statement {
+                Statement::CreateTable(table) => Some(simple_name(&table.name)?),
+                Statement::CreateView(view) => Some(simple_name(&view.name)?),
+                Statement::AlterTable(table) => rename_destination(table)?,
+                _ => None,
+            };
+            let sql = match &statement {
+                Statement::ShowViews { show_options, .. } => {
+                    format!("SHOW FULL TABLES{show_options}")
+                }
+                Statement::ShowFunctions { filter } => filter.as_ref().map_or_else(
+                    || "SHOW FUNCTION STATUS".to_owned(),
+                    |filter| format!("SHOW FUNCTION STATUS {filter}"),
+                ),
+                Statement::ShowVariable { .. } => "SHOW SESSION VARIABLES".to_owned(),
+                _ => statement.to_string(),
+            };
             Ok(CheckedStatement {
                 inspection,
-                sql: statement.to_string(),
+                sql,
                 read: inspect.footprint,
                 bindings: inspect.bindings,
                 schema_change,
+                renames_schema_identity,
+                created_relation,
             })
         })
         .collect()
@@ -654,6 +795,51 @@ mod tests {
             check(&engine, DataMode::Read, "SELECT 1; SELECT 2"),
             Err(SqlRefusal::StatementCount)
         ));
+    }
+
+    #[test]
+    fn refusals_and_schema_targets_preserve_authorized_footprints() {
+        let engine = DbEngine::Postgres;
+        for sql in [
+            "TABLE contacts",
+            "SELECT id FROM contacts UNION TABLE contacts",
+        ] {
+            assert!(check(&engine, DataMode::Read, sql).is_err(), "{sql}");
+        }
+        let plans = check(
+            &engine,
+            DataMode::Read,
+            "SELECT c.id FROM public.contacts AS c(id, name)",
+        )
+        .unwrap();
+        assert!(
+            plans[0]
+                .read
+                .columns
+                .iter()
+                .any(|column| matches!(column, ColumnAccess::Wildcard(_)))
+        );
+
+        let plans = check(
+            &engine,
+            DataMode::Migration,
+            "ALTER TABLE public.contacts RENAME COLUMN name TO label; INSERT INTO public.contacts (id) VALUES (1)",
+        )
+        .unwrap();
+        let targets = schema_targets(&plans);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].path[1].value, "contacts");
+        assert!(plans[0].renames_schema_identity);
+        let rename = check(
+            &engine,
+            DataMode::Schema,
+            "ALTER TABLE public.contacts RENAME TO archived",
+        )
+        .unwrap();
+        let targets = schema_targets(&rename);
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].path[1].value, "archived");
+        assert_eq!(targets[1].path[1].value, "contacts");
     }
 
     #[test]

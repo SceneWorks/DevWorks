@@ -65,6 +65,10 @@ impl DataExecutor {
         self
     }
 
+    pub(crate) fn versioned_migrations_available(&self) -> bool {
+        self.git.is_some()
+    }
+
     pub(super) fn parameters(
         &self,
         context: &InvocationContext,
@@ -150,6 +154,7 @@ impl DataExecutor {
             parameters,
             expected_schema_digest: None,
             include_schema_digest: false,
+            schema_targets: Vec::new(),
             limits,
             cancellation,
             file_authority,
@@ -226,6 +231,20 @@ impl Selected {
         if source.configuration_revision != self.configuration
             || global.revision != self.global.revision
             || local.revision != self.local.revision
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_schema_identity(
+        &self,
+        statements: &[CheckedStatement],
+    ) -> Result<(), StorageError> {
+        if statements
+            .iter()
+            .any(|statement| statement.renames_schema_identity)
+            && (!self.global.rules.is_empty() || !self.local.rules.is_empty())
         {
             return Err(StorageError::ScopeDenied);
         }

@@ -554,7 +554,6 @@ fn read_rows(
     }
     let columns = prepared
         .column_names()
-        .into_iter()
         .map(|name| Column {
             name: name.into(),
             data_type: "Dynamic".into(),
@@ -711,6 +710,7 @@ mod tests {
                 parameters: vec![],
                 expected_schema_digest: None,
                 include_schema_digest: false,
+                schema_targets: Vec::new(),
                 limits: DataLimits {
                     deadline: Instant::now() + Duration::from_secs(5),
                     rows: 1,

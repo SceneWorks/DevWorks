@@ -4,9 +4,10 @@ use crate::database::{NameScope, network::Target};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::database::data::*;
 use devworks_core::protocol::records::DbEngine;
-use devworks_core::services::database::statement::{CheckedStatement, DataMode, check};
+use devworks_core::services::database::sql_server_view::{Bindings, Definition};
+use devworks_core::services::database::statement::{CheckedStatement, DataMode};
 use futures_util::TryStreamExt;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tiberius::numeric::Numeric;
 use tiberius::{Client, ColumnType, Query, QueryItem, Row};
 use tokio::net::TcpStream;
@@ -120,15 +121,24 @@ async fn transaction(
         schema_changed: false,
     };
     for (position, checked) in request.statements.iter().enumerate() {
-        authorize(conn, request, target, scope, default_schema, checked, guard).await?;
-        if position == 0 {
-            if let Some(expected) = &request.expected_schema_digest
-                && expected != &digest(conn, request).await?
-            {
+        let views = authorize(conn, request, target, scope, default_schema, checked, guard).await?;
+        if position == 0
+            && let Some(expected) = &request.expected_schema_digest
+        {
+            let selected = schema_scope(request, target, default_schema, scope)?;
+            lock_schema_targets(conn, &selected).await?;
+            if expected != &digest(conn, &selected).await? {
                 return Err(refused(FailureKind::StaleSchema));
             }
         }
-        let mut query = Query::new(checked.sql());
+        let sql = if read_only(request) {
+            views
+                .freeze(checked)
+                .map_err(|_| refused(FailureKind::UnsupportedStatement))?
+        } else {
+            checked.sql().to_owned()
+        };
+        let mut query = Query::new(sql);
         if request.mode != DataMode::Migration {
             bind(&mut query, &request.parameters)?;
         }
@@ -136,7 +146,9 @@ async fn transaction(
         if read_only(request) {
             let mut rows = read(conn, query, &request.limits).await?;
             if request.include_schema_digest {
-                rows.schema_digest = Some(digest(conn, request).await?);
+                let selected = schema_scope(request, target, default_schema, scope)?;
+                lock_schema_targets(conn, &selected).await?;
+                rows.schema_digest = Some(digest(conn, &selected).await?);
             }
             return Ok(DataOutcome::Read(rows));
         }
@@ -206,10 +218,11 @@ async fn authorize(
     default_schema: &str,
     statement: &CheckedStatement,
     guard: &dyn DispatchGuard,
-) -> Result<(), DataFailure> {
+) -> Result<Bindings, DataFailure> {
     let engine = &DbEngine::SqlServer;
     let mut queue = VecDeque::from([statement.read.clone()]);
-    let mut views = BTreeSet::new();
+    let mut definitions = BTreeMap::<i32, Definition>::new();
+    let mut bindings = Bindings::default();
     let mut resolved = 0;
     while let Some(footprint) = queue.pop_front() {
         let mut tables = Vec::new();
@@ -232,7 +245,7 @@ async fn authorize(
                         .common_tables
                         .iter()
                         .any(|cte| cte.value.eq_ignore_ascii_case(&name));
-                if is_cte || statement.schema_change {
+                if is_cte || statement.created_relation.as_ref() == Some(&requested.path) {
                     check_scope(request, scope, &schema, &name)?;
                     continue;
                 }
@@ -245,11 +258,13 @@ async fn authorize(
             {
                 return Err(refused(FailureKind::UnsupportedStatement));
             }
-            let qualified = format!("{}.{}", quote(schema), quote(name));
-            // Take a transaction-held table lock using a fixed constant. The following catalog
-            // check binds case-insensitive SQL resolution to the server's physical identity.
-            let lock = format!("SELECT TOP (1) 1 FROM {qualified} WITH (TABLOCK,HOLDLOCK)");
-            control(conn, &lock).await.map_err(refused)?;
+            if kind != "V" {
+                let qualified = format!("{}.{}", quote(schema), quote(name));
+                // Only a verified base table is touched by this fixed lock query. Views use
+                // their checked definition and pinned dependencies, even if the view changes.
+                let lock = format!("SELECT TOP (1) 1 FROM {qualified} WITH (TABLOCK,HOLDLOCK)");
+                control(conn, &lock).await.map_err(refused)?;
+            }
             if relation(conn, schema, name).await? != found {
                 return Err(refused(FailureKind::StaleSchema));
             }
@@ -264,36 +279,48 @@ async fn authorize(
             if resolved > MAX_RELATIONS {
                 return Err(refused(FailureKind::ResultLimit));
             }
-            if kind == "V" && views.insert(*object) {
-                let row = conn
-                    .query("SELECT OBJECT_DEFINITION(@P1)", &[object])
-                    .await
-                    .map_err(|e| refused(classify(e)))?
-                    .into_row()
-                    .await
-                    .map_err(|e| refused(classify(e)))?
-                    .ok_or_else(|| refused(FailureKind::PermissionDenied))?;
-                let definition: &str = row
-                    .get(0)
-                    .ok_or_else(|| refused(FailureKind::PermissionDenied))?;
-                let tree = check(engine, DataMode::Schema, definition)
-                    .map_err(|_| refused(FailureKind::UnsupportedStatement))?;
-                // The view's own CREATE target is already checked and locked.
-                let mut dependencies = tree[0].read.clone();
-                dependencies.relations.retain(|candidate| {
-                    !names(engine, candidate, &target.catalog, default_schema).is_ok_and(
-                        |(s, n)| s.eq_ignore_ascii_case(schema) && n.eq_ignore_ascii_case(name),
-                    )
-                });
-                queue.push_back(dependencies);
+            let columns: Vec<String> = output
+                .iter()
+                .map(|row| row.get::<&str, _>(0).unwrap_or_default().to_owned())
+                .collect();
+            if kind == "V" && read_only(request) {
+                let view = match definitions.get(object) {
+                    Some(view) => view.clone(),
+                    None => {
+                        let row = conn
+                            .query("SELECT OBJECT_DEFINITION(@P1)", &[object])
+                            .await
+                            .map_err(|e| refused(classify(e)))?
+                            .into_row()
+                            .await
+                            .map_err(|e| refused(classify(e)))?
+                            .ok_or_else(|| refused(FailureKind::PermissionDenied))?;
+                        let definition: &str = row
+                            .get(0)
+                            .ok_or_else(|| refused(FailureKind::PermissionDenied))?;
+                        let view = Definition::checked(definition, &columns)
+                            .map_err(|_| refused(FailureKind::UnsupportedStatement))?;
+                        if schema != default_schema
+                            && view
+                                .statement
+                                .read
+                                .relations
+                                .iter()
+                                .any(|relation| relation.path.len() == 1)
+                        {
+                            return Err(refused(FailureKind::UnsupportedStatement));
+                        }
+                        queue.push_back(view.statement.read.clone());
+                        definitions.insert(*object, view.clone());
+                        view
+                    }
+                };
+                bindings.bind(&requested.path, view);
             }
             tables.push(PhysicalTable {
                 schema: schema.clone(),
                 name: name.clone(),
-                columns: output
-                    .iter()
-                    .map(|row| row.get::<&str, _>(0).unwrap_or_default().to_owned())
-                    .collect(),
+                columns,
                 aliases: requested
                     .alias
                     .iter()
@@ -303,50 +330,90 @@ async fn authorize(
         }
         check_columns(engine, &target.catalog, &footprint, &tables, guard)?;
     }
+    Ok(bindings)
+}
+
+async fn lock_schema_targets(
+    conn: &mut Session,
+    selected: &BTreeSet<(String, String)>,
+) -> Result<(), DataFailure> {
+    for (schema, name) in selected {
+        if schema.eq_ignore_ascii_case("sys")
+            || schema.eq_ignore_ascii_case("information_schema")
+            || name.starts_with('#')
+        {
+            return Err(refused(FailureKind::PermissionDenied));
+        }
+        let Some(identity) = relation(conn, schema, name).await? else {
+            continue;
+        };
+        let (_, physical_schema, physical_name, kind, unsafe_read, _) = &identity;
+        if kind != "U" || *unsafe_read {
+            return Err(refused(FailureKind::UnsupportedStatement));
+        }
+        let lock = format!(
+            "SELECT TOP (1) 1 FROM {}.{} WITH (TABLOCK,HOLDLOCK)",
+            quote(physical_schema),
+            quote(physical_name)
+        );
+        control(conn, &lock).await.map_err(refused)?;
+        if relation(conn, schema, name).await? != Some(identity) {
+            return Err(refused(FailureKind::StaleSchema));
+        }
+    }
     Ok(())
 }
 
-async fn digest(conn: &mut Session, request: &DataRequest) -> Result<String, DataFailure> {
-    let schemas = request
-        .config
-        .schemas
-        .0
-        .iter()
-        .map(|name| name.0.as_str())
-        .collect::<Vec<_>>();
-    let mut rows = conn.simple_query(
-        "SELECT s.name, (SELECT s.name AS [schema],o.name,CAST(o.type AS nvarchar(2)) AS kind,
+async fn digest(
+    conn: &mut Session,
+    selected: &BTreeSet<(String, String)>,
+) -> Result<String, DataFailure> {
+    let mut material =
+        serde_json::to_vec(selected).map_err(|_| refused(FailureKind::InvalidTarget))?;
+    let input = std::str::from_utf8(&material).map_err(|_| refused(FailureKind::InvalidTarget))?;
+    let mut rows = conn.query(
+        "SELECT (SELECT o.object_id,s.name AS [schema],o.name,CAST(o.type AS nvarchar(2)) AS kind,
           OBJECT_DEFINITION(o.object_id) AS [definition],
           JSON_QUERY((SELECT c.name,TYPE_NAME(c.user_type_id) AS [type],c.max_length,c.precision,c.scale,c.is_nullable,
-            OBJECT_DEFINITION(c.default_object_id) AS defaultValue
-            FROM sys.columns c WHERE c.object_id=o.object_id ORDER BY c.column_id FOR JSON PATH)) AS columns,
-          JSON_QUERY((SELECT i.name, i.type_desc, i.is_unique, i.filter_definition,
-            JSON_QUERY((SELECT ic.column_id,ic.key_ordinal,ic.is_descending_key
+            c.collation_name,c.is_identity,c.is_computed,
+            OBJECT_DEFINITION(c.default_object_id) AS defaultValue, cc.definition AS computedDefinition
+            FROM sys.columns c LEFT JOIN sys.computed_columns cc ON cc.object_id=c.object_id AND cc.column_id=c.column_id
+            WHERE c.object_id=o.object_id ORDER BY c.column_id FOR JSON PATH)) AS columns,
+          JSON_QUERY((SELECT i.name,i.type_desc,i.is_unique,i.is_disabled,i.filter_definition,
+            JSON_QUERY((SELECT ic.column_id,ic.key_ordinal,ic.is_descending_key,ic.is_included_column
               FROM sys.index_columns ic WHERE ic.object_id=i.object_id AND ic.index_id=i.index_id
               ORDER BY ic.index_column_id FOR JSON PATH)) AS columns
-            FROM sys.indexes i WHERE i.object_id=o.object_id AND i.index_id>0 ORDER BY i.name FOR JSON PATH)) AS indexes
+            FROM sys.indexes i WHERE i.object_id=o.object_id AND i.index_id>0 ORDER BY i.name FOR JSON PATH)) AS indexes,
+          JSON_QUERY((SELECT k.name,CAST(k.type AS nvarchar(2)) AS kind,OBJECT_DEFINITION(k.object_id) AS [definition]
+            FROM sys.objects k WHERE k.parent_object_id=o.object_id AND k.type IN('C','D','F','PK','UQ','TR')
+            ORDER BY k.name FOR JSON PATH)) AS constraints,
+          JSON_QUERY((SELECT f.name,f.referenced_object_id,f.delete_referential_action,f.update_referential_action,
+            f.is_disabled,f.is_not_trusted,
+            JSON_QUERY((SELECT fc.parent_column_id,fc.referenced_column_id FROM sys.foreign_key_columns fc
+              WHERE fc.constraint_object_id=f.object_id ORDER BY fc.constraint_column_id FOR JSON PATH)) AS columns
+            FROM sys.foreign_keys f WHERE f.parent_object_id=o.object_id ORDER BY f.name FOR JSON PATH)) AS foreignKeys
           FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)
         FROM sys.objects o JOIN sys.schemas s ON s.schema_id=o.schema_id
-        WHERE o.is_ms_shipped=0 ORDER BY s.name,o.name,o.type",
+        WHERE o.is_ms_shipped=0 AND EXISTS (SELECT 1 FROM OPENJSON(@P1)
+          WITH (schema_name nvarchar(128) '$[0]', relation_name nvarchar(128) '$[1]') p
+          WHERE p.schema_name COLLATE DATABASE_DEFAULT=s.name AND p.relation_name COLLATE DATABASE_DEFAULT=o.name)
+        ORDER BY s.name,o.name,o.type",
+        &[&input],
     ).await.map_err(|e| refused(classify(e)))?;
-    let mut material = Vec::new();
+    let mut definitions = Vec::new();
     while let Some(item) = rows.try_next().await.map_err(|e| refused(classify(e)))? {
         let QueryItem::Row(row) = item else { continue };
-        let schema = row
+        let value = row
             .get::<&str, _>(0)
             .ok_or_else(|| refused(FailureKind::StaleSchema))?;
-        if !schemas.is_empty() && !schemas.contains(&schema) {
-            continue;
-        }
-        let value = row
-            .get::<&str, _>(1)
-            .ok_or_else(|| refused(FailureKind::StaleSchema))?;
-        if value.len().saturating_add(material.len()) > 16 * 1024 * 1024 {
+        if value.len().saturating_add(definitions.len()) > 16 * 1024 * 1024 {
             return Err(refused(FailureKind::ResultLimit));
         }
-        material.extend_from_slice(&(value.len() as u64).to_le_bytes());
-        material.extend_from_slice(value.as_bytes());
+        definitions.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        definitions.extend_from_slice(value.as_bytes());
     }
+    drop(rows);
+    material.extend(definitions);
     Ok(sha256_hex(&material))
 }
 

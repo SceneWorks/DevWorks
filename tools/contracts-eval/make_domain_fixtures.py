@@ -87,6 +87,24 @@ for name,d in OPS.items():
  for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request'+('.r'+str(d['introducedRevision'])if d.get('introducedRevision',1)>1 else ''),request(name,mode))
 for name,t in ({n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS).items():
  case('result-'+name,'operation-result'+('.r'+str(OPS[name]['introducedRevision'])if OPS.get(name,{}).get('introducedRevision',1)>1 else ''),result(name,t))
+# Database data authority and exact versioned schema-change inputs (DW-37).
+_db_read=copy.deepcopy(POS['input-database.read-Query'])
+_db_read.update(schemaRevision=2)
+_db_read['body'].update(scope={'kind':'Project','projectId':'project-a'},statement='SELECT 1',
+ includeSchemaDigest=True,schemaPreview='ALTER TABLE contacts ADD label TEXT')
+case('input-database.read-scoped-schema-preview','domain-request.r2',_db_read)
+_db_legacy=copy.deepcopy(_db_read)
+_db_legacy.pop('schemaRevision')
+case('reject-database.read-revision-one-preview','domain-request',_db_legacy,False,False)
+_db_direct=copy.deepcopy(POS['input-database.direct_schema_change-Command'])
+_db_direct.update(schemaRevision=2)
+_db_direct['body'].update(expectedSchemaDigest='a'*64,fallbackReason='Approved emergency repair')
+case('input-database.direct_schema_change-exact-fallback','domain-request.r2',_db_direct)
+_db_migration=copy.deepcopy(POS['input-database.apply_migration-Command'])
+_db_migration.update(schemaRevision=2)
+_db_migration['body']['source']={'repositoryId':'repo-a','commit':{'format':'Sha1','hex':'a'*40},
+ 'path':'migrations/001.sql'}
+case('input-database.apply_migration-git-source','domain-request.r2',_db_migration)
 # Watcher sources (DW-96): exactly one of a process, a probe and a timer; only a probe takes a
 # maximum lifetime, a timer keeps no output tail, and a probe runs at most once a second.
 _watch=request('watch.create','Command')

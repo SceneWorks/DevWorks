@@ -11,7 +11,7 @@ use sqlx::{
     Arguments, AssertSqlSafe, Column, Connection, Executor, MySqlConnection, Row, Statement,
     TypeInfo, ValueRef,
 };
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const MAX_RELATIONS: usize = 128;
 const MAX_COLUMNS: usize = 1024;
@@ -88,7 +88,11 @@ pub(crate) async fn execute(
     if request.include_schema_digest
         && let Ok(DataOutcome::Read(rows)) = &mut result
     {
-        rows.schema_digest = Some(digest(&mut conn, &target, &scope).await?);
+        let selected = schema_scope(&request, &target, &target.catalog, &scope)?;
+        prime_metadata_locks(&mut conn, &selected).await?;
+        rows.schema_digest = Some(schema_digest(
+            &signatures(&mut conn, &target, &selected).await?,
+        )?);
     }
     match result {
         Ok(DataOutcome::Read(rows)) => {
@@ -135,16 +139,18 @@ async fn run_statement(
     position: usize,
 ) -> Result<DataOutcome, DataFailure> {
     let statement = &request.statements[position];
-    if let Some(Inspection::TableListing(parts)) = &statement.inspection {
-        let config = &request.config;
-        let selected = parts
+    if let Some(Inspection::TableListing { catalog, .. }) = &statement.inspection {
+        let selected = catalog
             .as_ref()
             .is_none_or(|path| path.len() == 1 && path[0].value == target.catalog);
         if !selected
-            || !config.include_patterns.0.is_empty()
-            || !config.exclude_patterns.0.is_empty()
-            || (!config.schemas.0.is_empty()
-                && !config.schemas.0.iter().any(|name| name.0 == target.catalog))
+            || (!request.config.schemas.0.is_empty()
+                && !request
+                    .config
+                    .schemas
+                    .0
+                    .iter()
+                    .any(|name| name.0 == target.catalog))
         {
             return Err(refused(FailureKind::PermissionDenied));
         }
@@ -177,6 +183,9 @@ async fn run_statement(
             .await
             .map_err(|error| refused(classify(error)))?
         {
+            if !visible_listing(&statement.inspection, &row, request, target, scope) {
+                continue;
+            }
             if answer.full() {
                 break;
             }
@@ -202,6 +211,45 @@ async fn run_statement(
             observed_statements: 1,
             schema_changed: false,
         }))
+    }
+}
+
+fn visible_listing(
+    inspection: &Option<Inspection>,
+    row: &MySqlRow,
+    request: &DataRequest,
+    target: &Target,
+    scope: &NameScope,
+) -> bool {
+    let get = |index| row.try_get::<String, _>(index).ok();
+    match inspection {
+        Some(Inspection::TableListing { views_only, .. }) => {
+            get(0).is_some_and(|name| check_scope(request, scope, &target.catalog, &name).is_ok())
+                && (!views_only || get(1).as_deref() == Some("VIEW"))
+        }
+        Some(Inspection::CatalogListing) => get(0).as_deref() == Some(&target.catalog),
+        Some(Inspection::RoutineListing) => {
+            get(0).as_deref() == Some(&target.catalog)
+                && get(1)
+                    .is_some_and(|name| check_scope(request, scope, &target.catalog, &name).is_ok())
+        }
+        Some(Inspection::Variables(selected)) => get(0).is_some_and(|name| {
+            selected.as_ref().is_none_or(|selected| selected == &name)
+                && matches!(
+                    name.as_str(),
+                    "autocommit"
+                        | "character_set_client"
+                        | "character_set_connection"
+                        | "character_set_results"
+                        | "collation_connection"
+                        | "sql_mode"
+                        | "time_zone"
+                        | "transaction_isolation"
+                        | "tx_isolation"
+                        | "version"
+                )
+        }),
+        _ => true,
     }
 }
 
@@ -239,7 +287,7 @@ async fn authorize(
                         .common_tables
                         .iter()
                         .any(|cte| cte.value.eq_ignore_ascii_case(&name));
-                if cte || statement.schema_change {
+                if cte || statement.created_relation.as_ref() == Some(&relation.path) {
                     continue;
                 }
                 return Err(refused(FailureKind::StaleSchema));
@@ -366,13 +414,10 @@ fn decode(row: &MySqlRow, index: usize, data_type: &str) -> Result<Scalar, DataF
             .map(Scalar::Integer)
             .map_err(fail),
         "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
-        | "BIGINT UNSIGNED" => row
-            .try_get::<u64, _>(index)
-            .map_err(fail)
-            .and_then(|number| {
-                Ok(i64::try_from(number)
-                    .map_or_else(|_| Scalar::Decimal(number.to_string()), Scalar::Integer))
-            }),
+        | "BIGINT UNSIGNED" => row.try_get::<u64, _>(index).map_err(fail).map(|number| {
+            i64::try_from(number)
+                .map_or_else(|_| Scalar::Decimal(number.to_string()), Scalar::Integer)
+        }),
         "CHAR" | "VARCHAR" | "TEXT" | "TINYTEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" | "SET" => {
             row.try_get::<String, _>(index)
                 .map(Scalar::Text)
@@ -402,6 +447,18 @@ fn decode(row: &MySqlRow, index: usize, data_type: &str) -> Result<Scalar, DataF
                     Err(refused(FailureKind::UnsupportedValue))
                 }
             }),
+        "DATE" => row
+            .try_get::<sqlx::types::chrono::NaiveDate, _>(index)
+            .map(|value| Scalar::Text(value.to_string()))
+            .map_err(fail),
+        "DATETIME" | "TIMESTAMP" => row
+            .try_get::<sqlx::types::chrono::NaiveDateTime, _>(index)
+            .map(|value| Scalar::Text(value.format("%Y-%m-%dT%H:%M:%S%.f").to_string()))
+            .map_err(fail),
+        "TIME" => row
+            .try_get::<sqlx::mysql::types::MySqlTime, _>(index)
+            .map(|value| Scalar::Text(value.to_string()))
+            .map_err(fail),
         "BINARY" | "VARBINARY" | "BLOB" | "TINYBLOB" | "MEDIUMBLOB" | "LONGBLOB" => row
             .try_get::<Vec<u8>, _>(index)
             .map(Scalar::Bytes)
@@ -410,11 +467,45 @@ fn decode(row: &MySqlRow, index: usize, data_type: &str) -> Result<Scalar, DataF
     }
 }
 
-async fn digest(
+type TargetNames = BTreeSet<(String, String)>;
+type SchemaSignatures = BTreeMap<(String, String), String>;
+
+async fn prime_metadata_locks(
+    conn: &mut MySqlConnection,
+    names: &TargetNames,
+) -> Result<(), DataFailure> {
+    for (schema, name) in names {
+        let initial = sqlx::query_as::<_, (String, String, Option<String>)>(TABLE)
+            .bind(schema)
+            .bind(name)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| refused(classify(e)))?;
+        if let Some(identity) = initial {
+            if identity.1 != "BASE TABLE" || identity.2.as_deref() != Some("InnoDB") {
+                return Err(refused(FailureKind::UnsupportedStatement));
+            }
+            let statement = format!("SELECT 1 FROM {}.{} LIMIT 0", quote(schema), quote(name));
+            sqlx::raw_sql(AssertSqlSafe(statement))
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| refused(classify(e)))?;
+        }
+    }
+    Ok(())
+}
+
+fn schema_digest(values: &SchemaSignatures) -> Result<String, DataFailure> {
+    let names = values.iter().collect::<Vec<_>>();
+    let material = serde_json::to_vec(&names).map_err(|_| refused(FailureKind::InvalidTarget))?;
+    Ok(devworks_core::fingerprint::sha256_hex(&material))
+}
+
+async fn signatures(
     conn: &mut MySqlConnection,
     target: &Target,
-    scope: &NameScope,
-) -> Result<String, DataFailure> {
+    selected: &TargetNames,
+) -> Result<SchemaSignatures, DataFailure> {
     const PROBES: &[&str] = &[
         "SELECT TABLE_NAME, CAST(JSON_ARRAY(TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_COLLATION) AS CHAR)
          FROM INFORMATION_SCHEMA.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ? ORDER BY BINARY TABLE_NAME",
@@ -431,7 +522,11 @@ async fn digest(
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE BINARY TABLE_SCHEMA=BINARY ?
           ORDER BY BINARY TABLE_NAME,BINARY CONSTRAINT_NAME,ORDINAL_POSITION",
     ];
-    let mut material = Vec::new();
+    let mut material: BTreeMap<_, Vec<u8>> = selected
+        .iter()
+        .map(|name| (name.clone(), Vec::new()))
+        .collect();
+    let mut size = 0usize;
     for probe in PROBES {
         let mut stream = sqlx::query_as::<_, (String, String)>(*probe)
             .bind(&target.catalog)
@@ -441,17 +536,21 @@ async fn digest(
             .await
             .map_err(|error| refused(classify(error)))?
         {
-            if !scope.includes(&name, &format!("{}.{name}", target.catalog)) {
+            let Some(entry) = material.get_mut(&(target.catalog.clone(), name)) else {
                 continue;
-            }
-            if row.len().saturating_add(material.len()) > 16 * 1024 * 1024 {
+            };
+            size = size.saturating_add(row.len() + 8);
+            if size > 16 * 1024 * 1024 {
                 return Err(refused(FailureKind::ResultLimit));
             }
-            material.extend_from_slice(&(row.len() as u64).to_le_bytes());
-            material.extend_from_slice(row.as_bytes());
+            entry.extend_from_slice(&(row.len() as u64).to_le_bytes());
+            entry.extend_from_slice(row.as_bytes());
         }
     }
-    Ok(devworks_core::fingerprint::sha256_hex(&material))
+    Ok(material
+        .into_iter()
+        .map(|(key, bytes)| (key, devworks_core::fingerprint::sha256_hex(&bytes)))
+        .collect())
 }
 
 async fn schema_change(
@@ -471,26 +570,50 @@ async fn schema_change(
         .execute(&mut *conn)
         .await
         .map_err(|e| refused(classify(e)))?;
-    let mut expected = request
-        .expected_schema_digest
-        .clone()
-        .expect("validated schema digest");
+    let all = schema_scope(request, target, &target.catalog, scope)?;
+    sqlx::raw_sql("START TRANSACTION READ ONLY")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| refused(classify(e)))?;
+    prime_metadata_locks(conn, &all).await?;
+    let mut expected = signatures(conn, target, &all).await?;
+    if request.expected_schema_digest.as_ref() != Some(&schema_digest(&expected)?) {
+        return Err(refused(FailureKind::StaleSchema));
+    }
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| refused(classify(e)))?;
     let mut known = MutationResult {
         affected_rows: None,
         observed_statements: 0,
         schema_changed: false,
     };
     for (position, sql) in request.statements.iter().enumerate() {
+        let step: TargetNames = sql
+            .read
+            .relations
+            .iter()
+            .map(|relation| {
+                names(
+                    &request.config.engine,
+                    relation,
+                    &target.catalog,
+                    &target.catalog,
+                )
+            })
+            .collect::<Result<_, _>>()?;
         let outcome = if sql.schema_change {
             schema_statement(
-                conn, request, target, guard, scope, boundary, position, &expected,
+                conn, request, target, guard, scope, boundary, position, &step, &expected,
             )
             .await
         } else {
             async {
                 sqlx::raw_sql("START TRANSACTION READ WRITE").execute(&mut *conn).await
                     .map_err(|error| refused(classify(error)))?;
-                if digest(conn, target, scope).await? != expected {
+                authorize(conn, request, target, guard, scope, sql).await?;
+                if !same_schema(&signatures(conn, target, &step).await?, &expected) {
                     return Err(rollback(conn, refused(FailureKind::StaleSchema)).await);
                 }
                 let affected = match run_statement(conn, request, target, guard, scope, position).await {
@@ -521,8 +644,16 @@ async fn schema_change(
             known.affected_rows = known.affected_rows.unwrap_or(0).checked_add(affected);
         }
         boundary.observed(guard, position, known)?;
-        if sql.schema_change && position + 1 < request.statements.len() {
-            expected = digest(conn, target, scope)
+        if sql.schema_change {
+            if position + 1 < request.statements.len() {
+                expected.extend(
+                    signatures(conn, target, &step)
+                        .await
+                        .map_err(|_| boundary.interrupted(FailureKind::Unavailable))?,
+                );
+            }
+            sqlx::raw_sql("UNLOCK TABLES")
+                .execute(&mut *conn)
                 .await
                 .map_err(|_| boundary.interrupted(FailureKind::Unavailable))?;
         }
@@ -539,7 +670,8 @@ async fn schema_statement(
     scope: &NameScope,
     boundary: &Boundary,
     position: usize,
-    expected: &str,
+    step: &TargetNames,
+    expected: &SchemaSignatures,
 ) -> Result<Option<i64>, DataFailure> {
     let statement = &request.statements[position];
     let mut locks = BTreeSet::new();
@@ -572,7 +704,7 @@ async fn schema_statement(
             .await
             .map_err(|e| refused(classify(e)))?;
     }
-    if digest(conn, target, scope).await? != expected {
+    if !same_schema(&signatures(conn, target, step).await?, expected) {
         return Err(refused(FailureKind::StaleSchema));
     }
     authorize(conn, request, target, guard, scope, statement).await?;
@@ -598,6 +730,11 @@ async fn schema_statement(
             _ => boundary.interrupted(reason),
         });
     }
-    let _ = sqlx::raw_sql("UNLOCK TABLES").execute(&mut *conn).await;
     Ok(None)
+}
+
+fn same_schema(current: &SchemaSignatures, expected: &SchemaSignatures) -> bool {
+    current
+        .iter()
+        .all(|(name, digest)| expected.get(name) == Some(digest))
 }

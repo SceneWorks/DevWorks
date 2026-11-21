@@ -150,11 +150,13 @@ async fn transaction(
     };
     for (position, sql) in request.statements.iter().enumerate() {
         authorize(client, target, request, scope, default_schema, sql, guard).await?;
-        if position == 0 {
-            if let Some(expected) = &request.expected_schema_digest {
-                if &digest(client, request).await? != expected {
-                    return Err(refused(FailureKind::StaleSchema));
-                }
+        if position == 0
+            && let Some(expected) = &request.expected_schema_digest
+        {
+            let selected = schema_scope(request, target, default_schema, scope)?;
+            lock_schema_targets(client, &selected).await?;
+            if expected != &digest(client, &selected).await? {
+                return Err(refused(FailureKind::StaleSchema));
             }
         }
         let statement = client
@@ -171,7 +173,9 @@ async fn transaction(
         if read_only(request) {
             let mut rows = read(client, &statement, arguments, &request.limits).await?;
             if request.include_schema_digest {
-                rows.schema_digest = Some(digest(client, request).await?);
+                let selected = schema_scope(request, target, default_schema, scope)?;
+                lock_schema_targets(client, &selected).await?;
+                rows.schema_digest = Some(digest(client, &selected).await?);
             }
             return Ok(DataOutcome::Read(rows));
         }
@@ -197,7 +201,9 @@ async fn transaction(
 
 const RELATION: &str = "SELECT c.oid,c.relkind::text,c.relrowsecurity,
     EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhparent=c.oid),
-    EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND t.tgenabled<>'D' AND NOT t.tgisinternal),
+    EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND t.tgenabled<>'D' AND NOT t.tgisinternal)
+    OR EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.contype='f' AND k.confrelid=c.oid
+        AND (k.confupdtype IN('c','n','d') OR k.confdeltype IN('c','n','d'))),
     EXISTS (SELECT 1 FROM pg_catalog.pg_rewrite r WHERE r.ev_class=c.oid AND r.rulename<>'_RETURN')
 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
 WHERE n.nspname=$1 AND c.relname=$2";
@@ -237,7 +243,7 @@ async fn authorize(
                         .common_tables
                         .iter()
                         .any(|cte| normalized(&DbEngine::Postgres, cte) == name);
-                if cte || statement.schema_change {
+                if cte || statement.created_relation.as_ref() == Some(&relation.path) {
                     continue;
                 }
                 return Err(refused(FailureKind::StaleSchema));
@@ -331,14 +337,52 @@ async fn authorize(
     Ok(())
 }
 
-async fn digest(client: &Client, request: &DataRequest) -> Result<String, DataFailure> {
-    let schemas = request
-        .config
-        .schemas
-        .0
+async fn lock_schema_targets(
+    client: &Client,
+    selected: &BTreeSet<(String, String)>,
+) -> Result<(), DataFailure> {
+    for (schema, name) in selected {
+        if schema == "information_schema" || schema.starts_with("pg_") {
+            return Err(refused(FailureKind::PermissionDenied));
+        }
+        let resolve = "SELECT c.oid,c.relkind::text FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2";
+        let prior = client
+            .query_opt(resolve, &[schema, name])
+            .await
+            .map_err(|e| refused(classify(e)))?;
+        let Some(prior) = prior else { continue };
+        if !matches!(prior.get::<_, &str>(1), "r" | "v") {
+            return Err(refused(FailureKind::UnsupportedStatement));
+        }
+        client
+            .batch_execute(&format!(
+                "LOCK TABLE {}.{} IN ACCESS SHARE MODE",
+                quote(schema),
+                quote(name)
+            ))
+            .await
+            .map_err(|e| refused(classify(e)))?;
+        let after = client
+            .query_opt(resolve, &[schema, name])
+            .await
+            .map_err(|e| refused(classify(e)))?;
+        if after.is_none_or(|row| row.get::<_, u32>(0) != prior.get::<_, u32>(0)) {
+            return Err(refused(FailureKind::StaleSchema));
+        }
+    }
+    Ok(())
+}
+
+async fn digest(
+    client: &Client,
+    selected: &BTreeSet<(String, String)>,
+) -> Result<String, DataFailure> {
+    let schemas = selected
         .iter()
-        .map(|schema| schema.0.clone())
+        .map(|(schema, _)| schema)
         .collect::<Vec<_>>();
+    let tables = selected.iter().map(|(_, table)| table).collect::<Vec<_>>();
     let statement = client.prepare(
         "SELECT jsonb_build_array(n.nspname,c.relname,c.relkind,a.attname,a.atttypid,
            a.atttypmod,a.attnotnull,pg_get_expr(d.adbin,d.adrelid),
@@ -349,16 +393,18 @@ async fn digest(client: &Client, request: &DataRequest) -> Result<String, DataFa
          LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
          LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
          WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
-           AND (cardinality($1::text[])=0 OR n.nspname=ANY($1))
+           AND EXISTS (SELECT 1 FROM unnest($1::text[],$2::text[]) as bindings(schema_name, table_name)
+                       WHERE bindings.schema_name=n.nspname AND bindings.table_name=c.relname)
          ORDER BY n.nspname,c.relname,a.attnum"
     ).await.map_err(|e| refused(classify(e)))?;
-    let parameters: [&(dyn ToSql + Sync); 1] = [&schemas];
+    let parameters: [&(dyn ToSql + Sync); 2] = [&schemas, &tables];
     let rows = client
         .query_raw(&statement, parameters)
         .await
         .map_err(|e| refused(classify(e)))?;
     pin_mut!(rows);
-    let mut material = Vec::new();
+    let mut material =
+        serde_json::to_vec(selected).map_err(|_| refused(FailureKind::InvalidTarget))?;
     while let Some(row) = rows.next().await {
         let row = row.map_err(|e| refused(classify(e)))?;
         let value: &str = row.get(0);

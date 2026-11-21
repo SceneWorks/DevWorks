@@ -111,6 +111,7 @@ pub struct DataRequest {
     pub parameters: Vec<Scalar>,
     pub expected_schema_digest: Option<String>,
     pub include_schema_digest: bool,
+    pub schema_targets: Vec<crate::services::database::statement::Relation>,
     pub limits: DataLimits,
     pub cancellation: Cancellation,
     /// Protected app-owned locations and the identity of a selected existing file.

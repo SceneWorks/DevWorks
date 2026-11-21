@@ -630,7 +630,7 @@ impl GitService {
             ));
         }
         let head = git
-            .revision_observation(target.path())
+            .head_observation(target.path())
             .map_err(|e| read_failure(e, id))?;
         if !git
             .is_ancestor(target.path(), &source.commit.hex, &head.head)

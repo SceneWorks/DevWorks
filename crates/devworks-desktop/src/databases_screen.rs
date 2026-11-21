@@ -1049,6 +1049,7 @@ impl DatabasesScreen {
             "submitted": self.batch_submitted,
             "failures": self.batch_failures,
             "dataOperation": self.data.operation,
+            "dataOperationProject": self.data.operation_project,
             "tab": self.tab
         })
     }
@@ -1061,6 +1062,7 @@ impl DatabasesScreen {
         self.data.operation = serde_json::from_value(value["dataOperation"].clone())
             .ok()
             .flatten();
+        self.data.operation_project = value["dataOperationProject"].as_str().map(str::to_owned);
         self.tab = value["tab"]
             .as_u64()
             .filter(|v| *v <= 3)

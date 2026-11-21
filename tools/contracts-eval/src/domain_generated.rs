@@ -2193,9 +2193,174 @@ impl Check for AnalysisTrendPoint {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisFileMetrics {
+    pub health: Finite,
+    pub risk: Finite,
+    pub concern: Finite,
+    pub trust: Finite,
+    pub complexity: Counter,
+    pub max_nesting: Counter,
+    pub deep_lines: Counter,
+    pub function_count: Counter,
+    pub longest_function: Counter,
+    pub branches: Counter,
+    pub lines_added_90d: Counter,
+    pub lines_removed_90d: Counter,
+    pub changes_90d: Counter,
+    pub churn_30d: Finite,
+    pub churn_90d: Finite,
+    pub churn_365d: Finite,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_change_at_ms: Option<Counter>,
+    pub bug_fix_ratio: Finite,
+    pub recurring_churn: Finite,
+    pub coupling_strength: Finite,
+    pub coupling_partners: Counter,
+    pub truck_factor: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lint_errors: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lint_warnings: Option<Counter>,
+    pub role: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotnet_project: Option<Label>,
+}
+impl Check for AnalysisFileMetrics {
+    fn check(&self) -> Result<(), String> {
+        self.health.check()?;
+        self.risk.check()?;
+        self.concern.check()?;
+        self.trust.check()?;
+        self.complexity.check()?;
+        self.max_nesting.check()?;
+        self.deep_lines.check()?;
+        self.function_count.check()?;
+        self.longest_function.check()?;
+        self.branches.check()?;
+        self.lines_added_90d.check()?;
+        self.lines_removed_90d.check()?;
+        self.changes_90d.check()?;
+        self.churn_30d.check()?;
+        self.churn_90d.check()?;
+        self.churn_365d.check()?;
+        self.last_change_at_ms.check()?;
+        self.bug_fix_ratio.check()?;
+        self.recurring_churn.check()?;
+        self.coupling_strength.check()?;
+        self.coupling_partners.check()?;
+        self.truck_factor.check()?;
+        self.lint_errors.check()?;
+        self.lint_warnings.check()?;
+        self.role.check()?;
+        self.dotnet_project.check()?;
+        super::domain_rules::record(
+            "AnalysisFileMetrics",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisHealthSummary {
+    pub repository_id: Id,
+    pub view_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotnet_project: Option<Label>,
+    pub base_score: Finite,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjusted_score: Option<Finite>,
+    pub files: Counter,
+    pub hotspots: Counter,
+    pub alerts: Counter,
+}
+impl Check for AnalysisHealthSummary {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.dotnet_project.check()?;
+        self.base_score.check()?;
+        self.adjusted_score.check()?;
+        self.files.check()?;
+        self.hotspots.check()?;
+        self.alerts.check()?;
+        super::domain_rules::record(
+            "AnalysisHealthSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisSecuritySummary {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub score: Finite,
+    pub complete: bool,
+    pub critical: Counter,
+    pub high: Counter,
+    pub medium: Counter,
+    pub low: Counter,
+    pub scanned_files: Counter,
+}
+impl Check for AnalysisSecuritySummary {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.score.check()?;
+        self.complete.check()?;
+        self.critical.check()?;
+        self.high.check()?;
+        self.medium.check()?;
+        self.low.check()?;
+        self.scanned_files.check()?;
+        super::domain_rules::record(
+            "AnalysisSecuritySummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisNarrative {
+    pub repository_id: Id,
+    pub view_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<Label>,
+    pub summary: Content,
+    pub confidence: Label,
+    pub model: Label,
+    pub computed_at_ms: Counter,
+    pub evidence: ArtifactRef,
+}
+impl Check for AnalysisNarrative {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.project.check()?;
+        self.summary.check()?;
+        self.confidence.check()?;
+        self.model.check()?;
+        self.computed_at_ms.check()?;
+        self.evidence.check()?;
+        super::domain_rules::record(
+            "AnalysisNarrative",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnalysisObservation {
     pub availability: AnalysisAvailability,
-    pub bindings: Items<AnalysisViewBinding>,
+    pub bindings: Rows<AnalysisViewBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computed_at_ms: Option<Counter>,
     pub coverage: Coverage,
@@ -2210,6 +2375,22 @@ pub struct AnalysisObservation {
     pub trends: Option<Items<AnalysisTrendPoint>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_work_ids: Option<Items<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_hotspots: Option<Rows<AnalysisMetricItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<Rows<AnalysisHealthSummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<Rows<AnalysisSecuritySummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_repositories: Option<Rows<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_bindings: Option<Rows<AnalysisViewBinding>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narratives: Option<Rows<AnalysisNarrative>>,
 }
 impl Check for AnalysisObservation {
     fn check(&self) -> Result<(), String> {
@@ -2223,6 +2404,14 @@ impl Check for AnalysisObservation {
         self.adjusted_score.check()?;
         self.trends.check()?;
         self.related_work_ids.check()?;
+        self.top_hotspots.check()?;
+        self.health.check()?;
+        self.security.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.missing_repositories.check()?;
+        self.indexed_bindings.check()?;
+        self.narratives.check()?;
         super::domain_rules::record(
             "AnalysisObservation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2301,6 +2490,8 @@ pub struct AnalysisMetricItem {
     pub history_coverage: Option<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<AnalysisLinkEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_metrics: Option<AnalysisFileMetrics>,
 }
 impl Check for AnalysisMetricItem {
     fn check(&self) -> Result<(), String> {
@@ -2314,6 +2505,7 @@ impl Check for AnalysisMetricItem {
         self.language_indexed.check()?;
         self.history_coverage.check()?;
         self.link.check()?;
+        self.file_metrics.check()?;
         super::domain_rules::record(
             "AnalysisMetricItem",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2361,6 +2553,10 @@ pub struct AnalysisMetricPage {
     pub fleet: Option<AnalysisFleetTotals>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub found: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_indexed: Option<bool>,
 }
 impl Check for AnalysisMetricPage {
     fn check(&self) -> Result<(), String> {
@@ -2370,6 +2566,8 @@ impl Check for AnalysisMetricPage {
         self.observation.check()?;
         self.fleet.check()?;
         self.found.check()?;
+        self.language.check()?;
+        self.language_indexed.check()?;
         super::domain_rules::record(
             "AnalysisMetricPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2447,6 +2645,8 @@ pub struct AnalysisClusterMember {
     pub language: Option<Label>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub framework: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Id>,
 }
 impl Check for AnalysisClusterMember {
     fn check(&self) -> Result<(), String> {
@@ -2460,6 +2660,7 @@ impl Check for AnalysisClusterMember {
         self.source_group.check()?;
         self.language.check()?;
         self.framework.check()?;
+        self.cluster_id.check()?;
         super::domain_rules::record(
             "AnalysisClusterMember",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2498,6 +2699,10 @@ pub struct AnalysisClusterDetails {
     pub members: Rows<AnalysisClusterMember>,
     pub bridges: Items<Id>,
     pub connections: Rows<AnalysisClusterConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
 }
 impl Check for AnalysisClusterDetails {
     fn check(&self) -> Result<(), String> {
@@ -2508,6 +2713,8 @@ impl Check for AnalysisClusterDetails {
         self.members.check()?;
         self.bridges.check()?;
         self.connections.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
         super::domain_rules::record(
             "AnalysisClusterDetails",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -2540,6 +2747,52 @@ impl Revisioned for AnalysisClusterItem {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterRelationshipCount {
+    pub relationship: Label,
+    pub count: Counter,
+}
+impl Check for AnalysisClusterRelationshipCount {
+    fn check(&self) -> Result<(), String> {
+        self.relationship.check()?;
+        self.count.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterRelationshipCount",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterGraphEdge {
+    pub source_repository_id: Id,
+    pub source_view_id: Id,
+    pub target_repository_id: Id,
+    pub target_view_id: Id,
+    pub edge_count: Counter,
+    pub relationship_counts: Items<AnalysisClusterRelationshipCount>,
+    pub cross_cluster: bool,
+}
+impl Check for AnalysisClusterGraphEdge {
+    fn check(&self) -> Result<(), String> {
+        self.source_repository_id.check()?;
+        self.source_view_id.check()?;
+        self.target_repository_id.check()?;
+        self.target_view_id.check()?;
+        self.edge_count.check()?;
+        self.relationship_counts.check()?;
+        self.cross_cluster.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterGraphEdge",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnalysisClusterPage {
     pub items: Rows<AnalysisClusterItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2556,6 +2809,8 @@ pub struct AnalysisClusterPage {
     pub repositories: Option<Rows<AnalysisClusterMember>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Rows<AnalysisLinkEvidence>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_edges: Option<Rows<AnalysisClusterGraphEdge>>,
 }
 impl Check for AnalysisClusterPage {
     fn check(&self) -> Result<(), String> {
@@ -2568,6 +2823,7 @@ impl Check for AnalysisClusterPage {
         self.clustered_repositories.check()?;
         self.repositories.check()?;
         self.links.check()?;
+        self.graph_edges.check()?;
         super::domain_rules::record(
             "AnalysisClusterPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -3143,6 +3399,144 @@ impl Check for DbRow {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseLegacyRows {
+    pub rows: Rows<DynamicJson>,
+    pub row_count: i32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<DbColumn>", extend("x-since" = 2))]
+    pub columns: Option<Items<DbColumn>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub truncated: Option<bool>,
+}
+impl Check for DatabaseLegacyRows {
+    fn check(&self) -> Result<(), String> {
+        self.rows.check()?;
+        self.row_count.check()?;
+        self.columns.check()?;
+        self.truncated.check()?;
+        super::domain_rules::record(
+            "DatabaseLegacyRows",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DatabaseLegacyRows {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.columns = None;
+        }
+        if revision < 2 {
+            self.truncated = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSensitiveColumnRule {
+    pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Label>,
+    pub column: Label,
+    pub allow: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+}
+impl Check for DatabaseSensitiveColumnRule {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.catalog.check()?;
+        self.schema.check()?;
+        self.table.check()?;
+        self.column.check()?;
+        self.allow.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "DatabaseSensitiveColumnRule",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSensitiveRuleSet {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Id>,
+    pub revision: Revision,
+    pub rules: Rows<DatabaseSensitiveColumnRule>,
+}
+impl Check for DatabaseSensitiveRuleSet {
+    fn check(&self) -> Result<(), String> {
+        self.connection_id.check()?;
+        self.revision.check()?;
+        self.rules.check()?;
+        super::domain_rules::record(
+            "DatabaseSensitiveRuleSet",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DatabaseSensitiveRuleEdit {
+    Upsert { rule: DatabaseSensitiveColumnRule },
+    Delete { id: Id },
+}
+impl Check for DatabaseSensitiveRuleEdit {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Upsert { rule } => {
+                rule.check()?;
+            }
+            Self::Delete { id } => {
+                id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseMigrationSource {
+    pub repository_id: Id,
+    pub commit: GitOid,
+    pub path: RelativePath,
+}
+impl Check for DatabaseMigrationSource {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.commit.check()?;
+        self.path.check()?;
+        super::domain_rules::record(
+            "DatabaseMigrationSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DbReadResult {
     pub columns: Items<DbColumn>,
     pub rows: Rows<DbRow>,
@@ -3151,6 +3545,13 @@ pub struct DbReadResult {
     pub next_cursor: Option<Cursor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub schema_digest: Option<Digest>,
 }
 impl Check for DbReadResult {
     fn check(&self) -> Result<(), String> {
@@ -3159,11 +3560,20 @@ impl Check for DbReadResult {
         self.truncated.check()?;
         self.next_cursor.check()?;
         self.source_revision.check()?;
+        self.schema_digest.check()?;
         super::domain_rules::record(
             "DbReadResult",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DbReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.schema_digest = None;
+        }
     }
 }
 
@@ -19535,12 +19945,47 @@ pub enum DomainQuery {
     },
     #[serde(rename = "database.read")]
     DatabaseRead {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         statement: Content,
         parameters: Items<DbParameter>,
         row_limit: Limit,
         timeout_ms: PositiveCounter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2))]
+        include_schema_digest: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 2))]
+        schema_preview: Option<Content>,
+    },
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<DataScope>,
+        source: Text,
+        sql: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<i32>,
+    },
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection_id: Option<Id>,
     },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch {
@@ -20659,6 +21104,8 @@ impl DomainQuery {
             Self::SchemasObjects { .. } => "schemas.objects",
             Self::SchemasRelationships { .. } => "schemas.relationships",
             Self::DatabaseRead { .. } => "database.read",
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeDiagnostics { .. } => "knowledge.diagnostics",
@@ -21170,19 +21617,39 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::DatabaseRead {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 statement,
                 parameters,
                 row_limit,
                 timeout_ms,
+                include_schema_digest,
+                schema_preview,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 statement.check()?;
                 parameters.check()?;
                 row_limit.check()?;
                 timeout_ms.check()?;
+                include_schema_digest.check()?;
+                schema_preview.check()?;
+            }
+            Self::DatabaseMysqlReadonlyQuery {
+                scope,
+                source,
+                sql,
+                limit,
+            } => {
+                scope.check()?;
+                source.check()?;
+                sql.check()?;
+                limit.check()?;
+            }
+            Self::DatabaseSensitiveColumns { connection_id } => {
+                connection_id.check()?;
             }
             Self::KnowledgeSearch {
                 scope,
@@ -22121,6 +22588,22 @@ impl Revisioned for DomainQuery {
             Self::SchemasObjects { object_id, .. } => {
                 if revision < 5 {
                     *object_id = None;
+                }
+            }
+            Self::DatabaseRead {
+                scope,
+                include_schema_digest,
+                schema_preview,
+                ..
+            } => {
+                if revision < 2 {
+                    *scope = None;
+                }
+                if revision < 2 {
+                    *include_schema_digest = None;
+                }
+                if revision < 2 {
+                    *schema_preview = None;
                 }
             }
             Self::KnowledgeSearch {
@@ -23142,6 +23625,13 @@ pub enum DomainCommand {
     },
     #[serde(rename = "database.execute_write")]
     DatabaseExecuteWrite {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         statement: Content,
@@ -23152,6 +23642,13 @@ pub enum DomainCommand {
     },
     #[serde(rename = "database.direct_schema_change")]
     DatabaseDirectSchemaChange {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         statement: Content,
@@ -23159,21 +23656,56 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
         timeout_ms: PositiveCounter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Digest", extend("x-since" = 2))]
+        expected_schema_digest: Option<Digest>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 2))]
+        fallback_reason: Option<Content>,
     },
     #[serde(rename = "database.apply_migration")]
     DatabaseApplyMigration {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         migration: ArtifactRef,
         expected_schema_digest: Digest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DatabaseMigrationSource", extend("x-since" = 2))]
+        source: Option<DatabaseMigrationSource>,
     },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns {
         connection_id: Id,
         expected_revision: Revision,
         column_ids: Items<Id>,
+    },
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection_id: Option<Id>,
+        expected_revision: Revision,
+        edit: DatabaseSensitiveRuleEdit,
     },
     #[serde(rename = "knowledge.record")]
     KnowledgeRecord {
@@ -24507,6 +25039,7 @@ impl DomainCommand {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeRecord { .. } => "knowledge.record",
             Self::KnowledgeRevise { .. } => "knowledge.revise",
             Self::KnowledgeRelate { .. } => "knowledge.relate",
@@ -25289,6 +25822,7 @@ impl Check for DomainCommand {
                 action.check()?;
             }
             Self::DatabaseExecuteWrite {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 statement,
@@ -25296,6 +25830,7 @@ impl Check for DomainCommand {
                 proposal_id,
                 timeout_ms,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 statement.check()?;
@@ -25304,32 +25839,42 @@ impl Check for DomainCommand {
                 timeout_ms.check()?;
             }
             Self::DatabaseDirectSchemaChange {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 statement,
                 parameters,
                 proposal_id,
                 timeout_ms,
+                expected_schema_digest,
+                fallback_reason,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 statement.check()?;
                 parameters.check()?;
                 proposal_id.check()?;
                 timeout_ms.check()?;
+                expected_schema_digest.check()?;
+                fallback_reason.check()?;
             }
             Self::DatabaseApplyMigration {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 migration,
                 expected_schema_digest,
                 proposal_id,
+                source,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 migration.check()?;
                 expected_schema_digest.check()?;
                 proposal_id.check()?;
+                source.check()?;
             }
             Self::DatabaseConfigureSensitiveColumns {
                 connection_id,
@@ -25339,6 +25884,15 @@ impl Check for DomainCommand {
                 connection_id.check()?;
                 expected_revision.check()?;
                 column_ids.check()?;
+            }
+            Self::DatabaseEditSensitiveColumnRules {
+                connection_id,
+                expected_revision,
+                edit,
+            } => {
+                connection_id.check()?;
+                expected_revision.check()?;
+                edit.check()?;
             }
             Self::KnowledgeRecord { scope, batch } => {
                 scope.check()?;
@@ -26821,6 +27375,35 @@ impl Revisioned for DomainCommand {
                     *action = None;
                 }
             }
+            Self::DatabaseExecuteWrite { scope, .. } => {
+                if revision < 2 {
+                    *scope = None;
+                }
+            }
+            Self::DatabaseDirectSchemaChange {
+                scope,
+                expected_schema_digest,
+                fallback_reason,
+                ..
+            } => {
+                if revision < 2 {
+                    *scope = None;
+                }
+                if revision < 2 {
+                    *expected_schema_digest = None;
+                }
+                if revision < 2 {
+                    *fallback_reason = None;
+                }
+            }
+            Self::DatabaseApplyMigration { scope, source, .. } => {
+                if revision < 2 {
+                    *scope = None;
+                }
+                if revision < 2 {
+                    *source = None;
+                }
+            }
             Self::KnowledgeRecord { batch, .. } => {
                 batch.retain_revision(revision);
             }
@@ -27426,6 +28009,12 @@ pub enum OperationResult {
     DatabaseApplyMigration { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch { value: Page<KnowledgeClaim> },
     #[serde(rename = "knowledge.read")]
@@ -28117,6 +28706,9 @@ impl OperationResult {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeRecord { .. } => "knowledge.record",
@@ -28507,6 +29099,9 @@ impl Check for OperationResult {
             Self::DatabaseDirectSchemaChange { value } => value.check()?,
             Self::DatabaseApplyMigration { value } => value.check()?,
             Self::DatabaseConfigureSensitiveColumns { value } => value.check()?,
+            Self::DatabaseMysqlReadonlyQuery { value } => value.check()?,
+            Self::DatabaseSensitiveColumns { value } => value.check()?,
+            Self::DatabaseEditSensitiveColumnRules { value } => value.check()?,
             Self::KnowledgeSearch { value } => value.check()?,
             Self::KnowledgeRead { value } => value.check()?,
             Self::KnowledgeRecord { value } => value.check()?,
@@ -28855,7 +29450,9 @@ impl Revisioned for OperationResult {
             Self::SchemasConnections { value } => value.retain_revision(revision),
             Self::SchemasObjects { value } => value.retain_revision(revision),
             Self::SchemasConfigure { value } => value.retain_revision(revision),
+            Self::DatabaseRead { value } => value.retain_revision(revision),
             Self::DatabaseConfigureSensitiveColumns { value } => value.retain_revision(revision),
+            Self::DatabaseMysqlReadonlyQuery { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
             Self::KnowledgeRecord { value } => value.retain_revision(revision),

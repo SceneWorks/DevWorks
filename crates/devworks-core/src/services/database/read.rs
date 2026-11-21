@@ -26,7 +26,7 @@ const MAX_MS: i64 = 30_000;
 
 struct PreparedRead {
     selected: Arc<Selected>,
-    answer: DbReadResult,
+    result: OperationResult,
 }
 
 impl QueryHandler for DataExecutor {
@@ -110,6 +110,27 @@ impl QueryHandler for DataExecutor {
             )
             .map_err(|error| super::store_fault(query, error))?;
         request.include_schema_digest = input.include_schema_digest.unwrap_or(false);
+        if let Some(preview) = &input.schema_preview {
+            if !request.include_schema_digest {
+                return Err(fault(query, DomainErrorCode::InvalidArgument));
+            }
+            let planned =
+                statement::check(&selected.config.engine, DataMode::Migration, &preview.0)
+                    .map_err(|_| fault(query, DomainErrorCode::InvalidArgument))?;
+            if !planned.iter().any(|statement| statement.schema_change) {
+                return Err(fault(query, DomainErrorCode::InvalidArgument));
+            }
+            request.schema_targets = statement::schema_targets(&planned);
+        }
+        if request.include_schema_digest
+            && request.schema_targets.is_empty()
+            && !matches!(
+                selected.config.engine,
+                crate::protocol::records::DbEngine::Sqlite
+            )
+        {
+            return Err(fault(query, DomainErrorCode::InvalidArgument));
+        }
         let guard = Arc::new(self.read_guard(
             context.clone(),
             query.authorization().clone(),
@@ -122,7 +143,33 @@ impl QueryHandler for DataExecutor {
         else {
             return Err(fault(query, DomainErrorCode::ExternalFailure));
         };
+        let legacy = matches!(
+            query.input(),
+            OperationInput::Database(ops::Input::MysqlReadonlyQuery(_))
+        );
+        if legacy && query.schema_revision().0 == 1 {
+            let value = super::mysql_compat::rows(&rows, None)
+                .ok_or_else(|| fault(query, DomainErrorCode::ExternalFailure))?;
+            value
+                .check()
+                .map_err(|_| fault(query, DomainErrorCode::ExternalFailure))?;
+            return Ok(Some(Prepared::new(PreparedRead {
+                selected,
+                result: OperationResult::DatabaseMysqlReadonlyQuery { value },
+            })));
+        }
         let binary = self.publish_cells(context, query, &selected, &rows.rows)?;
+        if legacy {
+            let value = super::mysql_compat::rows(&rows, Some(&binary))
+                .ok_or_else(|| fault(query, DomainErrorCode::ExternalFailure))?;
+            value
+                .check()
+                .map_err(|_| fault(query, DomainErrorCode::ExternalFailure))?;
+            return Ok(Some(Prepared::new(PreparedRead {
+                selected,
+                result: OperationResult::DatabaseMysqlReadonlyQuery { value },
+            })));
+        }
         let answer = DbReadResult {
             columns: BoundedList(
                 rows.columns
@@ -177,7 +224,10 @@ impl QueryHandler for DataExecutor {
         answer
             .check()
             .map_err(|_| fault(query, DomainErrorCode::ExternalFailure))?;
-        Ok(Some(Prepared::new(PreparedRead { selected, answer })))
+        Ok(Some(Prepared::new(PreparedRead {
+            selected,
+            result: OperationResult::DatabaseRead { value: answer },
+        })))
     }
 
     fn query(
@@ -208,11 +258,9 @@ impl QueryHandler for DataExecutor {
                 result: OperationResult::DatabaseSensitiveColumns { value },
             });
         }
-        let (scope, legacy) = match query.input() {
-            OperationInput::Database(ops::Input::Read(input)) => (input.scope.as_ref(), false),
-            OperationInput::Database(ops::Input::MysqlReadonlyQuery(input)) => {
-                (input.scope.as_ref(), true)
-            }
+        let scope = match query.input() {
+            OperationInput::Database(ops::Input::Read(input)) => input.scope.as_ref(),
+            OperationInput::Database(ops::Input::MysqlReadonlyQuery(input)) => input.scope.as_ref(),
             _ => return Err(fault(query, DomainErrorCode::UnsupportedCapability)),
         };
         let scoped = super::executor::scope_context(context, scope)
@@ -229,15 +277,7 @@ impl QueryHandler for DataExecutor {
                 context.policy_revision().clone(),
                 read.selected.revision.clone(),
             ),
-            result: if legacy {
-                OperationResult::DatabaseMysqlReadonlyQuery {
-                    value: super::mysql_compat::rows(&read.answer),
-                }
-            } else {
-                OperationResult::DatabaseRead {
-                    value: read.answer.clone(),
-                }
-            },
+            result: read.result.clone(),
         })
     }
 }
@@ -287,6 +327,7 @@ impl DataExecutor {
         let selected = Arc::clone(selected);
         let authorization = query.authorization().clone();
         let artifacts = Arc::clone(&self.artifacts);
+        let capability = query.descriptor().name.to_owned();
         let to_commit = staged.clone();
         let result = run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
             if !crate::authority::authorization_holds_in(tx, &context, &authorization)? {
@@ -320,6 +361,13 @@ impl DataExecutor {
                 source_policy,
                 scope_policy: context.policy_revision().get(),
                 restore_epoch: context.restore_epoch().get(),
+                capability,
+                fences: authorization.fences().to_vec(),
+                grants: authorization
+                    .authority_grants()
+                    .iter()
+                    .map(|grant| (grant.grant_id.clone(), grant.expected_revision))
+                    .collect(),
             };
             let mut output = BTreeMap::new();
             for (digest, staged) in &to_commit {

@@ -548,6 +548,29 @@ macro_rules! artifact_reads {
                 project: Option<&ProjectId>,
             ) -> Result<bool, StorageError> {
                 use devworks_core::protocol::records::SchemaExposureMode;
+                use devworks_core::ports::AuthorityFence;
+                if !matches!(access.capability.as_str(), "database.read" | "database.mysql_readonly_query") {
+                    return Ok(false);
+                }
+                for fence in &access.fences {
+                    let current = match fence {
+                        AuthorityFence::Principal { actor, revision } => actor == owner
+                            && AuthorityRead::principal(self, actor)?.is_some_and(|binding| binding.active && binding.revision == *revision),
+                        AuthorityFence::Policy { project_id, digest } =>
+                            devworks_core::authority::policy::resolve_policy(self, project_id.as_ref())?.digest() == *digest,
+                        _ => false,
+                    };
+                    if !current {
+                        return Ok(false);
+                    }
+                }
+                for (id, revision) in &access.grants {
+                    if !AuthorityRead::authority_grant(self, id)?.is_some_and(|grant| {
+                        grant.state == GrantState::Active && grant.revision == *revision
+                    }) {
+                        return Ok(false);
+                    }
+                }
                 let Some(source) = self.schema_source(&access.connection)? else { return Ok(false) };
                 let Some(config) = &source.connection.config else { return Ok(false) };
                 if source.deleted || source.configuration_revision != access.configuration

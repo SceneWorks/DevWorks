@@ -127,6 +127,9 @@ pub struct DatabaseArtifactAccess {
     pub source_policy: i64,
     pub scope_policy: i64,
     pub restore_epoch: i64,
+    pub capability: String,
+    pub fences: Vec<crate::ports::AuthorityFence>,
+    pub grants: Vec<(Id, i64)>,
 }
 
 /// How long an artifact is kept.

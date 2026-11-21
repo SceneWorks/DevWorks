@@ -4,7 +4,7 @@ Databases manages source connections, explores published schema, and runs bounde
 
 ## Run SQL
 
-Select a source and open **Data**. Choose **Read data**, enter one read statement, and run it. A read returns up to 100 rows in the desktop. **Capture schema digest** records the live schema precondition for a later schema operation. Use bound parameters to pass values separately from the SQL. A binary value is returned as an immutable artifact linked to your current source access.
+Select a source and open **Data**. Choose **Read data**, enter one read statement, and run it. A read returns up to 100 rows in the desktop. **Capture schema digest** records the live schema precondition for a later schema operation. For a network database, enter the planned migration or direct schema SQL in the preview field so the digest covers the relations the change will use. Use bound parameters to pass values separately from the SQL. A binary value is returned as an immutable artifact linked to your current source access.
 
 **Write data** accepts an authorized `INSERT`, `UPDATE`, or `DELETE` when the connection allows writes. Use **Apply migration** for a versioned migration. Supply the exact artifact, repository commit, and repository-relative file, then check the captured schema digest before submitting. Use **Direct schema change** with a recorded reason when a versioned migration is unavailable. Both paths check target permissions separately from access to the migration file.
 

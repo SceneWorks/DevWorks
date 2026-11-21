@@ -1182,7 +1182,12 @@ fn data_tab_uses_the_authorized_native_read_on_the_selected_database() {
     });
     h.state_mut().databases.tab = 3;
     settle(&mut h);
-    replace(&mut h, "SQL statement", "SELECT label FROM fixture");
+    h.get_by_role_and_label(Role::MultilineTextInput, "SQL statement")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::MultilineTextInput, "SQL statement")
+        .type_text("SELECT label FROM fixture");
+    settle(&mut h);
     click(&mut h, Role::Button, "Run read");
     step_until(&mut h, "read returned from the actual SQLite source", |s| {
         s.databases

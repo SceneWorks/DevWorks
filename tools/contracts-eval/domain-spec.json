@@ -1422,8 +1422,11 @@
       "kind": "record",
       "fields": {
         "rows": "Rows<DynamicJson>",
-        "row_count": "Counter"
-      }
+        "row_count": "i32",
+        "columns": "?Items<DbColumn>",
+        "truncated": "?bool"
+      },
+      "since": {"columns": 2, "truncated": 2}
     },
     "DatabaseSensitiveColumnRule": {
       "kind": "record",
@@ -8551,13 +8554,14 @@
         "parameters": "Items<DbParameter>",
         "row_limit": "Limit",
         "timeout_ms": "PositiveCounter",
-        "include_schema_digest": "?bool"
+        "include_schema_digest": "?bool",
+        "schema_preview": "?Content"
       },
       "result": "DbReadResult",
       "effect": "ExternalRead",
       "authority": "Scoped",
       "rules": "Parse/check effective read-only operation through qualified adapter; no arbitrary SQL function side effects, sensitive-column policy before materialization. Results not structural graph persistence.",
-      "since": {"scope": 2, "include_schema_digest": 2}
+      "since": {"scope": 2, "include_schema_digest": 2, "schema_preview": 2}
     },
     "database.execute_write": {
       "operation": "database.execute_write",
@@ -8635,7 +8639,7 @@
         "scope": "?DataScope",
         "source": "Text",
         "sql": "Content",
-        "limit": "?SignedCounter"
+        "limit": "?i32"
       },
       "result": "DatabaseLegacyRows",
       "effect": "ExternalRead",
@@ -13001,6 +13005,10 @@
       2
     ],
     "database.execute_write": [
+      1,
+      2
+    ],
+    "database.mysql_readonly_query": [
       1,
       2
     ],

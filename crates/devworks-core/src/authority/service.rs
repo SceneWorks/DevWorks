@@ -805,6 +805,9 @@ pub(crate) fn decide_in(
     {
         return Err(deny(DenialReason::UnregisteredPrincipal));
     }
+    let selected = crate::services::database::authority_scope(ctx, request.input)
+        .map_err(|_| deny(DenialReason::OutOfProjectScope))?;
+    let ctx = selected.as_ref().unwrap_or(ctx);
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     // A pushed ref is also protected when it is its repository's default branch.

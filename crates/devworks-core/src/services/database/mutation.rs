@@ -205,6 +205,14 @@ impl DataExecutor {
         env: &Preparation<'_>,
         input: &ops::Input,
     ) -> Result<Option<Prepared>, StorageError> {
+        if command.schema_revision().0 < 2
+            && matches!(
+                input,
+                ops::Input::ApplyMigration(_) | ops::Input::DirectSchemaChange(_)
+            )
+        {
+            return Ok(None);
+        }
         let context = &scoped(context, input)?;
         let operation = command.descriptor().name;
         let mode = mode(operation)?;
@@ -226,9 +234,28 @@ impl DataExecutor {
             return Err(StorageError::ScopeDenied);
         }
         let file_identity = self.file_identity(&selected.config)?;
-        let material = self.intent(context, input, &|| env.stopped(self.clock.now_ms().get()))?;
+        let material = match self.intent(context, input, &|| env.stopped(self.clock.now_ms().get()))
+        {
+            Ok(material) => material,
+            Err(StorageError::ScopeDenied) => {
+                return Ok(Some(Prepared::new(Refusal::new(
+                    DomainErrorCode::PermissionDenied,
+                    "database_mutation_material",
+                    Some(connection.clone()),
+                ))));
+            }
+            Err(StorageError::InvalidRecord(_)) => {
+                return Ok(Some(Prepared::new(Refusal::new(
+                    DomainErrorCode::InvalidArgument,
+                    "database_mutation_material",
+                    Some(connection.clone()),
+                ))));
+            }
+            Err(error) => return Err(error),
+        };
         let plan = statement::check(&selected.config.engine, mode, &material.sql)
             .map_err(|_| invalid())?;
+        selected.check_schema_identity(&plan)?;
         parameters::order(&selected.config.engine, &plan[0].bindings, &material.params)
             .map_err(|_| invalid())?;
         let bytes = serde_json::to_vec(&material).map_err(|_| invalid())?;
@@ -262,7 +289,23 @@ impl DataExecutor {
         let crate::operations::OperationInput::Database(input) = command.input() else {
             return Err(invalid().into());
         };
+        if command.schema_revision().0 < 2
+            && matches!(
+                input,
+                ops::Input::ApplyMigration(_) | ops::Input::DirectSchemaChange(_)
+            )
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::SchemaMismatch,
+                "database_schema_execution_revision_2",
+                None,
+            )
+            .into());
+        }
         let context = &scoped(context, input)?;
+        if let Some(refused) = command.prepared::<Refusal>() {
+            return Err(refused.clone().into());
+        }
         let prepared = command.prepared::<StagedMutation>().ok_or_else(invalid)?;
         let source = data::transaction_source(
             tx,
@@ -422,6 +465,9 @@ impl DataExecutor {
         }
         let statements = statement::check(&selected.config.engine, mode, &input.sql)
             .map_err(|_| DataFailure::Refused(FailureKind::UnsupportedStatement))?;
+        selected
+            .check_schema_identity(&statements)
+            .map_err(native_storage)?;
         let order = parameters::order(
             &selected.config.engine,
             &statements[0].bindings,
@@ -439,6 +485,7 @@ impl DataExecutor {
             columns: 0,
         };
         let total = statements.len();
+        let schema_targets = statement::schema_targets(&statements);
         let mut request = self
             .request(
                 &selected,
@@ -452,6 +499,7 @@ impl DataExecutor {
             return Err(DataFailure::Refused(FailureKind::InvalidTarget));
         }
         request.expected_schema_digest = input.schema_digest.map(|value| value.as_str().to_owned());
+        request.schema_targets = schema_targets;
         let guard = Arc::new(MutationGuard {
             store: Arc::clone(&self.store),
             job,
@@ -663,6 +711,15 @@ impl JournaledEffect for DataExecutor {
         let Ok(job) = job(operation) else {
             return EffectOutcome::Failed("InvalidDatabaseOperation".into());
         };
+        let known_change = operation.latest_attempt().is_some_and(|attempt| {
+            attempt.observations.iter().any(|observation| {
+                observation["kind"] == "DatabaseCommitObserved"
+                    && observation["schemaChanged"] == true
+            })
+        });
+        if known_change && retire_after_partial(self.store.as_ref(), operation, &job).is_err() {
+            return EffectOutcome::Unknown("Known database changes need settlement".into());
+        }
         let observed = operation.latest_attempt().and_then(|attempt| {
             attempt.observations.iter().rev().find(|observation| {
                 observation["kind"] == "DatabaseCommitObserved" && observation["completed"] == true

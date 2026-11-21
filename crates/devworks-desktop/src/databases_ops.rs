@@ -31,7 +31,7 @@ pub enum DatabasesSlot {
     DatabaseCa,
     /// A source command (its operation).
     DatabaseCommand(String),
-    DatabaseData(u64),
+    DatabaseData(u64, Option<String>, Option<String>),
     DatabaseDataStatus,
 }
 screen_slot!(DatabasesSlot, Databases);

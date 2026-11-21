@@ -565,7 +565,11 @@ pub fn registered_tool_visibility(
         if command || effect != EffectClass::ReadOnly {
             return Verdict::Deny(DenialReason::ReadOnlyRole);
         }
-        if UNVERIFIED_READ_FAMILIES.contains(&fam) {
+        // These two queries use the database service's verified read path. Other queries
+        // in the family need their own verification, and commands remain denied above.
+        if UNVERIFIED_READ_FAMILIES.contains(&fam)
+            && !matches!(op, "database.read" | "database.mysql_readonly_query")
+        {
             return Verdict::Deny(DenialReason::UnverifiedRead);
         }
     }

@@ -3406,17 +3406,44 @@ impl Check for DbRow {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DatabaseLegacyRows {
     pub rows: Rows<DynamicJson>,
-    pub row_count: Counter,
+    pub row_count: i32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<DbColumn>", extend("x-since" = 2))]
+    pub columns: Option<Items<DbColumn>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub truncated: Option<bool>,
 }
 impl Check for DatabaseLegacyRows {
     fn check(&self) -> Result<(), String> {
         self.rows.check()?;
         self.row_count.check()?;
+        self.columns.check()?;
+        self.truncated.check()?;
         crate::protocol::rules::record(
             "DatabaseLegacyRows",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DatabaseLegacyRows {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.columns = None;
+        }
+        if revision < 2 {
+            self.truncated = None;
+        }
     }
 }
 
