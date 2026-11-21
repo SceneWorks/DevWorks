@@ -500,6 +500,11 @@ impl Chat {
             .cloned()
             .unwrap_or_default()
     }
+    /// A saved reply carries the exact route selected when its message was submitted.
+    pub(crate) fn route_selection_locked(&self, key: &str) -> bool {
+        self.sending.as_deref() == Some(key) || self.routing.selection_locked(key)
+    }
+
     /// Moves the not-yet-started draft onto a started session.
     pub fn adopt_new_draft(&mut self, session: &str) {
         // The new chat's route and effort selection becomes the session's.
@@ -1085,14 +1090,14 @@ fn composer(
                 // A conversation's selection may be its durable pin: it is changed only once
                 // the router said what it is pinned to (never over an unknown pin).
                 let key = chat.draft_key();
-                // Nor while its first route, which carries the current selection, is saved.
+                // The exact selection belongs to its pending save or legacy first route.
                 let known = (key == NEW_DRAFT
                     || chat
                         .routing
                         .status
                         .get(&key)
                         .is_some_and(|s| s.availability.is_some()))
-                    && !chat.routing.selection_locked(&key);
+                    && !chat.route_selection_locked(&key);
                 selectors(
                     ui,
                     &chat.routing,

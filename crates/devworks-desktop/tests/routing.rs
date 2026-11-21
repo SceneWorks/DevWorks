@@ -133,6 +133,32 @@ fn pin_of(backend: &dyn Backend, session: &str) -> Option<(String, RouteIntent, 
     })
 }
 
+fn wait_for_pin(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    backend: &dyn Backend,
+    session: &str,
+) {
+    step_until(h, "the native coordinator saves the initial pin", |_| {
+        pin_of(backend, session).is_some()
+    });
+}
+
+fn workspace_reply_routes(root: &Root, session: &str) -> Vec<serde_json::Value> {
+    let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    db.prepare(
+        "SELECT payload_json FROM operations WHERE capability='workspace.reply'
+                AND json_extract(payload_json,'$.sessionId')=?1 ORDER BY id",
+    )
+    .unwrap()
+    .query_map([session], |row| row.get::<_, String>(0))
+    .unwrap()
+    .map(|payload| {
+        serde_json::from_str::<serde_json::Value>(&payload.unwrap()).unwrap()["route"].clone()
+    })
+    .collect()
+}
+
 #[test]
 fn the_composer_offers_tiers_then_named_models_and_a_separate_effort() {
     let root = Root::new("routing-selectors");
@@ -254,6 +280,7 @@ fn a_pinned_conversation_shows_its_pin_and_changes_through_router_pin() {
         .type_text("hello");
     settle(&mut h);
     click(&mut h, Role::Button, SEND_LABEL);
+    wait_for_pin(&mut h, &*backend, &session);
     assert_eq!(pin_of(&*backend, &session).unwrap().0, "opus");
     click_nav(&mut h, "Artifacts");
     click_nav(&mut h, "Chat");
@@ -361,16 +388,36 @@ fn an_unconfirmed_pin_change_is_confirmed_with_its_frame_at_the_next_launch() {
     assert!(has_text(&h, "Pinned: claude-haiku-5-5"));
 }
 
-/// Starts a conversation and saves one message while every availability query is held, so the
-/// message is saved before the router has said whether the conversation is pinned.
-fn send_before_availability(
+fn start_before_availability(
     h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
     gate: &Gate,
 ) -> String {
     gate.close();
     h.get_by_role_and_label(Role::Button, "New Chat").click();
     step_until(h, "the conversation starts", |s| s.chat.selected.is_some());
-    let session = h.state().chat.selected.clone().unwrap();
+    h.state().chat.selected.clone().unwrap()
+}
+
+/// Model a first-route marker saved by a shell that owned routing separately from append.
+fn legacy_first_route(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    gate: &Gate,
+) -> String {
+    let session = start_before_availability(h, gate);
+    h.state_mut()
+        .chat
+        .routing
+        .first_route
+        .insert(session.clone());
+    session
+}
+
+/// Save a native workspace message while its availability query is held.
+fn send_before_availability(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    gate: &Gate,
+) -> String {
+    let session = start_before_availability(h, gate);
     h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
         .focus();
     h.step();
@@ -393,7 +440,7 @@ fn send_before_availability(
 }
 
 #[test]
-fn a_first_message_saved_before_availability_is_known_is_routed_once_it_is() {
+fn a_native_reply_routes_the_saved_message_before_desktop_availability_returns() {
     let root = Root::new("routing-first-late");
     let engine = start_connected(&root);
     let real = engine.backend();
@@ -406,20 +453,18 @@ fn a_first_message_saved_before_availability_is_known_is_routed_once_it_is() {
     );
     settle(&mut h);
     let session = send_before_availability(&mut h, &gate);
-    assert!(
-        routes.request_keys().is_empty(),
-        "not routed over an unknown pin"
+    let high = json!({"intent":{"kind":"Tier","tier":"High"},"effort":"Default"});
+    assert_eq!(
+        workspace_reply_routes(&root, &session).as_slice(),
+        std::slice::from_ref(&high)
     );
+    wait_for_pin(&mut h, &*real, &session);
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
     gate.open();
     settle(&mut h);
-    assert_eq!(
-        routes.request_keys().len(),
-        1,
-        "routed once the router answered"
-    );
-    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert!(routes.request_keys().is_empty());
     assert!(h.state().chat.routing.first_route.is_empty());
-    // A later message of the pinned conversation is not routed again by the composer.
+    // A later message carries the same selection and uses the established pin.
     h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
         .focus();
     h.step();
@@ -427,7 +472,12 @@ fn a_first_message_saved_before_availability_is_known_is_routed_once_it_is() {
         .type_text("second");
     settle(&mut h);
     click(&mut h, Role::Button, SEND_LABEL);
-    assert_eq!(routes.request_keys().len(), 1);
+    assert!(routes.request_keys().is_empty());
+    assert_eq!(
+        workspace_reply_routes(&root, &session),
+        [high.clone(), high]
+    );
+    assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
 }
 
 #[test]
@@ -442,7 +492,7 @@ fn a_first_route_still_waiting_at_close_is_routed_once_at_the_next_launch() {
         900.0,
     );
     settle(&mut h);
-    let session = send_before_availability(&mut h, &gate);
+    let session = legacy_first_route(&mut h, &gate);
     h.state_mut().on_exit();
     gate.open();
     drop(h);
@@ -565,11 +615,11 @@ fn send_first(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>)
 }
 
 #[test]
-fn the_selection_cannot_change_while_the_first_route_carrying_it_is_saved() {
+fn the_selection_cannot_change_while_the_native_message_carrying_it_is_saved() {
     let root = Root::new("routing-first-lock");
     let engine = start_connected(&root);
     let real = engine.backend();
-    let gate = Gate::new("router.route");
+    let gate = Gate::holding_replies("sessions.append_message");
     let mut h = harness(
         shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
         1440.0,
@@ -578,30 +628,33 @@ fn the_selection_cannot_change_while_the_first_route_carrying_it_is_saved() {
     settle(&mut h);
     gate.close();
     let session = send_first(&mut h);
-    step_until(&mut h, "the first route is in flight", |s| {
-        s.chat.sending.is_none() && s.chat.routing.first_in_flight.contains(&session)
+    step_until(&mut h, "the exact workspace message is in flight", |s| {
+        s.chat.sending.as_deref() == Some(session.as_str())
     });
     h.run_steps(2);
     assert!(
         !route_selector_enabled(&h),
-        "locked while the route carrying Tier High runs"
+        "locked while the exact message carrying Tier High is uncertain"
     );
     gate.open();
     settle(&mut h);
+    wait_for_pin(&mut h, &*real, &session);
     assert!(route_selector_enabled(&h));
     assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
-    // Changed after the confirmed pin: the explicit router.pin, never dropped.
+    click_nav(&mut h, "Artifacts");
+    click_nav(&mut h, "Chat");
+    // The editor now reads the durable pin before submitting an explicit change.
     choose(&mut h, ROUTE_LABEL, "Sonnet");
     assert_eq!(pin_of(&*real, &session).unwrap().0, "sonnet");
 }
 
 #[test]
-fn an_unconfirmed_first_route_keeps_the_selection_locked_after_a_relaunch() {
+fn an_unconfirmed_native_message_keeps_its_selection_locked_across_relaunch() {
     let root = Root::new("routing-first-lock-restart");
     let engine = start_connected(&root);
     let real = engine.backend();
-    // The first route never reaches the runtime; its outcome stays unknown.
-    let lossy = LoseAcks::losing_requests(real.clone(), "router.route", 16);
+    // The message never reaches the runtime; its exact route remains unconfirmed.
+    let lossy = LoseAcks::losing_requests(real.clone(), "sessions.append_message", 16);
     let mut h = harness(
         shell_with(Ok(lossy.clone()), &root, Script::default(), None),
         1440.0,
@@ -622,9 +675,9 @@ fn an_unconfirmed_first_route_keeps_the_selection_locked_after_a_relaunch() {
         !lost.is_empty() && lost.iter().all(|k| *k == lost[0]),
         "{lost:?}"
     );
-    let gate = Gate::new("router.route");
+    let gate = Gate::new("sessions.append_message");
     gate.close();
-    let resubmitted = LoseAcks::over(gate.over(real.clone()), "router.route", 0);
+    let resubmitted = LoseAcks::over(gate.over(real.clone()), "sessions.append_message", 0);
     let mut h = harness(
         shell_with(Ok(resubmitted.clone()), &root, Script::default(), None),
         1440.0,
@@ -648,7 +701,9 @@ fn an_unconfirmed_first_route_keeps_the_selection_locked_after_a_relaunch() {
     );
     gate.open();
     settle(&mut h);
+    wait_for_pin(&mut h, &*real, &session);
     assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
+    assert_eq!(workspace_reply_routes(&root, &session).len(), 1);
     assert!(route_selector_enabled(&h));
     let keys = resubmitted.request_keys();
     assert!(
@@ -703,7 +758,7 @@ fn a_waiting_first_route_of_a_conversation_beyond_the_listed_page_is_still_route
         900.0,
     );
     settle(&mut h);
-    let session = send_before_availability(&mut h, &gate);
+    let session = legacy_first_route(&mut h, &gate);
     h.state_mut().on_exit();
     gate.open();
     drop(h);
@@ -736,8 +791,8 @@ fn a_first_route_refused_while_the_window_closes_is_routed_at_the_next_launch() 
     let root = Root::new("routing-first-closing");
     let engine = start_connected(&root);
     let real = engine.backend();
-    // The message's save commits; its reply is held until the window is closing.
-    let gate = Gate::holding_replies("sessions.append_message");
+    // The persisted legacy route waits for availability until the window starts closing.
+    let gate = Gate::holding_replies("router.availability");
     let routes = LoseAcks::over(gate.over(real.clone()), "router.route", 0);
     let mut h = harness(
         shell_with(Ok(routes.clone()), &root, Script::default(), None),
@@ -745,40 +800,13 @@ fn a_first_route_refused_while_the_window_closes_is_routed_at_the_next_launch() 
         900.0,
     );
     settle(&mut h);
-    click(&mut h, Role::Button, "New Chat");
-    let session = h.state().chat.selected.clone().unwrap();
-    assert!(
-        h.state()
-            .chat
-            .routing
-            .status
-            .get(&session)
-            .and_then(|s| s.availability.as_ref())
-            .is_some_and(|a| a.pin.is_none()),
-        "known to have no pin"
-    );
-    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
-        .focus();
-    h.step();
-    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
-        .type_text("sent while closing");
-    h.step();
-    gate.close();
-    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
-    step_until(&mut h, "the message is being saved", |s| {
-        s.chat.sending.is_some()
-    });
+    let session = legacy_first_route(&mut h, &gate);
     h.state_mut().request_close();
     h.step();
-    // The save's success is applied while quiescing; the route it asks for is not admitted.
     gate.open();
     step_until(&mut h, "the window closed", |s| {
         matches!(s.lifecycle(), Lifecycle::Closed)
     });
-    assert!(
-        h.state().chat.sending.is_none(),
-        "the save was applied before closing"
-    );
     assert!(
         routes.request_keys().is_empty(),
         "nothing is admitted while closing"
@@ -974,7 +1002,7 @@ fn relaunch_in_order(order: Order) {
         900.0,
     );
     settle(&mut h);
-    let session = send_before_availability(&mut h, &gate);
+    let session = legacy_first_route(&mut h, &gate);
     h.state_mut().on_exit();
     gate.open();
     drop(h);
@@ -1119,6 +1147,7 @@ fn refreshes_never_stack_availability_queries_on_a_slow_router() {
     });
     held.open_all();
     settle(&mut h);
+    wait_for_pin(&mut h, &*real, &session);
     assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
 }
 
