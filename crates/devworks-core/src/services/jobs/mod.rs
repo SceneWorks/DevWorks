@@ -1143,6 +1143,15 @@ impl JobService {
         i: &ops::RunNowInput,
     ) -> Result<(DomainDecision, Option<OperationId>), Failure> {
         let job = visible_job(tx.jobs(), ctx, &i.job_id)?;
+        if super::maintenance::is_retention_job(&job.definition)?
+            && (!authorizes(ctx) || !job.enabled || !job.authorized)
+        {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                JOB,
+                Some(&job.id),
+            ));
+        }
         if job.revision != i.expected_revision.get() {
             return Err(conflict(
                 JOB,

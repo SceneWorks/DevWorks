@@ -304,3 +304,139 @@ fn expired_previews_and_previews_owned_by_another_human_cannot_be_confirmed() {
         if fault.code == devworks_core::protocol::DomainErrorCode::SourceChanged));
     assert!(row_exists(&h));
 }
+
+#[test]
+fn a_native_firing_keeps_its_original_operation_and_rechecks_current_job_authority() {
+    let h = Harness::new();
+    let store = Arc::new(h.store());
+    let service = fixture(&store);
+    let run = write(&*store, |tx| {
+        let capability = "maintenance.scheduled_prune";
+        let definition = json!({
+            "kind":"Native","capabilityId":devworks_core::services::jobs::capability_id(capability),
+            "arguments":{"schema":devworks_core::services::jobs::argument_schema(
+                capability,devworks_core::registry::SchemaRevision(1)).unwrap(),
+                "value":{"target":"Diagnostics","maxItems":1}}
+        })
+        .to_string();
+        let epoch = tx.store().restore_epoch;
+        let now = tx.now_ms();
+        let job = tx.jobs().insert_job(&StoredJob {
+            id: id("retention-schedule"),
+            revision: 1,
+            project_id: None,
+            title: "Fixture retention job".into(),
+            kind: "Native".into(),
+            schedule: json!({"kind":"Manual"}).to_string(),
+            timezone: "UTC".into(),
+            definition: definition.clone(),
+            enabled: true,
+            authorized: true,
+            authorized_by: Some(ActorId(id("user-a"))),
+            hold: None,
+            activated_epoch: epoch,
+            project_epoch: 0,
+            anchor_at_ms: now,
+            next_at_ms: None,
+            interrupted_run_id: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+            deleted_at_ms: None,
+        })?;
+        let operation = OperationId(id("retention-parent"));
+        tx.operations().record_intent(NewOperation {
+            id: operation.clone(),
+            root_id: None,
+            assignment_id: None,
+            capability: "jobs.run".into(),
+            schema_version: 1,
+            args_digest: "fixture".into(),
+            payload: json!({}),
+        })?;
+        tx.jobs().insert_run(&StoredJobRun {
+            id: id("retention-firing"),
+            job_id: job.id,
+            seq: 1,
+            project_id: None,
+            job_revision: job.revision,
+            definition,
+            project_epoch: 0,
+            restore_epoch: epoch,
+            occurrence_key: "retention-firing".into(),
+            occurrence_at_ms: now,
+            trigger: "Manual".into(),
+            status: "Queued".into(),
+            revision: 1,
+            operation_id: Some(operation),
+            inner_operation_id: None,
+            boot_id: None,
+            started_at_ms: None,
+            finished_at_ms: None,
+            reason: None,
+            hold: None,
+            cancel_requested: false,
+            resumptions: 0,
+            session_id: None,
+            agent_actor: None,
+            skipped_for: None,
+            checkpoint: None,
+            created_at_ms: now,
+        })
+    })
+    .unwrap();
+    let run_id = run.id.clone();
+    let lifecycle = devworks_core::services::jobs::JobService::new(
+        devworks_core::services::jobs::NativeCatalog::of(&["maintenance.scheduled_prune"]),
+        Default::default(),
+    );
+    let begun = write(&*store, move |tx| {
+        lifecycle.begin(
+            tx,
+            &run_id,
+            &devworks_core::services::jobs::runner::NoInferencePipeline,
+        )
+    })
+    .unwrap()
+    .unwrap();
+    let devworks_core::services::jobs::runner::Step::Native { ctx: context, .. } = begun.step
+    else {
+        panic!("expected native firing");
+    };
+    let fire = |key| match command_as(
+        &context,
+        &store,
+        service.clone(),
+        "maintenance.scheduled_prune",
+        key,
+        json!({"target":"Diagnostics","maxItems":1}),
+    ) {
+        DomainDecision::Accepted { operation_id } => operation_id,
+        other => panic!("unexpected scheduled decision {other:?}"),
+    };
+    let first = fire("retention-firing-first");
+    // A different gateway receipt is deliberately used to exercise durable run binding, not
+    // replay from the command ledger.
+    assert_eq!(fire("retention-firing-retry"), first);
+    let operation = dispatch(&store, first);
+    write(&*store, move |tx| {
+        let mut job = tx.jobs().job(&run.job_id)?.unwrap();
+        job.enabled = false;
+        let expected = job.revision;
+        tx.jobs().update_job(&job, expected)?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        service.execute(&operation),
+        EffectOutcome::Failed(_)
+    ));
+    assert!(row_exists(&h));
+    let saved = read_snapshot(&*store, &ReadOptions::default(), |read| {
+        Ok(read
+            .retention()?
+            .retention_for_operation(&operation.id)?
+            .unwrap())
+    })
+    .unwrap();
+    assert_eq!(saved.outcome.unwrap().records_removed, 0);
+}

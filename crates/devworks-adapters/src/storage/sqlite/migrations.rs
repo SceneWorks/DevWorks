@@ -763,10 +763,10 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 68,
-        minimum_reader: 66,
+        minimum_reader: 68,
         minimum_writer: 68,
         sql: include_str!("migrations/0068_operational_retention.sql"),
-        expected_sha256: "7eab3454b4e3bb6ce393252ed095f76d22a0b6676adbf865ab147b60ed5b8931",
+        expected_sha256: "9cf44f5dc2de0ab5b235807f1abedca2866b83b2b1724729bd120bebe0c6548a",
         rebuilds_tables: false,
     },
 ];

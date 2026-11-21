@@ -9,7 +9,15 @@ pub(super) const DIAGNOSTIC_HOLD: &str = "
       WHEN r.evidence_json IS NOT NULL OR json_array_length(r.recovery_json)>0
         OR EXISTS (SELECT 1 FROM history_links h WHERE h.target_kind IN ('Diagnostic','DiagnosticRecord')
                    AND h.target_id=r.id) THEN 'PublishedEvidence'
-      WHEN (r.outcome='Running' AND r.started_at IS NOT NULL AND r.finished_at IS NULL)
+      WHEN r.component='indexing.repository' AND r.operation='indexing.index'
+           AND r.operation_id IS NOT NULL THEN
+        CASE WHEN NOT EXISTS (
+          SELECT 1 FROM index_runs run WHERE run.id=r.operation_id
+            AND run.repository_id=r.target_id AND run.owner IS NULL
+            AND run.state IN ('Succeeded','Cancelled')
+        ) THEN 'LiveOperation' END
+      WHEN (r.operation_id IS NULL AND r.outcome='Running'
+          AND r.started_at IS NOT NULL AND r.finished_at IS NULL)
         OR (r.operation_id IS NOT NULL AND NOT EXISTS (
           SELECT 1 FROM operations op WHERE op.id=r.operation_id
             AND op.state IN ('ObservedComplete','CancelledBeforeDispatch')
@@ -19,6 +27,14 @@ pub(super) const DIAGNOSTIC_HOLD: &str = "
 const INDEX_HOLD: &str = "
     CASE
       WHEN r.state IN ('Queued','Running') OR r.owner IS NOT NULL THEN 'LiveOperation'
+      WHEN EXISTS (
+        SELECT 1 FROM diagnostic_records log WHERE log.operation_id=r.id
+          AND log.component='indexing.repository' AND log.operation='indexing.index'
+          AND log.target_id=r.repository_id
+      ) THEN 'Referenced'
+      WHEN r.batch_id=r.id AND EXISTS (
+        SELECT 1 FROM index_runs member WHERE member.batch_id=r.id AND member.id<>r.id
+      ) THEN 'Referenced'
       WHEN EXISTS (
         SELECT 1 FROM index_overlays o
         WHERE o.run_id=r.id
@@ -41,13 +57,13 @@ const INDEX_HOLD: &str = "
           AND COALESCE(n.overlay_id,'')=COALESCE(r.overlay_id,'')
           AND n.state IN ('Queued','Running')
       ) THEN 'CurrentWitness'
-      WHEN r.state='Failed' AND NOT EXISTS (
+      WHEN r.state='Failed' AND (r.kind='Overlay' OR NOT EXISTS (
         SELECT 1 FROM index_runs n WHERE n.repository_id=r.repository_id
           AND COALESCE(n.overlay_id,'')=COALESCE(r.overlay_id,'')
           AND n.source_oid=r.source_oid AND n.config_digest=r.config_digest
           AND n.state='Succeeded' AND n.finished_at>COALESCE(r.finished_at,r.created_at)
           AND EXISTS (SELECT 1 FROM index_views v WHERE v.id=n.output_view_id)
-      ) THEN 'UnresolvedFailure'
+      )) THEN 'UnresolvedFailure'
     END";
 
 const MESSAGE_HOLD: &str = "
@@ -165,6 +181,20 @@ fn session_hold() -> String {
                            AND a.kind IN ('agent','host','schedule')) THEN 'AuthoredHistory'
           WHEN r.checkpoint_seq>0 OR r.next_seq>1
             OR EXISTS (SELECT 1 FROM history_links h WHERE h.target_kind='Session' AND h.target_id=r.id)
+            OR EXISTS (
+              SELECT 1 FROM decision_approvals a WHERE a.state='Pending' AND
+                json_extract(a.payload_json,'$.sourceContext.invocationContext.session')=r.id
+            ) OR EXISTS (
+              SELECT 1 FROM decision_approvals a WHERE a.state='Pending' AND
+                json_extract(a.payload_json,'$.invocation.session')=r.id
+            ) OR EXISTS (
+              SELECT 1 FROM approval_resumes a WHERE a.state IN ('Pending','Unknown')
+                AND json_extract(a.invocation_json,'$.session')=r.id
+            ) OR EXISTS (
+              SELECT 1 FROM operations o
+              WHERE o.state NOT IN ('ObservedComplete','Failed','CancelledBeforeDispatch')
+                AND json_extract(o.payload_json,'$.sourceContext.invocationContext.session')=r.id
+            )
             OR EXISTS (SELECT 1 FROM conversations c WHERE c.id=r.conversation_id AND c.root_id IS NOT NULL)
             {references} THEN 'Referenced'
         END"

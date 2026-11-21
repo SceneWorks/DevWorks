@@ -192,7 +192,12 @@ fn qualify(
     )?;
     if let Some(binding) = &preview.scheduled {
         let (owner, current, _) = scheduled::authorization(tx, &context, Some(&operation.id))?;
-        if &current != binding || owner != preview.owner {
+        if &current != binding
+            || owner != preview.owner
+            || (preview.window.kind == crate::ports::storage::RetentionKind::Diagnostics
+                && preview.window.effective_cutoff_ms
+                    > scheduled::diagnostics_cutoff(tx, preview.window.captured_at_ms)?)
+        {
             return Err(StorageError::ScopeDenied);
         }
     } else {

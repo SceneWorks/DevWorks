@@ -262,11 +262,26 @@ fn stats(conn: &Connection) -> Result<DiagnosticStats, StorageError> {
         [],
         |r| r.get(0),
     ))?;
+    let version: i64 = db(conn.query_row(
+        "SELECT schema_version FROM store_meta WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    ))?;
+    let retention_generation = if version >= 68 {
+        db(conn.query_row(
+            "SELECT retention_generation FROM diagnostic_retention WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        ))?
+    } else {
+        0
+    };
     Ok(DiagnosticStats {
         records,
         latest_sequence: latest.unwrap_or(0),
         oldest_recorded_at_ms: oldest,
         pruned_through,
+        retention_generation,
     })
 }
 
@@ -410,8 +425,11 @@ impl DiagnosticRepository for Unit<'_> {
         let mut boundary = 0;
         let mut remove = |filter: &str, argument: i64| {
             let sql = format!(
-                "DELETE FROM diagnostic_records AS r WHERE ({filter}) AND ({DIAGNOSTIC_HOLD}) IS NULL
-                 RETURNING sequence"
+                "DELETE FROM diagnostic_records WHERE sequence IN (
+                   SELECT r.sequence FROM diagnostic_records r
+                   WHERE ({filter}) AND ({DIAGNOSTIC_HOLD}) IS NULL
+                   ORDER BY r.sequence LIMIT 500
+                 ) RETURNING sequence"
             );
             let mut statement = db(self.conn.prepare_cached(&sql))?;
             let rows = db(statement.query_map([argument], |row| row.get::<_, i64>(0)))?;
@@ -424,7 +442,7 @@ impl DiagnosticRepository for Unit<'_> {
         };
         let expired = remove("r.recorded_at < ?1", older_than_ms)?;
         let over_cap = remove(
-            "r.sequence IN (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT -1 OFFSET ?1)",
+            "r.sequence <= (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT 1 OFFSET ?1)",
             keep_at_most,
         )?;
         if boundary > 0 {
@@ -432,7 +450,10 @@ impl DiagnosticRepository for Unit<'_> {
         }
         // An intent with a command is replay evidence owned by the gateway.
         db(self.conn.execute(
-            "DELETE FROM diagnostic_exports WHERE command IS NULL AND created_at < ?1",
+            "DELETE FROM diagnostic_exports WHERE rowid IN (
+                SELECT rowid FROM diagnostic_exports WHERE command IS NULL AND created_at < ?1
+                ORDER BY created_at,rowid LIMIT 500
+            )",
             [older_than_ms],
         ))?;
         Ok(PrunedDiagnostics { expired, over_cap })

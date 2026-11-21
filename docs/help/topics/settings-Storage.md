@@ -4,7 +4,7 @@ Artifact location and explicit-deletion retention are harness-enforced. Per-proj
 
 ## Review operational retention
 
-Open **Review operational retention** in Storage & import. Select a record type, minimum age, and batch size, then preview. Review the cutoff, exact record IDs and revisions, and the reasons held records are kept. Confirm before the preview expires. You can cancel a queued removal and return to the panel to see the settled outcome while it is open.
+Open **Review operational retention** in Storage & import. Select a record type, minimum age, and batch size, then preview. Review the cutoff, exact record IDs and revisions, and the reasons held records are kept. Confirm before the preview expires. You can cancel a queued removal and reopen the panel to see its outcome, including after restarting DevWorks.
 
 Operational retention protects authored and referenced records. Each confirmation acts on the reviewed batch. If a candidate changes or becomes protected, request a new preview. Documents, artifacts, and published search views are outside these removal actions.
 

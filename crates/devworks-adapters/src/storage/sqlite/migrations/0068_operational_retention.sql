@@ -22,3 +22,19 @@ CREATE INDEX agent_message_events_by_message ON agent_message_events(message_id,
 CREATE INDEX agent_message_replies ON agent_messages(in_reply_to_id) WHERE in_reply_to_id IS NOT NULL;
 CREATE INDEX index_runs_retention_by_target ON index_runs(repository_id,COALESCE(overlay_id,''),created_at,id);
 CREATE INDEX sessions_by_conversation ON sessions(conversation_id);
+
+-- A later removal can be below the highest removed sequence when retained rows have gaps.
+ALTER TABLE diagnostic_retention ADD COLUMN retention_generation INTEGER NOT NULL DEFAULT 0
+  CHECK(retention_generation>=0);
+
+-- The remaining owners store session identity in their typed captured invocation.
+CREATE INDEX decision_approval_session_retention
+  ON decision_approvals(json_extract(payload_json,'$.sourceContext.invocationContext.session'))
+  WHERE state='Pending';
+CREATE INDEX decision_approval_legacy_session_retention
+  ON decision_approvals(json_extract(payload_json,'$.invocation.session')) WHERE state='Pending';
+CREATE INDEX approval_resume_session_retention
+  ON approval_resumes(json_extract(invocation_json,'$.session')) WHERE state IN ('Pending','Unknown');
+CREATE INDEX operation_session_retention
+  ON operations(json_extract(payload_json,'$.sourceContext.invocationContext.session'))
+  WHERE state NOT IN ('ObservedComplete','Failed','CancelledBeforeDispatch');

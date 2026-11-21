@@ -293,7 +293,8 @@ pub(super) fn raise_diagnostic_boundary(
     sequence: i64,
 ) -> Result<(), StorageError> {
     db(conn.execute(
-        "UPDATE diagnostic_retention SET pruned_through=max(pruned_through,?1) WHERE singleton=1",
+        "UPDATE diagnostic_retention SET pruned_through=max(pruned_through,?1),
+             retention_generation=retention_generation+1 WHERE singleton=1",
         [sequence],
     ))?;
     Ok(())

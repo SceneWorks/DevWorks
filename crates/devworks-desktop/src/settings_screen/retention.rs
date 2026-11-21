@@ -7,7 +7,7 @@ use crate::settings_ops::SettingsSlot;
 use devworks_core::operations::{OperationInput, maintenance as api};
 use devworks_core::ports::storage::RetentionKind;
 use devworks_core::protocol::Id;
-use devworks_core::protocol::records::{PruneHold, PruneInspection, PrunePhase};
+use devworks_core::protocol::records::{PruneHold, PruneInspection, PruneKind, PrunePhase};
 use devworks_core::protocol::results::OperationResult;
 use eframe::egui::{self, Ui};
 use std::time::{Duration, Instant};
@@ -46,6 +46,17 @@ pub(crate) fn is_slot(slot: &SettingsSlot) -> bool {
 impl Panel {
     pub(crate) fn open(&mut self) {
         self.open = true;
+        if self.id.is_some() && self.detail.is_none() && !self.busy {
+            self.poll = Some(Instant::now());
+        }
+    }
+
+    pub(crate) fn preview_id(&self) -> Option<String> {
+        self.id.as_ref().map(|id| id.as_str().to_owned())
+    }
+
+    pub(crate) fn restore_preview(&mut self, id: Option<&str>) {
+        self.id = id.and_then(frame::id);
     }
 
     pub(crate) fn restore(&mut self, id: &str) {
@@ -286,6 +297,13 @@ impl Panel {
 
     fn seen(&mut self, value: PruneInspection) {
         if self.id.as_ref() == Some(&value.preview.id) {
+            self.target = match value.preview.kind {
+                PruneKind::Diagnostics => 0,
+                PruneKind::IndexRuns => 1,
+                PruneKind::Messages => 2,
+                PruneKind::Sessions => 3,
+            };
+            self.notice = None;
             self.poll = matches!(value.phase, PrunePhase::Queued)
                 .then(|| Instant::now() + Duration::from_secs(1));
             self.detail = Some(value);
@@ -304,7 +322,9 @@ impl Panel {
                         | OperationResult::MaintenancePruneSessions { value },
                     ) => {
                         self.id = Some(value.id);
+                        self.detail = None;
                         self.confirm = false;
+                        self.poll = Some(Instant::now());
                         self.inspect(cx);
                     }
                     Err(error) => self.notice = Some(error.describe()),
@@ -312,23 +332,37 @@ impl Panel {
                 }
             }
             (SettingsSlot::RetentionApply(id), Reply::Command(reply)) => {
-                self.id = frame::id(&id);
+                let unresolved = crate::backend::is_unknown(&reply);
+                let accepted = ops::accepted_decision(reply);
                 self.confirm = false;
-                if let Err(error) = ops::accepted_decision(reply) {
+                self.detail = None;
+                if accepted.is_ok() || unresolved {
+                    self.id = frame::id(&id);
+                    self.poll = Some(Instant::now());
+                    self.inspect(cx);
+                } else if let Err(error) = accepted {
+                    self.id = None;
+                    self.poll = None;
                     self.notice = Some(error.describe());
                 }
-                self.inspect(cx);
             }
             (SettingsSlot::RetentionInspect, Reply::Query(reply)) => match ops::query_result(reply)
             {
                 Ok((OperationResult::MaintenanceInspect { value }, _)) => self.seen(value),
+                Err(ops::Failure::Refused(ref fault))
+                    if matches!(
+                        fault.code,
+                        devworks_core::protocol::DomainErrorCode::NotFound
+                            | devworks_core::protocol::DomainErrorCode::PermissionDenied
+                    ) =>
+                {
+                    self.id = None;
+                    self.detail = None;
+                    self.notice = Some("The saved retention preview is unavailable.".into());
+                }
                 Err(error) => {
                     self.notice = Some(error.describe());
-                    if self
-                        .detail
-                        .as_ref()
-                        .is_some_and(|detail| matches!(detail.phase, PrunePhase::Queued))
-                    {
+                    if self.id.is_some() {
                         self.poll = Some(Instant::now() + Duration::from_secs(2));
                     }
                 }

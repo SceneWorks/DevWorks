@@ -48,6 +48,10 @@ fn arguments(definition: &str) -> Result<Option<ScheduledPruneInput>, StorageErr
     }
 }
 
+pub(crate) fn is_retention_job(definition: &str) -> Result<bool, StorageError> {
+    Ok(arguments(definition)?.is_some())
+}
+
 pub(crate) fn validate_schedule(
     ctx: &InvocationContext,
     project: Option<&ProjectId>,
@@ -114,6 +118,14 @@ pub(super) fn authorization(
     Ok((owner, binding, input))
 }
 
+pub(super) fn diagnostics_cutoff(
+    tx: &mut dyn WriteTransaction,
+    at_ms: i64,
+) -> Result<i64, StorageError> {
+    let days = diagnostics::retention(tx.configuration())?.days;
+    Ok(at_ms.saturating_sub(days * DAY_MS).max(0))
+}
+
 pub(super) fn fire(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -141,15 +153,16 @@ pub(super) fn fire(
             operation_id: saved.operation.ok_or(StorageError::ScopeDenied)?,
         });
     }
-    let days = if kind == RetentionKind::Diagnostics {
-        diagnostics::retention(tx.configuration())?.days
+    let now = tx.now_ms();
+    let cutoff = if kind == RetentionKind::Diagnostics {
+        diagnostics_cutoff(tx, now)?
     } else {
-        approved
+        let days = approved
             .retention_days
             .as_ref()
-            .map_or(30, |days| i64::from(days.get()))
+            .map_or(30, |days| i64::from(days.get()));
+        now.saturating_sub(days * DAY_MS).max(0)
     };
-    let cutoff = tx.now_ms().saturating_sub(days * DAY_MS).max(0);
     let preview = record_preview(
         tx,
         owner,

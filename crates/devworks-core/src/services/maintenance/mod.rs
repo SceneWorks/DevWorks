@@ -22,7 +22,7 @@ use crate::protocol::{
 use crate::services::kernel::{Failure, Refusal, counter, decided, label, not_found, rev};
 use std::sync::Arc;
 
-pub(crate) use scheduled::{cancel_scheduled, validate_schedule};
+pub(crate) use scheduled::{cancel_scheduled, is_retention_job, validate_schedule};
 pub use worker::EFFECT_CONSUMER;
 pub(crate) use worker::QueueHook;
 

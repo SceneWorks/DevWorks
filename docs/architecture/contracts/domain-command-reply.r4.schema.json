@@ -10791,6 +10791,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PruneHeldRecord_0_500": {
+      "items": {
+        "$ref": "#/$defs/PruneHeldRecord"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_QueueDelivery_0_500": {
       "items": {
         "$ref": "#/$defs/QueueDelivery"
@@ -17264,6 +17272,57 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "maintenance.inspect",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PruneInspection"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "maintenance.cancel",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PruneInspection"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "maintenance.scheduled_prune",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/PruneInspection"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "repository_docs.generate",
               "type": "string"
             },
@@ -21002,12 +21061,148 @@
       ],
       "type": "object"
     },
+    "PruneHeldRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "$ref": "#/$defs/PruneHold"
+        }
+      },
+      "required": [
+        "id",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "PruneHold": {
+      "enum": [
+        "AuthoredHistory",
+        "PublishedEvidence",
+        "LiveOperation",
+        "CurrentWitness",
+        "UnresolvedFailure",
+        "OpenConversation",
+        "PendingDelivery",
+        "HandoverWindow",
+        "ReplayHead",
+        "Referenced",
+        "UnclassifiedReference"
+      ],
+      "type": "string"
+    },
+    "PruneInspection": {
+      "additionalProperties": false,
+      "properties": {
+        "capturedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "effectiveCutoffMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "held": {
+          "$ref": "#/$defs/List_PruneHeldRecord_0_500"
+        },
+        "maxItems": {
+          "$ref": "#/$defs/Limit"
+        },
+        "moreCandidates": {
+          "type": "boolean"
+        },
+        "moreHeld": {
+          "type": "boolean"
+        },
+        "operationId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PruneOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/PrunePhase"
+        },
+        "preview": {
+          "$ref": "#/$defs/PrunePreview"
+        },
+        "requestedCutoffMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "preview",
+        "requestedCutoffMs",
+        "effectiveCutoffMs",
+        "capturedAtMs",
+        "maxItems",
+        "held",
+        "moreCandidates",
+        "moreHeld",
+        "phase"
+      ],
+      "type": "object"
+    },
     "PruneKind": {
       "enum": [
         "Diagnostics",
         "IndexRuns",
         "Messages",
         "Sessions"
+      ],
+      "type": "string"
+    },
+    "PruneOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "ownedRowsRemoved": {
+          "$ref": "#/$defs/Counter"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recordsRemoved": {
+          "$ref": "#/$defs/Counter"
+        },
+        "settledAtMs": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "recordsRemoved",
+        "ownedRowsRemoved",
+        "settledAtMs"
+      ],
+      "type": "object"
+    },
+    "PrunePhase": {
+      "enum": [
+        "Previewed",
+        "Queued",
+        "Applied",
+        "Cancelled",
+        "Refused"
       ],
       "type": "string"
     },

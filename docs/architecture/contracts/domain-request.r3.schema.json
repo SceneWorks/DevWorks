@@ -6819,6 +6819,58 @@
               "$ref": "#/$defs/Revision"
             },
             "kind": {
+              "const": "maintenance.cancel",
+              "type": "string"
+            },
+            "previewId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "previewId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "maintenance.scheduled_prune",
+              "type": "string"
+            },
+            "maxItems": {
+              "$ref": "#/$defs/Limit"
+            },
+            "retentionDays": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Limit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "$ref": "#/$defs/PruneKind"
+            }
+          },
+          "required": [
+            "kind",
+            "target",
+            "maxItems"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
               "const": "repository_docs.generate",
               "type": "string"
             },
@@ -10926,6 +10978,23 @@
           "additionalProperties": false,
           "properties": {
             "kind": {
+              "const": "maintenance.inspect",
+              "type": "string"
+            },
+            "previewId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "previewId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
               "const": "mcp_server.status",
               "type": "string"
             }
@@ -13746,6 +13815,15 @@
     "Protocol": {
       "enum": [
         "1.0-draft.1"
+      ],
+      "type": "string"
+    },
+    "PruneKind": {
+      "enum": [
+        "Diagnostics",
+        "IndexRuns",
+        "Messages",
+        "Sessions"
       ],
       "type": "string"
     },

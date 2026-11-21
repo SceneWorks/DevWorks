@@ -122,6 +122,8 @@ impl SettingsScreen {
             .and_then(|l| Category::ALL.into_iter().find(|c| c.label() == l));
         self.query = m.query.clone();
         self.restored = m.drafts.clone();
+        self.retention
+            .restore_preview(m.retention_preview.as_deref());
     }
     pub fn memory(&self) -> SettingsMemory {
         let drafts = match &self.view {
@@ -136,6 +138,7 @@ impl SettingsScreen {
             category: self.category.map(|c| c.label().to_owned()),
             query: self.query.clone(),
             drafts,
+            retention_preview: self.retention.preview_id(),
         }
     }
 

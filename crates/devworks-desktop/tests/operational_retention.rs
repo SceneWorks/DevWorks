@@ -152,6 +152,35 @@ fn four_selectors_apply_the_reviewed_rows_and_preserve_holds() {
     let conn = database(&root);
     seed(&conn);
     let b = app.backend();
+    let until = Instant::now() + SETTLE_BOUND;
+    let artifact = loop {
+        let reference = read_snapshot(
+            &**app.host().runtime().store(),
+            &Default::default(),
+            |read| {
+                let Some(generation) = read.help().help_head()?.generation_id else {
+                    return Ok(None);
+                };
+                Ok(read
+                    .help()
+                    .help_topic(&generation, &Id::new("settings-Storage").unwrap())?
+                    .and_then(|topic| topic.content_ref))
+            },
+        )
+        .unwrap();
+        if let Some(reference) = reference {
+            break serde_json::from_value::<devworks_core::protocol::provider::ArtifactRef>(
+                reference,
+            )
+            .unwrap();
+        }
+        assert!(
+            Instant::now() < until,
+            "native Help did not publish its artifact"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let artifact_before = ops::read_artifact_bytes(&*b, &artifact).unwrap();
     for (op, table, eligible, held) in [
         (
             DIAGNOSTICS,
@@ -223,6 +252,55 @@ fn four_selectors_apply_the_reviewed_rows_and_preserve_holds() {
         })
         .unwrap();
     assert_eq!(deliveries, 3);
+    assert_eq!(
+        ops::read_artifact_bytes(&*b, &artifact).unwrap(),
+        artifact_before
+    );
+}
+
+#[test]
+fn an_old_batch_opener_stays_addressable_while_a_member_is_running() {
+    let _case = native_runtime_case();
+    let root = Root::new("operational-retention-batch");
+    let app = start(&root);
+    let conn = database(&root);
+    seed(&conn);
+    conn.execute_batch("
+        INSERT INTO repositories(id,canonical_location,revision) VALUES('retention-member-repo','fixture://member',1);
+        UPDATE index_runs SET batch_id=id WHERE id='run-old';
+        INSERT INTO index_runs(id,batch_id,kind,repository_id,state,stage,revision,attempt,max_attempts,
+            owner,lease_until,config_revision,config_digest,completed_units,deterministic,
+            warnings_json,requested_by,created_at,next_attempt_at)
+        VALUES('retention-batch-member','run-old','Index','retention-member-repo','Running','Extracting',
+            1,1,1,'retention-fixture',9223372036854775807,1,printf('%064d',0),0,1,'[]',
+            'retention-machine',1700000000000,0);
+    ").unwrap();
+    let b = app.backend();
+    let reviewed = preview(&*b, INDEX_RUNS, 10);
+    assert!(
+        reviewed
+            .held_ids
+            .0
+            .iter()
+            .any(|id| id.as_str() == "run-old")
+    );
+    assert!(
+        reviewed
+            .candidate_ids
+            .0
+            .iter()
+            .all(|row| row.id.as_str() != "run-old")
+    );
+    let frame = ops::cancel_index_run(&*b, "run-old");
+    assert!(ops::command_result(b.command("indexing.cancel", &frame)).is_ok());
+    let requested: Option<i64> = conn
+        .query_row(
+            "SELECT cancel_requested_at FROM index_runs WHERE id='retention-batch-member'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(requested.is_some());
 }
 
 #[test]
@@ -362,13 +440,74 @@ fn an_explicit_native_job_firing_applies_one_bounded_preview() {
 }
 
 #[test]
+fn approval_provenance_and_settled_index_log_ownership_are_respected() {
+    let _case = native_runtime_case();
+    let root = Root::new("operational-retention-references");
+    let app = start(&root);
+    let conn = database(&root);
+    seed(&conn);
+    conn.execute_batch("
+        INSERT INTO decision_approvals
+          (id,scope_key,revision,state,operation_kind,target_id,target_revision,content_digest,
+           scope_digest,summary,payload_json,author_id,author_kind,created_at,restore_epoch)
+        VALUES('retention-approval','workspace',1,'Pending','Test','some-target',1,printf('%064d',0),
+           printf('%064d',0),'pending',json_object('sourceContext',json_object(
+               'invocationContext',json_object('session','session-eligible'))),
+           'retention-machine','agent',1700000000000,0);
+        INSERT INTO diagnostic_records
+          (id,recorded_at,severity,severity_rank,component,code,message,origin,actor_id,
+           operation,operation_id,target_id,started_at,outcome)
+        VALUES('diag-index','1700000000000','Info',0,'indexing.repository','running','Indexed phase',
+               'Host','retention-machine','indexing.index','run-old','retention-repo',1700000000000,'Running');
+    ").unwrap();
+    let b = app.backend();
+    let sessions = preview(&*b, SESSIONS, 20);
+    assert!(
+        sessions
+            .held_ids
+            .0
+            .iter()
+            .any(|id| id.as_str() == "session-eligible")
+    );
+    let index = preview(&*b, INDEX_RUNS, 20);
+    assert!(index.held_ids.0.iter().any(|id| id.as_str() == "run-old"));
+    let logs = preview(&*b, DIAGNOSTICS, 20);
+    assert!(
+        logs.candidate_ids
+            .0
+            .iter()
+            .any(|row| row.id.as_str() == "diag-index")
+    );
+    let frame = confirm_frame(&*b, DIAGNOSTICS, &logs, 20);
+    ops::accepted_decision(b.command(DIAGNOSTICS, &frame)).unwrap();
+    assert!(matches!(settled(&*b, &logs.id).phase, PrunePhase::Applied));
+    let index = preview(&*b, INDEX_RUNS, 20);
+    assert!(
+        index
+            .candidate_ids
+            .0
+            .iter()
+            .any(|row| row.id.as_str() == "run-old")
+    );
+}
+
+#[test]
 fn settings_shows_native_preview_and_requires_confirmation() {
     let _case = native_runtime_case();
     let root = Root::new("operational-retention-settings");
     let app = start(&root);
     let conn = database(&root);
     diagnostics(&conn);
-    let mut ui = harness(shell(&app, &root, Script::default()), 1440.0, 1040.0);
+    let mut ui = harness(
+        shell_with(
+            Ok(app.backend()),
+            &root,
+            Script::default(),
+            Some(Box::new(app)),
+        ),
+        1440.0,
+        1040.0,
+    );
     settle(&mut ui);
     click_nav(&mut ui, "Settings");
     click(&mut ui, Role::Button, "Review operational retention");
@@ -383,4 +522,25 @@ fn settings_shows_native_preview_and_requires_confirmation() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(exists(&conn, "diagnostic_records", "diag-human"));
+    drop(conn);
+    let viewport = eframe::egui::ViewportId::ROOT;
+    ui.input_mut()
+        .viewports
+        .entry(viewport)
+        .or_default()
+        .events
+        .push(eframe::egui::ViewportEvent::Close);
+    let until = Instant::now() + SETTLE_BOUND;
+    while ui.state().lifecycle() != &devworks_desktop::shell::Lifecycle::Closed {
+        assert!(Instant::now() < until);
+        ui.step();
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    drop(ui);
+    let restarted = start(&root);
+    let mut ui = harness(shell(&restarted, &root, Script::default()), 1440.0, 1040.0);
+    settle(&mut ui);
+    click_nav(&mut ui, "Settings");
+    click(&mut ui, Role::Button, "Review operational retention");
+    assert!(has_text(&ui, "Removed 2 records"));
 }
