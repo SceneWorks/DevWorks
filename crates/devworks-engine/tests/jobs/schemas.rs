@@ -408,3 +408,579 @@ fn cancelling_ready_schema_child_clears_only_its_activity_and_allows_next_run() 
     assert_eq!(app.settle(&rt, &scheduler, &job).status, "Cancelled");
     rt.block_on(app.runtime.shutdown());
 }
+
+#[cfg(unix)]
+mod database_commit_fixture {
+    use devworks_adapters::database::NativeDataAdapter;
+    use devworks_core::ports::database::data::*;
+    use devworks_core::protocol::records::DbEngine;
+    use devworks_core::services::database::statement::DataMode;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    pub(super) struct Adapter {
+        pub native: NativeDataAdapter,
+        pub lose_observation: Arc<AtomicBool>,
+        pub sends: AtomicUsize,
+    }
+
+    struct Observation {
+        inner: Arc<dyn DispatchGuard>,
+        lose_observation: Arc<AtomicBool>,
+    }
+
+    impl DataAdapter for Adapter {
+        fn capabilities(&self, engine: &DbEngine) -> DataCapabilities {
+            self.native.capabilities(engine)
+        }
+
+        fn execute(&self, request: DataRequest, guard: Arc<dyn DispatchGuard>) -> DataFuture {
+            if request.mode != DataMode::Read {
+                self.sends.fetch_add(1, Ordering::SeqCst);
+            }
+            self.native.execute(
+                request,
+                Arc::new(Observation {
+                    inner: guard,
+                    lose_observation: self.lose_observation.clone(),
+                }),
+            )
+        }
+    }
+
+    impl DispatchGuard for Observation {
+        fn check_columns(&self, columns: &[PhysicalColumn]) -> Result<(), DataFailure> {
+            self.inner.check_columns(columns)
+        }
+
+        fn before_statement(&self, position: usize) -> Result<(), DataFailure> {
+            self.inner.before_statement(position)
+        }
+
+        fn before_commit(&self) -> Result<(), DataFailure> {
+            self.inner.before_commit()
+        }
+
+        fn observed_statement(
+            &self,
+            position: usize,
+            result: MutationResult,
+        ) -> Result<(), DataFailure> {
+            if self.lose_observation.swap(false, Ordering::SeqCst) {
+                return Err(DataFailure::Unknown { known: result });
+            }
+            self.inner.observed_statement(position, result)
+        }
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn separately_permitted_database_effect_runs_through_native_gateway_and_operation_journal() {
+    use devworks_core::protocol::results::DomainQueryReply;
+    let _case = crate::common::native_runtime_case();
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let outside = Harness::new();
+    std::fs::create_dir_all(&outside.root).unwrap();
+    let path = outside.root.join("db-target.sqlite");
+    let target = rusqlite::Connection::open(&path).unwrap();
+    target
+        .execute_batch(
+            "CREATE TABLE contacts (id INTEGER PRIMARY KEY, label TEXT, payload BLOB);
+         INSERT INTO contacts VALUES(1,'VISIBLE_DATABASE_ROW',X'0102');",
+        )
+        .unwrap();
+    let commit = seed_migration_repository(&h, &outside.root);
+    let rt = runtime();
+    let adapter = Arc::new(database_commit_fixture::Adapter {
+        native: devworks_adapters::database::NativeDataAdapter::new(vec![h.root.clone()]),
+        lose_observation: Arc::new(AtomicBool::new(false)),
+        sends: AtomicUsize::new(0),
+    });
+    let boot = || {
+        boot_help_with_database(
+            &rt,
+            &h,
+            Arc::new(NativeArtifactFiles::new(
+                h.root.clone(),
+                h.root.with_extension("cache"),
+            )),
+            Some(devworks_engine::schemas::SchemaComposition {
+                reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
+                secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+            }),
+            Some(devworks_engine::schemas::DatabaseComposition {
+                adapter: adapter.clone(),
+                filesystem: Arc::new(NativeFilesystem::new()),
+            }),
+            Some(devworks_engine::git::GitComposition {
+                config: devworks_core::services::git::GitConfig {
+                    filesystem: Some(Arc::new(NativeFilesystem::new())),
+                    roots: vec![devworks_core::services::git::RegisteredGitRoot {
+                        id: id("migration-fixture-root"),
+                        path: outside.root.canonicalize().unwrap(),
+                    }],
+                    deadline: Duration::from_secs(5),
+                    ..Default::default()
+                },
+                github_http: None,
+            }),
+        )
+    };
+    let app = boot();
+    assert!(
+        app.runtime.git().is_some(),
+        "migration fixture requires qualified Git"
+    );
+    let available = |name, exposure, writes, projects: Value| {
+        value(app.command("schemas.configure", json!({"scope":{"kind":"Workspace"},
+            "config":{"name":name,"engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],
+                "includePatterns":[],"excludePatterns":[],"writesEnabled":writes,
+                "enabled":true,"projectAccess":projects,"workspaceExposed":false,"exposureMode":exposure,
+                "authentication":"File"}
+        }),5))
+    };
+    let enabled = available("Enabled connection", "ReadWrite", true, json!([]));
+    let disabled = available("Metadata only", "SchemaOnly", false, json!([]));
+    let shared = available(
+        "Project A connection",
+        "ReadWrite",
+        true,
+        json!([{"projectId":"project-a","metadataEnabled":true,"dataReadEnabled":true,"dataWriteEnabled":true}]),
+    );
+    verify_database_project_role(&app, &enabled, &shared);
+    assert_eq!(adapter.sends.load(Ordering::SeqCst), 0);
+    let read_data = |connection: &Value, text: &str| {
+        let bytes = serde_json::to_vec(&json!({
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"database-read",
+            "body":{"kind":"database.read","connectionId":connection["id"],
+                "expectedConnectionRevision":connection["revision"],"statement":text,
+                "parameters":[],"rowLimit":100,"timeoutMs":"30000","includeSchemaDigest":true}
+        }))
+        .unwrap();
+        app.runtime
+            .query(&app.user(), "database.read", &bytes)
+            .unwrap()
+    };
+    assert!(matches!(
+        read_data(&disabled, "SELECT id FROM contacts"),
+        DomainQueryReply::Rejected { .. }
+    ));
+    let reply = read_data(&enabled, "SELECT id,label,payload FROM contacts");
+    let DomainQueryReply::Result {
+        result: OperationResult::DatabaseRead { value: answer },
+        ..
+    } = reply
+    else {
+        panic!("authorized native database read: {reply:?}");
+    };
+    assert_eq!(answer.rows.0.len(), 1);
+    assert!(answer.schema_digest.is_some());
+    let artifact = match &answer.rows.0[0].cells.0[2] {
+        devworks_core::protocol::records::DbScalar::Bytes { value } => value.clone(),
+        _ => panic!("expected a scoped native artifact"),
+    };
+    let read_artifact = || {
+        app.runtime
+            .artifacts()
+            .read_exact(app.store.as_ref(), &app.user(), &artifact, 100)
+    };
+    assert_eq!(read_artifact().unwrap().0, [1, 2]);
+
+    let saved = value(app.command(
+        "database.edit_sensitive_column_rules",
+        json!({
+            "expectedRevision":"1","edit":{"kind":"Upsert","rule":{
+                "id":"deny-database-payload","table":"contacts","column":"payload","allow":false
+            }}
+        }),
+        1,
+    ));
+    assert_eq!(saved["revision"], "2");
+    assert!(read_artifact().is_err());
+    assert!(matches!(
+        read_data(&enabled, "SELECT payload AS alias FROM contacts"),
+        DomainQueryReply::Rejected { .. }
+    ));
+
+    let response = app.command(
+        "database.execute_write",
+        json!({
+            "connectionId":enabled["id"],"expectedConnectionRevision":enabled["revision"],
+            "statement":"INSERT INTO contacts(id,label) VALUES(2,'PRIVATE_WRITE_MATERIAL')",
+            "parameters":[],"timeoutMs":"5000"
+        }),
+        2,
+    );
+    let CommandReply::Recorded { receipt, .. } = response else {
+        panic!("{response:?}")
+    };
+    let DomainDecision::Accepted { operation_id } = receipt.decision else {
+        panic!("{:?}", receipt.decision)
+    };
+    rt.block_on(app.runtime.dispatcher().run_until_idle())
+        .unwrap();
+    let journal = read(app.store.as_ref(), |read| {
+        read.operations().operation(&operation_id)
+    })
+    .unwrap();
+    assert_eq!(
+        journal.state,
+        OperationState::ObservedComplete,
+        "{:?}",
+        journal.latest_attempt()
+    );
+    assert!(
+        !journal
+            .payload
+            .to_string()
+            .contains("PRIVATE_WRITE_MATERIAL")
+    );
+    assert!(
+        journal
+            .latest_attempt()
+            .unwrap()
+            .observations
+            .iter()
+            .any(|entry| entry["completed"] == true)
+    );
+    let observed: i64 = target
+        .query_row("SELECT count(*) FROM contacts WHERE id=2", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(observed, 1);
+    verify_database_schema_effects(&rt, &app, &enabled, &disabled, &commit, &target);
+    assert_eq!(adapter.sends.load(Ordering::SeqCst), 3);
+    let current = source(&app, &id(enabled["id"].as_str().unwrap())).connection;
+    let enabled = json!({"id":current.id,"revision":current.revision});
+    adapter.lose_observation.store(true, Ordering::SeqCst);
+    let request = serde_json::to_vec(&json!({
+        "mode":"Command","protocol":PROTOCOL,"schemaRevision":2,
+        "requestKey":"database-fixture-post-commit-loss",
+        "body":{"kind":"database.execute_write",
+            "connectionId":enabled["id"],"expectedConnectionRevision":enabled["revision"],
+            "statement":"INSERT INTO contacts(id,label) VALUES(3,'COMMITTED_WITHOUT_OBSERVATION')",
+            "parameters":[],"timeoutMs":"5000"}
+    }))
+    .unwrap();
+    let command = |app: &HelpApp| {
+        app.runtime
+            .command(&app.user(), "database.execute_write", &request)
+            .unwrap()
+    };
+    let CommandReply::Recorded { receipt, .. } = command(&app) else {
+        panic!("the write did not receive a durable receipt")
+    };
+    let DomainDecision::Accepted { operation_id } = receipt.decision else {
+        panic!("the write was not admitted")
+    };
+    let state = |app: &HelpApp| {
+        read(app.store.as_ref(), |read| {
+            read.operations().operation(&operation_id)
+        })
+        .unwrap()
+        .state
+    };
+    let row_count = || {
+        target
+            .query_row("SELECT count(*) FROM contacts WHERE id=3", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    rt.block_on(app.runtime.dispatcher().run_until_idle())
+        .unwrap();
+    assert_eq!(state(&app), OperationState::OutcomeUnknown);
+    assert_eq!(row_count(), 1);
+    assert_eq!(adapter.sends.load(Ordering::SeqCst), 4);
+    assert!(rt.block_on(app.runtime.shutdown()).reconciliation.is_ok());
+    drop(app);
+
+    let restarted = boot();
+    assert!(matches!(
+        command(&restarted),
+        CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Accepted { operation_id: existing } if existing == &operation_id)
+    ));
+    rt.block_on(restarted.runtime.dispatcher().observe_unknown())
+        .unwrap();
+    assert_eq!(state(&restarted), OperationState::OutcomeUnknown);
+    assert_eq!(adapter.sends.load(Ordering::SeqCst), 4);
+    assert_eq!(row_count(), 1);
+    assert!(
+        rt.block_on(restarted.runtime.shutdown())
+            .reconciliation
+            .is_ok()
+    );
+}
+
+#[cfg(unix)]
+fn verify_database_project_role(app: &HelpApp, private: &Value, shared: &Value) {
+    use devworks_core::ports::storage::NewPrincipalBinding;
+    use devworks_core::protocol::{ActorId, ProjectId, results::DomainQueryReply};
+    let human = app.user();
+    let actor = ActorId(id("database-reviewer"));
+    let bound = actor.clone();
+    let host = human.clone();
+    write(app.store.as_ref(), move |tx| {
+        tx.actors()
+            .register(&bound, PrincipalKind::Agent, "Database reviewer")?;
+        devworks_core::authority::service::bind_principal(
+            tx,
+            &host,
+            NewPrincipalBinding {
+                actor: bound,
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::CodeReviewer),
+                project_id: Some(ProjectId(id("project-a"))),
+                tool_families: None,
+                bound_by: host.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
+        Ok(())
+    })
+    .unwrap();
+    let reviewer = HostIngress::new(app.store.as_ref())
+        .context(
+            actor,
+            PrincipalKind::Agent,
+            id("database-reviewer-call"),
+            id("database-reviewer-tools"),
+            Counter::new(app.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_lineage(Some(ProjectId(id("project-a"))), None, None);
+    let scope = json!({"kind":"Project","projectId":"project-a"});
+    let query = |context: &InvocationContext, connection: &Value| {
+        let frame = json!({
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"database-project-read",
+            "body":{"kind":"database.read","scope":scope,"connectionId":connection["id"],
+                "expectedConnectionRevision":connection["revision"],"statement":"SELECT id FROM contacts",
+                "parameters":[],"rowLimit":10,"timeoutMs":"5000"}
+        });
+        app.runtime
+            .query(context, "database.read", frame.to_string().as_bytes())
+            .unwrap()
+    };
+    assert!(matches!(
+        query(&human, private),
+        DomainQueryReply::Rejected { .. }
+    ));
+    assert!(matches!(
+        query(&human, shared),
+        DomainQueryReply::Result { .. }
+    ));
+    let admitted = query(&reviewer, shared);
+    assert!(
+        matches!(admitted, DomainQueryReply::Result { .. }),
+        "{admitted:?}"
+    );
+    let frame = json!({
+        "mode":"Command","protocol":PROTOCOL,"schemaRevision":2,
+        "requestKey":"database-reviewer-write",
+        "body":{"kind":"database.execute_write","scope":scope,"connectionId":shared["id"],
+            "expectedConnectionRevision":shared["revision"],
+            "statement":"INSERT INTO contacts(id,label) VALUES(9,'MUST_NOT_REACH_TARGET')",
+            "parameters":[],"timeoutMs":"5000"}
+    });
+    let denied = app
+        .runtime
+        .command(
+            &reviewer,
+            "database.execute_write",
+            frame.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(
+        !matches!(denied,CommandReply::Recorded { receipt, .. } if matches!(receipt.decision,DomainDecision::Accepted { .. }))
+    );
+}
+
+#[cfg(unix)]
+const MIGRATION_SQL: &str = "ALTER TABLE contacts ADD archived INTEGER DEFAULT 0;";
+
+#[cfg(unix)]
+fn seed_migration_repository(h: &Harness, outside: &std::path::Path) -> String {
+    use devworks_core::protocol::ProjectId;
+    let repository = outside.join("migration-repository");
+    std::fs::create_dir(&repository).unwrap();
+    let repository = repository.canonicalize().unwrap();
+    let git = |args: &[&str]| {
+        let result = std::process::Command::new("git")
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(args)
+            .current_dir(&repository)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "fixture git: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-b", "main"]);
+    std::fs::write(repository.join("001.sql"), MIGRATION_SQL).unwrap();
+    git(&["add", "001.sql"]);
+    git(&["commit", "-m", "Version the fixture migration"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let location = repository.to_str().unwrap().to_owned();
+    let store = h.open();
+    write(store.as_ref(), move |tx| {
+        tx.projects()
+            .insert_repository(&devworks_core::ports::storage::StoredRepository {
+                id: id("migration-repo"),
+                location,
+                name: "Migration fixture".into(),
+                remote_url: None,
+                primary: true,
+                lifecycle: "Active".into(),
+                languages: vec![],
+                revision: 1,
+                registered_at_ms: 0,
+            })?;
+        tx.projects()
+            .set_members(&ProjectId(id("project-a")), &[id("migration-repo")])
+    })
+    .unwrap();
+    commit
+}
+
+#[cfg(unix)]
+fn verify_database_schema_effects(
+    rt: &tokio::runtime::Runtime,
+    app: &HelpApp,
+    enabled: &Value,
+    disabled: &Value,
+    commit: &str,
+    target: &rusqlite::Connection,
+) {
+    use devworks_core::protocol::results::DomainQueryReply;
+    let digest = |connection: &Value| {
+        let frame = json!({
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"migration-precondition",
+            "body":{"kind":"database.read","connectionId":connection["id"],
+                "expectedConnectionRevision":connection["revision"],"statement":"SELECT 1",
+                "parameters":[],"rowLimit":1,"timeoutMs":"5000","includeSchemaDigest":true}
+        });
+        let reply = app
+            .runtime
+            .query(&app.user(), "database.read", frame.to_string().as_bytes())
+            .unwrap();
+        let DomainQueryReply::Result {
+            result: OperationResult::DatabaseRead { value },
+            ..
+        } = reply
+        else {
+            panic!("failed to read migration schema digest: {reply:?}");
+        };
+        value.schema_digest.unwrap()
+    };
+    let save_artifact = |sql: &[u8]| {
+        let artifacts = app.runtime.artifacts().clone();
+        let staged = artifacts
+            .stage_host_bytes(app.store.as_ref(), sql, json!({"kind":"FixtureMigration"}))
+            .unwrap()
+            .unwrap();
+        let pending = staged.clone();
+        let publisher = artifacts.clone();
+        let result = write(app.store.as_ref(), move |tx| {
+            publisher.commit_host_bytes(
+                tx,
+                &pending,
+                "Fixture migration",
+                "application/sql",
+                json!({}),
+            )
+        })
+        .unwrap();
+        artifacts.settle_host_bytes(app.store.as_ref(), &staged, true);
+        devworks_core::services::artifacts::version_ref(&result)
+    };
+    let expected = digest(enabled);
+    let migrated = |connection: &Value, artifact| {
+        json!({
+            "connectionId":connection["id"], "expectedConnectionRevision":connection["revision"],
+            "expectedSchemaDigest":expected, "migration":artifact,
+            "source":{"repositoryId":"migration-repo","commit":{"format":"Sha1","hex":commit},"path":"001.sql"}
+        })
+    };
+    let own = save_artifact(MIGRATION_SQL.as_bytes());
+    let wrong = save_artifact(b"CREATE TABLE unrelated(x int)");
+    let accepted = |reply| matches!(reply,CommandReply::Recorded { receipt, .. } if matches!(receipt.decision,DomainDecision::Accepted { .. }));
+    for (connection, material) in [(disabled, own.clone()), (enabled, wrong)] {
+        assert!(!accepted(app.command(
+            "database.apply_migration",
+            migrated(connection, material),
+            2
+        )));
+    }
+    let settle = |reply| {
+        let CommandReply::Recorded { receipt, .. } = reply else {
+            panic!("expected receipt: {reply:?}");
+        };
+        let DomainDecision::Accepted { operation_id } = receipt.decision else {
+            panic!("expected accepted operation: {receipt:?}");
+        };
+        rt.block_on(app.runtime.dispatcher().run_until_idle())
+            .unwrap();
+        let operation = read(app.store.as_ref(), |r| {
+            r.operations().operation(&operation_id)
+        })
+        .unwrap();
+        assert_eq!(
+            operation.state,
+            OperationState::ObservedComplete,
+            "{:?}",
+            operation.latest_attempt()
+        );
+    };
+    settle(app.command("database.apply_migration", migrated(enabled, own), 2));
+    let connection = source(app, &id(enabled["id"].as_str().unwrap())).connection;
+    let selected = json!({"id":connection.id,"revision":connection.revision});
+    assert_eq!(
+        target
+            .query_row("SELECT archived FROM contacts WHERE id=1", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let direct = |sql: &str| {
+        json!({
+            "connectionId":selected["id"],"expectedConnectionRevision":selected["revision"],
+            "expectedSchemaDigest":digest(&selected),"fallbackReason":"Fixture emergency repair",
+            "statement":sql,"parameters":[],"timeoutMs":"5000"
+        })
+    };
+    assert!(!accepted(app.command(
+        "database.direct_schema_change",
+        direct("ALTER TABLE contacts RENAME COLUMN payload TO unprotected"),
+        2
+    )));
+    settle(app.command(
+        "database.direct_schema_change",
+        direct("CREATE TABLE direct_repair_marker (id INTEGER PRIMARY KEY)"),
+        2,
+    ));
+    assert_eq!(
+        target
+            .query_row("SELECT count(*) FROM direct_repair_marker", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+}

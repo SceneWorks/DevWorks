@@ -503,6 +503,58 @@ impl ArtifactService {
         Ok((bytes, provenance))
     }
 
+    /// Reads a private effect input whose reference and provenance came from the operation
+    /// journal. Database intent contents are unreachable through ordinary artifact queries.
+    pub(crate) fn read_database_intent(
+        &self,
+        store: &dyn ApplicationStore,
+        operation: &crate::protocol::OperationId,
+        reference: &ArtifactRef,
+        maximum: u64,
+    ) -> Result<Vec<u8>, StorageError> {
+        let digest = reference.sha256.as_str();
+        let length = reference.byte_length.get() as u64;
+        if length > maximum {
+            return Err(StorageError::ScopeDenied);
+        }
+        let _hold = self.readers.acquire(digest);
+        let generation = read_snapshot(store, &ReadOptions::default(), |snapshot| {
+            let artifacts = snapshot.artifacts();
+            let artifact = artifacts
+                .artifact(&reference.artifact_id)?
+                .filter(|artifact| {
+                    artifact.state == ArtifactState::Live
+                        && artifact.owner.as_ref() == Some(&store.info().host_actor)
+                        && super::database_intent(artifact)
+                        && artifact.provenance["derived"]["operationId"].as_str()
+                            == Some(operation.0.as_str())
+                })
+                .ok_or(StorageError::ScopeDenied)?;
+            let version = artifacts
+                .version(&reference.version_id)?
+                .filter(|version| {
+                    version.live()
+                        && version.artifact_id == artifact.id
+                        && version.blob_digest == digest
+                        && version.byte_count as u64 == length
+                        && version.media_type == reference.media_type
+                })
+                .ok_or(StorageError::ScopeDenied)?;
+            Ok(version.blob_generation)
+        })?;
+        let mut bytes = Vec::with_capacity(length as usize);
+        self.files
+            .open(digest, &generation, length)
+            .map_err(|_| StorageError::ViewUnavailable)?
+            .take(maximum + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| StorageError::ViewUnavailable)?;
+        if bytes.len() as u64 != length || sha256_hex(&bytes) != digest {
+            return Err(StorageError::ViewUnavailable);
+        }
+        Ok(bytes)
+    }
+
     /// Opens a stream handle for its principal after re-authorizing the operation that issued
     /// it and re-checking that the version is still live and visible. The returned stream holds
     /// a reader on the blob until dropped.

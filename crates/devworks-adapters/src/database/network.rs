@@ -1,10 +1,12 @@
 //! Explicit native wire clients; no connection strings, ambient password files or caller SQL.
 use super::*;
-use devworks_core::protocol::records::{DbEngine, SchemaAuthMode, SchemaTlsMode};
+use devworks_core::ports::secrets::Secret;
+use devworks_core::protocol::records::{ConnectionConfig, DbEngine, SchemaAuthMode, SchemaTlsMode};
 use std::net::IpAddr;
 use std::time::Duration;
 
 mod catalog;
+pub mod data;
 mod mysql;
 mod postgres;
 mod sql_server;
@@ -18,7 +20,7 @@ impl MetadataReader for NetworkMetadataReader {
             // builder selects ring explicitly. Tiberius also compiles aws-lc; preserve
             // the app's ring default without replacing any provider already installed.
             let _ = rustls::crypto::ring::default_provider().install_default();
-            let target = Target::parse(&request)?;
+            let target = Target::parse(&request.config, WireCredentials::metadata(&request))?;
             let token = request.cancellation.clone();
             let deadline = request.limits.deadline;
             let cancelled = async {
@@ -46,6 +48,28 @@ impl MetadataReader for NetworkMetadataReader {
         })
     }
 }
+#[derive(Clone, Copy)]
+struct WireCredentials<'a> {
+    password: Option<&'a Secret>,
+    ca: Option<&'a [u8]>,
+}
+
+impl<'a> WireCredentials<'a> {
+    fn metadata(request: &'a MetadataRequest) -> Self {
+        Self {
+            password: request.password.as_ref(),
+            ca: request.ca_certificate.as_deref(),
+        }
+    }
+
+    fn password(self) -> Result<&'a str, MetadataFailure> {
+        self.password
+            .filter(|secret| !secret.is_empty())
+            .map(Secret::expose)
+            .ok_or(MetadataFailure::CredentialsRequired)
+    }
+}
+
 struct Target {
     host: String,
     port: u16,
@@ -54,15 +78,18 @@ struct Target {
     tls: SchemaTlsMode,
 }
 impl Target {
-    fn parse(request: &MetadataRequest) -> Result<Self, MetadataFailure> {
-        let scheme = match request.config.engine {
+    fn parse(
+        config: &ConnectionConfig,
+        credentials: WireCredentials<'_>,
+    ) -> Result<Self, MetadataFailure> {
+        let scheme = match config.engine {
             DbEngine::MariaDb => "mariadb",
             DbEngine::MySql => "mysql",
             DbEngine::Postgres => "postgres",
             DbEngine::SqlServer => "sqlserver",
             DbEngine::Sqlite => return Err(MetadataFailure::UnsupportedProfile),
         };
-        let url = url::Url::parse(request.config.endpoint.0.as_str())
+        let url = url::Url::parse(config.endpoint.0.as_str())
             .map_err(|_| MetadataFailure::InvalidTarget)?;
         if url.scheme() != scheme
             || !url.username().is_empty()
@@ -77,7 +104,7 @@ impl Target {
             .ok_or(MetadataFailure::InvalidTarget)?
             .trim_matches(['[', ']'])
             .to_owned();
-        let port = url.port().unwrap_or(match request.config.engine {
+        let port = url.port().unwrap_or(match config.engine {
             DbEngine::MariaDb | DbEngine::MySql => 3306,
             DbEngine::Postgres => 5432,
             DbEngine::SqlServer => 1433,
@@ -100,38 +127,25 @@ impl Target {
             return Err(MetadataFailure::InvalidTarget);
         }
         if !catalog.is_empty()
-            && !request.config.catalogs.0.is_empty()
-            && !request
-                .config
-                .catalogs
-                .0
-                .iter()
-                .any(|v| v.0.as_str() == catalog)
+            && !config.catalogs.0.is_empty()
+            && !config.catalogs.0.iter().any(|v| v.0.as_str() == catalog)
         {
             return Err(MetadataFailure::InvalidTarget);
         }
-        if !matches!(
-            request.config.authentication,
-            Some(SchemaAuthMode::Password)
-        ) {
+        if !matches!(config.authentication, Some(SchemaAuthMode::Password)) {
             return Err(MetadataFailure::UnsupportedProfile);
         }
-        let username = request
-            .config
+        let username = config
             .username
             .as_ref()
             .ok_or(MetadataFailure::CredentialsRequired)?
             .0
             .as_str()
             .to_owned();
-        if username.is_empty() || request.password.as_ref().is_none_or(|p| p.is_empty()) {
+        if username.is_empty() || credentials.password().is_err() {
             return Err(MetadataFailure::CredentialsRequired);
         }
-        let tls = request
-            .config
-            .tls
-            .clone()
-            .unwrap_or(SchemaTlsMode::VerifyFull);
+        let tls = config.tls.clone().unwrap_or(SchemaTlsMode::VerifyFull);
         if matches!(tls, SchemaTlsMode::LoopbackPlaintext)
             && !host
                 .parse::<IpAddr>()
@@ -139,7 +153,7 @@ impl Target {
         {
             return Err(MetadataFailure::InvalidTarget);
         }
-        if matches!(tls, SchemaTlsMode::LoopbackPlaintext) && request.ca_certificate.is_some() {
+        if matches!(tls, SchemaTlsMode::LoopbackPlaintext) && credentials.ca.is_some() {
             return Err(MetadataFailure::UnsupportedProfile);
         }
         Ok(Self {

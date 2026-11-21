@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-19",
-  "catalogSha256": "ecba2423d1b209a5d74e32b555fcab73cd27564dbe6607fbae46eac00361090b",
+  "catalogSha256": "65cbae4c70d2f2b698dd23eccd6e2c63bf473691cb6abfdefc1063d49e51139f",
   "familyCount": 50,
-  "operationCount": 382,
-  "concreteInputCandidates": 382,
+  "operationCount": 385,
+  "concreteInputCandidates": 385,
   "domainInputsPending": 0,
   "families": [
     {
@@ -7225,6 +7225,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -7271,6 +7279,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7317,6 +7333,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7363,6 +7387,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7422,6 +7454,152 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
+          "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "database.mysql_readonly_query",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "database.mysql_readonly_query",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "database.mysql_readonly_query"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "database.mysql_readonly_query"
+          },
+          "resultValueType": "DatabaseLegacyRows",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "ExternalRead",
+          "semanticRules": "Explicitly exposed read-only MySQL source selected by ID, display name, or unique logical endpoint identity. One bounded statement, 100 rows by default, a 500-row ceiling, and the shared data policy and native read boundary.",
+          "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "database.sensitive_columns",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "database.sensitive_columns",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "database.sensitive_columns"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "database.sensitive_columns"
+          },
+          "resultValueType": "DatabaseSensitiveRuleSet",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The workspace administrator lists default or source-owned sensitivity definitions.",
+          "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "database.edit_sensitive_column_rules",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "database.edit_sensitive_column_rules",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "database.edit_sensitive_column_rules"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "database.edit_sensitive_column_rules"
+          },
+          "resultValueType": "DatabaseSensitiveRuleSet",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The workspace administrator makes a compare-and-set rule upsert or delete within the selected scope.",
           "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

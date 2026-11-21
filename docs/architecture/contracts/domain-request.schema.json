@@ -618,6 +618,104 @@
         }
       ]
     },
+    "DatabaseSensitiveColumnRule": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "boolean"
+        },
+        "catalog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "column": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "column",
+        "allow"
+      ],
+      "type": "object"
+    },
+    "DatabaseSensitiveRuleEdit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Upsert",
+              "type": "string"
+            },
+            "rule": {
+              "$ref": "#/$defs/DatabaseSensitiveColumnRule"
+            }
+          },
+          "required": [
+            "kind",
+            "rule"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "DbEngine": {
       "enum": [
         "Sqlite",
@@ -2861,6 +2959,37 @@
             "connectionId",
             "expectedRevision",
             "columnIds"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edit": {
+              "$ref": "#/$defs/DatabaseSensitiveRuleEdit"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "database.edit_sensitive_column_rules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "expectedRevision",
+            "edit"
           ],
           "type": "object"
         },
@@ -7139,6 +7268,67 @@
             "parameters",
             "rowLimit",
             "timeoutMs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "database.mysql_readonly_query",
+              "type": "string"
+            },
+            "limit": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataScope"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "sql": {
+              "$ref": "#/$defs/Text0To65536"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "sql"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "database.sensitive_columns",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
           ],
           "type": "object"
         },

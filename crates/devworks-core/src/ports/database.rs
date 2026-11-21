@@ -85,3 +85,7 @@ pub trait MetadataReader: Send + Sync {
     /// Owns connection/transaction lifetime through physical close, including cancellation.
     fn read(&self, request: MetadataRequest) -> MetadataFuture;
 }
+
+/// A driver receives only statements already classified by the operation owner. It still
+/// resolves the physical source and enforces the applicable session/transaction boundary.
+pub mod data;

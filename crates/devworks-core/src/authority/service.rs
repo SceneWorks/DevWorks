@@ -805,6 +805,9 @@ pub(crate) fn decide_in(
     {
         return Err(deny(DenialReason::UnregisteredPrincipal));
     }
+    let selected = crate::services::database::authority_scope(ctx, request.input)
+        .map_err(|_| deny(DenialReason::OutOfProjectScope))?;
+    let ctx = selected.as_ref().unwrap_or(ctx);
     let binding = bound(s, ctx).map_err(unavailable)?;
     let policy = resolve_policy(s.configuration(), ctx.project_id()).map_err(unavailable)?;
     // A pushed ref is also protected when it is its repository's default branch.
@@ -846,6 +849,18 @@ pub(crate) fn decide_in(
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
+    if !matches!(verdict, Verdict::Deny(_))
+        && let Some(fence) = crate::services::database::mutation_fence(s, ctx, request.input)
+            .map_err(|error| {
+                if matches!(error, StorageError::ScopeDenied) {
+                    deny(DenialReason::OutOfProjectScope)
+                } else {
+                    unavailable(error)
+                }
+            })?
+    {
+        fences.push(fence);
+    }
     if let Some((id, digest)) = ownership {
         fences.push(AuthorityFence::GitWorktree { id, digest });
     }
@@ -1036,6 +1051,11 @@ pub fn fences_hold(
                     tx, operation, request,
                 )?
             }
+            AuthorityFence::DatabaseSource { id, revision } => {
+                tx.schemas().schema_source(id)?.is_some_and(|source| {
+                    !source.deleted && source.connection.revision.get() == *revision
+                })
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
@@ -1092,6 +1112,11 @@ pub fn authorization_holds(
                 crate::services::graph::repository_analysis::dispatch_binding_snapshot(
                     s, operation, request,
                 )?
+            }
+            AuthorityFence::DatabaseSource { id, revision } => {
+                s.schemas().schema_source(id)?.is_some_and(|source| {
+                    !source.deleted && source.connection.revision.get() == *revision
+                })
             }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)

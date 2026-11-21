@@ -146,6 +146,38 @@ fn relations(
 macro_rules! reads {
     ($t:ty) => {
         impl SchemaRead for $t {
+            fn mysql_readonly_sources(&self) -> Result<Vec<StoredSchemaSource>, StorageError> {
+                let mut statement = db(self.conn.prepare(
+                    "SELECT body_json FROM schema_sources WHERE deleted=0
+                     AND json_extract(body_json,'$.connection.engine') IN('MySql','MariaDb')
+                     AND json_extract(body_json,'$.connection.config.exposureMode')='ReadOnly'
+                     ORDER BY id LIMIT 501",
+                ))?;
+                let rows = db(db(statement.query_map([], |row| row.get::<_, String>(0)))?
+                    .collect::<rusqlite::Result<Vec<_>>>())?;
+                if rows.len() > 500 {
+                    return Err(StorageError::Busy);
+                }
+                rows.into_iter().map(decode).collect()
+            }
+            fn sensitive_policy(
+                &self,
+                source: Option<&Id>,
+            ) -> Result<SensitivePolicy, StorageError> {
+                let key = source.map_or("", Id::as_str);
+                let body = db(self
+                    .conn
+                    .query_row(
+                        "SELECT policy_json FROM database_sensitive_policies WHERE source_key=?1",
+                        [key],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional())?;
+                body.map(decode)
+                    .transpose()
+                    .map(|policy| policy.unwrap_or_default())
+            }
+
             fn schema_certificate(
                 &self,
                 connection: &Id,
@@ -263,6 +295,37 @@ macro_rules! reads {
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl SchemaRepository for Unit<'_> {
+    fn set_sensitive_policy(
+        &mut self,
+        source: Option<&Id>,
+        expected: i64,
+        policy: &SensitivePolicy,
+    ) -> Result<(), StorageError> {
+        if expected.checked_add(1) != Some(policy.revision)
+            || policy.rules.len() > 500
+            || policy.legacy_columns.len() > 500
+        {
+            return Err(invalid("invalid database sensitive policy"));
+        }
+        let current = self.sensitive_policy(source)?.revision;
+        if current != expected {
+            return Err(conflict_strict(
+                devworks_core::protocol::RevisionDimension::Configuration,
+                "database_sensitive_policy",
+                source.map_or("workspace", Id::as_str),
+                expected.saturating_add(1),
+                current.saturating_add(1),
+            ));
+        }
+        let key = source.map_or("", Id::as_str);
+        db(self.conn.execute(
+            "INSERT INTO database_sensitive_policies(source_key,source_id,policy_json)
+             VALUES(?1,?2,?3) ON CONFLICT(source_key) DO UPDATE SET policy_json=excluded.policy_json",
+            params![key, source.map(Id::as_str), encode(policy)?],
+        ))?;
+        Ok(())
+    }
+
     fn set_schema_certificate(
         &mut self,
         connection: &Id,

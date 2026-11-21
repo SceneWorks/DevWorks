@@ -731,6 +731,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "a604659ef41800df6389f9094fd42f27c15e4d7623d8718a9efae1c533d1ae01",
         rebuilds_tables: false,
     },
+    // Older readers ignore this workspace/source policy. Require current writers to preserve it.
+    Migration {
+        version: 65,
+        minimum_reader: 57,
+        minimum_writer: 65,
+        sql: include_str!("migrations/0065_database_sensitive_policy.sql"),
+        expected_sha256: "a702716325ba7e39d34906db691762fdb215b7321b67e2ea2bd5fa637901ab69",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

@@ -86,6 +86,13 @@ class SchemaRevisionRules(unittest.TestCase):
             'conventions.resources', 'conventions.version',
             'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
             'schemas.configure', 'database.configure_sensitive_columns', 'schemas.code_references',
+            'database.read', 'database.execute_write', 'database.apply_migration',
+            'database.direct_schema_change', 'database.mysql_readonly_query',
+            'analysis.health', 'analysis.cross_repo_links', 'analysis.community_analysis',
+            'analysis.status', 'analysis.clusters', 'analysis.cluster_detail', 'analysis.link_and_detect',
+            'analysis.process_batch', 'analysis.security', 'analysis.metrics', 'analysis.hotspots',
+            'analysis.reanalyze', 'analysis.synthesize', 'analysis.fleet_health',
+            'analysis.archival_candidates', 'analysis.file_hotspot',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
             'agents.history', 'agents.events', 'skills.resources', *MCP,
@@ -112,6 +119,9 @@ class SchemaRevisionRules(unittest.TestCase):
         for name in ('schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
                      'schemas.configure', 'database.configure_sensitive_columns'):
             self.assertEqual(carried[name], {5})
+        for name in ('database.read', 'database.execute_write', 'database.apply_migration',
+                     'database.direct_schema_change', 'database.mysql_readonly_query'):
+            self.assertEqual(carried[name], {2})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         for name in ('desktop.inspect', 'desktop.capture', 'desktop.request_control',

@@ -467,6 +467,12 @@ async fn compose(
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
         secrets: secrets.clone(),
     });
+    runtime_config.database = Some(devworks_engine::schemas::DatabaseComposition {
+        adapter: Arc::new(devworks_adapters::database::NativeDataAdapter::new(vec![
+            config.data_root.clone(),
+        ])),
+        filesystem: Arc::new(devworks_adapters::fs::NativeFilesystem::new()),
+    });
     // The configured executable names (`tools.processExecutables`), each resolved on PATH
     // when a tool first selects it: nothing scans PATH before the first frame.
     let executables = Arc::new(

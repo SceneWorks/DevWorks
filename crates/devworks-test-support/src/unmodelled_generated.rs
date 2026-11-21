@@ -137,6 +137,14 @@ impl ArtifactRead for Unmodelled {
     ) -> Result<bool, StorageError> {
         unmodelled()
     }
+    fn database_artifact_available(
+        &self,
+        _: &DatabaseArtifactAccess,
+        _: &ActorId,
+        _: Option<&ProjectId>,
+    ) -> Result<bool, StorageError> {
+        unmodelled()
+    }
     fn links(&self, _: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         unmodelled()
     }
@@ -3214,6 +3222,12 @@ impl RunRepository for Unmodelled {
     }
 }
 impl SchemaRead for Unmodelled {
+    fn mysql_readonly_sources(&self) -> Result<Vec<StoredSchemaSource>, StorageError> {
+        unmodelled()
+    }
+    fn sensitive_policy(&self, _: Option<&Id>) -> Result<SensitivePolicy, StorageError> {
+        unmodelled()
+    }
     fn schema_certificate(&self, _: &Id) -> Result<Option<StoredSchemaCertificate>, StorageError> {
         unmodelled()
     }
@@ -3273,6 +3287,14 @@ impl SchemaRead for Unmodelled {
     }
 }
 impl SchemaRepository for Unmodelled {
+    fn set_sensitive_policy(
+        &mut self,
+        _: Option<&Id>,
+        _: i64,
+        _: &SensitivePolicy,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn set_schema_certificate(
         &mut self,
         _: &Id,

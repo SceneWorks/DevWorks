@@ -39,6 +39,8 @@ sqlite-vec = "=0.1.7"
 # Native target metadata readers; SQLite target files reuse the bundled rusqlite above. MySQL and
 # SQL Server use rustls with the bundled roots; PostgreSQL uses native-tls (the OS store).
 sqlx = { version = "=0.9.0", default-features = false, features = ["mysql-rsa", "runtime-tokio", "tls-rustls-ring-webpki"] }
+# Enable dates on the MySQL driver only.
+sqlx-mysql = { version = "=0.9.0", default-features = false, features = ["chrono"] }
 tiberius = { version = "=0.13.0", default-features = false, features = ["tds73", "rustls-webpki-roots"] }
 futures-util = { version = "=0.3.32", default-features = false, features = ["std", "async-await", "sink"] }
 tokio-util = { version = "=0.7.20", default-features = false, features = ["compat"] }

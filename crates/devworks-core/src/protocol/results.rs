@@ -310,6 +310,12 @@ pub enum OperationResult {
     DatabaseDirectSchemaChange { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch { value: Page<KnowledgeClaim> },
     #[serde(rename = "knowledge.read")]
@@ -956,6 +962,9 @@ impl OperationResult {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeRecord { .. } => "knowledge.record",
@@ -1346,6 +1355,9 @@ impl Check for OperationResult {
             Self::DatabaseApplyMigration { value } => value.check()?,
             Self::DatabaseDirectSchemaChange { value } => value.check()?,
             Self::DatabaseConfigureSensitiveColumns { value } => value.check()?,
+            Self::DatabaseMysqlReadonlyQuery { value } => value.check()?,
+            Self::DatabaseSensitiveColumns { value } => value.check()?,
+            Self::DatabaseEditSensitiveColumnRules { value } => value.check()?,
             Self::KnowledgeSearch { value } => value.check()?,
             Self::KnowledgeRead { value } => value.check()?,
             Self::KnowledgeRecord { value } => value.check()?,
@@ -1678,7 +1690,9 @@ impl Revisioned for OperationResult {
             Self::SchemasConnections { value } => value.retain_revision(revision),
             Self::SchemasObjects { value } => value.retain_revision(revision),
             Self::SchemasConfigure { value } => value.retain_revision(revision),
+            Self::DatabaseRead { value } => value.retain_revision(revision),
             Self::DatabaseConfigureSensitiveColumns { value } => value.retain_revision(revision),
+            Self::DatabaseMysqlReadonlyQuery { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
             Self::KnowledgeRecord { value } => value.retain_revision(revision),

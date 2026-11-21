@@ -86,6 +86,11 @@ impl Screen for DatabasesScreen {
             self.clear_explorer();
             self.connections.reset();
         }
+        if self.data.operation_project.as_deref() == Some(p) {
+            self.data.operation = None;
+            self.data.operation_project = None;
+            self.data.operation_state = None;
+        }
         if let Some(d) = &mut self.draft {
             if let Some(a) = d
                 .config
@@ -138,6 +143,7 @@ impl DatabasesCtl<'_, '_> {
             lists.relations.reset();
             lists.code_references.reset();
             *self.databases = Default::default();
+            self.databases.data.query_generation = lists.data.query_generation.wrapping_add(1);
             self.databases.connections = lists.connections;
             self.databases.scan = lists.scan;
             self.databases.objects = lists.objects;
@@ -661,6 +667,40 @@ impl DatabasesCtl<'_, '_> {
                 repository: r.repository_id.as_str().into(),
                 node: r.node_id.as_str().into(),
             }),
+            Action::Data(input) => {
+                let operation = input.operation();
+                if matches!(operation, "database.read" | "database.sensitive_columns") {
+                    self.databases.data.query_generation =
+                        self.databases.data.query_generation.wrapping_add(1);
+                    let ticket = self.databases.data.query_generation;
+                    self.databases.error = None;
+                    self.query(
+                        DatabasesSlot::DatabaseData(
+                            ticket,
+                            self.databases.project.clone(),
+                            self.databases.selected.clone(),
+                        ),
+                        "Reading database data",
+                        operation,
+                        move |b| query(b, *input),
+                    );
+                } else {
+                    self.databases
+                        .data
+                        .submitted_project
+                        .clone_from(&self.databases.project);
+                    self.database_command(Some(*input));
+                }
+            }
+            Action::DataStatus(id) => {
+                self.query(
+                    DatabasesSlot::DatabaseDataStatus,
+                    "Checking database operation",
+                    "history.operation_status",
+                    move |b| crate::usage_ops::operation_status(b, &id),
+                );
+            }
+            Action::DataError(reason) => self.databases.error = Some(reason),
             Action::ConfirmOutcome => self.confirm_outcomes(),
         }
     }
@@ -670,6 +710,37 @@ impl DatabasesCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(DatabasesSlot, Reply)> {
         match (slot, reply) {
+            (DatabasesSlot::DatabaseData(ticket, project, source), Reply::Query(result)) => {
+                if ticket != self.databases.data.query_generation
+                    || project != self.databases.project
+                    || source != self.databases.selected
+                {
+                    return None;
+                }
+                match ops::query_result(result) {
+                    Ok((OperationResult::DatabaseRead { value }, _)) => {
+                        self.databases.data.result = Some(value);
+                        self.databases.error = None;
+                    }
+                    Ok((OperationResult::DatabaseSensitiveColumns { value }, _)) => {
+                        self.databases.data.rules = Some(value);
+                        self.databases.error = None;
+                    }
+                    Ok(_) => self.databases.error = Some("Unexpected database result".into()),
+                    Err(error) => self.databases.error = Some(error.describe()),
+                }
+            }
+            (DatabasesSlot::DatabaseDataStatus, Reply::Query(result)) => {
+                match ops::query_result(result) {
+                    Ok((OperationResult::HistoryOperationStatus { value }, _)) => {
+                        if self.databases.data.operation.as_ref() == Some(&value.operation_id) {
+                            self.databases.data.operation_state = Some(value.state);
+                        }
+                    }
+                    Ok(_) => self.databases.error = Some("Unexpected operation result".into()),
+                    Err(error) => self.databases.error = Some(error.describe()),
+                }
+            }
             (DatabasesSlot::DatabaseList(g, _), Reply::Query(result)) => {
                 let scanning = self.databases.batch_scanning;
                 match ops::query_result(result) {
@@ -876,7 +947,7 @@ impl DatabasesCtl<'_, '_> {
                     }
                 }
             }
-            (DatabasesSlot::DatabaseCommand(_), Reply::Command(outcome)) => {
+            (DatabasesSlot::DatabaseCommand(operation), Reply::Command(outcome)) => {
                 self.databases.busy = false;
                 match outcome {
                     Ok(CommandReply::Recorded { receipt, .. }) => match receipt.decision {
@@ -896,16 +967,29 @@ impl DatabasesCtl<'_, '_> {
                                 OperationResult::SchemasRemoveIndex { .. } => {
                                     self.databases.clear_explorer()
                                 }
+                                OperationResult::DatabaseEditSensitiveColumnRules { value } => {
+                                    self.databases.data.rules = Some(value);
+                                }
                                 _ => {}
                             }
                             self.databases.notice = Some("Database source change recorded.".into());
                             self.databases.error = None;
                         }
                         DomainDecision::Accepted { operation_id } => {
-                            self.databases.notice = Some(format!(
-                                "Metadata work accepted as {}. Refresh to inspect its actual outcome.",
-                                operation_id.0.as_str()
-                            ));
+                            if operation.starts_with("database.") {
+                                self.databases.data.operation_project =
+                                    self.databases.data.submitted_project.take();
+                                self.databases.data.operation = Some(operation_id);
+                                self.databases.data.operation_state =
+                                    Some(devworks_core::protocol::OperationState::IntentRecorded);
+                                self.databases.data.result = None;
+                                self.databases.notice = Some("Database operation accepted. Check its operation status for the outcome.".into());
+                            } else {
+                                self.databases.notice = Some(format!(
+                                    "Metadata work accepted as {}. Refresh to inspect its actual outcome.",
+                                    operation_id.0.as_str()
+                                ));
+                            }
                             self.databases.error = None;
                         }
                         DomainDecision::Refused { fault } => {

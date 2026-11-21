@@ -541,6 +541,55 @@ macro_rules! artifact_reads {
                     .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(|p| id_of(p).map(ProjectId)).collect()
             }
+            fn database_artifact_available(
+                &self,
+                access: &DatabaseArtifactAccess,
+                owner: &ActorId,
+                project: Option<&ProjectId>,
+            ) -> Result<bool, StorageError> {
+                use devworks_core::protocol::records::SchemaExposureMode;
+                use devworks_core::ports::AuthorityFence;
+                if !matches!(access.capability.as_str(), "database.read" | "database.mysql_readonly_query") {
+                    return Ok(false);
+                }
+                for fence in &access.fences {
+                    let current = match fence {
+                        AuthorityFence::Principal { actor, revision } => actor == owner
+                            && AuthorityRead::principal(self, actor)?.is_some_and(|binding| binding.active && binding.revision == *revision),
+                        AuthorityFence::Policy { project_id, digest } =>
+                            devworks_core::authority::policy::resolve_policy(self, project_id.as_ref())?.digest() == *digest,
+                        _ => false,
+                    };
+                    if !current {
+                        return Ok(false);
+                    }
+                }
+                for (id, revision) in &access.grants {
+                    if !AuthorityRead::authority_grant(self, id)?.is_some_and(|grant| {
+                        grant.state == GrantState::Active && grant.revision == *revision
+                    }) {
+                        return Ok(false);
+                    }
+                }
+                let Some(source) = self.schema_source(&access.connection)? else { return Ok(false) };
+                let Some(config) = &source.connection.config else { return Ok(false) };
+                if source.deleted || source.configuration_revision != access.configuration
+                    || source.connection.revision.get() != access.revision
+                    || config.enabled == Some(false)
+                    || !matches!(config.exposure_mode, Some(SchemaExposureMode::ReadOnly | SchemaExposureMode::ReadWrite))
+                {
+                    return Ok(false);
+                }
+                let allowed = match project {
+                    Some(project) => ArtifactRead::project_exists(self, project)?
+                        && config.project_access.as_ref().is_some_and(|access| access.0.iter().any(|grant| {
+                            grant.project_id == project.0 && grant.data_read_enabled
+                        })),
+                    None => &source.owner_id == owner || config.workspace_exposed == Some(true),
+                };
+                Ok(allowed && self.sensitive_policy(None)?.revision == access.global_policy
+                    && self.sensitive_policy(Some(&access.connection))?.revision == access.source_policy)
+            }
             fn analysis_artifact_available(
                 &self, artifact: &Id, run: &Id, project: Option<&ProjectId>,
                 worktree: Option<(&Id, i64)>, restore_epoch: i64,

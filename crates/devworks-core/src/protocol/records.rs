@@ -3404,6 +3404,144 @@ impl Check for DbRow {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseLegacyRows {
+    pub rows: Rows<DynamicJson>,
+    pub row_count: i32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<DbColumn>", extend("x-since" = 2))]
+    pub columns: Option<Items<DbColumn>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub truncated: Option<bool>,
+}
+impl Check for DatabaseLegacyRows {
+    fn check(&self) -> Result<(), String> {
+        self.rows.check()?;
+        self.row_count.check()?;
+        self.columns.check()?;
+        self.truncated.check()?;
+        crate::protocol::rules::record(
+            "DatabaseLegacyRows",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DatabaseLegacyRows {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.columns = None;
+        }
+        if revision < 2 {
+            self.truncated = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSensitiveColumnRule {
+    pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Label>,
+    pub column: Label,
+    pub allow: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+}
+impl Check for DatabaseSensitiveColumnRule {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.catalog.check()?;
+        self.schema.check()?;
+        self.table.check()?;
+        self.column.check()?;
+        self.allow.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "DatabaseSensitiveColumnRule",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSensitiveRuleSet {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Id>,
+    pub revision: Revision,
+    pub rules: Rows<DatabaseSensitiveColumnRule>,
+}
+impl Check for DatabaseSensitiveRuleSet {
+    fn check(&self) -> Result<(), String> {
+        self.connection_id.check()?;
+        self.revision.check()?;
+        self.rules.check()?;
+        crate::protocol::rules::record(
+            "DatabaseSensitiveRuleSet",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DatabaseSensitiveRuleEdit {
+    Upsert { rule: DatabaseSensitiveColumnRule },
+    Delete { id: Id },
+}
+impl Check for DatabaseSensitiveRuleEdit {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Upsert { rule } => {
+                rule.check()?;
+            }
+            Self::Delete { id } => {
+                id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseMigrationSource {
+    pub repository_id: Id,
+    pub commit: GitOid,
+    pub path: RelativePath,
+}
+impl Check for DatabaseMigrationSource {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.commit.check()?;
+        self.path.check()?;
+        crate::protocol::rules::record(
+            "DatabaseMigrationSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DbReadResult {
     pub columns: Items<DbColumn>,
     pub rows: Rows<DbRow>,
@@ -3412,6 +3550,13 @@ pub struct DbReadResult {
     pub next_cursor: Option<Cursor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub schema_digest: Option<Digest>,
 }
 impl Check for DbReadResult {
     fn check(&self) -> Result<(), String> {
@@ -3420,11 +3565,20 @@ impl Check for DbReadResult {
         self.truncated.check()?;
         self.next_cursor.check()?;
         self.source_revision.check()?;
+        self.schema_digest.check()?;
         crate::protocol::rules::record(
             "DbReadResult",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DbReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.schema_digest = None;
+        }
     }
 }
 
