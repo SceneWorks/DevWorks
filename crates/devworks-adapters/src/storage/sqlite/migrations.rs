@@ -35,6 +35,11 @@ impl Migration {
     }
 }
 
+const SYSTEMONE_0064_SHA256: &str =
+    "1862c1bf4f8a16e13eb6c34c73515c8ad144fffebe64f7f6742adec95fec592a";
+const KEEP_WORKING_SHA256: &str =
+    "70360b84c1f238653ca0ef7272447c4d35b123fefc9df28bc3daada15fd6fcab";
+
 /// This build's migrations, in version order. The last version is the build's schema version.
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -726,39 +731,65 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 64,
         minimum_reader: 57,
         minimum_writer: 64,
-        sql: include_str!("migrations/0064_document_index.sql"),
-        expected_sha256: "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+        sql: include_str!("migrations/0064_systemone_pool.sql"),
+        expected_sha256: SYSTEMONE_0064_SHA256,
         rebuilds_tables: false,
     },
+    // Older writers cannot distinguish automatic and ordinary project reservations.
     Migration {
         version: 65,
         minimum_reader: 57,
         minimum_writer: 65,
-        sql: include_str!("migrations/0065_document_lexical.sql"),
-        expected_sha256: "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+        sql: include_str!("migrations/0065_keep_working_claims.sql"),
+        expected_sha256: KEEP_WORKING_SHA256,
         rebuilds_tables: false,
     },
+    // Older writers cannot interpret automatic intent or protect its first input.
     Migration {
         version: 66,
-        minimum_reader: 57,
+        minimum_reader: 66,
         minimum_writer: 66,
-        sql: include_str!("migrations/0066_document_vectors.sql"),
-        expected_sha256: "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+        sql: include_str!("migrations/0066_auto_routing.sql"),
+        expected_sha256: AUTO_ROUTING_0066_SHA256,
         rebuilds_tables: false,
     },
     Migration {
         version: 67,
-        minimum_reader: 57,
+        minimum_reader: 66,
         minimum_writer: 67,
-        sql: include_str!("migrations/0067_document_vision.sql"),
-        expected_sha256: "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+        sql: include_str!("migrations/0067_document_index.sql"),
+        expected_sha256: "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
         rebuilds_tables: false,
     },
     Migration {
         version: 68,
-        minimum_reader: 57,
+        minimum_reader: 66,
         minimum_writer: 68,
-        sql: include_str!("migrations/0068_document_activity.sql"),
+        sql: include_str!("migrations/0068_document_lexical.sql"),
+        expected_sha256: "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 69,
+        minimum_reader: 66,
+        minimum_writer: 69,
+        sql: include_str!("migrations/0069_document_vectors.sql"),
+        expected_sha256: "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 70,
+        minimum_reader: 66,
+        minimum_writer: 70,
+        sql: include_str!("migrations/0070_document_vision.sql"),
+        expected_sha256: "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 71,
+        minimum_reader: 66,
+        minimum_writer: 71,
+        sql: include_str!("migrations/0071_document_activity.sql"),
         expected_sha256: "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
         rebuilds_tables: false,
     },
@@ -909,7 +940,7 @@ fn apply(
         // A no-op inside a transaction, so it is switched before BEGIN.
         db(conn.pragma_update(None, "foreign_keys", false))?;
     }
-    let outcome = apply_in_transaction(conn, m, bootstrap_store_id, now_ms, app_build);
+    let outcome = apply_in_transaction(conn, m, bootstrap_store_id, now_ms, app_build, None);
     if m.rebuilds_tables {
         let restored = db(conn.pragma_update(None, "foreign_keys", true));
         outcome?;
@@ -924,28 +955,40 @@ fn apply_in_transaction(
     bootstrap_store_id: Option<&str>,
     now_ms: i64,
     app_build: &str,
+    already_applied: Option<&Migration>,
 ) -> Result<(), StorageError> {
     db(conn.execute_batch("BEGIN IMMEDIATE"))?;
     let result = (|| {
+        if let Some(previous) = already_applied {
+            let moved = db(conn.execute(
+                "UPDATE schema_migrations SET version=?1 WHERE version=?2 AND checksum=?3",
+                params![previous.version, m.version, previous.checksum()],
+            ))?;
+            if moved != 1 {
+                return Err(StorageError::IncompatibleSchema(
+                    "parallel migration 64 changed before reconciliation".into(),
+                ));
+            }
+        }
         db(conn.execute_batch(m.sql))?;
+        let latest = already_applied.unwrap_or(m);
         match bootstrap_store_id {
-            Some(store_id) => db(conn.execute(
-                "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,\
+            Some(store_id) => {
+                db(conn.execute(
+                    "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,\
                     minimum_writer,restore_epoch) VALUES(1,?1,?2,?3,?4,0)",
-                params![store_id, m.version, m.minimum_reader, m.minimum_writer],
-            ))?,
-            None => db(conn.execute(
-                "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,\
-                    minimum_writer=?3 WHERE singleton=1",
-                params![m.version, m.minimum_reader, m.minimum_writer],
-            ))?,
+                    params![
+                        store_id,
+                        latest.version,
+                        latest.minimum_reader,
+                        latest.minimum_writer
+                    ],
+                ))?;
+            }
+            None => update_schema_meta(conn, latest)?,
         };
-        db(conn.execute(
-            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) \
-                VALUES(?1,?2,?3,?4)",
-            params![m.version, m.checksum(), now_ms, app_build],
-        ))?;
-        db(conn.pragma_update(None, "user_version", m.version))?;
+        record_applied(conn, m, now_ms, app_build)?;
+        db(conn.pragma_update(None, "user_version", latest.version))?;
         // Validate inside the transaction: a migration that breaks foreign keys or integrity is
         // never committed.
         verify_after(conn)
@@ -957,6 +1000,176 @@ fn apply_in_transaction(
             Err(e)
         }
     }
+}
+
+fn record_applied(
+    conn: &Connection,
+    migration: &Migration,
+    now_ms: i64,
+    app_build: &str,
+) -> Result<(), StorageError> {
+    db(conn.execute(
+        "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+        params![migration.version, migration.checksum(), now_ms, app_build],
+    ))?;
+    Ok(())
+}
+
+fn update_schema_meta(conn: &Connection, latest: &Migration) -> Result<(), StorageError> {
+    db(conn.execute(
+        "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+        params![latest.version, latest.minimum_reader, latest.minimum_writer],
+    ))?;
+    Ok(())
+}
+
+/// DW-F4/F5 published the keep-working SQL at version 64 before DW-F6 combined it with
+/// SystemOne. Only the exact former layout at 64 can adopt the canonical ledger.
+fn split_migration<'a>(
+    migrations: &'a [Migration],
+    meta: &Meta,
+    applied: &AppliedMigration,
+) -> Option<(&'a Migration, &'a Migration)> {
+    if meta.schema_version != 64
+        || meta.minimum_writer != 64
+        || meta.minimum_reader != 57
+        || applied.version != 64
+        || applied.checksum != KEEP_WORKING_SHA256
+    {
+        return None;
+    }
+    let systemone = migrations.get(63)?;
+    let keep_working = migrations.get(64)?;
+    (systemone.version == 64
+        && systemone.expected_sha256 == SYSTEMONE_0064_SHA256
+        && keep_working.version == 65
+        && keep_working.expected_sha256 == KEEP_WORKING_SHA256)
+        .then_some((systemone, keep_working))
+}
+
+const AUTO_ROUTING_0066_SHA256: &str =
+    "ff33a5f40322cc4f8524b653d2e2418531fabcbaba261311a6bcfd25829da83f";
+const COMMON_DOCUMENT_BASE: usize = 63;
+const DEPLOYED_ROUTER_VERSION: usize = 66;
+const FEATURE_DOCUMENT_DIGESTS: [&str; 5] = [
+    "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+    "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+    "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+    "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+    "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
+];
+
+/// DW-F8 published document SQL at 64–68 before those migration identities were reconciled
+/// with main. Recognize only a complete, exact prefix of that published ledger.
+fn document_lineage(
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+) -> Option<usize> {
+    let version = usize::try_from(meta.schema_version).ok()?;
+    let count = version.checked_sub(COMMON_DOCUMENT_BASE)?;
+    if !(1..=FEATURE_DOCUMENT_DIGESTS.len()).contains(&count)
+        || meta.minimum_reader != 57
+        || meta.minimum_writer != meta.schema_version
+        || applied.len() != version
+    {
+        return None;
+    }
+    let common = migrations.get(..COMMON_DOCUMENT_BASE)?;
+    if !applied[..COMMON_DOCUMENT_BASE]
+        .iter()
+        .zip(common)
+        .all(|(saved, expected)| {
+            saved.version == expected.version && saved.checksum == expected.checksum()
+        })
+    {
+        return None;
+    }
+    let deployed = migrations.get(COMMON_DOCUMENT_BASE..DEPLOYED_ROUTER_VERSION)?;
+    let digests = [
+        SYSTEMONE_0064_SHA256,
+        KEEP_WORKING_SHA256,
+        AUTO_ROUTING_0066_SHA256,
+    ];
+    if !deployed
+        .iter()
+        .zip(digests)
+        .enumerate()
+        .all(|(index, (migration, digest))| {
+            migration.version == (COMMON_DOCUMENT_BASE + index + 1) as i64
+                && !migration.rebuilds_tables
+                && migration.checksum() == digest
+        })
+    {
+        return None;
+    }
+    let documents = migrations.get(DEPLOYED_ROUTER_VERSION..DEPLOYED_ROUTER_VERSION + count)?;
+    for (index, (saved, destination)) in applied[COMMON_DOCUMENT_BASE..]
+        .iter()
+        .zip(documents)
+        .enumerate()
+    {
+        let digest = FEATURE_DOCUMENT_DIGESTS[index];
+        if saved.version != (COMMON_DOCUMENT_BASE + index + 1) as i64
+            || destination.version != (DEPLOYED_ROUTER_VERSION + index + 1) as i64
+            || saved.checksum != digest
+            || destination.checksum() != digest
+        {
+            return None;
+        }
+    }
+    Some(count)
+}
+
+/// Move only the document ledger keys, retaining original checksums and provenance. Router
+/// migrations touch disjoint tables and are applied exactly once in the same transaction.
+fn reconcile_documents(
+    conn: &Connection,
+    migrations: &[Migration],
+    count: usize,
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    let tx = db(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    ))?;
+    let current = read_meta(&tx)?.ok_or_else(document_lineage_changed)?;
+    if document_lineage(migrations, &current, &ledger(&tx)?) != Some(count) {
+        return Err(document_lineage_changed());
+    }
+    let documents = &migrations[DEPLOYED_ROUTER_VERSION..DEPLOYED_ROUTER_VERSION + count];
+    // Move high keys first because the old and new document ranges overlap.
+    for (index, destination) in documents.iter().enumerate().rev() {
+        let old_version = (COMMON_DOCUMENT_BASE + index + 1) as i64;
+        let updated = db(tx.execute(
+            "UPDATE schema_migrations SET version=?1 WHERE version=?2 AND checksum=?3",
+            params![
+                destination.version,
+                old_version,
+                FEATURE_DOCUMENT_DIGESTS[index]
+            ],
+        ))?;
+        if updated != 1 {
+            return Err(document_lineage_changed());
+        }
+    }
+    for migration in &migrations[COMMON_DOCUMENT_BASE..DEPLOYED_ROUTER_VERSION] {
+        db(tx.execute_batch(migration.sql))?;
+        record_applied(&tx, migration, now_ms, app_build)?;
+    }
+    let current = &documents[count - 1];
+    update_schema_meta(&tx, current)?;
+    db(tx.pragma_update(None, "user_version", current.version))?;
+    verify_after(&tx)?;
+    db(tx.commit())?;
+    Ok(current.version)
+}
+
+fn document_lineage_changed() -> StorageError {
+    StorageError::IncompatibleSchema(
+        "document migration lineage changed before reconciliation".into(),
+    )
 }
 
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
@@ -982,12 +1195,16 @@ pub(crate) fn check(
         )));
     }
     let applied = ledger(conn)?;
+    if document_lineage(migrations, &meta, &applied).is_some() {
+        return Ok(Some((meta, AccessMode::ReadWrite)));
+    }
     for m in migrations
         .iter()
         .filter(|m| m.version <= meta.schema_version)
     {
         match applied.iter().find(|a| a.version == m.version) {
             Some(a) if a.checksum == m.checksum() => {}
+            Some(a) if split_migration(migrations, &meta, a).is_some() => {}
             Some(a) => {
                 return Err(StorageError::IncompatibleSchema(format!(
                     "migration {} checksum {} does not match this build ({})",
@@ -1042,10 +1259,19 @@ pub(crate) fn prepare(
     if let AccessMode::ReadOnly { .. } = access {
         return Ok((meta, access));
     }
-    for m in migrations
-        .iter()
-        .filter(|m| m.version > meta.schema_version)
+    let applied = ledger(conn)?;
+    let mut version = meta.schema_version;
+    if let Some(count) = document_lineage(migrations, &meta, &applied) {
+        version = reconcile_documents(conn, migrations, count, now_ms, app_build)?;
+    } else if version == 64
+        && let Some((systemone, keep_working)) = applied
+            .iter()
+            .find_map(|applied| split_migration(migrations, &meta, applied))
     {
+        apply_in_transaction(conn, systemone, None, now_ms, app_build, Some(keep_working))?;
+        version = keep_working.version;
+    }
+    for m in migrations.iter().filter(|m| m.version > version) {
         apply(conn, m, None, now_ms, app_build)?;
     }
     let meta = read_meta(conn)?

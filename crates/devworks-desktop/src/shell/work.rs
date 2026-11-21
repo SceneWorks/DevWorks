@@ -85,6 +85,7 @@ impl std::ops::Deref for Activity {
 pub struct WorkUi {
     pub messages: MessageBoard,
     pub histories: BTreeMap<String, Activity>,
+    pub keep_working: BTreeMap<String, devworks_engine::KeepWorkingStatus>,
 
     /// Workflow drafts and inspected claims survive project switches; records remain authoritative.
     pub workflows: BTreeMap<String, WorkflowUi>,
@@ -275,6 +276,7 @@ impl WorkUi {
 /// What the screens ask the shell to do.
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    KeepWorking(bool),
     RefreshMessages,
     PollMessages,
     MoreInbox,

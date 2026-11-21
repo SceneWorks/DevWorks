@@ -358,6 +358,9 @@ impl Chat {
         {
             ctl.load_transcript(&id);
         }
+        if visible && let Some(id) = ctl.chat.selected.clone() {
+            ctl.refresh_workspace_reply(&id);
+        }
         if visible || route == Route::Jobs {
             if visible {
                 ctl.refresh_route_status();
@@ -660,7 +663,15 @@ impl ChatCtl<'_, '_> {
             ChatSlot::RouteStatus(key.clone()),
             "Checking model availability",
             "router.availability",
-            move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
+            move |b| {
+                ops::router_availability_for(
+                    b,
+                    &sel.intent,
+                    &sel.effort,
+                    session.as_deref(),
+                    &["tools"],
+                )
+            },
         );
         if submitted {
             self.chat.routing.status_asked.insert(key, asked);
@@ -675,11 +686,10 @@ impl ChatCtl<'_, '_> {
         if self.chat.selection() == sel {
             return;
         }
-        if self.chat.routing.selection_locked(&key) {
+        if self.chat.route_selection_locked(&key) {
             self.chat.notice = Some((
                 Tone::Attention,
-                "The conversation's first route is still being saved; choose again once it \
-                 is pinned."
+                "A message or route change is still being saved. Choose again once it is confirmed."
                     .into(),
             ));
             return;
@@ -795,6 +805,13 @@ impl ChatCtl<'_, '_> {
             .get(session)
             .cloned()
             .unwrap_or_default();
+        if matches!(
+            sel.intent,
+            devworks_core::protocol::records::RouteIntent::DevWorksAuto {}
+        ) {
+            // The saved native reply owns classification from the first message.
+            return;
+        }
         let sid = session.to_owned();
         if self.command(
             ChatSlot::RouteFirst(session.to_owned()),
@@ -826,6 +843,17 @@ impl ChatCtl<'_, '_> {
         let (text, refs) = (draft.text.clone(), draft.stored());
         let submitted = draft.submission();
         let id = session.id.as_str().to_owned();
+        let selection = self
+            .chat
+            .routing
+            .selections
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        let route = devworks_core::protocol::provider::ConversationRoutePreference {
+            intent: selection.intent,
+            effort: selection.effort,
+        };
         let revision = session.revision.get();
         self.chat.sending = Some(id.clone());
         self.chat.submitted = Some(submitted);
@@ -834,7 +862,7 @@ impl ChatCtl<'_, '_> {
             ChatSlot::Append(id),
             "Saving your message",
             "sessions.append_message",
-            move |b| ops::append_message(b, &sid, revision, &text, &refs),
+            move |b| ops::append_message_with_route(b, &sid, revision, &text, &refs, Some(route)),
         );
     }
 
@@ -1297,6 +1325,9 @@ impl ChatCtl<'_, '_> {
                 if let Some((tone, text)) = &self.chat.notice {
                     chip(ui, text.clone(), *tone);
                 }
+                if let Some((tone, text)) = self.chat.coordinator_reply_notice() {
+                    chip(ui, text, tone);
+                }
                 chat::conversation(
                     ui,
                     &mut *self.chat,
@@ -1330,6 +1361,9 @@ impl ChatCtl<'_, '_> {
                 |ui, st, _| {
                     if let Some((tone, text)) = &notice {
                         chip(ui, text.clone(), *tone);
+                    }
+                    if let Some((tone, text)) = st.0.coordinator_reply_notice() {
+                        chip(ui, text, tone);
                     }
                     chat::conversation(ui, st.0, Surface::Home, online_ref, st.1);
                 },
@@ -1401,6 +1435,25 @@ impl ChatCtl<'_, '_> {
         self.chat_actions(&ctx, actions);
         if !watch_actions.is_empty() {
             self.cx.effects.push(Effect::Watch(watch_actions));
+        }
+    }
+
+    fn refresh_workspace_reply(&mut self, session: &str) {
+        let slot = ChatSlot::WorkspaceReplyStatus(session.to_owned());
+        if self.pending(&slot) {
+            return;
+        }
+        if let Some(client) = &mut self.client
+            && let Ok(session) = devworks_core::protocol::Id::new(session)
+        {
+            client.task(
+                slot.into(),
+                "Reading the coordinator reply status",
+                move |b| {
+                    b.workspace_reply_status(&session)
+                        .map(TaskOutput::WorkspaceReplyStatus)
+                },
+            );
         }
     }
 
@@ -1708,11 +1761,23 @@ impl ChatCtl<'_, '_> {
                     }
                 }
             }
+            (ChatSlot::WorkspaceReplyStatus(id), Reply::Task(result)) => match result {
+                Ok(TaskOutput::WorkspaceReplyStatus(Some(status))) => {
+                    self.chat.reply_status.insert(id, status);
+                }
+                Ok(TaskOutput::WorkspaceReplyStatus(None)) => {
+                    self.chat.reply_status.remove(&id);
+                }
+                _ => {}
+            },
             (ChatSlot::TextPreview(id, generation), Reply::Task(result)) => {
                 self.apply_live_text(&id, generation, result);
             }
             (ChatSlot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
+                let queued = matches!(&c, Ok(devworks_core::protocol::CommandReply::Recorded {
+                    receipt, ..
+                }) if receipt.operation_id.is_some());
                 let outcome = ops::appended(c);
                 if matches!(outcome, Err(Failure::Unknown)) {
                     // Not known whether the message was saved: the composer keeps it as
@@ -1744,9 +1809,15 @@ impl ChatCtl<'_, '_> {
                             d.settle_sent(sent);
                         }
                         self.chat.notice = None;
-                        self.announce("Message saved to the conversation. No coordinator is connected to reply (DW-16).");
                         self.load_transcript(&id);
-                        self.route_first(&id);
+                        if queued {
+                            self.refresh_workspace_reply(&id);
+                            self.announce("Message saved. Coordinator reply queued.");
+                        } else {
+                            self.announce(
+                                "Message saved. The workspace coordinator is unavailable.",
+                            );
+                        }
                     }
                     Err(e) => {
                         if let Failure::Refused(f) = &e
@@ -1800,9 +1871,11 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::TextPreview(_)
                         | TaskOutput::DocumentSource(_)
                         | TaskOutput::DocumentAccess(_)
+                        | TaskOutput::WorkspaceReplyStatus(_)
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
                         | TaskOutput::McpContent(_)
+                        | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_),
                     ) => AttachState::Failed("unexpected reply".into()),
@@ -1873,9 +1946,11 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::TextPreview(_)
                             | TaskOutput::DocumentSource(_)
                             | TaskOutput::DocumentAccess(_)
+                            | TaskOutput::WorkspaceReplyStatus(_)
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
                             | TaskOutput::McpContent(_)
+                            | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_),
                         ) => {}

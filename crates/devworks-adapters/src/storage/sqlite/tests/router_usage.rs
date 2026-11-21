@@ -906,6 +906,98 @@ fn actual_configured_quote_stays_immutable_and_reported_cost_replaces_its_estima
 }
 
 #[test]
+fn legacy_gateway_preserves_free_zero_and_other_usage_amounts() {
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::protocol::records::{RouterUsageResult, UsageQueryResult};
+
+    for (classification, charge, legacy_amount, current_amount) in [
+        (CostClassification::LocalFree, None, Some("0"), Some(0)),
+        (
+            CostClassification::ReportedCharge,
+            Some("0"),
+            Some("0.000000"),
+            Some(0),
+        ),
+        (CostClassification::Untracked, None, None, None),
+    ] {
+        let mut f = NativeFx::new();
+        if classification == CostClassification::LocalFree {
+            f.fx.write(|tx| {
+                let mut connection = tx.router().connection(&id("api"))?.unwrap();
+                connection.local_free = true;
+                tx.router()
+                    .put_connection(&connection, Some(connection.revision))
+            });
+            f.request.quote = f.fx.read(|read| {
+                devworks_core::services::prices::CatalogPriceResolver.quote(read, &f.request.query)
+            });
+        }
+        let attempt = f.admitted();
+        let mut frame = observation("complete-usage", 1, Some(123), charge);
+        frame.quantities.cached_read_tokens = Some(0);
+        frame.quantities.cache_write_tokens = Some(0);
+        let (source, _) = source(
+            vec![
+                InferenceFrame::Usage(frame),
+                InferenceFrame::Terminal(AttemptEnd::Completed),
+            ],
+            false,
+        );
+        let DriveOutcome::Settled(balance) = f
+            .host()
+            .drive(attempt.attempt_id, source, Cancellation::new())
+            .unwrap()
+        else {
+            panic!("usage did not settle");
+        };
+        assert_eq!(balance.classification, classification);
+        while !f
+            .fx
+            .write(|tx| devworks_core::services::usage::ingest::bootstrap_page(tx, 64))
+            .complete
+        {}
+        f.fx.cases = std::mem::take(&mut f.fx.cases).with_usage(Arc::new(
+            devworks_core::services::usage::UsageService::new(
+                f.fx.h.ids.clone(),
+                f.fx.h.clock.clone(),
+            ),
+        ));
+
+        let (kind, origin) = classification.price();
+        let mut body = json!({"sessionId":"s1","page":{"limit":10}});
+        let OperationResult::RouterUsage {
+            value: RouterUsageResult::Legacy(report),
+        } = result(f.fx.query_at(&f.fx.user(), "router.usage", body.clone(), Some(1)))
+        else {
+            panic!("expected the legacy usage report");
+        };
+        assert_eq!(report.items.0.len(), 1);
+        let item = serde_json::to_value(&report.items.0[0]).unwrap();
+        assert_eq!(item["priceKind"], kind);
+        assert_eq!(item["priceOrigin"], origin);
+        assert_eq!(item.get("amountUsd").and_then(Value::as_str), legacy_amount);
+        assert_eq!(report.total_tracked_usd.0, "0.000000");
+
+        body["reportKind"] = json!("Attempts");
+        body["endMs"] = json!((T0 + 1).to_string());
+        let OperationResult::RouterUsage {
+            value: RouterUsageResult::Current(UsageQueryResult::Attempts { page }),
+        } = result(f.fx.query_at(&f.fx.user(), "router.usage", body, Some(3)))
+        else {
+            panic!("expected the current usage report");
+        };
+        assert_eq!(page.items.0.len(), 1);
+        let cost = &page.items.0[0].cost;
+        assert_eq!(serde_json::to_value(&cost.price_kind).unwrap(), kind);
+        assert_eq!(serde_json::to_value(&cost.price_origin).unwrap(), origin);
+        assert_eq!(
+            cost.amount_micro_usd.as_ref().map(|v| v.get()),
+            current_amount
+        );
+    }
+}
+
+#[test]
 fn legacy_gateway_keeps_full_stored_dates_including_maximum_timestamp() {
     for timestamp in [T0, i64::MAX] {
         let mut f = NativeFx::new();

@@ -1,20 +1,32 @@
 {
   "schema": 67,
-  "policy": "dw406-document-vision-v1",
+  "policy": "dw403-document-index-v1",
   "additionalTables": [
     {
-      "table": "document_extraction_keys",
+      "table": "document_retrieval_preferences",
       "class": "artifact_and_derived_lineage",
       "disposition": "owned_lineage",
-      "purpose": "The immutable extraction identity and bounded native image locators follow the exact retained document version."
+      "purpose": "The explicit retrieval preference follows its managed artifact across sharing, movement and deletion."
     },
     {
-      "table": "document_vision_units",
+      "table": "document_extractions",
       "class": "artifact_and_derived_lineage",
       "disposition": "owned_lineage",
-      "purpose": "The captured raster, routed outcome references and model provenance follow the direct extraction. Attributed attempts and usage retain their accounting project."
+      "purpose": "An immutable extraction checkpoint follows the exact original version. A surviving shared or moved version retains its checkpoints."
+    },
+    {
+      "table": "document_extracted_blocks",
+      "class": "artifact_and_derived_lineage",
+      "disposition": "owned_lineage",
+      "purpose": "Local extracted text and citations follow their extraction checkpoint. Index removal leaves these available under the original version's authority."
+    },
+    {
+      "table": "document_index_versions",
+      "class": "artifact_and_derived_lineage",
+      "disposition": "owned_lineage",
+      "purpose": "The publication pointer and stage follow one exact source version. The delivery identifier is a generation witness. Queue and receipt authority remain with their existing ledgers."
     }
   ],
   "readerFloor": 57,
-  "writerFloor": 67
+  "writerFloor": 64
 }

@@ -83,14 +83,19 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema62-extension.json"
     ),
-    policy_document!("documentIndexExtension", Tables, "schema64-extension.json"),
+    policy_document!(
+        "routingPoolExtension",
+        Tables,
+        "schema66-routing-extension.json"
+    ),
+    policy_document!("documentIndexExtension", Tables, "schema67-extension.json"),
     policy_document!(
         "documentLexicalExtension",
         Tables,
-        "schema65-extension.json"
+        "schema68-extension.json"
     ),
-    policy_document!("documentVectorExtension", Tables, "schema66-extension.json"),
-    policy_document!("documentVisionExtension", Tables, "schema67-extension.json"),
+    policy_document!("documentVectorExtension", Tables, "schema69-extension.json"),
+    policy_document!("documentVisionExtension", Tables, "schema70-extension.json"),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {

@@ -149,7 +149,11 @@ No layer should copy this large probe union into a monolithic application dispat
 
 ## SystemOne and route contracts
 
-The decision input is now concrete: exact model ID/revision, bounded state, uniquely named questions, typed image/video references and timeout. The host derives attribution from the authenticated invocation; the payload cannot relabel feature work as workspace usage. Model capabilities and credential/upstream mapping come from current configuration, not request claims. `router.decision_models` returns the exact supported question/media/extension/output schema declarations.
+The decision input carries bounded state, uniquely named questions, typed image and video references, and a timeout. Revision 1 selects a model by its exact ID and revision. Revision 4 also accepts `usePool: true` in place of both fields. The router derives attribution from the authenticated invocation and resolves capabilities, credentials, and upstream identity from current configuration.
+
+`router.decision_models` lists available decision models by default. Settings requests the inspection view, including saved models that the latest complete inventory omitted. Revision 4 shows availability separately from enablement, with the current reason and known retry time. A malformed inventory leaves the last complete inventory in force.
+
+The pool rotates through models that a human configured for automatic selection with request and batch limits. The router records a decision intent and returns its operation ID. The native worker resolves media, checks schemas and connection access, and commits the eligible ordering and cursor together before inference. Retries use the saved ordering. Explicit selection and receipt replay leave the cursor alone.
 
 Choice, Noul, Score and Box are strict variants. The native adapter converts their tags to upstream lowercase `type` values; choice criteria become name-to-description/null entries, score criteria preserve order and named questions become the upstream question map. A schema-bound Extension question supports a future declared model type without allowing an arbitrary unknown type to execute or bypass validation. Unsupported types/media fail before send. Check embedded image/video parts in state/extension content as well as top-level media; external URLs require ordinary outbound/redirect authority and artifact references require current file access.
 

@@ -482,7 +482,7 @@ pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'s
         AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, packages, resources,
         router, runs, sessions, web,
     };
-    let families: [(&'static str, &[&str]); 14] = [
+    let families: [(&'static str, &[&str]); 15] = [
         ("artifacts", &artifacts::OPERATIONS),
         ("resources", &resources::OPERATIONS),
         ("runs", &runs::OPERATIONS),
@@ -495,6 +495,7 @@ pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'s
         ("sessions", &sessions::OPERATIONS),
         ("history", &history::OPERATIONS),
         ("router", &router::OPERATIONS),
+        ("router", &[router::decisions::OPERATION]),
         ("connections", &router::connections::OPERATIONS),
         ("mcp", &mcp::OPERATIONS),
     ];

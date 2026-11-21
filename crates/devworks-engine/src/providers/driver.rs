@@ -36,6 +36,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct ProviderComposition {
     pub http: Arc<dyn StreamingHttp>,
+    pub(crate) systemone_validator:
+        Option<Arc<dyn devworks_core::ports::packages::SchemaValidator>>,
     /// Advanced controls require exact host-qualified model/profile metadata. Basic tool/image
     /// flags and efforts are intersected with the CURRENT registered catalog model facts.
     pub capabilities: Vec<Capabilities>,
@@ -56,11 +58,19 @@ impl ProviderComposition {
     pub fn new(http: Arc<dyn StreamingHttp>) -> Self {
         Self {
             http,
+            systemone_validator: None,
             capabilities: Vec::new(),
             embedding_spaces: Vec::new(),
             usage_semantics: Default::default(),
             instruction_guard: None,
         }
+    }
+    pub fn with_systemone_validator(
+        mut self,
+        validator: Arc<dyn devworks_core::ports::packages::SchemaValidator>,
+    ) -> Self {
+        self.systemone_validator = Some(validator);
+        self
     }
     /// Host-composed repository source used by direct native provider owners. Boot installs
     /// its registered indexing source automatically.
@@ -481,19 +491,24 @@ impl NativeProviders {
                     .cmp(b.capability_id.as_str())
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
-            let selected_mcp = if tools
+            let mut external = Vec::new();
+            if tools
                 .iter()
                 .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
             {
-                self.schemas.selected_mcp_tools(&context)?
-            } else {
-                Vec::new()
-            };
+                external.extend(self.schemas.selected_mcp_tools(&context)?);
+            }
+            if tools.iter().any(|tool| {
+                let id = tool.capability_id.as_str();
+                !id.starts_with("mcp/") && super::schemas::builtin_operation(id).is_none()
+            }) {
+                external.extend(self.schemas.selected_package_tools(&context)?);
+            }
             if tools.iter().any(|tool| {
                 self.schemas
                     .builtin_binding(&tool.capability_id, &tool.input_schema)
                     .is_none()
-                    && !selected_mcp.iter().any(|selected| {
+                    && !external.iter().any(|selected| {
                         selected.capability_id == tool.capability_id
                             && selected.wire_name == tool.wire_name
                             && selected.input_schema.schema_id == tool.input_schema.schema_id
@@ -501,8 +516,8 @@ impl NativeProviders {
                             && selected.input_schema.sha256 == tool.input_schema.sha256
                     })
             }) {
-                // Schema discovery alone does not make an external invocation durable. Only
-                // currently selected MCP bindings have the journaled turn dispatcher.
+                // Only the exact selected MCP and installed package aliases have a durable
+                // dispatcher. A caller cannot qualify a different wire name or schema.
                 return Err(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "external tool dispatch is unavailable",
@@ -512,12 +527,20 @@ impl NativeProviders {
         use devworks_core::services::router::Purpose;
         let compaction = matches!(request.purpose, InferencePurpose::Compaction);
         let vision = matches!(request.purpose, InferencePurpose::Vision);
-        let detached = compaction || vision || nested.is_some();
+        let classification = matches!(
+            logical.purpose,
+            devworks_core::services::router::Purpose::TierClassification
+        );
+        let detached = compaction || vision || classification || nested.is_some();
         if compaction != (logical.purpose == Purpose::Compaction)
             || vision != (logical.purpose == Purpose::Vision)
             || (detached
                 && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
             || ((compaction || vision) && nested.is_some())
+            || (classification
+                && (!matches!(request.purpose, InferencePurpose::Semantic)
+                    || nested.is_some()
+                    || logical.pin_id.is_some()))
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -580,7 +603,7 @@ impl NativeProviders {
             }
             if let Some(nested) = &nested {
                 self.require_dispatching_call(&context, session_id, nested)?;
-            } else if !compaction {
+            } else if !detached {
                 let fence = crate::tool_turn::require_current_head_for_new_request(
                     self.store.as_ref(),
                     &context,
@@ -600,10 +623,25 @@ impl NativeProviders {
             return Err(StorageError::ScopeDenied);
         }
 
-        logical.args_digest = devworks_core::fingerprint::canonical_digest(
-            &serde_json::to_value(&request).map_err(|_| invalid("provider request JSON"))?,
-        )
-        .map_err(|_| invalid("provider request canonical JSON"))?;
+        let mut logical_input =
+            serde_json::to_value(&request).map_err(|_| invalid("provider request JSON"))?;
+        if classification {
+            // The classifier's logical input is the sealed material and chosen candidate.
+            // Control and policy generations are current admission fences on each attempt.
+            let fields = logical_input
+                .as_object_mut()
+                .ok_or_else(|| invalid("classifier request JSON"))?;
+            for field in [
+                "authorityRevision",
+                "controlGeneration",
+                "instructionRevision",
+                "cancellationRevision",
+            ] {
+                fields.remove(field);
+            }
+        }
+        logical.args_digest = devworks_core::fingerprint::canonical_digest(&logical_input)
+            .map_err(|_| invalid("provider request canonical JSON"))?;
         if request.request_id != logical.request_id || request.request_id != attempt.request_id {
             return Err(StorageError::ScopeDenied);
         }
@@ -651,6 +689,7 @@ impl NativeProviders {
             ..
         } = &request.input
             && context_epoch.get() > 0
+            && !classification
             && nested.is_none()
             && !vision
         {
@@ -1373,8 +1412,19 @@ impl OwnedInferenceSource for LazySource {
                         .router()
                         .connection(&captured.connection_id)?
                         .ok_or(StorageError::ScopeDenied)?;
-                    // External aliases are refused before admission; an unrelated package
-                    // registry edit cannot change this built-in-only request.
+                    // The request's exact external aliases were requalified above. Check
+                    // current connection and source fences in the final writer transaction.
+                    let bound = devworks_core::services::usage::accounting::snapshot(&captured)?;
+                    if let Some((model_revision, account_revision)) =
+                        bound.selection.classifier_binding()
+                        && (connection.account_revision != account_revision
+                            || !tx
+                                .router()
+                                .route_model(&captured.catalog_model_id)?
+                                .is_some_and(|model| model.revision == model_revision))
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
                     if connection.revision != expected_revision
                         || connection.account_revision
                             != publication.identity.binding.account_revision.get()

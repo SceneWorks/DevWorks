@@ -439,6 +439,16 @@ fn build() -> Vec<SettingDescriptor> {
             NewClonesOnly
         ),
         setting!(
+            MANAGED_AUTO_KEY,
+            "DevWorks Auto for new managed sessions",
+            "Classify each new managed assignment once before its first reply. Existing pins and automatic tiers are retained.",
+            Routing,
+            WORKSPACE,
+            ValueKind::Bool,
+            false,
+            NextAdmission
+        ),
+        setting!(
             "routing.tierMax.members",
             "Tier Max members",
             "Configured models allocated round-robin for Tier Max.",
@@ -1117,6 +1127,8 @@ pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
 pub const PROCESS_EXECUTABLES_KEY: &str = "tools.processExecutables";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
+/// Whether new managed sessions default to DevWorks Auto.
+pub const MANAGED_AUTO_KEY: &str = "routing.managedAuto";
 /// Explicit shared per-tool choices; missing IDs use origin-specific defaults.
 pub const TOOL_OVERRIDES_KEY: &str = "tools.overrides";
 /// The configured external search provider (`none` or a provider ID).

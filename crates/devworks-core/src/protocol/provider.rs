@@ -3,7 +3,7 @@
 //! stream assembly or session store. Package-provided codec events live in
 //! `devworks-extension-protocol` because packages emit them across the public boundary.
 use super::shared::*;
-use super::support::Revisioned;
+use super::support::{Check, Revisioned};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashSet};
@@ -78,7 +78,7 @@ impl JsonSchema for QualifiedId {
         json_schema!({"type":"string","pattern":"^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$"})
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArtifactRef {
     pub artifact_id: Id,
@@ -574,9 +574,30 @@ pub struct SessionCommandRequest {
     pub expected_session_revision: Revision,
     #[schemars(length(min = 1, max = 128))]
     pub content: Vec<UserContent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::support::gated_member"
+    )]
+    #[schemars(with = "ConversationRoutePreference", extend("x-since" = 3))]
+    pub reply_route: Option<ConversationRoutePreference>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRoutePreference {
+    pub intent: super::records::RouteIntent,
+    pub effort: super::records::EffortName,
 }
 impl SessionCommandRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
+        if self
+            .reply_route
+            .as_ref()
+            .is_some_and(|route| route.intent.check().is_err())
+        {
+            return Err("invalid conversation route");
+        }
         if self.content.is_empty() || self.content.len() > 128 {
             return Err("invalid user content count");
         }

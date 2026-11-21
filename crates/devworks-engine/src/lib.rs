@@ -208,6 +208,7 @@ pub mod agent_inbox;
 pub mod agent_supervisor;
 pub mod agent_turns;
 pub mod approvals;
+mod auto_routing;
 pub mod browser;
 mod compaction;
 mod context_epoch;
@@ -224,6 +225,8 @@ pub mod help;
 pub mod indexing;
 mod instruction_guard;
 pub mod jobs;
+mod keep_working;
+pub use keep_working::KeepWorkingStatus;
 pub mod knowledge;
 pub mod mcp;
 pub mod mcp_sampling;
@@ -274,3 +277,6 @@ pub mod providers;
 pub mod conventions_import;
 
 pub mod schemas;
+
+mod workspace_reply;
+pub use workspace_reply::WorkspaceReplyStatus;

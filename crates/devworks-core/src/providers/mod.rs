@@ -12,6 +12,7 @@ pub mod meter;
 pub mod openrouter;
 pub mod profiles;
 pub mod sse;
+pub mod systemone;
 use crate::protocol::provider::{EndpointProfile, NativeBinding, QualifiedId, SchemaRef};
 use crate::protocol::{AttemptId, Id};
 use serde::{Deserialize, Serialize};

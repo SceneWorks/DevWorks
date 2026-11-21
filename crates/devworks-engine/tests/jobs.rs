@@ -28,6 +28,7 @@ use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, Opera
 use devworks_core::protocol::{
     ActorId, CommandReply, Counter, Id, OperationId, OperationState, Revision, RootId,
 };
+use devworks_core::protocol::{DomainErrorCode, results::DomainQueryReply};
 use devworks_core::registry::SchemaRevision;
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
@@ -357,11 +358,14 @@ impl App {
             Revision::new(1).unwrap(),
         )
     }
-    fn command(&self, op: &str, mut body: Value) -> DomainCommandReply {
+    fn command(&self, op: &str, body: Value) -> DomainCommandReply {
+        self.command_at(op, body, 2)
+    }
+    fn command_at(&self, op: &str, mut body: Value, revision: u32) -> DomainCommandReply {
         body["kind"] = json!(op);
         let key = format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst));
         let frame = json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": key,
-            "schemaRevision": 2, "body": body});
+            "schemaRevision": revision, "body": body});
         self.runtime
             .command(&self.user(), op, frame.to_string().as_bytes())
             .expect("addressable")
@@ -734,12 +738,43 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
     .unwrap();
     let def = json!({"kind": "Inference", "prompt": {"artifactId": "prompt-1", "versionId": "prompt-v1",
         "sha256": "a".repeat(64), "byteLength": "12", "mediaType": "text/markdown"},
-        "route": {"kind": "Tier", "tier": "High"}, "effort": "Default"});
-    let job = value(app.command(
-        "jobs.create",
-        json!({"scope": {"kind": "Workspace"}, "title": "Scan",
-        "schedule": {"kind": "Manual"}, "definition": def, "enabled": true}),
+        "route": {"kind": "DevWorksAuto"}, "effort": "Default"});
+    let body = json!({"scope": {"kind": "Workspace"}, "title": "Scan",
+        "schedule": {"kind": "Manual"}, "definition": def, "enabled": true});
+    assert!(matches!(
+        app.command("jobs.create", body.clone()),
+        CommandReply::Rejected { .. }
     ));
+    let job = value(app.command_at("jobs.create", body, 3));
+    assert_eq!(job["definition"]["route"]["kind"], "DevWorksAuto");
+    let saved = app.job(&id(job["id"].as_str().unwrap()));
+    let definition: Value = serde_json::from_str(&saved.definition).unwrap();
+    assert_eq!(definition["route"]["kind"], "DevWorksAuto");
+    for schema_revision in [1, 2, 3] {
+        let query = json!({"mode":"Query","protocol":PROTOCOL,"queryId":"auto-job-inspect",
+            "schemaRevision":schema_revision, "body":{"kind":"jobs.inspect","jobId":job["id"]}});
+        let reply = app
+            .runtime
+            .query(
+                &app.user(),
+                "jobs.inspect",
+                &serde_json::to_vec(&query).unwrap(),
+            )
+            .unwrap();
+        if schema_revision < 3 {
+            assert!(
+                matches!(&reply, DomainQueryReply::Rejected { fault, .. }
+                if fault.code == DomainErrorCode::UnsupportedCapability),
+                "{reply:?}"
+            );
+        } else {
+            assert_eq!(
+                serde_json::to_value(reply).unwrap()["result"]["value"]["job"]["definition"]["route"]
+                    ["kind"],
+                "DevWorksAuto"
+            );
+        }
+    }
     let run = value(app.command(
         "jobs.run_now",
         json!({"jobId": job["id"], "expectedRevision": "1"}),
@@ -754,6 +789,52 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
             .contains("Nothing was sent to a model")
     );
     assert!(failed.session_id.is_none() && failed.agent_actor.is_none());
+    rt.block_on(app.runtime.shutdown());
+
+    use devworks_core::services::jobs::runner::{InferenceJobs, InferenceRefusal, InferenceStart};
+    #[derive(Default)]
+    struct RecordingInference(std::sync::Mutex<Vec<InferenceStart>>);
+    impl InferenceJobs for RecordingInference {
+        fn availability(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn start(&self, run: &InferenceStart) -> Result<Option<Id>, InferenceRefusal> {
+            self.0.lock().unwrap().push(run.clone());
+            Err(InferenceRefusal {
+                dispatched: false,
+                reason: "Recorded the scheduled route input.".into(),
+            })
+        }
+        fn cancel(&self, _: &Id) -> Result<bool, String> {
+            Ok(true)
+        }
+    }
+    let pipeline = Arc::new(RecordingInference::default());
+    let store = app.store.clone();
+    drop(app);
+    let app = boot_over(&rt, &h, false, store, pipeline.clone());
+    let run = value(app.command(
+        "jobs.run_now",
+        json!({"jobId":job["id"],"expectedRevision":"1"}),
+    ));
+    app.tick(&rt);
+    {
+        let calls = pipeline.0.lock().unwrap();
+        let [start] = calls.as_slice() else {
+            panic!("expected one scheduled handoff")
+        };
+        assert_eq!(start.run_id.as_str(), run["id"].as_str().unwrap());
+        assert_eq!(start.ctx.job_run_id(), Some(&start.run_id));
+        assert!(matches!(
+            start.route,
+            devworks_core::protocol::records::RouteIntent::DevWorksAuto {}
+        ));
+        assert!(matches!(
+            start.effort,
+            devworks_core::protocol::records::EffortName::Default
+        ));
+        assert_eq!(start.prompt.version_id.as_str(), "prompt-v1");
+    }
     rt.block_on(app.runtime.shutdown());
 }
 

@@ -487,6 +487,7 @@ impl Collector {
 /// Dropping it stops delivery and collection (as [`Runtime::shutdown`] does, without waiting).
 pub struct Runtime {
     store: Arc<dyn ApplicationStore>,
+    keep_working: Arc<crate::keep_working::KeepWorking>,
     artifacts: Arc<ArtifactService>,
     control: Arc<ControlService>,
     knowledge: Arc<devworks_core::services::knowledge::KnowledgeService>,
@@ -495,7 +496,7 @@ pub struct Runtime {
     connections: Option<Arc<devworks_core::services::router::connections::ConnectionService>>,
     use_cases: UseCases,
     /// The narrow handle set agent turns and durable tool dispatch run on.
-    turn: crate::turn_engine::TurnEngine,
+    turn: Arc<crate::turn_engine::TurnEngine>,
     dispatcher: Dispatcher,
     collector: Arc<Collector>,
     resources: Arc<ResourceService>,
@@ -567,6 +568,8 @@ struct Engine {
     use_cases: UseCases,
     usage: Arc<crate::usage::UsageRuntime>,
     dispatcher: Dispatcher,
+    workspace_replies: Option<Arc<crate::workspace_reply::WorkspaceReplies>>,
+    auto_decisions: Option<Arc<devworks_core::services::router::decisions::DecisionService>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
@@ -617,7 +620,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         power,
         diagnostics: _,
         knowledge: _,
-        application: _,
+        application,
         web: _,
         browser,
         git,
@@ -1006,6 +1009,50 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let systemone = match (
+        use_cases.inference_router(),
+        use_cases.connection_service(),
+        config.providers.as_ref(),
+    ) {
+        (Some(router), Some(connections), Some(provider)) => {
+            provider.systemone_validator.clone().map(|validator| {
+                Arc::new(crate::providers::systemone::SystemOne {
+                    store: store.clone(),
+                    artifacts: artifacts.clone(),
+                    decisions: Arc::new(
+                        devworks_core::services::router::decisions::DecisionService::new(
+                            router.clone(),
+                        ),
+                    ),
+                    router,
+                    connections,
+                    web: core.web.clone(),
+                    authority: authority.clone(),
+                    http: provider.http.clone(),
+                    validator,
+                    usage: usage.clone(),
+                    schemas: Default::default(),
+                    runtime: tokio::runtime::Handle::current(),
+                })
+            })
+        }
+        _ => None,
+    };
+    let use_cases = if let Some(systemone) = &systemone {
+        consumers.push(systemone.consumer());
+        use_cases.with_systemone(systemone.decisions.clone())
+    } else {
+        use_cases
+    };
+    let workspace_replies = (config.providers.is_some()
+        && application
+            .sessions
+            .as_ref()
+            .is_some_and(|sessions| sessions.coordinator.is_some()))
+    .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
+    if let Some(worker) = &workspace_replies {
+        consumers.push(worker.consumer());
+    }
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -1168,6 +1215,9 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                 package_service.clone(),
                 artifacts.clone(),
             ));
+            if let Some(systemone) = &systemone {
+                let _ = systemone.schemas.set(schemas.clone());
+            }
             Some(crate::providers::driver::NativeProviders::new(
                 store.clone(),
                 artifacts.clone(),
@@ -1368,6 +1418,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         use_cases,
         usage,
         dispatcher,
+        workspace_replies,
+        auto_decisions: systemone.as_ref().map(|worker| worker.decisions.clone()),
         process_tools,
         containers,
         git,
@@ -1427,6 +1479,11 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
+    let workspace_coordinator = composition
+        .application
+        .sessions
+        .as_ref()
+        .and_then(|sessions| sessions.coordinator.clone());
     // The one construction of the core services; everything below receives the finished set.
     let core = CoreServices::build(CorePorts {
         store: &composition.store,
@@ -1470,6 +1527,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         use_cases,
         usage,
         dispatcher,
+        workspace_replies,
+        auto_decisions,
         process_tools,
         containers,
         git,
@@ -1512,6 +1571,24 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         core.web.clone(),
         core.connections.clone(),
     );
+    if let Some(coordinator) = workspace_coordinator {
+        let info = store.info();
+        let host = devworks_core::context::HostIngress::new(store.as_ref()).context(
+            info.host_actor,
+            devworks_core::context::PrincipalKind::Host,
+            admitter.ids.next_id(devworks_core::ports::IdKind::Command),
+            Id::new("workspace-coordinator").expect("fixed ingress"),
+            devworks_core::protocol::Counter::new(info.restore_epoch)
+                .map_err(|_| failed(BootError::Composition(StorageError::ScopeDenied)))?,
+            devworks_core::protocol::Revision::new(1).expect("positive revision"),
+        );
+        crate::store::write(&store, WriteOptions::recovery(), move |tx| {
+            devworks_core::services::agents::bind_workspace_coordinator(tx, &host, &coordinator)
+        })
+        .await
+        .map_err(BootError::Composition)
+        .map_err(failed)?;
+    }
     if let Some(service) = &schemas {
         // Namespace/reference-only cleanup precedes password intake and command exposure.
         match service.reconcile_credential_orphans() {
@@ -1676,6 +1753,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     #[cfg(any(test, feature = "test-support"))]
     let polling_marks = (stored.clone(), delivered.clone());
     let turn_commits = stored.clone();
+    let turn = Arc::new(crate::turn_engine::TurnEngine {
+        store: store.clone(),
+        clock: clock.clone(),
+        artifacts: artifacts.clone(),
+        providers: providers.clone(),
+        inference_router: use_cases.inference_router(),
+        auto_decisions,
+        mcp: use_cases.mcp_service(),
+        packages: package_host.clone(),
+        approvals: approvals.clone(),
+        runs: run_supervisor.clone(),
+        instructions: instructions.clone(),
+        indexing: index_supervisor.clone(),
+        admitter: admitter.clone(),
+        commits: turn_commits,
+    });
+    if let Some(worker) = &workspace_replies {
+        worker.bind(&turn);
+    }
     let commits = {
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
         let registered = polling_loops.clone();
@@ -1753,6 +1849,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
                 .on_stop(move || stop.stop()),
         ),
     );
+    let keep_working = Arc::new(crate::keep_working::KeepWorking::new(
+        store.clone(),
+        admitter.ids.clone(),
+        admitter.clone(),
+    ));
+    let (project_work, stop) = (keep_working.clone(), keep_working.clone());
+    workers.start(
+        StopAt::Schedule,
+        None,
+        Arc::new(
+            Loop::new("project keep-working", |_| project_work.clone().run(every))
+                .on_stop(move || stop.stop()),
+        ),
+    );
     let (stop, drain) = (usage.clone(), usage.clone());
     let usage_drain = Arc::new(Mutex::new(None));
     let drained = usage_drain.clone();
@@ -1782,20 +1892,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     // Unknown external effects remain held, never retried. Re-observe them while the app is
     // running as well as at boot; an owner can establish a terminal fact without a restart.
-    if process_tools.is_some() || containers.is_some() {
+    if process_tools.is_some() || containers.is_some() || workspace_replies.is_some() {
         let observing = dispatcher.clone();
+        let stopping = workspace_replies.clone();
         workers.start(
             StopAt::Work,
             None,
-            Arc::new(Loop::new(
-                "unknown outcome observation",
-                |mut stopped| async move {
+            Arc::new(
+                Loop::new("unknown outcome observation", |mut stopped| async move {
                     while !stopped.is_set() {
                         let _ = observing.observe_unknown().await;
                         stopped.wait(Duration::from_secs(10)).await;
                     }
-                },
-            )),
+                })
+                .on_stop(move || {
+                    if let Some(worker) = &stopping {
+                        worker.stop();
+                    }
+                }),
+            ),
         );
     }
     if let Some(worker) = purge_worker {
@@ -2171,21 +2286,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
-    let turn = crate::turn_engine::TurnEngine {
-        store: store.clone(),
-        artifacts: artifacts.clone(),
-        providers: providers.clone(),
-        mcp: use_cases.mcp_service(),
-        packages: package_host.clone(),
-        approvals: approvals.clone(),
-        runs: run_supervisor.clone(),
-        instructions: instructions.clone(),
-        indexing: index_supervisor.clone(),
-        admitter: admitter.clone(),
-        commits: turn_commits,
-    };
     Ok(Runtime {
         store,
+        keep_working,
         artifacts,
         control,
         knowledge,
@@ -2357,6 +2460,14 @@ impl Runtime {
     pub fn store(&self) -> &Arc<dyn ApplicationStore> {
         &self.store
     }
+    pub fn workspace_reply_status(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+    ) -> Result<Option<crate::WorkspaceReplyStatus>, StorageError> {
+        crate::workspace_reply::status(self.store.as_ref(), ctx, session_id)
+    }
+
     /// The artifact service the use cases, reply publication and collection share (artifact
     /// streams are opened through it).
     pub fn artifacts(&self) -> &Arc<ArtifactService> {
@@ -2815,6 +2926,17 @@ impl Runtime {
         self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 
+    pub fn systemone_completion(
+        &self,
+        context: &InvocationContext,
+        id: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        Box<devworks_core::protocol::DomainFault>,
+    > {
+        crate::providers::systemone::completion(&*self.store, context, id)
+    }
+
     /// Dedicated trusted native-human interaction. The ordinary command/tool path cannot
     /// mint this private exact-content witness, even for a context whose kind is Human.
     pub fn record_human_decision(&self, ctx: &InvocationContext, frame: &[u8]) -> CommandOutcome {
@@ -2924,6 +3046,28 @@ impl Runtime {
     /// granted in between). Trusted native confirmation ingress stays closed otherwise.
     pub fn control_quiet_since(&self, received: ControlEpoch) -> bool {
         received.quiet_through(&self.desktop_control_epoch())
+    }
+
+    pub fn keep_working_status(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+    ) -> Option<crate::KeepWorkingStatus> {
+        self.keep_working.status(project)
+    }
+
+    /// Only an explicit native click can arm automatic allocation. All resulting commands
+    /// still run under the human's current authority through the ordinary gateway.
+    pub fn set_keep_working(
+        &self,
+        context: &InvocationContext,
+        project: &devworks_core::protocol::ProjectId,
+        enabled: bool,
+        received: ControlEpoch,
+    ) -> Result<crate::KeepWorkingStatus, StorageError> {
+        if !self.control_quiet_since(received) {
+            return Err(StorageError::ScopeDenied);
+        }
+        self.keep_working.set(context, project, enabled)
     }
 
     pub fn approvals(&self) -> &Arc<ApprovalService> {

@@ -70,6 +70,8 @@ use tokio::sync::{oneshot, watch};
 pub const HOST_ACTOR: &str = "devworks-host";
 /// The local user, registered as the human principal at every boot.
 pub const USER_ACTOR: &str = "local-user";
+/// The durable rootless agent for native Home conversations.
+const WORKSPACE_COORDINATOR: &str = "devworks-workspace-coordinator";
 /// Retry-key namespace of the desktop UI surface.
 pub const UI_INGRESS: &str = "desktop-ui";
 /// Lifetime of an upload ticket minted for an attachment (it is spent at once).
@@ -254,6 +256,7 @@ impl std::fmt::Display for StartError {
 /// The booted host: the runtime handle and the host-bound user identity.
 pub struct Host {
     runtime: Arc<Runtime>,
+    navigation: Arc<devworks_core::services::navigation::NavigationContextService>,
     async_runtime: tokio::runtime::Handle,
     ctx: InvocationContext,
     sources: Arc<HostArtifactSources>,
@@ -338,8 +341,6 @@ async fn compose(
         .http
         .clone()
         .unwrap_or_else(|| Arc::new(devworks_adapters::http::NativeHttp::new()));
-    // The Home coordinator agent is bound by the Home chat item (DW-16); until it exists a
-    // human's Home session is conducted by its creator, and no reply is ever fabricated.
     // Unified Knowledge retrieval is lexical until an embedding route exists (vector search is
     // never reported as run). The engine builds every core service from these ports.
     let application = ApplicationComposition {
@@ -361,11 +362,18 @@ async fn compose(
         router: Some(RouterPorts {
             directory: config.connections.clone(),
         }),
-        sessions: Some(SessionPorts::default()),
+        sessions: Some(SessionPorts {
+            coordinator: Some(ActorId(
+                Id::new(WORKSPACE_COORDINATOR).expect("fixed actor ID"),
+            )),
+        }),
         history: true,
         mcp: true,
     };
-    let use_cases = UseCases::new().with_queue();
+    let navigation =
+        Arc::new(devworks_core::services::navigation::NavigationContextService::default());
+    let mut use_cases = UseCases::new().with_queue();
+    use_cases.register("ui.current_screen", Some(navigation.clone()), None);
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
         clock: clock.clone(),
@@ -550,14 +558,19 @@ async fn compose(
             native
         }),
     });
-    runtime_config.providers = Some(match config.providers.clone() {
-        Some(providers) => providers,
-        None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
-            devworks_adapters::provider_stream::NativeStreamingHttp::new().map_err(|_| {
-                StartError::Thread("native inference HTTP client could not be initialized".into())
-            })?,
-        )),
-    });
+    runtime_config.providers = Some(
+        (match config.providers.clone() {
+            Some(providers) => providers,
+            None => devworks_engine::providers::driver::ProviderComposition::new(Arc::new(
+                devworks_adapters::provider_stream::NativeStreamingHttp::new().map_err(|_| {
+                    StartError::Thread(
+                        "native inference HTTP client could not be initialized".into(),
+                    )
+                })?,
+            )),
+        })
+        .with_systemone_validator(Arc::new(JsonSchemaValidator)),
+    );
     runtime_config.price_refresh = Some(devworks_engine::prices::PriceComposition::new(Arc::new(
         devworks_adapters::prices::OfficialPriceSource::new(http.clone()),
     )));
@@ -727,6 +740,7 @@ async fn compose(
     runtime.notification_wakeup();
     Ok(Host {
         runtime,
+        navigation,
         async_runtime: tokio::runtime::Handle::current(),
         ctx,
         sources,
@@ -1004,6 +1018,31 @@ impl DesktopBackend {
 }
 
 impl Backend for DesktopBackend {
+    fn publish_current_screen(
+        &self,
+        screen: Option<(Id, devworks_core::protocol::records::ScreenContext)>,
+        selection_key: &str,
+    ) {
+        self.host.navigation.publish(screen, selection_key);
+    }
+    fn keep_working_status(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+    ) -> Option<devworks_engine::KeepWorkingStatus> {
+        self.host.runtime.keep_working_status(project)
+    }
+    fn set_keep_working(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        enabled: bool,
+        received: ControlEpoch,
+    ) -> Result<(), String> {
+        self.host
+            .runtime
+            .set_keep_working(&self.host.ctx, project, enabled, received)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
     fn read_coordinator_notice(
         &self,
         reference: &devworks_core::protocol::provider::ArtifactRef,
@@ -1038,13 +1077,28 @@ impl Backend for DesktopBackend {
             Counter::new(info.restore_epoch).map_err(|e| e.to_string())?,
             Revision::new(1).map_err(|e| e.to_string())?,
         );
+        let topic = crate::help_ops::topics(self.query(
+            "help.topic_for_screen",
+            &crate::help_ops::context(self, screen, None),
+        ))
+        .ok()
+        .and_then(|page| {
+            page.items
+                .0
+                .into_iter()
+                .find(|topic| topic.id.as_str() == screen)
+        });
+        let context = topic.map_or_else(
+            || context.to_owned(),
+            |topic| format!("{context} ({})", topic.version.0),
+        );
         devworks_core::services::sessions::notice::append_screen_context(
             &**store,
             self.host.runtime.artifacts(),
             &host,
             session,
             screen,
-            context,
+            &context,
         )
         .map_err(|e| format!("coordinator context notice: {e:?}"))
     }
@@ -1144,6 +1198,17 @@ impl Backend for DesktopBackend {
             None => Ok(None),
         }
     }
+    fn systemone_completion(
+        &self,
+        operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        Box<devworks_core::protocol::DomainFault>,
+    > {
+        self.host
+            .runtime
+            .systemone_completion(&self.host.ctx, operation)
+    }
     fn control_epoch(&self) -> ControlEpoch {
         self.host.runtime.desktop_control_epoch()
     }
@@ -1194,6 +1259,15 @@ impl Backend for DesktopBackend {
             reviewed,
         )
         .map_err(|r| crate::repository_deletion::refusal_text(&r))
+    }
+    fn workspace_reply_status(
+        &self,
+        session: &Id,
+    ) -> Result<Option<devworks_engine::WorkspaceReplyStatus>, String> {
+        self.host
+            .runtime
+            .workspace_reply_status(&self.host.ctx, session)
+            .map_err(|error| error.to_string())
     }
     fn text_preview(
         &self,

@@ -2,6 +2,7 @@
 from pathlib import Path
 import json,re,subprocess
 from domain_spec import TYPES,OPS,LEGACY_RESULTS,FAMILY_RULES
+from input_alternatives import alternatives
 from versioned_result import generate as gen_versioned
 from variant_revision import containing as variant_types, method as variant_method, calls as variant_calls
 ROOT=Path(__file__).resolve().parents[2]; OUT=ROOT/'tools/contracts-eval/src/domain_generated.rs'
@@ -90,7 +91,8 @@ for name,d in TYPES.items():
   if name in RC:
    gated=lambda v,fs:{n:t for n,t in fs.items() if tokens(t)&RC or n in vs.get(v,{})}
    arms=[f' Self::{v} {{'+','.join(gated(v,fs))+',..} => {'+''.join(retain(gated(v,fs),vs.get(v,{}),'','*'))+'},' for v,fs in d['variants'].items() if gated(v,fs)]
-   lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{match self {{',*arms,*([' _ => {}'] if len(arms)<len(d['variants']) else []),'}}',variant_method(d,variant_types(TYPES)),'}','']
+   projection = [f'fn retain_revision(&mut self,revision:u32){{match self {{',*arms,*([' _ => {}'] if len(arms)<len(d['variants']) else []),'}}'] if arms else ['fn retain_revision(&mut self,_:u32){}']
+   lines += [f'impl Revisioned for {name} {{',*projection,variant_method(d,variant_types(TYPES)),'}','']
 
 def included(d,mode): return d['mode'] in [mode,'Hybrid']
 def opfields(d,mode): return d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
@@ -100,7 +102,9 @@ for mode in ['Query','Command']:
  for n,d in OPS.items():
   if included(d,mode):
    one=d.get('exactlyOne',[]);fs=opfields(d,mode)
-   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+(choice(fs,one,opsince(d,mode),True,d.get('requiredSince')) if one else '')+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema'),d.get('strictOptional',())),'    },']
+   constraint=choice(fs,one,opsince(d,mode),True,d.get('requiredSince')) if one else ''
+   if d.get('inputAlternatives'):constraint,one=alternatives(fs,d['inputAlternatives'],kind=True)
+   lines += [*( [f'    #[schemars(extend("x-since" = {d["introducedRevision"]}))]'] if d.get('introducedRevision',1)>1 else []), '    #[serde(rename = "'+n+'")] '+constraint+pascal(n)+' {',enumfields(fs,opsince(d,mode),one,d.get('fieldSchema'),d.get('strictOptional',())),'    },']
  lines += ['}',f'impl Domain{mode} {{pub fn operation(&self)->&\'static str {{match self {{']
  for n,d in OPS.items():
   if included(d,mode):lines.append(f' Self::{pascal(n)} {{..}} => "{n}",')
@@ -132,7 +136,7 @@ lines += ['} super::domain_rules::result(self.operation(), &serde_json::to_value
 # HistoryPage is a support type with its own revision-2 member (the tail checkpoint);
 # TranscriptPage leaves out or maps the transcript entries introduced at revision 8.
 projected=[n for n,t in results.items() if tokens(t)&(RC|{'HistoryPage','GraphPage','TranscriptPage'})]
-lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}', 'fn check_revision(&self,revision:u32)->Result<(),String>{match self{',*[f'Self::{pascal(n)} {{..}} if revision<{d["introducedRevision"]}=>Err("operation result predates its introduction".into()),' for n,d in OPS.items() if d.get('introducedRevision',1)>1],*[f'Self::{pascal(n)} {{value}}=>value.check_revision(revision),' for n,t in results.items() if TYPES.get(t,{}).get('kind')=='versioned' or t=='GraphPage' or t in variant_types(TYPES)],'_=>Ok(())}}','}','']
+lines += ['impl Revisioned for OperationResult {fn retain_revision(&mut self,revision:u32){match self{',*[f' Self::{pascal(n)} {{value}}=>value.retain_revision(revision),' for n in projected],*([' _ => {}'] if len(projected)<len(results) else []),'}}', 'fn check_revision(&self,revision:u32)->Result<(),String>{match self{',*[f'Self::{pascal(n)} {{..}} if revision<{d["introducedRevision"]}=>Err("operation result predates its introduction".into()),' for n,d in OPS.items() if d.get('introducedRevision',1)>1],*[f'Self::{pascal(n)} {{value}}=>value.check_revision(revision),' for n,t in results.items() if TYPES.get(t,{}).get('kind')=='versioned' or t=='GraphPage' or tokens(t) & variant_types(TYPES)],'_=>Ok(())}}','}','']
 # Generic receipts preserve admitted/rejected/unknown command distinctions. Outcome
 # variants cannot mint human authority or make an external uncertainty successful.
 lines += [TAG+'''pub enum DomainDecision {

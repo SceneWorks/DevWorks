@@ -455,7 +455,7 @@ pub(super) fn delete_connection(
 
 const DECISION_COLUMNS: &str = "id,display_name,connection_id,upstream_model_id,question_types_json,\
     accepts_images,accepts_videos,enabled,extension_schemas_json,\
-    result_schema_json,revision,updated_at";
+    result_schema_json,revision,updated_at,decision_policy_json";
 
 fn decision_of(r: &Row<'_>) -> rusqlite::Result<RawDecision> {
     Ok((
@@ -471,6 +471,7 @@ fn decision_of(r: &Row<'_>) -> rusqlite::Result<RawDecision> {
         r.get(9)?,
         r.get(10)?,
         r.get(11)?,
+        r.get(12)?,
     ))
 }
 type RawDecision = (
@@ -486,6 +487,7 @@ type RawDecision = (
     String,
     i64,
     i64,
+    Option<String>,
 );
 fn stored_decision(r: RawDecision) -> Result<StoredDecisionModel, StorageError> {
     Ok(StoredDecisionModel {
@@ -501,6 +503,7 @@ fn stored_decision(r: RawDecision) -> Result<StoredDecisionModel, StorageError> 
         result_schema: r.9,
         revision: r.10,
         updated_at_ms: r.11,
+        decision_policy: r.12,
     })
 }
 
@@ -592,8 +595,8 @@ pub(super) fn put_decision_model(
     db(conn.execute(
         "INSERT INTO router_decision_models(id,display_name,connection_id,\
             upstream_model_id,question_types_json,accepts_images,accepts_videos,\
-            enabled,extension_schemas_json,result_schema_json,revision,updated_at) \
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) \
+            enabled,extension_schemas_json,result_schema_json,revision,updated_at,decision_policy_json) \
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) \
             ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name, \
             connection_id=excluded.connection_id, \
             upstream_model_id=excluded.upstream_model_id, \
@@ -602,8 +605,8 @@ pub(super) fn put_decision_model(
             accepts_videos=excluded.accepts_videos, enabled=excluded.enabled, \
             extension_schemas_json=excluded.extension_schemas_json, \
             result_schema_json=excluded.result_schema_json, \
-            revision=excluded.revision, updated_at=excluded.updated_at WHERE \
-            revision=?13",
+            revision=excluded.revision, updated_at=excluded.updated_at, \
+            decision_policy_json=excluded.decision_policy_json WHERE revision=?14",
         params![
             m.id.as_str(),
             m.display_name,
@@ -617,6 +620,7 @@ pub(super) fn put_decision_model(
             m.result_schema,
             next,
             m.updated_at_ms,
+            m.decision_policy,
             expected.unwrap_or(0),
         ],
     ))?;

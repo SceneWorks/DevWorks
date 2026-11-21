@@ -56,17 +56,24 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// foreign key to instruction_revisions and one to knowledge_claims, and no other table changes.
 /// Migration 63 adds file scan progress to watchers. The watcher retains its existing project
 /// and session ownership. The new column adds no reference to another row.
-/// Migration 64 adds retrieval preferences and three per-version document index tables. The
+/// Migration 64 adds one decision policy column on the globally owned model and a workspace
+/// cursor. Migration 65 adds an automatic-claim flag and replaces an allocation uniqueness index
+/// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
+/// routing source linked to its owning session. The linked input artifact follows the ordinary
+/// project artifact ownership and the operation journal follows its existing scope.
+/// Migration 67 adds retrieval preferences and three per-version document index tables. The
 /// document lineage propagates from the managed artifact version to its extraction and text.
 /// Explicit version tombstones remove derived rows, and project purge classifies each row.
-/// Migration 65 adds a published lexical row per extracted block. It is classified through
+/// Migration 68 adds a published lexical row per extracted block. It is classified through
 /// that block's retained version. FTS5 segments follow the projection and are maintained
 /// by the virtual table when a canonical lexical row changes.
-/// Migration 68 indexes existing embedding preparation rows and keeps the publication time on
+/// Migrations 69 and 70 add derivative embedding runs, vectors, and vision units and keys.
+/// Each follows its exact extraction or version and has a separate ownership entry.
+/// Migration 71 indexes existing embedding preparation rows and keeps the publication time on
 /// the exact document index version. Both tables retain their existing purge policies, so a
 /// retained document keeps its publication time after its previous owner's events are purged.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "3c90e53fca3046cd2120e4356bf2191ea7e5974fb9f0ca63f997e71fc4fdb694";
+    "44cab1ac114b4701d2454a0a8498d666f1af4dba3cc8b60acef03b85a6e81365";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

@@ -62,6 +62,126 @@ fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, 
 }
 
 #[test]
+fn native_home_sessions_have_the_workspace_coordinator_as_their_owner() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("workspace-coordinator");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let operation = "sessions.start";
+    let mut frame: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::command(
+            &*backend,
+            operation,
+            json!({"scope":{"kind":"Workspace"},"title":"Home"}),
+        ))
+        .unwrap();
+    frame["schemaRevision"] = json!(devworks_desktop::frame::latest_revision(operation));
+    let session = ops::started(backend.command(operation, frame.to_string().as_bytes())).unwrap();
+    let store = engine.host().runtime().store();
+    devworks_core::ports::storage::read_snapshot(
+        store.as_ref(),
+        &devworks_core::ports::storage::ReadOptions::default(),
+        |snapshot| {
+            let stored = snapshot.sessions().session(&session.id)?.unwrap();
+            let owner = snapshot.authority().principal(&stored.agent_id)?.unwrap();
+            assert!(owner.active);
+            assert_eq!(
+                owner.role,
+                Some(devworks_core::settings::catalog::AgentRole::WorkspaceCoordinator)
+            );
+            assert!(stored.root_id.is_none() && stored.project_id.is_none());
+            assert_ne!(stored.created_by, stored.agent_id);
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn overview_can_enable_and_stop_keep_working_without_taking_a_manual_reservation() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("keep-working");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Project scheduling", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    let pid = project.0.as_str().to_owned();
+    let issue = command(
+        &*backend,
+        "issues.create",
+        json!({
+            "projectId": project, "title":"Reserved work", "description":"An actionable issue.",
+            "repositoryIds":[], "statusId":default_status_id(&project, "ready"), "priority":1
+        }),
+    );
+    let queue = wops::queue_snapshot(backend.query(
+        "next_work.inspect_queue",
+        &wops::allocation_queue(&*backend, &pid, None),
+    ))
+    .unwrap();
+    let frame = wops::allocation_command(
+        &*backend,
+        command_input(
+            "next_work.claim_project_queue",
+            json!({"projectId":project,"expectedQueueRevision":queue.queue_revision,"leaseMs":"120000"}),
+        ),
+    );
+    let claim =
+        wops::allocation_selection(backend.command("next_work.claim_project_queue", &frame))
+            .unwrap();
+    use devworks_core::protocol::records::{AllocationOutcome, AllocationSelection};
+    let AllocationSelection::Current(AllocationOutcome::Claimed { claim, .. }) = claim else {
+        panic!("expected the existing manual reservation");
+    };
+    assert_eq!(claim.work_id, issue.id);
+
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    h.state_mut().select_project(Some(pid));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Enable keep-working")
+        .click();
+    h.step();
+    assert!(h.state().wait_idle());
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        h.step();
+        if h.query_by_role_and_label(Role::Button, "Stop keep-working")
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "keep-working control updates"
+        );
+        std::thread::yield_now();
+    }
+    h.get_by_role_and_label(Role::Button, "Stop keep-working")
+        .click();
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Enable keep-working");
+    let result = backend.query(
+        "next_work.inspect_claim",
+        &wops::allocation_inspect(&*backend, claim.id.as_str()),
+    );
+    let (devworks_core::protocol::results::OperationResult::NextWorkInspectClaim { value }, _) =
+        ops::query_result(result).expect("stopping the mode preserves the manual reservation")
+    else {
+        panic!("expected the exact claim inspection");
+    };
+    assert_eq!(value.id, claim.id);
+    assert!(matches!(
+        value.state,
+        devworks_core::protocol::records::LeaseState::Held
+    ));
+}
+
+#[test]
 fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state() {
     let root = Root::new("work-message-board");
     let engine = start(&root);

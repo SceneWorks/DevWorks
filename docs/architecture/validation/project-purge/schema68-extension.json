@@ -1,5 +1,5 @@
 {
-  "schema": 65,
+  "schema": 68,
   "policy": "dw404-document-lexical-v1",
   "additionalTables": [
     {

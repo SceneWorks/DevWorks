@@ -411,9 +411,11 @@ mod tests {
             | TaskOutput::TextPreview(_)
             | TaskOutput::DocumentSource(_)
             | TaskOutput::DocumentAccess(_)
+            | TaskOutput::WorkspaceReplyStatus(_)
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)
             | TaskOutput::McpContent(_)
+            | TaskOutput::SystemOneCompletion(_)
             | TaskOutput::RepositoryDeletionPreview(_)
             | TaskOutput::RepositoryDeleted(_) => {
                 panic!("expected a preview")

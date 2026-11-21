@@ -672,7 +672,9 @@
     ],
     "relatedCapabilityIds": [
       "router.connections",
-      "router.configure"
+      "router.configure",
+      "router.decision_models",
+      "router.decide"
     ]
   },
   {

@@ -1217,6 +1217,187 @@ fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
         .unwrap()
 }
 
+fn feature_document_migrations(count: usize) -> Vec<Migration> {
+    let mut migrations = through(63);
+    migrations.extend(
+        MIGRATIONS[66..66 + count]
+            .iter()
+            .map(|migration| Migration {
+                version: migration.version - 3,
+                minimum_reader: 57,
+                minimum_writer: migration.version - 3,
+                ..*migration
+            }),
+    );
+    migrations
+}
+
+#[test]
+fn published_feature_document_prefixes_converge_without_rewriting_evidence() {
+    for count in 1..=5 {
+        let h = Harness::new();
+        let mut config = h.config();
+        config.app_build = "document-feature".into();
+        let legacy = SqliteStore::open_with(config, &feature_document_migrations(count)).unwrap();
+        let id = |name| Id::new(name).unwrap();
+        write(&legacy, move |tx| {
+            let digest = "a".repeat(64);
+            let generation = "branch-blob".to_owned();
+            let owner = tx.store().host_actor.clone();
+            tx.artifacts()
+                .put_blob(&digest, 4, &generation, "blobs/fixture")?;
+            tx.artifacts().insert_artifact(&StoredArtifact {
+                id: id("branch-document"),
+                origin_project_id: None,
+                origin_work_id: None,
+                title: "Saved document".into(),
+                revision: 1,
+                scope: ArtifactScope::Workspace,
+                owner: Some(owner),
+                retention: ArtifactRetention::Explicit,
+                scope_revision: 1,
+                reference_revision: 1,
+                current_version_id: None,
+                state: ArtifactState::Live,
+                created_at_ms: T0,
+                provenance: json!({}),
+            })?;
+            tx.artifacts().insert_version(&StoredVersion {
+                id: id("branch-version"),
+                artifact_id: id("branch-document"),
+                version_no: 1,
+                blob_digest: digest,
+                byte_count: 4,
+                blob_generation: generation,
+                media_type: "text/plain".into(),
+                created_at_ms: T0,
+                deleted_at_ms: None,
+                source: json!({}),
+            })
+        })
+        .unwrap();
+        drop(legacy);
+        let conn = h.raw();
+        conn.execute_batch(
+            "INSERT INTO document_retrieval_preferences VALUES('branch-document',0);
+             INSERT INTO document_extractions VALUES('branch-extraction','branch-version',1,
+                replace(hex(zeroblob(32)),'0','a'),'{}',1);
+             INSERT INTO document_extracted_blocks VALUES('branch-block','branch-extraction',0,
+                'retained migration marker','{}','[]');
+             INSERT INTO document_index_versions(version_id,latest_operation,stage,published_generation,published_revision)
+                VALUES('branch-version','branch-index','Ready','branch-generation',1);",
+        ).unwrap();
+        if count >= 3 {
+            conn.execute(
+                "INSERT INTO document_embedding_runs(run_id,extraction_id,configuration_digest)
+                 VALUES('branch-embedding','branch-extraction',replace(hex(zeroblob(32)),'0','b'))",
+                [],
+            )
+            .unwrap();
+        }
+        if count >= 4 {
+            conn.execute(
+                "INSERT INTO document_extraction_keys VALUES('branch-version','branch-key','branch-extraction','[]')",
+                [],
+            ).unwrap();
+        }
+        if count >= 5 {
+            conn.execute(
+                "UPDATE document_index_versions SET published_at=123 WHERE version_id='branch-version'",
+                [],
+            ).unwrap();
+        }
+        let before = migrations::ledger(&conn).unwrap();
+        drop(conn);
+        let upgraded = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+        let after = upgraded.compatibility().unwrap().migrations;
+        assert_eq!(after.len(), MIGRATIONS.len());
+        assert_eq!(&after[..63], &before[..63]);
+        for old in &before[63..] {
+            let canonical = &after[(old.version + 2) as usize];
+            assert_eq!(canonical.version, old.version + 3);
+            assert_eq!(canonical.checksum, old.checksum);
+            assert_eq!(canonical.app_build, "document-feature");
+            assert_eq!(canonical.applied_at_ms, old.applied_at_ms);
+        }
+        for main in &MIGRATIONS[63..66] {
+            assert_eq!(after[(main.version - 1) as usize].checksum, main.checksum());
+        }
+        let conn = h.raw();
+        let text: String = conn
+            .query_row(
+                "SELECT text FROM document_extracted_blocks WHERE id='branch-block'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(text, "retained migration marker");
+        let lexical: i64 = conn.query_row(
+            "SELECT count(*) FROM document_lexical_fts WHERE document_lexical_fts MATCH 'marker'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(lexical, 1);
+        if count >= 3 {
+            let retained: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM document_embedding_runs WHERE run_id='branch-embedding')",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert!(retained);
+        }
+        if count >= 4 {
+            let key: String = conn.query_row(
+                "SELECT identity_key FROM document_extraction_keys WHERE extraction_id='branch-extraction'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(key, "branch-key");
+        }
+        if count >= 5 {
+            let published: i64 = conn.query_row(
+                "SELECT published_at FROM document_index_versions WHERE version_id='branch-version'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(published, 123);
+        }
+        drop(conn);
+        drop(upgraded);
+        let reopened = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+        assert_eq!(reopened.compatibility().unwrap().migrations, after);
+    }
+}
+
+#[test]
+fn feature_document_reconciliation_rejects_a_mixed_ledger() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &feature_document_migrations(2)).unwrap());
+    let conn = h.raw();
+    conn.execute(
+        "UPDATE schema_migrations SET checksum=?1 WHERE version=65",
+        [MIGRATIONS[64].checksum()],
+    )
+    .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+    assert!(matches!(
+        SqliteStore::open_with(h.config(), MIGRATIONS),
+        Err(StorageError::IncompatibleSchema(_))
+    ));
+    assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+}
+
+#[test]
+fn feature_document_reconciliation_rolls_back_all_ledger_and_schema_changes() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &feature_document_migrations(5)).unwrap());
+    let conn = h.raw();
+    conn.execute("DROP INDEX allocation_claims_project_slot", [])
+        .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+    assert!(SqliteStore::open_with(h.config(), MIGRATIONS).is_err());
+    assert_eq!(version_and_ledger(&h, "router_decision_pool"), (0, 68, 68));
+    assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+}
+
 #[test]
 fn migrations_apply_in_order_and_an_interrupted_one_leaves_nothing() {
     let h = Harness::new();

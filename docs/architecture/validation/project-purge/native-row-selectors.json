@@ -120,6 +120,7 @@
     "resource_leases": "project_id=?1",
     "resume_grants": "root_id IN(SELECT id FROM ownedWork)",
     "root_controls": "root_id IN(SELECT id FROM ownedWork)",
+    "router_auto_sessions": "session_id IN(SELECT id FROM ownedSessions)",
     "router_pins": "session_id IN(SELECT id FROM ownedSessions)",
     "router_requests": "project_id=?1",
     "run_instructions": "root_id IN(SELECT id FROM ownedWork)",

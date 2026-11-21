@@ -221,7 +221,33 @@ impl AttemptHost {
         let control = self.control.clone();
         let dispatch_id = id.clone();
         let admission = self.write(move |tx| {
-            let admission = router.mark_attempt_dispatched(tx, &control, &dispatch_id)?;
+            let dispatch = tx.savepoint()?;
+            let admission = match router.mark_attempt_dispatched(tx, &control, &dispatch_id) {
+                Ok(admission) => {
+                    tx.release(dispatch)?;
+                    admission
+                }
+                Err(error @ (StorageError::ScopeDenied | StorageError::LeaseLost { .. })) => {
+                    // Undo partial dispatch work, then retire the reservation in this write.
+                    // Return the denial only once the cancellation has committed.
+                    tx.rollback_to(dispatch)?;
+                    if let Some(attempt) = tx.usage().inference_attempt(&dispatch_id)?
+                        && attempt.state == AttemptState::Admitted
+                        && tx.store().boot_id.as_ref()
+                            == Some(&accounting::snapshot(&attempt)?.admitted_boot_id)
+                    {
+                        accounting::cancel_admitted(
+                            tx,
+                            &dispatch_id,
+                            "final transport dispatch lost authority or custody",
+                        )?;
+                    }
+                    return Ok(Err(error));
+                }
+                // A transient failure or unknown commit leaves the attempt available for
+                // the existing retry or recovery path.
+                Err(error) => return Err(error),
+            };
             if !matches!(admission, Admission::Admitted { .. }) {
                 accounting::cancel_admitted(
                     tx,
@@ -229,8 +255,8 @@ impl AttemptHost {
                     "final transport admission was fenced",
                 )?;
             }
-            Ok(admission)
-        })?;
+            Ok(Ok(admission))
+        })??;
         let attempt = match admission {
             Admission::Admitted { reused: true, .. } => return Ok(DriveOutcome::AlreadyDispatched),
             Admission::Admitted {
