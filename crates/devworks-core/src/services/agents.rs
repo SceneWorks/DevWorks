@@ -96,7 +96,7 @@ fn assignment_scope(
     Ok((assignment, root.project_id))
 }
 
-fn source_assignment(
+pub(super) fn source_assignment(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     project: &ProjectId,

@@ -4,7 +4,7 @@ use super::repos::{Snapshot, Unit};
 use super::support::{corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId};
+use devworks_core::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId};
 use rusqlite::{Connection, Row, params, params_from_iter};
 
 const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,\
@@ -14,7 +14,7 @@ const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_
     probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,\
     probe_next_run_at,due_at,expires_at,match_pattern,match_each,\
     match_min_interval_ms,match_scanned,match_pending,match_total,\
-    match_last_event_at,file_path,file_scan_json,attached_pid,attached_birth";
+    match_last_event_at,file_path,file_scan_json,attached_pid,attached_birth,assignment_id,child_session_id";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -59,6 +59,8 @@ fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
         file_scan_json: row.get(37)?,
         attached_pid: row.get(38)?,
         attached_birth: row.get(39)?,
+        assignment_id: row.get(40)?,
+        child_session_id: row.get(41)?,
     })
 }
 struct WatcherRow {
@@ -102,6 +104,8 @@ struct WatcherRow {
     file_scan_json: Option<String>,
     attached_pid: Option<i64>,
     attached_birth: Option<String>,
+    assignment_id: Option<String>,
+    child_session_id: Option<String>,
 }
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
@@ -173,6 +177,14 @@ impl WatcherRow {
             }),
             file_path: self.file_path,
             attached_process,
+            assignment: match (self.assignment_id, self.child_session_id) {
+                (Some(id), Some(session)) => Some(StoredWatchAssignment {
+                    id: AssignmentId(id_of(id)?),
+                    session_id: id_of(session)?,
+                }),
+                (None, None) => None,
+                _ => return Err(corrupt("incomplete watched assignment")),
+            },
         })
     }
 }
@@ -490,6 +502,8 @@ fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, Storag
         opt(file_scan_json.as_deref()),
         int(w.attached_process.as_ref().map(|a| i64::from(a.pid))),
         opt(w.attached_process.as_ref().map(|a| a.birth.as_str())),
+        opt(w.assignment.as_ref().map(|a| a.id.0.as_str())),
+        opt(w.assignment.as_ref().map(|a| a.session_id.as_str())),
     ])
 }
 
@@ -508,7 +522,7 @@ impl WatcherRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO watchers({WATCHER_COLUMNS}) VALUES({})",
-                placeholders(1, 40)
+                placeholders(1, 42)
             ),
             params_from_iter(write_params(watcher)?),
         ))?;
@@ -529,8 +543,8 @@ impl WatcherRepository for Unit<'_> {
                 due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,\
                 match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,\
                 match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38,\
-                attached_pid=?39,attached_birth=?40 WHERE id=?1 AND \
-                revision=?41",
+                attached_pid=?39,attached_birth=?40,assignment_id=?41,child_session_id=?42 \
+                WHERE id=?1 AND revision=?43",
             params_from_iter(values),
         ))?;
         if changed != 1 {

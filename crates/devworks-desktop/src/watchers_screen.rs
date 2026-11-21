@@ -349,6 +349,10 @@ fn source_label(w: &WatcherRecord) -> String {
             ),
             None => "Probe".to_owned(),
         },
+        WatchSourceKind::Assignment => w.assignment.as_ref().map_or_else(
+            || "Delegated assignment".to_owned(),
+            |child| format!("Delegated assignment {}", child.assignment_id.0.as_str()),
+        ),
         WatchSourceKind::Timer => "Timer".to_owned(),
         WatchSourceKind::File => "File".to_owned(),
         WatchSourceKind::AttachedProcess => w.attached_pid.map_or_else(

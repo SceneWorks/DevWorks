@@ -99,6 +99,12 @@ _probe={'process':_proc,'intervalMs':'1000','condition':{'exitCode':0,'outputPat
 case('input-watch.create-probe','domain-request.r8',_watch_body(probe=_probe,maxLifetimeMs='60000',tailBytes=64))
 case('input-watch.create-timer-after','domain-request.r8',_watch_body(timer={'afterMs':'5000'}))
 case('input-watch.create-timer-at','domain-request.r8',_watch_body(timer={'atMs':'1700000000000'}))
+def _assignment_watch(revision, **members):
+ frame=_watch_body(assignmentId='child-a',**members); frame['schemaRevision']=revision; return frame
+case('input-watch.create-assignment','domain-request.r10',_assignment_watch(10))
+case('reject-watch.create-assignment-legacy','domain-request.r9',_assignment_watch(9),False,False)
+case('reject-watch.create-assignment-and-process','domain-request.r10',_assignment_watch(10,process=_proc),False,True)
+case('reject-watch.create-assignment-output','domain-request.r10',_assignment_watch(10,tailBytes=64),False,True)
 case('reject-watch.create-two-sources','domain-request.r8',_watch_body(process=_proc,timer={'afterMs':'5000'}),False,True)
 case('reject-watch.create-no-source','domain-request.r8',_watch_body(),False,True)
 case('reject-watch.create-process-lifetime','domain-request.r8',_watch_body(process=_proc,maxLifetimeMs='60000'),False,True)

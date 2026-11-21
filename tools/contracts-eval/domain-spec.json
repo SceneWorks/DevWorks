@@ -6600,9 +6600,10 @@
         "Probe",
         "Timer",
         "File",
-        "AttachedProcess"
+        "AttachedProcess",
+        "Assignment"
       ],
-      "introducedVariants": {"AttachedProcess": 9},
+      "introducedVariants": {"AttachedProcess": 9, "Assignment": 10},
       "fallbackVariants": {"AttachedProcess": "Process"}
     },
     "WatchOutcomeKind": {
@@ -6625,6 +6626,13 @@
       "fields": {
         "pid": "u32",
         "birth_token": "Label"
+      }
+    },
+    "WatchAssignmentSource": {
+      "kind": "record",
+      "fields": {
+        "assignment_id": "AssignmentId",
+        "session_id": "Id"
       }
     },
     "WatchOutcome": {
@@ -6736,6 +6744,7 @@
         "source_kind": "WatchSourceKind",
         "process": "?WatchProcessSource",
         "attached_pid": "?u32",
+        "assignment": "?WatchAssignmentSource",
         "probe": "?WatchProbeStatus",
         "due_at_ms": "?Counter",
         "expires_at_ms": "?Counter",
@@ -6754,7 +6763,7 @@
         "stop_requested": "bool",
         "event": "?WatchEvent"
       },
-      "since": {"attached_pid": 9}
+      "since": {"attached_pid": 9, "assignment": 10}
     }
   },
   "operations": {
@@ -11529,15 +11538,16 @@
         "timer": "?WatchTimer",
         "file": "?WatchFile",
         "attached_process": "?WatchAttachedProcess",
+        "assignment_id": "?AssignmentId",
         "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
         "max_lifetime_ms": "?Counter"
       },
-      "since": {"attached_process": 9},
+      "since": {"attached_process": 9, "assignment_id": 10},
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Revision 9 permits read-only observation of an external process given its PID and birth token. An attached process can have a maximum lifetime and reports Exited with a status only when observed. Reviewer roles may create observing watchers and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Revision 9 permits read-only observation of an external process given its PID and birth token. An attached process can have a maximum lifetime and reports Exited with a status only when observed. Revision 10 allows an active parent assignment to observe one of its direct children by assignmentId. The outcome links the child session and the evidence of the terminal state. Reviewer roles may create observing watchers and cannot launch a process through a watcher.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -11552,7 +11562,7 @@
       "result": "WatcherPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "An agent lists its own session's watchers; a person or the host lists the watchers visible in their scope (every project's at workspace scope), optionally only those of one session or of one feature's sessions. Newest first.",
+      "rules": "An agent lists its own session's watchers; a person or the host lists the watchers visible in their scope (every project's at workspace scope), optionally only those of one session or of one feature's sessions. Newest first. Assignment watchers are visible starting at revision 10.",
       "introducedRevision": 8
     },
     "watch.inspect": {
@@ -11564,7 +11574,7 @@
       "result": "WatcherRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "State, source, elapsed time, outcome and the redacted output tail (live while the process runs).",
+      "rules": "State, source, elapsed time, outcome and the redacted output tail (live while the process runs). Assignment watchers are visible starting at revision 10.",
       "introducedRevision": 8
     },
     "watch.cancel": {
@@ -12618,19 +12628,23 @@
     ],
     "watch.create": [
       8,
-      9
+      9,
+      10
     ],
     "watch.list": [
       8,
-      9
+      9,
+      10
     ],
     "watch.inspect": [
       8,
-      9
+      9,
+      10
     ],
     "watch.cancel": [
       8,
-      9
+      9,
+      10
     ]
   },
   "familyRules": {

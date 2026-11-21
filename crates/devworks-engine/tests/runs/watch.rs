@@ -242,8 +242,19 @@ fn frame_at(mode: &str, op: &str, mut body: Value, key: &str, revision: u32) -> 
 }
 
 fn command(app: &Runtime, ctx: &InvocationContext, op: &str, body: Value, key: &str) -> Value {
+    command_at(app, ctx, op, body, key, 8)
+}
+
+fn command_at(
+    app: &Runtime,
+    ctx: &InvocationContext,
+    op: &str,
+    body: Value,
+    key: &str,
+    revision: u32,
+) -> Value {
     match app
-        .command(ctx, op, &frame("Command", op, body, key))
+        .command(ctx, op, &frame_at("Command", op, body, key, revision))
         .unwrap()
     {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
