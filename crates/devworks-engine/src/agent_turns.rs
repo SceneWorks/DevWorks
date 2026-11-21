@@ -952,7 +952,7 @@ async fn wait_for_linked_effects(
     }
 }
 
-fn prepare_generation_context(
+pub(crate) fn prepare_generation_context(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
@@ -2378,12 +2378,25 @@ fn plan_request(
     let tools = match window {
         Some(window) => {
             let mut selected = providers.schemas().selected_agent_tools(ctx)?;
-            if root_scope.is_none()
-                && let Some(index) = selected.iter().position(|tool| {
-                    tool.capability_id.as_str() == "devworks-query/ui.current_screen"
-                })
-            {
-                selected[..=index].rotate_right(1);
+            if root_scope.is_none() {
+                // Screen and Help discovery remain reachable even when the complete selected
+                // inventory exceeds the first provider window.
+                for (target, capability) in [
+                    "devworks-query/ui.current_screen",
+                    "devworks-query/help.topic_for_screen",
+                    "devworks-query/help.read",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if let Some(index) = selected
+                        .iter()
+                        .position(|tool| tool.capability_id.as_str() == capability)
+                    {
+                        let target = target.min(index);
+                        selected[target..=index].rotate_right(1);
+                    }
+                }
             }
             tool_window(&selected, window)?.to_vec()
         }

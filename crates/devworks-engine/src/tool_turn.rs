@@ -82,7 +82,7 @@ impl ContextHeadFence {
 
 /// Workspace messages queued after a frozen prompt need not be part of that prompt. A tail
 /// with provider, tool or epoch changes still invalidates the shared head fence.
-fn workspace_input_tail(
+pub(crate) fn workspace_input_tail(
     sessions: &dyn devworks_core::ports::storage::SessionRead,
     session: &devworks_core::ports::storage::StoredSession,
     after: i64,

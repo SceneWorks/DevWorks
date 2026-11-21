@@ -277,3 +277,4 @@ pub mod conventions_import;
 pub mod schemas;
 
 mod workspace_reply;
+pub use workspace_reply::WorkspaceReplyStatus;

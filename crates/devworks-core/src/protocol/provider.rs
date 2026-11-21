@@ -78,7 +78,7 @@ impl JsonSchema for QualifiedId {
         json_schema!({"type":"string","pattern":"^[a-z0-9_.-]{1,64}/[a-z0-9_.-]{1,64}$"})
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ArtifactRef {
     pub artifact_id: Id,

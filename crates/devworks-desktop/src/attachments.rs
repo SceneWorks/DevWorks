@@ -387,6 +387,7 @@ mod tests {
             | TaskOutput::PackagePrepared { .. }
             | TaskOutput::Refreshed
             | TaskOutput::TextPreview(_)
+            | TaskOutput::WorkspaceReplyStatus(_)
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)
             | TaskOutput::McpContent(_)

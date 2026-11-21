@@ -743,14 +743,6 @@ impl Shell {
             return;
         };
         let screen = self.route.screen();
-        let (board, card) = if matches!(
-            self.route,
-            Route::Features | Route::Issues | Route::Overview
-        ) {
-            (self.work.board.as_deref(), self.work.card.as_deref())
-        } else {
-            (None, None)
-        };
         let default_memory = RouteMemory::default();
         let screen_context = self.screen(self.shown_screen()).map(|s| {
             s.context(
@@ -759,10 +751,26 @@ impl Shell {
             )
         });
         let tab = screen_context.as_ref().map_or(0, |c| c.tab);
-        let selection = screen_context
-            .as_ref()
-            .and_then(|c| c.selection.as_deref())
-            .unwrap_or("");
+        let features_board = self.route == Route::Features && tab.min(1) == 1;
+        let selection = if features_board || self.route == Route::Overview {
+            ""
+        } else {
+            screen_context
+                .as_ref()
+                .and_then(|c| c.selection.as_deref())
+                .unwrap_or("")
+        };
+        // Only the Features Board displays its saved board and card. The list and
+        // Issues display their own selected work record, even in the same project.
+        let (board, card, work_root) = match self.route {
+            Route::Features if features_board => (
+                self.work.board.as_deref(),
+                self.work.card.as_deref(),
+                self.work.board.as_deref(),
+            ),
+            Route::Features | Route::Issues => (None, None, Some(selection)),
+            _ => (None, None, None),
+        };
         let knowledge_project = if self.route == Route::Knowledge {
             self.screen(ScreenId::Knowledge)
                 .and_then(|s| s.scope())
@@ -795,10 +803,7 @@ impl Shell {
                 selected_ids.push(id);
             }
         }
-        let root_id = board
-            .or(card)
-            .and_then(|value| Id::new(value).ok())
-            .map(RootId);
+        let root_id = work_root.and_then(|value| Id::new(value).ok()).map(RootId);
         backend.publish_current_screen(
             Some((
                 session,

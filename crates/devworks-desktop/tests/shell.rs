@@ -8,6 +8,7 @@ use devworks_core::protocol::provider::{TranscriptBody, UserContent};
 use devworks_core::settings::catalog::{Category, descriptor};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::chat::{ATTACH_LABEL, COMPOSER_LABEL, SEND_LABEL};
+use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::host::{Engine, StartError};
 use devworks_desktop::notifications::CompletionCard;
 use devworks_desktop::ops;
@@ -534,6 +535,57 @@ fn current_screen_uses_the_visible_native_workspace_session_and_help_binding() {
     assert_eq!(next.screen_id.as_str(), Route::Artifacts.screen().id);
     assert!(next.revision.get() > first.revision.get());
     assert!(query(&ctx.clone().with_session(new_id("other-session"))).is_err());
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Visible work project", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    let backlog = devworks_core::services::work::workflow::default_status_id(&project, "backlog");
+    let create = |operation: &str, payload| {
+        let frame =
+            devworks_desktop::work_ops::work_command(&*backend, command_input(operation, payload));
+        devworks_desktop::work_ops::work_changed(backend.command(operation, &frame)).unwrap()
+    };
+    let feature = create(
+        "features.create",
+        json!({"projectId":project,"creation":{
+            "kind":"Single","title":"Visible feature","description":"","repositoryIds":[],
+            "statusId":backlog,"priority":1
+        }}),
+    );
+    let issue = create(
+        "issues.create",
+        json!({"projectId":project,"title":"Visible issue",
+            "description":"","repositoryIds":[],"statusId":backlog,"priority":1
+        }),
+    );
+    h.state_mut()
+        .select_project(Some(project.0.as_str().into()));
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    h.state_mut().work.board = Some(feature.id.as_str().into());
+    click(&mut h, Role::Button, "Board");
+    assert_eq!(screen().root_id.unwrap().0, feature.id);
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    let overview = screen();
+    assert_eq!(overview.project_id.unwrap().0, project.0);
+    assert!(overview.root_id.is_none() && overview.selected_ids.0.is_empty());
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    h.query_all_by_label_contains("Visible issue")
+        .find(|node| {
+            node.accesskit_node()
+                .label()
+                .is_some_and(|label| label.starts_with("Visible issue"))
+        })
+        .expect("a visible issue row")
+        .click();
+    settle(&mut h);
+    let issue_screen = screen();
+    assert_eq!(issue_screen.root_id.unwrap().0, issue.id);
+    assert_eq!(issue_screen.selected_ids.0, vec![issue.id]);
     click_nav(&mut h, "Chat");
     assert_eq!(screen().screen_id.as_str(), Route::Chat.screen().id);
 }

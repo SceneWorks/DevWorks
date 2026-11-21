@@ -36,6 +36,7 @@ pub enum ChatSlot {
     SessionsList,
     SessionStart,
     Transcript(String),
+    WorkspaceReplyStatus(String),
     TextPreview(String, u64),
     Append(String),
     /// An attachment being stored for a draft (`draft`, local attachment ID).
@@ -300,6 +301,7 @@ pub struct Chat {
     /// The height each surface's conversation (transcript and composer) had last frame.
     pub conversation_heights: [f32; 2],
     pub notice: Option<(Tone, String)>,
+    pub reply_status: HashMap<String, devworks_engine::WorkspaceReplyStatus>,
     /// The overlay sidebar is shown on narrow Home layouts.
     pub narrow_sidebar_open: bool,
     pub scrolls: Scrolls,
@@ -345,6 +347,7 @@ impl Chat {
             composer_overheads: [110.0, 110.0],
             conversation_heights: [0.0, 0.0],
             notice: None,
+            reply_status: HashMap::new(),
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),
             routing: Routing::default(),
@@ -448,6 +451,23 @@ impl Chat {
     pub fn session(&self, id: &str) -> Option<&SessionRecord> {
         self.sessions.items.iter().find(|s| s.id.as_str() == id)
     }
+    pub fn coordinator_reply_notice(&self) -> Option<(Tone, &'static str)> {
+        use devworks_engine::WorkspaceReplyStatus::*;
+        match self.reply_status.get(self.selected.as_ref()?)? {
+            Queued => Some((Tone::Neutral, "Coordinator reply queued.")),
+            Running => Some((Tone::Neutral, "Coordinator reply in progress.")),
+            NeedsReconciliation => Some((
+                Tone::Attention,
+                "The coordinator is checking the previous reply before it can continue.",
+            )),
+            Unavailable => Some((
+                Tone::Attention,
+                "The coordinator could not finish the reply. Check model availability below before sending again.",
+            )),
+            Cancelled => Some((Tone::Neutral, "Coordinator reply cancelled.")),
+        }
+    }
+
     pub fn selected_session(&self) -> Option<&SessionRecord> {
         self.selected.as_deref().and_then(|s| self.session(s))
     }

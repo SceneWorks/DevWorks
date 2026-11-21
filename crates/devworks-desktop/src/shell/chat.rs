@@ -358,6 +358,9 @@ impl Chat {
         {
             ctl.load_transcript(&id);
         }
+        if visible && let Some(id) = ctl.chat.selected.clone() {
+            ctl.refresh_workspace_reply(&id);
+        }
         if visible || route == Route::Jobs {
             if visible {
                 ctl.refresh_route_status();
@@ -660,7 +663,15 @@ impl ChatCtl<'_, '_> {
             ChatSlot::RouteStatus(key.clone()),
             "Checking model availability",
             "router.availability",
-            move |b| ops::router_availability(b, &sel.intent, &sel.effort, session.as_deref()),
+            move |b| {
+                ops::router_availability_for(
+                    b,
+                    &sel.intent,
+                    &sel.effort,
+                    session.as_deref(),
+                    &["tools"],
+                )
+            },
         );
         if submitted {
             self.chat.routing.status_asked.insert(key, asked);
@@ -1308,6 +1319,9 @@ impl ChatCtl<'_, '_> {
                 if let Some((tone, text)) = &self.chat.notice {
                     chip(ui, text.clone(), *tone);
                 }
+                if let Some((tone, text)) = self.chat.coordinator_reply_notice() {
+                    chip(ui, text, tone);
+                }
                 chat::conversation(
                     ui,
                     &mut *self.chat,
@@ -1341,6 +1355,9 @@ impl ChatCtl<'_, '_> {
                 |ui, st, _| {
                     if let Some((tone, text)) = &notice {
                         chip(ui, text.clone(), *tone);
+                    }
+                    if let Some((tone, text)) = st.0.coordinator_reply_notice() {
+                        chip(ui, text, tone);
                     }
                     chat::conversation(ui, st.0, Surface::Home, online_ref, st.1);
                 },
@@ -1412,6 +1429,25 @@ impl ChatCtl<'_, '_> {
         self.chat_actions(&ctx, actions);
         if !watch_actions.is_empty() {
             self.cx.effects.push(Effect::Watch(watch_actions));
+        }
+    }
+
+    fn refresh_workspace_reply(&mut self, session: &str) {
+        let slot = ChatSlot::WorkspaceReplyStatus(session.to_owned());
+        if self.pending(&slot) {
+            return;
+        }
+        if let Some(client) = &mut self.client
+            && let Ok(session) = devworks_core::protocol::Id::new(session)
+        {
+            client.task(
+                slot.into(),
+                "Reading the coordinator reply status",
+                move |b| {
+                    b.workspace_reply_status(&session)
+                        .map(TaskOutput::WorkspaceReplyStatus)
+                },
+            );
         }
     }
 
@@ -1719,6 +1755,15 @@ impl ChatCtl<'_, '_> {
                     }
                 }
             }
+            (ChatSlot::WorkspaceReplyStatus(id), Reply::Task(result)) => match result {
+                Ok(TaskOutput::WorkspaceReplyStatus(Some(status))) => {
+                    self.chat.reply_status.insert(id, status);
+                }
+                Ok(TaskOutput::WorkspaceReplyStatus(None)) => {
+                    self.chat.reply_status.remove(&id);
+                }
+                _ => {}
+            },
             (ChatSlot::TextPreview(id, generation), Reply::Task(result)) => {
                 self.apply_live_text(&id, generation, result);
             }
@@ -1760,6 +1805,7 @@ impl ChatCtl<'_, '_> {
                         self.chat.notice = None;
                         self.load_transcript(&id);
                         if queued {
+                            self.refresh_workspace_reply(&id);
                             self.announce("Message saved. Coordinator reply queued.");
                         } else {
                             self.announce(
@@ -1817,6 +1863,7 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
+                        | TaskOutput::WorkspaceReplyStatus(_)
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
                         | TaskOutput::McpContent(_)
@@ -1888,6 +1935,7 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
+                            | TaskOutput::WorkspaceReplyStatus(_)
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
                             | TaskOutput::McpContent(_)

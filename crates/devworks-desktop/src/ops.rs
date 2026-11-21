@@ -978,12 +978,26 @@ pub fn router_availability(
     effort: &EffortName,
     session: Option<&str>,
 ) -> Vec<u8> {
+    router_availability_for(backend, intent, effort, session, &[])
+}
+pub(crate) fn router_availability_for(
+    backend: &dyn Backend,
+    intent: &RouteIntent,
+    effort: &EffortName,
+    session: Option<&str>,
+    required: &[&str],
+) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Router(router::Input::Availability(
             router::AvailabilityInput {
                 intent: intent.clone(),
                 effort: effort.clone(),
-                required_capabilities: BoundedList(Vec::new()),
+                required_capabilities: BoundedList(
+                    required
+                        .iter()
+                        .map(|value| frame::text(value))
+                        .collect::<Option<_>>()?,
+                ),
                 session_id: frame::lift(session.map(frame::id))?,
             },
         )))

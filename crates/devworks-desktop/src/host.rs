@@ -1027,13 +1027,28 @@ impl Backend for DesktopBackend {
             Counter::new(info.restore_epoch).map_err(|e| e.to_string())?,
             Revision::new(1).map_err(|e| e.to_string())?,
         );
+        let topic = crate::help_ops::topics(self.query(
+            "help.topic_for_screen",
+            &crate::help_ops::context(self, screen, None),
+        ))
+        .ok()
+        .and_then(|page| {
+            page.items
+                .0
+                .into_iter()
+                .find(|topic| topic.id.as_str() == screen)
+        });
+        let context = topic.map_or_else(
+            || context.to_owned(),
+            |topic| format!("{context} ({})", topic.version.0),
+        );
         devworks_core::services::sessions::notice::append_screen_context(
             &**store,
             self.host.runtime.artifacts(),
             &host,
             session,
             screen,
-            context,
+            &context,
         )
         .map_err(|e| format!("coordinator context notice: {e:?}"))
     }
@@ -1149,6 +1164,15 @@ impl Backend for DesktopBackend {
             reviewed,
         )
         .map_err(|r| crate::repository_deletion::refusal_text(&r))
+    }
+    fn workspace_reply_status(
+        &self,
+        session: &Id,
+    ) -> Result<Option<devworks_engine::WorkspaceReplyStatus>, String> {
+        self.host
+            .runtime
+            .workspace_reply_status(&self.host.ctx, session)
+            .map_err(|error| error.to_string())
     }
     fn text_preview(
         &self,

@@ -1683,6 +1683,16 @@ impl QueueRead for HandlerTx<'_> {
     ) -> Result<Option<QueueEntry>, StorageError> {
         self.inner.borrow_mut().queue().delivery(consumer, event)
     }
+    fn partition_head(
+        &self,
+        consumer: &str,
+        partition: &str,
+    ) -> Result<Option<QueueEntry>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .queue()
+            .partition_head(consumer, partition)
+    }
     fn status(&self, consumer: &str) -> Result<QueueStatus, StorageError> {
         self.inner.borrow_mut().queue().status(consumer)
     }
