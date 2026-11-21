@@ -197,7 +197,7 @@ async fn drive_agent_turn_once(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    if !is_plan_reviewer(&coordinator)
+    if !is_plan_reviewer(coordinator)
         && let Err(error) = acknowledge_native_instructions(engine, ctx, coordinator).await
     {
         return turn_failure(error);
@@ -255,7 +255,7 @@ async fn drive_agent_turn_once(
         progress,
     )
     .await;
-    if is_plan_reviewer(&coordinator) && !cancellation.is_cancelled() {
+    if is_plan_reviewer(coordinator) && !cancellation.is_cancelled() {
         let mut report = review_report(engine, ctx, result).await;
         if report.as_ref().is_ok_and(|report| report.needs_source) {
             report = match crate::plan_review::enable_sources(engine, ctx).await {
