@@ -11,7 +11,7 @@ use devworks_core::ports::storage::{
     ReadSnapshot, StorageError, StoredSession, Wake, WriteOptions, WriteTransaction, read_snapshot,
 };
 use devworks_core::protocol::provider::{
-    ArtifactRef, EndpointProfile, NativeBinding, TranscriptBody, UserContent,
+    ArtifactRef, EndpointProfile, InferenceInput, NativeBinding, TranscriptBody, UserContent,
 };
 use devworks_core::protocol::records::RouteChoice;
 use devworks_core::protocol::{Counter, Id, OperationId, OperationState, Revision};
@@ -193,6 +193,7 @@ impl EffectExecutor for ReplyEffects {
 struct PreparedReply {
     request_id: Id,
     head: ArtifactRef,
+    compaction_source: Option<ArtifactRef>,
 }
 
 fn prepared_reply(attempt: &AttemptRecord) -> Result<Option<PreparedReply>, StorageError> {
@@ -205,6 +206,8 @@ fn prepared_reply(attempt: &AttemptRecord) -> Result<Option<PreparedReply>, Stor
             Ok(PreparedReply {
                 request_id: serde_json::from_value(value["requestId"].clone()).map_err(invalid)?,
                 head: serde_json::from_value(value["head"].clone()).map_err(invalid)?,
+                compaction_source: serde_json::from_value(value["compactionSource"].clone())
+                    .map_err(invalid)?,
             })
         })
         .transpose()
@@ -265,6 +268,31 @@ async fn recorded_reply(
                     || inference.request_id != prepared.request_id
                 {
                     return Err(StorageError::ScopeDenied);
+                }
+                if let Some(source) = &prepared.compaction_source {
+                    let binding = provider.binding.as_ref().ok_or(StorageError::ScopeDenied)?;
+                    let next = binding
+                        .context_epoch
+                        .get()
+                        .checked_add(1)
+                        .ok_or(StorageError::ScopeDenied)?;
+                    let Some(epoch) = read.sessions().epoch(&intent.session_id, next)? else {
+                        return Ok(None);
+                    };
+                    let artifact: ArtifactRef =
+                        serde_json::from_value(epoch.context).map_err(invalid)?;
+                    let version = read
+                        .artifacts()
+                        .version(&artifact.version_id)?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    let derived = &version.source["derived"];
+                    if derived["workspaceReply"] != json!(operation.0)
+                        || derived["sourceContext"] != json!(source)
+                        || derived["reason"] != "Compaction"
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                    return Ok(Some(artifact));
                 }
                 let Some(head) = read
                     .sessions()
@@ -345,6 +373,13 @@ async fn settle_from_evidence(
         });
     };
     match recorded.provider.outcome {
+        Some(AttemptEnd::Completed) if prepared.compaction_source.is_some() => {
+            Ok(if recorded.provider.result_artifact.is_some() {
+                EffectResult::NotApplied("Resume after the recorded workspace compaction.".into())
+            } else {
+                unknown()
+            })
+        }
         Some(AttemptEnd::Completed) => {
             if recorded.published.is_none() {
                 let ctx = invocation(engine.store().as_ref(), &intent, &operation.id)?;
@@ -411,6 +446,30 @@ async fn run(
         if stopping.is_cancelled() {
             return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
         }
+        match compact_workspace(
+            engine,
+            &ctx,
+            &route,
+            &binding,
+            &head,
+            (&operation.id, attempt_no),
+            stopping,
+        )
+        .await
+        {
+            Ok(true) => match prepare(engine, &ctx, &intent).await {
+                Ok((next_route, next_binding, next_head)) => {
+                    route = next_route;
+                    binding = next_binding;
+                    head = next_head;
+                }
+                Err(error) => {
+                    return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
+                }
+            },
+            Ok(false) => {}
+            Err(error) => return EffectResult::Unknown(error.to_string()),
+        }
         let request = match crate::agent_turns::plan_generation_window(
             engine, &ctx, &route, &binding, &head, 0,
         ) {
@@ -422,6 +481,7 @@ async fn run(
         let prepared = PreparedReply {
             request_id: request.logical.request_id.clone(),
             head: head.clone(),
+            compaction_source: None,
         };
         if let Err(error) = save_prepared(engine, &operation.id, attempt_no, &prepared).await {
             return EffectResult::Unknown(error.to_string());
@@ -541,6 +601,22 @@ async fn resume_recorded_turn(
         .await
         .map_err(unknown)?;
     match recorded.provider.outcome {
+        Some(AttemptEnd::Completed) if prepared.compaction_source.is_some() => {
+            if recorded.published.is_none() {
+                let source = prepared
+                    .compaction_source
+                    .ok_or_else(|| unknown(StorageError::ScopeDenied))?;
+                let engine = engine.clone();
+                let ctx = ctx.clone();
+                tokio::task::spawn_blocking(move || {
+                    finish_compaction(&engine, &ctx, &source, recorded.provider)
+                })
+                .await
+                .map_err(|error| EffectResult::Unknown(error.to_string()))?
+                .map_err(|error| EffectResult::Unknown(format!("{error:?}")))?;
+            }
+            Ok(())
+        }
         Some(AttemptEnd::ToolCallsReady) => {
             if recorded.published.is_none() {
                 finish_tools(
@@ -600,9 +676,98 @@ async fn save_prepared(
         engine,
         operation,
         attempt_no,
-        json!({"requestId": prepared.request_id, "head": prepared.head}),
+        json!({"requestId": prepared.request_id, "head": prepared.head,
+            "compactionSource": prepared.compaction_source}),
     )
     .await
+}
+
+/// Use the same routed threshold and compaction producer as a managed agent. Recording the
+/// exact immutable request before admission allows a restart to reuse its settled summary.
+async fn compact_workspace(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+    operation: (&OperationId, i64),
+    cancellation: &Cancellation,
+) -> Result<bool, StorageError> {
+    let (worker, context, route, binding, head) = (
+        engine.clone(),
+        ctx.clone(),
+        route.clone(),
+        binding.clone(),
+        head.clone(),
+    );
+    let prepared = tokio::task::spawn_blocking(move || {
+        if crate::agent_turns::compaction_due(&worker, &context, &route, &head, 0)? {
+            crate::agent_turns::prepare_compaction(&worker, &context, &route, &binding, &head)
+                .map(Some)
+        } else {
+            Ok(None)
+        }
+    })
+    .await
+    .map_err(invalid)??;
+    let Some((source, request)) = prepared else {
+        return Ok(false);
+    };
+    let InferenceInput::Generation { context: input, .. } = &request.request.input else {
+        return Err(StorageError::ScopeDenied);
+    };
+    let prepared = PreparedReply {
+        request_id: request.logical.request_id.clone(),
+        head: input.clone(),
+        compaction_source: Some(source.artifact.clone()),
+    };
+    save_prepared(engine, operation.0, operation.1, &prepared).await?;
+    let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
+    let result = providers
+        .produce_cancellable(request, Some(cancellation.clone()))
+        .await?
+        .result;
+    let (worker, context, source) = (engine.clone(), ctx.clone(), source.artifact);
+    tokio::task::spawn_blocking(move || finish_compaction(&worker, &context, &source, result))
+        .await
+        .map_err(invalid)?
+        .map_err(|error| invalid(format!("{error:?}")))?;
+    Ok(true)
+}
+
+fn finish_compaction(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    source: &ArtifactRef,
+    result: ProviderResult,
+) -> Result<ArtifactRef, crate::turn_error::TurnError> {
+    let binding = result.binding.clone().ok_or(StorageError::ScopeDenied)?;
+    let (bytes, provenance) = engine
+        .artifacts()
+        .read_exact(engine.store().as_ref(), ctx, source, 8 * 1024 * 1024)
+        .map_err(crate::turn_error::artifact_read_fault)?;
+    let derived = &provenance["derived"];
+    if derived["binding"] != json!(binding)
+        || derived["sessionId"].as_str() != ctx.session_id().map(Id::as_str)
+    {
+        return Err(StorageError::ScopeDenied.into());
+    }
+    let context = serde_json::from_slice(&bytes).map_err(invalid)?;
+    let observed = derived["observedSequence"]
+        .as_i64()
+        .ok_or(StorageError::ScopeDenied)?;
+    crate::agent_turns::publish_compaction_result(
+        engine,
+        ctx,
+        &binding,
+        crate::context_epoch::EpochSource {
+            context,
+            artifact: source.clone(),
+            observed_sequence: Some(observed),
+        },
+        result,
+        &mut None,
+    )
 }
 
 async fn finish_tools(

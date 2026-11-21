@@ -491,19 +491,24 @@ impl NativeProviders {
                     .cmp(b.capability_id.as_str())
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
-            let selected_mcp = if tools
+            let mut external = Vec::new();
+            if tools
                 .iter()
                 .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
             {
-                self.schemas.selected_mcp_tools(&context)?
-            } else {
-                Vec::new()
-            };
+                external.extend(self.schemas.selected_mcp_tools(&context)?);
+            }
+            if tools.iter().any(|tool| {
+                let id = tool.capability_id.as_str();
+                !id.starts_with("mcp/") && super::schemas::builtin_operation(id).is_none()
+            }) {
+                external.extend(self.schemas.selected_package_tools(&context)?);
+            }
             if tools.iter().any(|tool| {
                 self.schemas
                     .builtin_binding(&tool.capability_id, &tool.input_schema)
                     .is_none()
-                    && !selected_mcp.iter().any(|selected| {
+                    && !external.iter().any(|selected| {
                         selected.capability_id == tool.capability_id
                             && selected.wire_name == tool.wire_name
                             && selected.input_schema.schema_id == tool.input_schema.schema_id
@@ -511,8 +516,8 @@ impl NativeProviders {
                             && selected.input_schema.sha256 == tool.input_schema.sha256
                     })
             }) {
-                // Schema discovery alone does not make an external invocation durable. Only
-                // currently selected MCP bindings have the journaled turn dispatcher.
+                // Only the exact selected MCP and installed package aliases have a durable
+                // dispatcher. A caller cannot qualify a different wire name or schema.
                 return Err(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "external tool dispatch is unavailable",
@@ -1312,8 +1317,8 @@ impl OwnedInferenceSource for LazySource {
                         .router()
                         .connection(&captured.connection_id)?
                         .ok_or(StorageError::ScopeDenied)?;
-                    // External aliases are refused before admission; an unrelated package
-                    // registry edit cannot change this built-in-only request.
+                    // The request's exact external aliases were requalified above. Check
+                    // current connection and source fences in the final writer transaction.
                     if connection.revision != expected_revision
                         || connection.account_revision
                             != publication.identity.binding.account_revision.get()

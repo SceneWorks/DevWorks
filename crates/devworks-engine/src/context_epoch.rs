@@ -374,6 +374,7 @@ pub(crate) fn publish(
         if let Some(reply) = ctx_for_write.workspace_reply() {
             provenance["workspaceReply"] = json!(ctx_for_write.invocation_id());
             provenance["workspaceUserSequence"] = json!(reply.user_sequence);
+            provenance["sourceContext"] = json!(source_for_write);
         }
         let version = artifacts_for_write.commit_host_bytes_in_scope(
             tx,

@@ -9,19 +9,7 @@ impl devworks_core::ports::http::Entropy for WorkspaceEntropy {
     }
 }
 
-struct UnusedHelpGeneration;
-impl devworks_core::ports::CommandHandler for UnusedHelpGeneration {
-    fn decide(
-        &self,
-        _: &InvocationContext,
-        _: &devworks_core::gateway::AdmittedCommand,
-        _: &mut dyn WriteTransaction,
-    ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
-        Err(StorageError::ScopeDenied.into())
-    }
-}
-
-fn workspace_ports(f: &Fx, wire: Arc<dyn StreamingHttp>) -> Composition {
+pub(super) fn workspace_ports(f: &Fx, wire: Arc<dyn StreamingHttp>) -> Composition {
     let mut ports = composition(f, None, Arc::new(FakePower::default()));
     // Leave offline Help generation to its own tests. Its bulk writes can obscure the
     // workspace reply journal's progress on the restart test's synchronous test disk.
@@ -48,7 +36,7 @@ fn workspace_ports(f: &Fx, wire: Arc<dyn StreamingHttp>) -> Composition {
     ports
 }
 
-fn open_home(f: &Fx, app: &devworks_engine::Runtime) -> Id {
+pub(super) fn open_home(f: &Fx, app: &devworks_engine::Runtime) -> Id {
     let open = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":1,"requestKey":"native-home",
         "body":{"kind":"sessions.start","scope":{"kind":"Workspace"},"title":"Home"}});
     let session = applied(
@@ -96,7 +84,7 @@ fn the_native_workspace_coordinator_replies_to_a_saved_home_message() {
     });
 }
 
-async fn wait_for_replies(f: &Fx, n: usize) {
+pub(super) async fn wait_for_replies(f: &Fx, n: usize) {
     within("native workspace replies settle", async {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
@@ -140,7 +128,7 @@ async fn wait_for_replies(f: &Fx, n: usize) {
     .await;
 }
 
-fn send_workspace(
+pub(super) fn send_workspace(
     f: &Fx,
     app: &devworks_engine::Runtime,
     session: &Id,

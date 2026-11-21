@@ -17,7 +17,11 @@ use devworks_core::{
     },
 };
 use serde_json::{Value, json};
-use std::{io::Read, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Read,
+    sync::Arc,
+};
 
 pub struct RegisteredSchemas {
     store: Arc<dyn ApplicationStore>,
@@ -218,6 +222,7 @@ impl RegisteredSchemas {
         {
             tools.extend(self.selected_mcp_tools(ctx)?);
         }
+        tools.extend(self.selected_package_tools(ctx)?);
         tools.sort_by(|a, b| {
             a.capability_id
                 .as_str()
@@ -233,6 +238,96 @@ impl RegisteredSchemas {
             return Err(StorageError::InvalidRecord(
                 "ambiguous selected agent tool".into(),
             ));
+        }
+        Ok(tools)
+    }
+
+    /// Only explicit package-tool selections can reach an agent's provider request. Use
+    /// the same installed-version and file checks that materialization and dispatch repeat
+    /// at their own boundaries.
+    pub(crate) fn selected_package_tools(
+        &self,
+        ctx: &InvocationContext,
+    ) -> Result<Vec<ToolSchema>, StorageError> {
+        if self.packages.is_none() || !self.cases.has_query("addons.catalog") {
+            return Ok(Vec::new());
+        }
+        let choices = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            let policy = match package_context(snapshot, ctx) {
+                Ok(policy) => policy,
+                Err(StorageError::ScopeDenied) => return Ok(BTreeMap::new()),
+                Err(error) => return Err(error),
+            };
+            let mut packages: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+            for (capability, on) in policy.tool_overrides.into_iter().flatten() {
+                if !on || capability.starts_with("mcp/") || builtin_operation(&capability).is_some()
+                {
+                    continue;
+                }
+                if let Some((package, _)) = capability.split_once('/') {
+                    packages
+                        .entry(package.to_owned())
+                        .or_default()
+                        .insert(capability);
+                }
+            }
+            Ok(packages)
+        })?;
+        let mut tools = Vec::new();
+        for (package, enabled) in choices {
+            let (inspection, _) = match self.package_inspection(ctx, &package) {
+                Ok(installed) => installed,
+                Err(ProviderError::MaterialUnavailable | ProviderError::Unsupported(_)) => continue,
+                Err(error) => {
+                    return Err(StorageError::InvalidRecord(format!(
+                        "package tool selection: {error:?}"
+                    )));
+                }
+            };
+            for c in inspection
+                .contributions
+                .iter()
+                .filter(|c| c.kind == "Tool" && enabled.contains(&c.id))
+            {
+                let Some(descriptor) = c.descriptor.as_ref() else {
+                    continue;
+                };
+                if devworks_core::fingerprint::canonical_digest(descriptor)
+                    .ok()
+                    .as_ref()
+                    != Some(&c.contract_digest)
+                {
+                    continue;
+                }
+                let schema = &descriptor["meta"]["inputSchema"];
+                if !inspection
+                    .schema_assets
+                    .iter()
+                    .any(|asset| &asset.reference == schema)
+                {
+                    continue;
+                }
+                let input_schema: SchemaRef =
+                    serde_json::from_value(schema.clone()).map_err(|error| {
+                        StorageError::InvalidRecord(format!(
+                            "selected package tool schema: {error}"
+                        ))
+                    })?;
+                let capability_id = QualifiedId::try_from(c.id.clone())
+                    .map_err(|error| StorageError::InvalidRecord(error.into()))?;
+                let name = c.id.split_once('/').map_or("", |(_, name)| name);
+                let name: String = name
+                    .chars()
+                    .take(28)
+                    .map(|c| if c == '.' { '_' } else { c })
+                    .collect();
+                let digest = sha256_hex(c.id.as_bytes());
+                tools.push(ToolSchema {
+                    capability_id,
+                    wire_name: format!("pkg_{name}_{}", &digest[..24]),
+                    input_schema,
+                });
+            }
         }
         Ok(tools)
     }
@@ -518,7 +613,10 @@ fn current_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), 
     }
     Ok(())
 }
-fn package_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), StorageError> {
+fn package_context(
+    s: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+) -> Result<policy::EffectivePolicy, StorageError> {
     current_context(s, ctx)?;
     let d = registry::find("addons.catalog").ok_or(StorageError::ScopeDenied)?;
     let selected = d.binding(Mode::Query).ok_or(StorageError::ScopeDenied)?;
@@ -537,7 +635,7 @@ fn package_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), 
     ) {
         return Err(StorageError::ScopeDenied);
     }
-    Ok(())
+    Ok(effective)
 }
 
 impl SchemaDocuments for RegisteredSchemas {

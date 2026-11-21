@@ -82,10 +82,13 @@ pub(crate) fn publish_input(
         if session.closed()
             || ctx.session_id() != Some(&session_id)
             || session.context_epoch != binding.context_epoch.get()
-            || session.last_durable_sequence() != observed
+            || (session.last_durable_sequence() != observed
+                && !(ctx.workspace_reply().is_some()
+                    && crate::tool_turn::workspace_input_tail(tx.sessions(), &session, observed)?))
         {
             return Err(StorageError::ScopeDenied);
         }
+        let observed = session.last_durable_sequence();
         let root = crate::context_epoch::epoch_root(
             tx.sessions(),
             &session_id,
@@ -128,12 +131,39 @@ pub(crate) fn publish_compacted(
     let previous_epoch = binding.context_epoch.get();
     let (next, omitted) = omitted_native(&source.context, binding)?;
     let outstanding = outstanding_calls(store, ctx, session_id, &source.context)?;
-    let compacted = compacted_context(
+    let mut compacted = compacted_context(
         &source.context,
         next.context_epoch.get(),
         summary,
         &outstanding,
     );
+    if let Some(reply) = ctx.workspace_reply()
+        && reply.user_sequence > 1
+    {
+        // A summary does not replace the exact message that is still awaiting its reply.
+        // The cutoff also prevents later queued workspace messages from entering this epoch.
+        let body = read_snapshot(store, &ReadOptions::default(), |read| {
+            let entries = read
+                .sessions()
+                .entries(session_id, reply.user_sequence - 1, 1)?;
+            let entry = entries
+                .first()
+                .filter(|entry| {
+                    entry.sequence == reply.user_sequence && entry.kind == "UserMessage"
+                })
+                .ok_or(StorageError::ScopeDenied)?;
+            serde_json::from_value(entry.body.clone())
+                .map_err(|error| StorageError::InvalidRecord(error.to_string()))
+        })?;
+        crate::tool_turn::append_context_fact(
+            &mut compacted,
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            body,
+        )?;
+    }
     let (context, _) = compacted
         .converted_for_new_epoch(binding, &next)
         .map_err(|error| StorageError::InvalidRecord(format!("compaction: {error:?}")))?;

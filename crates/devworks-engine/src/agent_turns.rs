@@ -1222,6 +1222,30 @@ fn tool_window_count(total: usize) -> usize {
     total.div_ceil(MAX_ALIASES_PER_TURN).max(1)
 }
 
+fn offered_tools(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    window: usize,
+) -> Result<Vec<devworks_core::protocol::provider::ToolSchema>, StorageError> {
+    let mut selected = engine
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_agent_tools(ctx)?;
+    if ctx.workspace_reply().is_some() {
+        // Keep screen discovery and explicitly selected extensions reachable on the first
+        // workspace turn, even when there are more built-in aliases than provider slots.
+        selected.sort_by_key(|tool| match tool.capability_id.as_str() {
+            "devworks-query/ui.current_screen" => 0,
+            "devworks-query/help.topic_for_screen" => 1,
+            "devworks-query/help.read" => 2,
+            id if crate::providers::schemas::builtin_operation(id).is_none() => 3,
+            _ => 4,
+        });
+    }
+    Ok(tool_window(&selected, window)?.to_vec())
+}
+
 /// Estimated input tokens of the next request from `head` with tool window `window`: the context
 /// and the offered tool definitions, by the attributed estimate of four bytes per token. Tool-call
 /// arguments and native blocks the context only references count at their artifact size, and
@@ -1255,9 +1279,9 @@ fn measure(
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas();
-    let selected = schemas.selected_agent_tools(ctx)?;
+    let offered = offered_tools(engine, ctx, window)?;
     let mut tool_bytes = 0usize;
-    for alias in tool_window(&selected, window)? {
+    for alias in &offered {
         // The encoder sends the resolved definition; an unresolvable one is refused there.
         let bytes = match schemas.tool(ctx, alias) {
             Ok(tool) => serde_json::to_vec(&(&tool.schema, &tool.description, &tool.wire_name)),
@@ -1329,7 +1353,7 @@ fn measure(
 /// window while the part compaction keeps stays under it, or its context holds as many native
 /// blocks as one epoch change can record as omitted. When the kept part alone reaches the
 /// threshold, compacting cannot help and the request is sent as before.
-fn compaction_due(
+pub(crate) fn compaction_due(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
@@ -1368,10 +1392,28 @@ async fn compact(
     cancellation: &Cancellation,
     retry_at_ms: &mut Option<i64>,
 ) -> Result<ArtifactRef, TurnError> {
+    let (source, invocation) = prepare_compaction(engine, ctx, route, binding, head)?;
+    let providers = Arc::clone(engine.providers().ok_or(StorageError::ScopeDenied)?);
+    let stopped = cancellation.clone();
+    let handle = tokio::runtime::Handle::current();
+    let produced = tokio::task::spawn_blocking(move || {
+        handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
+    })
+    .await
+    .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
+    publish_compaction_result(engine, ctx, binding, source, produced.result, retry_at_ms)
+}
+
+pub(crate) fn prepare_compaction(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+) -> Result<(crate::context_epoch::EpochSource, NativeInvocation), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let store = engine.store().as_ref();
     let source = crate::context_epoch::current_source(
-        store,
+        engine.store().as_ref(),
         engine.artifacts(),
         ctx,
         session_id,
@@ -1381,7 +1423,7 @@ async fn compact(
     // Refuse a context the new epoch could not record before paying for its summary.
     crate::compaction::omitted_native(&source.context, binding)?;
     let input = crate::compaction::publish_input(
-        store,
+        engine.store().as_ref(),
         engine.artifacts(),
         ctx,
         session_id,
@@ -1389,15 +1431,19 @@ async fn compact(
         &source,
     )?;
     let invocation = plan_compaction(engine, ctx, route, binding, &input)?;
-    let providers = Arc::clone(engine.providers().ok_or(StorageError::ScopeDenied)?);
-    let stopped = cancellation.clone();
-    let handle = tokio::runtime::Handle::current();
-    let produced = tokio::task::spawn_blocking(move || {
-        handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
-    })
-    .await
-    .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
-    let result = produced.result;
+    Ok((source, invocation))
+}
+
+pub(crate) fn publish_compaction_result(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    binding: &NativeBinding,
+    source: crate::context_epoch::EpochSource,
+    result: crate::providers::sink::ProviderResult,
+    retry_at_ms: &mut Option<i64>,
+) -> Result<ArtifactRef, TurnError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let store = engine.store().as_ref();
     let summary = match (result.outcome, result.result_artifact) {
         (Some(AttemptEnd::Completed), Some(summary)) => summary,
         (Some(AttemptEnd::Cancelled), _) => return Err(StorageError::Cancelled.into()),
@@ -2374,32 +2420,8 @@ fn plan_request(
     if binding.model_id != route.model_id || binding.connection_id != route.connection_id {
         return Err(StorageError::ScopeDenied);
     }
-    let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
     let tools = match window {
-        Some(window) => {
-            let mut selected = providers.schemas().selected_agent_tools(ctx)?;
-            if root_scope.is_none() {
-                // Screen and Help discovery remain reachable even when the complete selected
-                // inventory exceeds the first provider window.
-                for (target, capability) in [
-                    "devworks-query/ui.current_screen",
-                    "devworks-query/help.topic_for_screen",
-                    "devworks-query/help.read",
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if let Some(index) = selected
-                        .iter()
-                        .position(|tool| tool.capability_id.as_str() == capability)
-                    {
-                        let target = target.min(index);
-                        selected[target..=index].rotate_right(1);
-                    }
-                }
-            }
-            tool_window(&selected, window)?.to_vec()
-        }
+        Some(window) => offered_tools(engine, ctx, window)?,
         None => Vec::new(),
     };
     let compaction = window.is_none();

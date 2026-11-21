@@ -120,6 +120,120 @@ async fn runtime_on(
     Arc::new(boot(composed).await.unwrap())
 }
 
+#[test]
+fn workspace_conversation_compacts_before_reply_at_the_routed_threshold() {
+    use super::workspace_reply::{open_home, send_workspace, wait_for_replies, workspace_ports};
+    use devworks_core::context::{HostIngress, WorkspaceReply};
+    use devworks_core::protocol::Counter;
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let set_model_window = |size| {
+        f.tx(move |_, tx| {
+            let mut model = tx.router().route_model(&id("watch-model"))?.unwrap();
+            let previous = model.revision;
+            model.context_tokens = Some(size);
+            model.revision += 1;
+            tx.router().put_route_model(&model, Some(previous))
+        })
+    };
+    set_model_window(1_000_000);
+    let wire = Arc::new(CompactionWire::default());
+    wire.answers
+        .lock()
+        .unwrap()
+        .extend([long_answer(), "Reply after summary".into()]);
+    runtime().block_on(async {
+        let app = boot(workspace_ports(&f, wire.clone())).await.unwrap();
+        let session = open_home(&f, &app);
+        send_workspace(
+            &f,
+            &app,
+            &session,
+            "home-before-compaction",
+            "Keep the original brief",
+            "watch-model",
+        );
+        wait_for_replies(&f, 1).await;
+        let session_record = read(&*f.store, |r| r.sessions().session(&session)).unwrap();
+        let info = f.store.info();
+        let ctx = HostIngress::new(&*f.store)
+            .context(
+                session_record.agent_id.clone(),
+                PrincipalKind::Agent,
+                id("measure-home-compaction"),
+                id("workspace-compaction-test"),
+                Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session.clone())
+            .with_workspace_reply(WorkspaceReply {
+                user_sequence: session_record.last_durable_sequence(),
+                preference: None,
+            });
+        let engine = app.turn_engine();
+        let (head, _, _) = engine
+            .recover_native_context_head(&ctx, &session)
+            .unwrap()
+            .unwrap();
+        let measured =
+            devworks_engine::agent_turns::context_tokens(engine, &ctx, &head, 0).unwrap();
+        let saved = read(&*f.store, |r| r.sessions().entries(&session, 0, 30));
+        let response_bytes = saved
+            .iter()
+            .find_map(|entry| {
+                entry.body["visibleText"]
+                    .as_str()
+                    .filter(|text| text.starts_with(LONG_ANSWER))
+                    .map(str::len)
+            })
+            .expect("the long response was durably recorded");
+        // Choose a window whose 80% boundary falls between the measured context and
+        // its fixed prefix. The set of composed tool definitions can grow independently.
+        set_model_window((measured - response_bytes as i64 / 8) * 100 / 80);
+
+        send_workspace(
+            &f,
+            &app,
+            &session,
+            "home-after-compaction",
+            "Continue the same conversation",
+            "watch-model",
+        );
+        wait_for_replies(&f, 2).await;
+        {
+            let requests = wire.bodies.lock().unwrap();
+            let [initial, compaction, reply] = requests.as_slice() else {
+                panic!(
+                    "expected one compaction between two replies, got {}",
+                    requests.len()
+                );
+            };
+            assert!(
+                initial.contains("Keep the original brief")
+                    && !initial.contains(COMPACTION_REQUEST)
+            );
+            assert!(compaction.contains(COMPACTION_REQUEST) && compaction.contains(LONG_ANSWER));
+            assert!(reply.contains(SUMMARY) && !reply.contains(LONG_ANSWER));
+            assert!(reply.contains("Continue the same conversation"));
+            assert!(requests.iter().all(|r| r.contains("fixture-model")));
+        }
+        let entries = read(&*f.store, |r| r.sessions().entries(&session, 0, 30));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.kind == "ContextEpochChanged" && e.body["reason"] == "Compaction")
+        );
+        assert!(entries.iter().any(|e| {
+            e.kind == "AssistantAttempt"
+                && e.body["visibleText"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with(LONG_ANSWER))
+        }));
+        app.shutdown().await;
+    });
+}
+
 /// Sets the pinned fixture model's context window.
 fn set_context_window(fx: &Fx, tokens: i64) {
     fx.tx(move |_, tx| {
