@@ -1058,6 +1058,7 @@ const FEATURE_DOCUMENT_DIGESTS: [&str; 5] = [
     "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
     "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
 ];
+const RECONCILED_DOCUMENT_VERSION: usize = DEPLOYED_ROUTER_VERSION + FEATURE_DOCUMENT_DIGESTS.len();
 
 /// DW-F8 published document SQL at 64–68 before those migration identities were reconciled
 /// with main. Recognize only a complete, exact prefix of that published ledger.
@@ -1103,26 +1104,32 @@ fn document_lineage(
     {
         return None;
     }
-    let documents = migrations.get(DEPLOYED_ROUTER_VERSION..DEPLOYED_ROUTER_VERSION + count)?;
-    for (index, (saved, destination)) in applied[COMMON_DOCUMENT_BASE..]
+    let documents = migrations.get(DEPLOYED_ROUTER_VERSION..RECONCILED_DOCUMENT_VERSION)?;
+    if !documents
         .iter()
-        .zip(documents)
+        .zip(FEATURE_DOCUMENT_DIGESTS)
         .enumerate()
+        .all(|(index, (migration, digest))| {
+            migration.version == (DEPLOYED_ROUTER_VERSION + index + 1) as i64
+                && !migration.rebuilds_tables
+                && migration.checksum() == digest
+        })
+        || !applied[COMMON_DOCUMENT_BASE..]
+            .iter()
+            .zip(FEATURE_DOCUMENT_DIGESTS)
+            .enumerate()
+            .all(|(index, (saved, digest))| {
+                saved.version == (COMMON_DOCUMENT_BASE + index + 1) as i64
+                    && saved.checksum == digest
+            })
     {
-        let digest = FEATURE_DOCUMENT_DIGESTS[index];
-        if saved.version != (COMMON_DOCUMENT_BASE + index + 1) as i64
-            || destination.version != (DEPLOYED_ROUTER_VERSION + index + 1) as i64
-            || saved.checksum != digest
-            || destination.checksum() != digest
-        {
-            return None;
-        }
+        return None;
     }
     Some(count)
 }
 
 /// Move only the document ledger keys, retaining original checksums and provenance. Router
-/// migrations touch disjoint tables and are applied exactly once in the same transaction.
+/// migrations and any remaining document migrations commit with the ledger move.
 fn reconcile_documents(
     conn: &Connection,
     migrations: &[Migration],
@@ -1154,11 +1161,14 @@ fn reconcile_documents(
             return Err(document_lineage_changed());
         }
     }
-    for migration in &migrations[COMMON_DOCUMENT_BASE..DEPLOYED_ROUTER_VERSION] {
+    let missing_router = &migrations[COMMON_DOCUMENT_BASE..DEPLOYED_ROUTER_VERSION];
+    let missing_documents =
+        &migrations[DEPLOYED_ROUTER_VERSION + count..RECONCILED_DOCUMENT_VERSION];
+    for migration in missing_router.iter().chain(missing_documents) {
         db(tx.execute_batch(migration.sql))?;
         record_applied(&tx, migration, now_ms, app_build)?;
     }
-    let current = &documents[count - 1];
+    let current = &migrations[RECONCILED_DOCUMENT_VERSION - 1];
     update_schema_meta(&tx, current)?;
     db(tx.pragma_update(None, "user_version", current.version))?;
     verify_after(&tx)?;
@@ -1195,6 +1205,14 @@ pub(crate) fn check(
         )));
     }
     let applied = ledger(conn)?;
+    if let Some(last) = applied.last()
+        && last.version > meta.schema_version
+    {
+        return Err(StorageError::IncompatibleSchema(format!(
+            "migration {} is recorded above store schema {}",
+            last.version, meta.schema_version
+        )));
+    }
     if document_lineage(migrations, &meta, &applied).is_some() {
         return Ok(Some((meta, AccessMode::ReadWrite)));
     }

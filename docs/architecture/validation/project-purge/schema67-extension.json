@@ -27,6 +27,6 @@
       "purpose": "The publication pointer and stage follow one exact source version. The delivery identifier is a generation witness. Queue and receipt authority remain with their existing ledgers."
     }
   ],
-  "readerFloor": 57,
-  "writerFloor": 64
+  "readerFloor": 66,
+  "writerFloor": 67
 }

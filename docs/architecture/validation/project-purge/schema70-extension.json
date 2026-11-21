@@ -15,6 +15,6 @@
       "purpose": "The captured raster, routed outcome references and model provenance follow the direct extraction. Attributed attempts and usage retain their accounting project."
     }
   ],
-  "readerFloor": 57,
-  "writerFloor": 67
+  "readerFloor": 66,
+  "writerFloor": 70
 }

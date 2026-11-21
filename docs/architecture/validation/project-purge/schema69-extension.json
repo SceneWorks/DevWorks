@@ -15,6 +15,6 @@
       "purpose": "The rebuildable scoped Float32 vector belongs to its retained block and extraction. It does not own the shared model space."
     }
   ],
-  "readerFloor": 57,
-  "writerFloor": 66
+  "readerFloor": 66,
+  "writerFloor": 69
 }

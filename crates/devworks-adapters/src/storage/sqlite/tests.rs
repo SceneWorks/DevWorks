@@ -1385,6 +1385,28 @@ fn feature_document_reconciliation_rejects_a_mixed_ledger() {
 }
 
 #[test]
+fn feature_document_migrations_refuse_entries_above_the_deployed_schema() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(66)).unwrap());
+    let conn = h.raw();
+    conn.execute(
+        "INSERT INTO schema_migrations (version,checksum,applied_at,app_build) VALUES
+            (?1,'unknown',0,'other-branch')",
+        [MIGRATIONS.last().unwrap().version + 1],
+    )
+    .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+
+    assert!(matches!(
+        SqliteStore::open_with(h.config(), MIGRATIONS),
+        Err(StorageError::IncompatibleSchema(_))
+    ));
+    assert_eq!(version_and_ledger(&h, "document_extractions"), (0, 66, 67));
+    assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+}
+
+#[test]
 fn feature_document_reconciliation_rolls_back_all_ledger_and_schema_changes() {
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &feature_document_migrations(5)).unwrap());
@@ -1396,6 +1418,44 @@ fn feature_document_reconciliation_rolls_back_all_ledger_and_schema_changes() {
     assert!(SqliteStore::open_with(h.config(), MIGRATIONS).is_err());
     assert_eq!(version_and_ledger(&h, "router_decision_pool"), (0, 68, 68));
     assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+}
+
+#[test]
+fn feature_document_reconciliation_rolls_back_if_the_missing_suffix_fails() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &feature_document_migrations(1)).unwrap());
+    let conn = h.raw();
+    conn.execute(
+        "CREATE TABLE document_lexical_rows (fixture_fault INTEGER)",
+        [],
+    )
+    .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+
+    let Err(error) = SqliteStore::open_with(h.config(), MIGRATIONS) else {
+        panic!("the conflicting table should fail the lexical migration");
+    };
+    assert!(
+        error.to_string().contains("document_lexical_rows"),
+        "{error}"
+    );
+    assert_eq!(version_and_ledger(&h, "router_decision_pool"), (0, 64, 64));
+    let conn = h.raw();
+    assert_eq!(migrations::ledger(&conn).unwrap(), before);
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        64,
+    );
+    conn.execute("DROP TABLE document_lexical_rows", [])
+        .unwrap();
+    drop(conn);
+    let upgraded = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+    assert_eq!(
+        upgraded.compatibility().unwrap().store_schema_version,
+        MIGRATIONS.last().unwrap().version,
+    );
 }
 
 #[test]

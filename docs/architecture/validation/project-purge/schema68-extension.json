@@ -39,6 +39,6 @@
       "purpose": "FTS segment index rows follow the virtual table."
     }
   ],
-  "readerFloor": 57,
-  "writerFloor": 65
+  "readerFloor": 66,
+  "writerFloor": 68
 }
