@@ -5062,6 +5062,26 @@ impl Check for JobDefinition {
     }
 }
 
+impl Revisioned for JobDefinition {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            Self::Inference { route, .. } => {
+                route.retain_revision(revision);
+            }
+            _ => {}
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Inference { route, .. } => {
+                route.check_revision(revision)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JobRecord {
@@ -5192,6 +5212,7 @@ impl Check for JobRecord {
 
 impl Revisioned for JobRecord {
     fn retain_revision(&mut self, revision: u32) {
+        self.definition.retain_revision(revision);
         if revision < 2 {
             self.scope = None;
         }
@@ -5228,6 +5249,10 @@ impl Revisioned for JobRecord {
         if revision < 2 {
             self.deleted_at_ms = None;
         }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.definition.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -5494,9 +5519,17 @@ impl Check for ValidationReport {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum RouteIntent {
-    Tier { tier: TierName },
-    Model { model_id: Id },
+    Tier {
+        tier: TierName,
+    },
+    Model {
+        model_id: Id,
+    },
     OpenRouterAuto {},
+    #[schemars(extend("x-since" = 3))]
+    DevWorksAuto {},
+    #[schemars(extend("x-since" = 3))]
+    OpenRouterAutoBeta {},
 }
 impl Check for RouteIntent {
     fn check(&self) -> Result<(), String> {
@@ -5508,6 +5541,28 @@ impl Check for RouteIntent {
                 model_id.check()?;
             }
             Self::OpenRouterAuto {} => {}
+            Self::DevWorksAuto {} => {}
+            Self::OpenRouterAutoBeta {} => {}
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for RouteIntent {
+    fn retain_revision(&mut self, revision: u32) {
+        match self {
+            _ => {}
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::DevWorksAuto { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: DevWorksAuto".into());
+            }
+            Self::OpenRouterAutoBeta { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: OpenRouterAutoBeta".into());
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -5822,6 +5877,7 @@ impl Check for RouteChoice {
 
 impl Revisioned for RouteChoice {
     fn retain_revision(&mut self, revision: u32) {
+        self.intent.retain_revision(revision);
         if revision < 3 {
             self.resolved_upstream_model_id = None;
         }
@@ -5831,6 +5887,10 @@ impl Revisioned for RouteChoice {
         if revision < 3 {
             self.resolved_identity_origin = None;
         }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -5885,6 +5945,7 @@ impl Check for RouteAvailability {
 
 impl Revisioned for RouteAvailability {
     fn retain_revision(&mut self, revision: u32) {
+        self.intent.retain_revision(revision);
         if revision < 2 {
             self.pin = None;
         } else {
@@ -5896,6 +5957,11 @@ impl Revisioned for RouteAvailability {
         if revision < 2 {
             self.pin_reason = None;
         }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        self.pin.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -8216,6 +8282,10 @@ impl Revisioned for JobInspection {
         if revision < 2 {
             self.runs_next_cursor = None;
         }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.job.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -21744,7 +21814,10 @@ impl Revisioned for DomainQuery {
                     *repository_id = None;
                 }
             }
-            Self::RouterAvailability { session_id, .. } => {
+            Self::RouterAvailability {
+                intent, session_id, ..
+            } => {
+                intent.retain_revision(revision);
                 if revision < 2 {
                     *session_id = None;
                 }
@@ -21958,6 +22031,10 @@ impl Revisioned for DomainQuery {
             }
             Self::RepositoriesNodes { scope, .. } if revision >= 3 && scope.is_none() => {
                 Err("required current input member is absent: scope".into())
+            }
+            Self::RouterAvailability { intent, .. } => {
+                intent.check_revision(revision)?;
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -26404,10 +26481,22 @@ impl Revisioned for DomainCommand {
             Self::ContainersCreate { spec, .. } => {
                 spec.retain_revision(revision);
             }
+            Self::JobsCreate { definition, .. } => {
+                definition.retain_revision(revision);
+            }
+            Self::JobsEdit { definition, .. } => {
+                definition.retain_revision(revision);
+            }
             Self::SettingsSaveRevision { repository_id, .. } => {
                 if revision < 8 {
                     *repository_id = None;
                 }
+            }
+            Self::RouterRoute { intent, .. } => {
+                intent.retain_revision(revision);
+            }
+            Self::RouterPin { intent, .. } => {
+                intent.retain_revision(revision);
             }
             Self::RouterPriceOverride { change, .. } => {
                 if revision < 3 {
@@ -26553,6 +26642,22 @@ impl Revisioned for DomainCommand {
             }
             Self::DesktopInput { action, .. } => {
                 action.check_revision(revision)?;
+                Ok(())
+            }
+            Self::JobsCreate { definition, .. } => {
+                definition.check_revision(revision)?;
+                Ok(())
+            }
+            Self::JobsEdit { definition, .. } => {
+                definition.check_revision(revision)?;
+                Ok(())
+            }
+            Self::RouterRoute { intent, .. } => {
+                intent.check_revision(revision)?;
+                Ok(())
+            }
+            Self::RouterPin { intent, .. } => {
+                intent.check_revision(revision)?;
                 Ok(())
             }
             Self::RouterConfigure { action, .. } => {
@@ -28460,6 +28565,15 @@ impl Revisioned for OperationResult {
             Self::ConventionsImport { value } => value.check_revision(revision),
             Self::ConventionsMove { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::JobsCreate { value } => value.check_revision(revision),
+            Self::JobsEdit { value } => value.check_revision(revision),
+            Self::JobsEnable { value } => value.check_revision(revision),
+            Self::JobsDisable { value } => value.check_revision(revision),
+            Self::JobsDelete { value } => value.check_revision(revision),
+            Self::JobsInspect { value } => value.check_revision(revision),
+            Self::RouterRoute { value } => value.check_revision(revision),
+            Self::RouterPin { value } => value.check_revision(revision),
+            Self::RouterAvailability { value } => value.check_revision(revision),
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),

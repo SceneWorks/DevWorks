@@ -314,6 +314,25 @@ fn request(conn: &Connection, id: &Id) -> Result<Option<StoredRouteRequest>, Sto
     .transpose()
 }
 
+fn auto_route(conn: &Connection, session: &Id) -> Result<Option<StoredAutoRoute>, StorageError> {
+    let row = db(conn.query_row(
+        "SELECT source_json,systemone_operation,low_plan_json,decision_json FROM router_auto_sessions WHERE session_id=?1",
+        params![session.as_str()],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?)),
+    ).optional())?;
+    let parse =
+        |value: String| serde_json::from_str(&value).map_err(|_| corrupt("stored automatic route"));
+    row.map(|(source, operation, low_plan, decision)| {
+        Ok(StoredAutoRoute {
+            source: parse(source)?,
+            systemone_operation: opt_id(operation)?.map(OperationId),
+            low_plan: low_plan.map(parse).transpose()?,
+            decision: decision.map(parse).transpose()?,
+        })
+    })
+    .transpose()
+}
+
 macro_rules! router_reads {
     ($t:ty) => {
         impl RouterRead for $t {
@@ -372,6 +391,16 @@ macro_rules! router_reads {
                     .optional())?
                 .unwrap_or(0))
             }
+            fn auto_route(&self, session: &Id) -> Result<Option<StoredAutoRoute>, StorageError> {
+                auto_route(self.conn, session)
+            }
+            fn auto_low_cursor(&self) -> Result<i64, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT next FROM router_auto_low_cursor WHERE singleton=1",
+                    [],
+                    |row| row.get(0),
+                ))
+            }
             fn session_pin(&self, session: &Id) -> Result<Option<StoredPin>, StorageError> {
                 pin(self.conn, session)
             }
@@ -394,6 +423,65 @@ router_reads!(Snapshot<'_>);
 router_reads!(Unit<'_>);
 
 impl RouterRepository for Unit<'_> {
+    fn begin_auto_route(
+        &mut self,
+        session: &Id,
+        source: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        db(self.conn.execute(
+            "INSERT INTO router_auto_sessions(session_id,source_json) VALUES(?1,?2) ON CONFLICT(session_id) DO NOTHING",
+            params![session.as_str(), source.to_string()],
+        ))?;
+        self.auto_route(session)?
+            .ok_or_else(|| corrupt("automatic route source vanished"))
+    }
+
+    fn bind_auto_decision_operation(
+        &mut self,
+        session: &Id,
+        operation: &OperationId,
+    ) -> Result<(), StorageError> {
+        if db(self.conn.execute(
+            "UPDATE router_auto_sessions SET systemone_operation=?2 WHERE session_id=?1 AND systemone_operation IS NULL AND low_plan_json IS NULL AND decision_json IS NULL",
+            params![session.as_str(), operation.0.as_str()],
+        ))? != 1 {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
+    }
+
+    fn save_auto_low_plan(
+        &mut self,
+        session: &Id,
+        plan: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        let inserted = db(self.conn.execute(
+            "UPDATE router_auto_sessions SET low_plan_json=?2 WHERE session_id=?1 AND low_plan_json IS NULL AND decision_json IS NULL",
+            params![session.as_str(), plan.to_string()],
+        ))?;
+        if inserted != 0 {
+            db(self.conn.execute(
+                "UPDATE router_auto_low_cursor SET next=next+1 WHERE singleton=1",
+                [],
+            ))?;
+        }
+        self.auto_route(session)?
+            .ok_or_else(|| corrupt("automatic route source vanished"))
+    }
+
+    fn finish_auto_route(
+        &mut self,
+        session: &Id,
+        decision: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        db(self.conn.execute(
+            "UPDATE router_auto_sessions SET decision_json=?2 WHERE session_id=?1 AND decision_json IS NULL",
+            params![session.as_str(), decision.to_string()],
+        ))?;
+        self.auto_route(session)?
+            .ok_or_else(|| corrupt("automatic route source vanished"))
+    }
+
     fn set_decision_pool_cursor(&mut self, model: &Id) -> Result<(), StorageError> {
         let changed = db(self.conn.execute(
             "UPDATE router_decision_pool SET last_model_id=?1 WHERE singleton=1",

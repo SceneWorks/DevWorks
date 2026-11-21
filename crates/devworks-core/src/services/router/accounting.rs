@@ -153,12 +153,17 @@ impl InferenceRouter {
                         "session route pin changed before inference admission".into(),
                     ));
                 }
+                let Some(effective) =
+                    super::auto_routing::effective_intent(tx.router(), session, intent)?
+                else {
+                    return Ok(Some("DevWorks Auto has no assigned tier".into()));
+                };
                 let pinned = current_pin
                     .as_ref()
                     .filter(|current| pin.as_ref().is_some_and(|p| p.id == current.pin_id))
-                    .and_then(|pin| facts.assess_pin(intent, pin, &connections, &need));
+                    .and_then(|pin| facts.assess_pin(&effective, pin, &connections, &need));
                 let pool = facts.assess_pool(
-                    intent,
+                    &effective,
                     &connections,
                     &need,
                     Some((&query.catalog_model_id, &query.connection_id)),
@@ -325,7 +330,16 @@ impl InferenceRouter {
             ));
         }
         if route.purpose == "TierClassification"
-            && matches!(request.selection.route(),AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
+            && !matches!(
+                request.selection.route(),
+                AttemptSelection::Conversation {
+                    intent: RouteIntent::Tier {
+                        tier: TierName::Low
+                    },
+                    pin: None,
+                    ..
+                }
+            )
         {
             return Ok(Admission::SourceChanged(
                 "the conversational classifier must target Low directly".into(),

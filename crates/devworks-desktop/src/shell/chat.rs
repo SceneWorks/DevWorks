@@ -806,6 +806,13 @@ impl ChatCtl<'_, '_> {
             .get(session)
             .cloned()
             .unwrap_or_default();
+        if matches!(
+            sel.intent,
+            devworks_core::protocol::records::RouteIntent::DevWorksAuto {}
+        ) {
+            // The saved native reply owns classification from the first message.
+            return;
+        }
         let sid = session.to_owned();
         if self.command(
             ChatSlot::RouteFirst(session.to_owned()),

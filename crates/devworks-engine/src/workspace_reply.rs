@@ -445,9 +445,14 @@ async fn run(
     {
         return outcome;
     }
-    let (mut route, mut binding, mut head) = match prepare(engine, &ctx, &intent).await {
+    let (mut route, mut binding, mut head) = match prepare(engine, &ctx, &intent, stopping).await {
         Ok(value) => value,
-        Err(error) => return settled(engine, &operation.id, attempt_no, unavailable(error)).await,
+        Err(error) => {
+            if stopping.is_cancelled() {
+                return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
+            }
+            return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
+        }
     };
     for _ in 0..64 {
         if stopping.is_cancelled() {
@@ -464,7 +469,7 @@ async fn run(
         )
         .await
         {
-            Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent).await {
+            Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent, stopping).await {
                 Ok((next_route, next_binding, next_head)) => {
                     route = next_route;
                     binding = next_binding;
@@ -529,7 +534,7 @@ async fn run(
                 {
                     return EffectResult::Unknown(error.to_string());
                 }
-                match prepare(engine, &ctx, &intent).await {
+                match prepare(engine, &ctx, &intent, stopping).await {
                     Ok((next_route, next_binding, next_head)) => {
                         route = next_route;
                         binding = next_binding;
@@ -888,33 +893,96 @@ async fn prepare(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     intent: &ReplyIntent,
+    cancel: &Cancellation,
 ) -> Result<(RouteChoice, NativeBinding, ArtifactRef), String> {
-    let (engine, ctx, intent) = (engine.clone(), ctx.clone(), intent.clone());
-    tokio::task::spawn_blocking(move || prepare_prompt(&engine, &ctx, &intent))
-        .await
-        .map_err(|error| error.to_string())?
+    if crate::auto_routing::needs_assignment(engine, ctx).map_err(|e| e.to_string())? {
+        let (origin, material) =
+            first_auto_input(engine, ctx, intent).map_err(|e| e.to_string())?;
+        crate::auto_routing::assign(engine, ctx, origin, material, cancel)
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+    }
+    loop {
+        let (worker, ctx, intent) = (engine.clone(), ctx.clone(), intent.clone());
+        let result = tokio::task::spawn_blocking(move || prepare_prompt(&worker, &ctx, &intent))
+            .await
+            .map_err(|error| error.to_string())?;
+        match result {
+            Err(crate::turn_error::TurnError::Cooling { until_ms }) => {
+                crate::auto_routing::wait_until(engine, until_ms, cancel)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?
+            }
+            other => return other.map_err(|error| format!("{error:?}")),
+        }
+    }
+}
+
+fn first_auto_input(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    intent: &ReplyIntent,
+) -> Result<(String, ProviderContext), StorageError> {
+    let entry = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let session = session_for_reply(read, intent)?;
+        if intent.user_sequence > session.last_durable_sequence() {
+            return Err(StorageError::ScopeDenied);
+        }
+        let mut after = 0;
+        while after < intent.user_sequence && after < 10_000 {
+            let remaining = (intent.user_sequence - after).min(500) as u16;
+            let entries = read
+                .sessions()
+                .entries(&intent.session_id, after, remaining)?;
+            if entries.is_empty() {
+                break;
+            }
+            for entry in entries {
+                if entry.kind == "UserMessage" {
+                    return Ok(entry);
+                }
+                after = entry.sequence;
+            }
+        }
+        Err(StorageError::ScopeDenied)
+    })?;
+    let source = serde_json::from_value(entry.body)
+        .map_err(|error| StorageError::InvalidRecord(format!("automatic route input: {error}")))?;
+    let mut context = ProviderContext {
+        version: 1,
+        instructions: Vec::new(),
+        instruction_stamps: Vec::new(),
+        skill_stamp: None,
+        messages: Vec::new(),
+        parameters: GenerationParameters::default(),
+    };
+    crate::tool_turn::append_context_fact(
+        &mut context,
+        engine.store().as_ref(),
+        engine.artifacts(),
+        ctx,
+        &intent.session_id,
+        source,
+    )?;
+    Ok((entry.entry_id.as_str().to_owned(), context))
 }
 
 fn prepare_prompt(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     intent: &ReplyIntent,
-) -> Result<(RouteChoice, NativeBinding, ArtifactRef), String> {
+) -> Result<(RouteChoice, NativeBinding, ArtifactRef), crate::turn_error::TurnError> {
     let session = &intent.session_id;
-    let recovered = engine
-        .recover_native_context_head(ctx, session)
-        .map_err(|error| error.to_string())?;
+    let recovered = engine.recover_native_context_head(ctx, session)?;
     if let Some((head, binding, _)) = recovered {
         read_snapshot(
             engine.store().as_ref(),
             &ReadOptions::default(),
             |snapshot| input_prefix(snapshot, intent, intent.user_sequence - 1).map(|_| ()),
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
         let (head, binding, route, _) = crate::agent_turns::prepare_generation_context(
             engine, ctx, session, head, binding, false,
-        )
-        .map_err(|error| format!("{error:?}"))?;
+        )?;
         return Ok((route, binding, head));
     }
     let (inputs, role) = read_snapshot(
@@ -930,8 +998,7 @@ fn prepare_prompt(
             .map_err(|_| StorageError::ScopeDenied)?;
             Ok((inputs, role))
         },
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     let images = inputs.iter().any(|body| match body {
         TranscriptBody::UserMessage { content } => content.iter().any(|item| {
             matches!(item, UserContent::Attachment { artifact } if artifact.media_type.starts_with("image/"))
@@ -940,10 +1007,9 @@ fn prepare_prompt(
     });
     let tools = !engine
         .providers()
-        .ok_or("The native provider is unavailable.")?
+        .ok_or(StorageError::ScopeDenied)?
         .schemas()
-        .selected_agent_tools(ctx)
-        .map_err(|error| error.to_string())?
+        .selected_agent_tools(ctx)?
         .is_empty();
     let route = crate::agent_turns::route_context_head(
         engine,
@@ -953,10 +1019,8 @@ fn prepare_prompt(
         None,
         tools,
         images,
-    )
-    .map_err(|error| format!("{error:?}"))?;
-    let (binding, headroom) = crate::agent_turns::initial_route_binding(engine, session, &route)
-        .map_err(|error| error.to_string())?;
+    )?;
+    let (binding, headroom) = crate::agent_turns::initial_route_binding(engine, session, &route)?;
     let instructions = (!role.text.is_empty())
         .then_some(TextBlock {
             text: role.text,
@@ -985,23 +1049,17 @@ fn prepare_prompt(
             ctx,
             session,
             body,
-        )
-        .map_err(|error| error.to_string())?;
+        )?;
     }
-    let context = engine
-        .bind_provider_instructions(ctx, context, &[])
-        .map_err(|error| error.to_string())?;
-    let initial = engine
-        .publish_initial_native_context(ctx, session, &binding, &context)
-        .map_err(|error| error.to_string())?;
+    let context = engine.bind_provider_instructions(ctx, context, &[])?;
+    let initial = engine.publish_initial_native_context(ctx, session, &binding, &context)?;
     let head = crate::tool_turn::append_operation_updates(
         engine.store().as_ref(),
         engine.artifacts(),
         ctx,
         session,
         &initial,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     Ok((route, binding, head))
 }
 

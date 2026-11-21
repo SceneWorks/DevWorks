@@ -12908,6 +12908,104 @@
     "schemaValid": true
   },
   {
+    "id": "dw13-r3-admission-jobs.list-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.list",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-jobs.create-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.create\",\"scope\":{\"kind\":\"Workspace\"},\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.create",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.create\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-jobs.edit-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.edit\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.edit",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.edit\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-jobs.enable-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.enable\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.enable",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.enable\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-jobs.disable-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.disable\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.disable",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.disable\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-jobs.delete-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"jobs.delete\",\"jobId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.delete",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.delete\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-jobs.inspect-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"jobs.inspect\",\"jobId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-jobs.inspect",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"jobs.inspect\",\"value\":{\"job\":{\"id\":\"id-a\",\"revision\":\"1\",\"title\":\"fixture\",\"schedule\":{\"kind\":\"Manual\"},\"definition\":{\"kind\":\"Native\",\"capabilityId\":\"id-a\",\"arguments\":{\"schema\":{\"schemaId\":\"fixture/object\",\"revision\":\"1\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"value\":{\"input\":\"fixture\"}}},\"enabled\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-admission-workflows.list-Query",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"workflows.list\",\"projectId\":\"project-a\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",

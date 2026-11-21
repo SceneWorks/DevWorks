@@ -48,6 +48,12 @@ impl DecisionIntent {
     }
 }
 
+struct DecisionSource {
+    schema_revision: i64,
+    args_digest: String,
+    fences: Vec<AuthorityFence>,
+}
+
 pub struct DecisionService {
     router: Arc<InferenceRouter>,
 }
@@ -61,7 +67,7 @@ impl DecisionService {
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
-        command: &AdmittedCommand,
+        source: DecisionSource,
         input: &ops::DecideInput,
     ) -> Result<Decided, Failure> {
         let requirements = systemone::requirements(input)
@@ -138,7 +144,7 @@ impl DecisionService {
             delivery_id: delivery_id.clone(),
             actor: ctx.principal().clone(),
             principal_kind: ctx.principal_kind().as_str().into(),
-            authority_fences: command.authorization().fences().to_vec(),
+            authority_fences: source.fences,
             context: crate::services::approvals::save_source_context(ctx),
         };
         tx.operations().record_intent(NewOperation {
@@ -146,8 +152,8 @@ impl DecisionService {
             root_id: ctx.root_id().cloned(),
             assignment_id: ctx.assignment_id().cloned(),
             capability: OPERATION.into(),
-            schema_version: i64::from(command.schema_revision().0),
-            args_digest: command.fingerprint().as_str().to_owned(),
+            schema_version: source.schema_revision,
+            args_digest: source.args_digest,
             payload: serde_json::to_value(&intent).map_err(invalid_record)?,
         })?;
         let event = EventId(tx.new_id(IdKind::Event));
@@ -180,6 +186,57 @@ impl DecisionService {
             },
             operation_id: Some(operation_id),
         })
+    }
+
+    /// The native first-generation owner can queue an auxiliary choice without exposing
+    /// a command to the model. Keep the original principal and native budget attribution.
+    pub fn enqueue_auto(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        input: &ops::DecideInput,
+    ) -> Result<Option<OperationId>, StorageError> {
+        let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+        let record = tx
+            .router()
+            .auto_route(session)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if record.systemone_operation.is_some()
+            || record.low_plan.is_some()
+            || record.decision.is_some()
+        {
+            return Ok(record.systemone_operation);
+        }
+        let fences = super::auto_routing::current_authority(tx, ctx)?;
+        let args_digest = crate::fingerprint::canonical_digest(
+            &serde_json::to_value(input).map_err(invalid_record)?,
+        )
+        .map_err(|_| StorageError::ScopeDenied)?;
+        let result = self.enqueue(
+            tx,
+            ctx,
+            DecisionSource {
+                schema_revision: 4,
+                args_digest,
+                fences,
+            },
+            input,
+        );
+        match result {
+            Ok(Decided {
+                operation_id: Some(operation),
+                ..
+            }) => {
+                tx.router()
+                    .bind_auto_decision_operation(session, &operation)?;
+                Ok(Some(operation))
+            }
+            Err(Failure::Refused(refusal)) if refusal.target_kind == "decision_pool_empty" => {
+                Ok(None)
+            }
+            Err(other) => Err(other.into_storage()),
+            _ => Err(StorageError::ScopeDenied),
+        }
     }
 
     /// Finish allocating the saved logical request after the native owner has resolved media,
@@ -381,7 +438,12 @@ impl CommandHandler for DecisionService {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into()),
             );
         };
-        match self.enqueue(tx, ctx, command, input) {
+        let source = DecisionSource {
+            schema_revision: i64::from(command.schema_revision().0),
+            args_digest: command.fingerprint().as_str().to_owned(),
+            fences: command.authorization().fences().to_vec(),
+        };
+        match self.enqueue(tx, ctx, source, input) {
             Ok(result) => Ok(result),
             Err(error) => decided(tx, Err(error)),
         }

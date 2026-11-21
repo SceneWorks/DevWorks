@@ -53,6 +53,7 @@
 //! analysis/review/assistant configuration endpoints map to `router.connections` and
 //! `router.configure` (the provider-connection item) and to the routing settings.
 pub mod accounting;
+pub mod auto_routing;
 pub mod connections;
 mod decision_models;
 pub mod decisions;
@@ -420,13 +421,18 @@ impl Facts {
                 .cloned()
                 .unwrap_or_default(),
             RouteIntent::Model { model_id } => vec![model_id.clone()],
-            RouteIntent::OpenRouterAuto {} => self
+            RouteIntent::DevWorksAuto {} => Vec::new(),
+            RouteIntent::OpenRouterAuto {} | RouteIntent::OpenRouterAutoBeta {} => self
                 .ordered
                 .iter()
                 .filter(|id| {
                     self.models.get(id.as_str()).is_some_and(|m| {
                         m.endpoint_profile == select::OPEN_ROUTER_PROFILE
-                            && crate::ports::router::is_open_router_auto(&m.upstream_model_id)
+                            && m.upstream_model_id
+                                == match intent {
+                                    RouteIntent::OpenRouterAutoBeta {} => "openrouter/auto-beta",
+                                    _ => "openrouter/auto",
+                                }
                     })
                 })
                 .cloned()
@@ -448,6 +454,14 @@ impl Facts {
         };
         if !pin_matches_model(pin, model) {
             return false;
+        }
+        // Before Beta had its own intent, Auto could select it. Keep that exact saved pin
+        // while it is eligible. New Auto selections and replacements use ordinary Auto.
+        if matches!(intent, RouteIntent::OpenRouterAuto {})
+            && model.endpoint_profile == select::OPEN_ROUTER_PROFILE
+            && model.upstream_model_id == "openrouter/auto-beta"
+        {
+            return true;
         }
         let family = latest::parse(&model.upstream_model_id).map(|p| p.family);
         self.pool(intent).iter().any(|id| {
@@ -763,6 +777,20 @@ impl InferenceRouter {
         let members = tier_members(tx.configuration())?;
         let f = facts_with(members, tx.router(), now)?;
         let connections = self.connections.connections(tx.router())?;
+        let Some(effective) =
+            auto_routing::effective_intent(tx.router(), Some(&session.id), intent)?
+        else {
+            let reason = if current.is_some() {
+                "auto_requires_new_session"
+            } else {
+                "auto_needs_first_input"
+            };
+            return Err(
+                Refusal::new(DomainErrorCode::Conflict, reason, Some(session.id.clone()))
+                    .retry(RetryAdvice::AfterBlockerClears)
+                    .into(),
+            );
+        };
         let same_intent = current.as_ref().is_some_and(|p| p.intent == key);
         let same_effort = current
             .as_ref()
@@ -771,11 +799,11 @@ impl InferenceRouter {
             .as_ref()
             .filter(|_| same_intent)
             .map(|p| (&p.model_id, &p.connection_id));
-        let pool = f.assess_pool(intent, &connections, need, preferred);
+        let pool = f.assess_pool(&effective, &connections, need, preferred);
         let pinned_assessment = current
             .as_ref()
             .filter(|_| same_intent)
-            .and_then(|p| f.assess_pin(intent, p, &connections, need));
+            .and_then(|p| f.assess_pin(&effective, p, &connections, need));
         let pinned = current
             .as_ref()
             .zip(pinned_assessment.as_ref().filter(|a| a.eligible()));
@@ -830,7 +858,7 @@ impl InferenceRouter {
             include_recoverable_pin(&mut diagnostics, pinned_assessment.as_ref());
             return Err(blocked(intent, &diagnostics, Some(&session.id)));
         }
-        let chosen = match intent {
+        let chosen = match &effective {
             RouteIntent::Tier { tier } => {
                 let tier = wire(tier);
                 let turn = tx.router().tier_cursor(&tier)?;
@@ -838,7 +866,10 @@ impl InferenceRouter {
                 tx.router().advance_tier_cursor(&tier, turn)?;
                 pick
             }
-            RouteIntent::Model { .. } | RouteIntent::OpenRouterAuto {} => eligible[0],
+            RouteIntent::Model { .. }
+            | RouteIntent::OpenRouterAuto {}
+            | RouteIntent::OpenRouterAutoBeta {} => eligible[0],
+            RouteIntent::DevWorksAuto {} => unreachable!("automatic tier must be assigned"),
         };
         let reason = match &current {
             None => "Initial",
@@ -1219,6 +1250,7 @@ impl InferenceRouter {
         intent: &RouteIntent,
         effort: &EffortName,
         capabilities: &[&str],
+        session_id: Option<&Id>,
         pin: Option<&StoredPin>,
     ) -> Result<RouteAvailability, Failure> {
         let now = self.clock.now_ms().get();
@@ -1226,7 +1258,25 @@ impl InferenceRouter {
             .map_err(|_| invalid(CAPABILITY))?;
         let f = facts(snapshot.configuration(), snapshot.router(), now)?;
         let connections = self.connections.connections(snapshot.router())?;
-        let mut pool = f.assess_pool(intent, &connections, &need, None);
+        let Some(effective) =
+            auto_routing::effective_intent(snapshot.router(), session_id, intent)?
+        else {
+            return Ok(RouteAvailability {
+                intent: intent.clone(),
+                available: false,
+                eligible_model_ids: BoundedList(Vec::new()),
+                blocked_reason_codes: BoundedList(vec![wire_label(if pin.is_some() {
+                    "AutoRequiresNewSession"
+                } else {
+                    "AutoNeedsFirstInput"
+                })]),
+                retry_at_ms: None,
+                pin: pin.map(choice_of).transpose()?,
+                pin_eligible: pin.map(|_| false),
+                pin_reason: pin.map(|p| wire_label(&p.reason)),
+            });
+        };
+        let mut pool = f.assess_pool(&effective, &connections, &need, None);
         let mut eligible: Vec<Id> = pool
             .iter()
             .filter(|a| a.eligible())
@@ -1234,7 +1284,7 @@ impl InferenceRouter {
             .collect();
         let pinned_assessment = pin
             .filter(|p| p.intent == intent_key(intent))
-            .and_then(|p| f.assess_pin(intent, p, &connections, &need));
+            .and_then(|p| f.assess_pin(&effective, p, &connections, &need));
         let pin_eligible = pin.map(|p| {
             p.requested_effort == need.effort
                 && pinned_assessment.as_ref().is_some_and(Assessed::eligible)
@@ -1290,8 +1340,15 @@ impl InferenceRouter {
             .iter()
             .map(|l| l.0.as_str())
             .collect();
-        self.availability_of(snapshot, &i.intent, &i.effort, &caps, pin.as_ref())
-            .map(|value| OperationResult::RouterAvailability { value })
+        self.availability_of(
+            snapshot,
+            &i.intent,
+            &i.effort,
+            &caps,
+            i.session_id.as_ref(),
+            pin.as_ref(),
+        )
+        .map(|value| OperationResult::RouterAvailability { value })
     }
 
     fn request_status(
@@ -1367,7 +1424,14 @@ impl InferenceRouter {
                 }));
             }
         }
-        let pool = f.assess_pool(&request.intent, &connections, &need, None);
+        let intent = auto_routing::effective_intent(
+            snapshot.router(),
+            request.session_id.as_ref(),
+            &request.intent,
+        )?;
+        let pool = intent.map_or_else(Vec::new, |intent| {
+            f.assess_pool(&intent, &connections, &need, None)
+        });
         Ok(match pool.iter().find(|a| a.eligible()) {
             Some(a) => Ok(AuxiliaryRoute {
                 model_id: a.model_id.clone(),

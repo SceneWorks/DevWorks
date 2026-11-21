@@ -128,32 +128,33 @@ pub fn selectable(m: &RouteCatalogModel) -> bool {
     is_latest(m) || (m.enabled && (is_open_router_auto(m) || m.available != Some(false)))
 }
 
-const OPEN_ROUTER_AUTO_UPSTREAM: &str = "openrouter/auto";
-
-/// Whether a catalog model is OpenRouter's own automatic route.
+/// Whether a catalog model is an automatic route at OpenRouter.
 pub fn is_open_router_auto(m: &RouteCatalogModel) -> bool {
     wire_name(&m.endpoint_profile) == "OpenRouterChat"
-        && m.upstream_model_id.0 == OPEN_ROUTER_AUTO_UPSTREAM
+        && devworks_core::ports::router::is_open_router_auto(&m.upstream_model_id.0)
 }
 
 /// The intent a catalog entry selects: Open Router Auto is its own intent, every other model is
 /// named directly (never translated to a tier).
 pub fn intent_of(m: &RouteCatalogModel) -> RouteIntent {
-    if is_open_router_auto(m) {
-        RouteIntent::OpenRouterAuto {}
-    } else {
-        RouteIntent::Model {
+    match (is_open_router_auto(m), m.upstream_model_id.0.as_str()) {
+        (true, "openrouter/auto") => RouteIntent::OpenRouterAuto {},
+        (true, "openrouter/auto-beta") => RouteIntent::OpenRouterAutoBeta {},
+        _ => RouteIntent::Model {
             model_id: m.id.clone(),
-        }
+        },
     }
 }
 
 /// The four tiers, eight stable family choices, then offered concrete versions and upstream auto.
 pub fn options(catalog: &[RouteCatalogModel]) -> Vec<(String, RouteIntent)> {
-    let mut out: Vec<(String, RouteIntent)> = TIERS
-        .iter()
-        .map(|(t, l)| ((*l).to_owned(), RouteIntent::Tier { tier: t.clone() }))
-        .collect();
+    let mut out = vec![("DevWorks Auto".into(), RouteIntent::DevWorksAuto {})];
+    out.extend(TIERS.iter().map(|(tier, label)| {
+        (
+            (*label).to_owned(),
+            RouteIntent::Tier { tier: tier.clone() },
+        )
+    }));
     out.extend(LATEST_FAMILIES.iter().map(|(id, label)| {
         (
             catalog
@@ -166,12 +167,19 @@ pub fn options(catalog: &[RouteCatalogModel]) -> Vec<(String, RouteIntent)> {
             },
         )
     }));
+    out.extend([
+        ("Open Router Auto".into(), RouteIntent::OpenRouterAuto {}),
+        (
+            "Open Router Auto Beta".into(),
+            RouteIntent::OpenRouterAutoBeta {},
+        ),
+    ]);
     out.extend(
         catalog
             .iter()
-            .filter(|m| !is_latest(m) && selectable(m))
+            .filter(|m| !is_latest(m) && !is_open_router_auto(m) && selectable(m))
             .map(|m| {
-                let label = if m.available.is_none() && !is_open_router_auto(m) {
+                let label = if m.available.is_none() {
                     format!("{} (availability unknown)", m.display_name.0)
                 } else {
                     m.display_name.0.clone()
@@ -203,7 +211,9 @@ pub fn intent_label(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Stri
                 .find(|m| &m.id == model_id)
                 .map(|m| m.display_name.0.clone())
                 .unwrap_or_else(|| model_id.as_str().to_owned()),
+            RouteIntent::DevWorksAuto {} => "DevWorks Auto".into(),
             RouteIntent::OpenRouterAuto {} => "Open Router Auto".into(),
+            RouteIntent::OpenRouterAutoBeta {} => "Open Router Auto Beta".into(),
             RouteIntent::Tier { tier } => format!("Tier {}", wire_name(tier)),
         })
 }
@@ -229,7 +239,10 @@ pub fn efforts(catalog: &[RouteCatalogModel], intent: &RouteIntent) -> Vec<Effor
                 .iter()
                 .any(|t| wire_name(t) == wire_name(tier)),
             RouteIntent::Model { model_id } => &m.id == model_id,
-            RouteIntent::OpenRouterAuto {} => is_open_router_auto(m),
+            RouteIntent::DevWorksAuto {} => !m.tier_memberships.0.is_empty(),
+            RouteIntent::OpenRouterAuto {} | RouteIntent::OpenRouterAutoBeta {} => {
+                same_intent(&intent_of(m), intent)
+            }
         })
         .flat_map(|m| m.offered_efforts.iter().flat_map(|e| e.0.iter()))
         .map(wire_name)
@@ -270,6 +283,8 @@ pub fn reason(code: &str) -> &'static str {
         "ContextTooSmall" => "context window too small",
         "EmptyPool" => "no members are configured",
         "NoInventory" => "waiting for complete provider inventory",
+        "AutoNeedsFirstInput" => "the first request will classify the conversation",
+        "AutoRequiresNewSession" => "start a new conversation to use DevWorks Auto",
         _ => "unavailable",
     }
 }
@@ -373,6 +388,28 @@ mod tests {
         let unknown = model("manual-version");
         let catalog = vec![available, gone, unknown];
         let choices = options(&catalog);
+        assert!(matches!(choices[0].1, RouteIntent::DevWorksAuto {}));
+        assert_eq!(
+            choices[1..5]
+                .iter()
+                .map(|(label, _)| label.as_str())
+                .collect::<Vec<_>>(),
+            ["Tier Max", "Tier High", "Tier Mid", "Tier Low"]
+        );
+        assert_eq!(
+            choices
+                .iter()
+                .filter(|(_, intent)| matches!(intent, RouteIntent::OpenRouterAuto {}))
+                .count(),
+            1
+        );
+        assert_eq!(
+            choices
+                .iter()
+                .filter(|(_, intent)| matches!(intent, RouteIntent::OpenRouterAutoBeta {}))
+                .count(),
+            1
+        );
         for (id, label) in LATEST_FAMILIES {
             assert!(choices.iter().any(|(l, i)| l == label
                 && matches!(i, RouteIntent::Model { model_id } if model_id.as_str() == id)));

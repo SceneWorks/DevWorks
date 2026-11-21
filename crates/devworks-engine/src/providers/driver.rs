@@ -525,11 +525,19 @@ impl NativeProviders {
             }
         }
         let compaction = matches!(request.purpose, InferencePurpose::Compaction);
-        let detached = compaction || nested.is_some();
+        let classification = matches!(
+            logical.purpose,
+            devworks_core::services::router::Purpose::TierClassification
+        );
+        let detached = compaction || classification || nested.is_some();
         if compaction != (logical.purpose == devworks_core::services::router::Purpose::Compaction)
             || (detached
                 && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
             || (compaction && nested.is_some())
+            || (classification
+                && (!matches!(request.purpose, InferencePurpose::Semantic)
+                    || nested.is_some()
+                    || logical.pin_id.is_some()))
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -554,7 +562,7 @@ impl NativeProviders {
             }
             if let Some(nested) = &nested {
                 self.require_dispatching_call(&context, session_id, nested)?;
-            } else if !compaction {
+            } else if !detached {
                 let fence = crate::tool_turn::require_current_head_for_new_request(
                     self.store.as_ref(),
                     &context,
@@ -624,6 +632,7 @@ impl NativeProviders {
             ..
         } = &request.input
             && context_epoch.get() > 0
+            && !classification
             && nested.is_none()
         {
             // The epoch is host-published provenance, not a guess from a cache miss. Record

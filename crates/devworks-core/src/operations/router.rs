@@ -73,7 +73,13 @@ impl Check for RouteInput {
     }
 }
 impl Revisioned for RouteInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `router.pin` Command input.
@@ -95,7 +101,13 @@ impl Check for PinInput {
     }
 }
 impl Revisioned for PinInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `router.availability` Query input.
@@ -127,6 +139,11 @@ impl Revisioned for AvailabilityInput {
         if revision < 2 {
             self.session_id = None;
         }
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
     }
 }
 

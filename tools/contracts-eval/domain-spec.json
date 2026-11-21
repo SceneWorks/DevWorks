@@ -2038,7 +2038,13 @@
         "Model": {
           "model_id": "Id"
         },
-        "OpenRouterAuto": {}
+        "OpenRouterAuto": {},
+        "DevWorksAuto": {},
+        "OpenRouterAutoBeta": {}
+      },
+      "introducedVariants": {
+        "DevWorksAuto": 3,
+        "OpenRouterAutoBeta": 3
       }
     },
     "RouteModel": {
@@ -12157,27 +12163,33 @@
     ],
     "jobs.list": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.create": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.edit": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.enable": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.disable": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.delete": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.run_now": [
       1,
@@ -12185,7 +12197,8 @@
     ],
     "jobs.inspect": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.cancel": [
       1,

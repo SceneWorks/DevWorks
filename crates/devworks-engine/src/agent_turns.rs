@@ -16,9 +16,7 @@ use devworks_core::protocol::provider::{
     Attribution, EffortOption, InferenceInput, InferenceOptions, InferencePurpose,
     InferenceRequest, ModelSelection,
 };
-use devworks_core::protocol::records::{
-    AgentRecord, EffortName, RouteChoice, RouteIntent, TierName,
-};
+use devworks_core::protocol::records::{AgentRecord, EffortName, RouteChoice, RouteIntent};
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
 use devworks_core::protocol::{
     AttemptId, CommandReply, Counter, Id, OperationState, Protocol, RetryAdvice, Revision,
@@ -341,6 +339,10 @@ async fn drive_agent_turn(
         },
         Err(TurnError::PlanReviewUnavailable { .. }) => awaiting_plan_review(),
         Err(error) if error.is_cancelled() && cancellation.is_cancelled() => cancelled(),
+        Err(TurnError::Cooling { until_ms }) => LaunchEnd::Failed(ActivationFailure::RateLimited {
+            until_ms,
+            detail: "The assigned tier is cooling down.".into(),
+        }),
         Err(error) if retry_at_ms.is_some() => LaunchEnd::Failed(ActivationFailure::RateLimited {
             until_ms: retry_at_ms.expect("checked above"),
             detail: format!("native agent provider cooldown: {error:?}"),
@@ -521,6 +523,18 @@ async fn run_native_loop(
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
+                if crate::auto_routing::needs_assignment(engine, ctx)? {
+                    let material =
+                        initial_assignment_context(engine.store().as_ref(), ctx, agent, false)?;
+                    crate::auto_routing::assign(
+                        engine,
+                        ctx,
+                        agent.assignment_id.0.as_str().to_owned(),
+                        material,
+                        cancellation,
+                    )
+                    .await?;
+                }
                 let (engine, ctx, agent, session) = (
                     engine.clone(),
                     ctx.clone(),
@@ -1525,27 +1539,8 @@ pub fn route_context_head(
                     reviewer,
                 )),
                 None => {
-                    let preferred = ctx
-                        .workspace_reply()
-                        .and_then(|scope| scope.preference.clone())
-                        .map(
-                            serde_json::from_value::<
-                                devworks_core::protocol::provider::ConversationRoutePreference,
-                            >,
-                        )
-                        .transpose()
-                        .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
-                    let (intent, effort) = preferred.map_or_else(
-                        || {
-                            (
-                                RouteIntent::Tier {
-                                    tier: TierName::High,
-                                },
-                                EffortName::Default,
-                            )
-                        },
-                        |route| (route.intent, route.effort),
-                    );
+                    let (intent, effort) =
+                        crate::auto_routing::unpinned_selection(read, ctx, session_id)?;
                     Ok((intent, effort, Vec::new(), 0, reviewer))
                 }
             }
@@ -1567,10 +1562,24 @@ pub fn route_context_head(
         route_identity.push(':');
         route_identity.push_str(ctx.invocation_id().as_str());
     }
+    if matches!(intent, RouteIntent::DevWorksAuto {}) {
+        // A prior routing refusal must never mask freshly available members of the saved tier.
+        static ROUTE_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let attempt = ROUTE_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let boot = engine
+            .store()
+            .info()
+            .boot_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned())
+            .unwrap_or_default();
+        route_identity.push_str(&format!(":{boot}:{attempt}"));
+    }
     let key = sha256_hex(route_identity.as_bytes());
     let frame = serde_json::to_vec(&json!({
         "mode": "Command",
         "protocol": devworks_core::protocol::CONTRACT,
+        "schemaRevision": 3,
         "requestKey": format!("agent-route-{key}"),
         "body": {
             "kind": "router.route",
@@ -1620,12 +1629,25 @@ pub fn route_context_head(
             | DomainDecision::NoChange {
                 result: OperationResult::RouterRoute { value },
             } => Ok(value),
-            // A recorded refusal replays under this stable request key until the head or pin
-            // changes, so repeating the same turn cannot reach a new routing decision.
-            DomainDecision::Refused { fault } => Err(refused(
-                format!("agent route refused: {fault:?}"),
-                RetryAdvice::Never,
-            )),
+            DomainDecision::Refused { fault } => {
+                let auto = matches!(intent, RouteIntent::DevWorksAuto {});
+                if auto
+                    && fault.code == devworks_core::protocol::DomainErrorCode::CapacityWait
+                    && let Some(until_ms) = crate::auto_routing::cooldown(
+                        engine, session_id, &intent, &effort, &required,
+                    )?
+                {
+                    return Err(TurnError::Cooling { until_ms });
+                }
+                Err(refused(
+                    format!("agent route refused: {fault:?}"),
+                    if auto {
+                        fault.retry
+                    } else {
+                        RetryAdvice::Never
+                    },
+                ))
+            }
             _ => Err(refused("agent route reply".into(), RetryAdvice::Never)),
         },
         CommandReply::Rejected { code, retry, .. } => {
@@ -1695,6 +1717,15 @@ pub fn initial_context(
     ctx: &InvocationContext,
     agent: &AgentRecord,
 ) -> Result<ProviderContext, StorageError> {
+    initial_assignment_context(store, ctx, agent, true)
+}
+
+fn initial_assignment_context(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    agent: &AgentRecord,
+    include_redirects: bool,
+) -> Result<ProviderContext, StorageError> {
     let (role, brief, tasks, unlinked) =
         read_snapshot(store, &ReadOptions::default(), |snapshot| {
             let assignment = snapshot
@@ -1728,7 +1759,7 @@ pub fn initial_context(
             }
             let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
                 .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
-            if is_plan_reviewer(agent) {
+            if is_plan_reviewer(agent) || !include_redirects {
                 return Ok((source.role_instructions, source.brief, tasks, Vec::new()));
             }
             let mut unlinked = Vec::new();

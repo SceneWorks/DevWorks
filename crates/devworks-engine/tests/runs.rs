@@ -8737,6 +8737,8 @@ mod usage_tests;
 #[path = "runs/keep_working.rs"]
 mod keep_working;
 
+#[path = "runs/auto_routing.rs"]
+mod auto_routing;
 #[path = "runs/workspace_reply.rs"]
 mod workspace_reply;
 

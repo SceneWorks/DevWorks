@@ -225,6 +225,15 @@ pub struct StoredDecisionModel {
     pub updated_at_ms: i64,
 }
 
+/// Durable first input, assigned auxiliary candidates and final provenance of one Auto session.
+#[derive(Clone, Debug)]
+pub struct StoredAutoRoute {
+    pub source: serde_json::Value,
+    pub systemone_operation: Option<OperationId>,
+    pub low_plan: Option<serde_json::Value>,
+    pub decision: Option<serde_json::Value>,
+}
+
 pub trait RouterRead: super::EmbeddingRead {
     fn route_model(&self, id: &Id) -> Result<Option<StoredRouteModel>, StorageError>;
     fn connection(&self, id: &Id) -> Result<Option<StoredConnection>, StorageError>;
@@ -254,6 +263,8 @@ pub trait RouterRead: super::EmbeddingRead {
     ) -> Result<Vec<StoredRouteModel>, StorageError>;
     /// The turns `tier` (a `TierName` wire name) has handed out; 0 before the first.
     fn tier_cursor(&self, tier: &str) -> Result<i64, StorageError>;
+    fn auto_route(&self, session: &Id) -> Result<Option<StoredAutoRoute>, StorageError>;
+    fn auto_low_cursor(&self) -> Result<i64, StorageError>;
     fn session_pin(&self, session: &Id) -> Result<Option<StoredPin>, StorageError>;
     /// Every recorded cooldown, expired or not, in model ID order (one per catalog model).
     fn cooldowns(&self) -> Result<Vec<StoredCooldown>, StorageError>;
@@ -267,6 +278,29 @@ pub trait RouterRead: super::EmbeddingRead {
 }
 
 pub trait RouterRepository: RouterRead + super::EmbeddingRepository {
+    /// Saves the first authoritative source. Replays return the original source.
+    fn begin_auto_route(
+        &mut self,
+        session: &Id,
+        source: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError>;
+    fn bind_auto_decision_operation(
+        &mut self,
+        session: &Id,
+        operation: &OperationId,
+    ) -> Result<(), StorageError>;
+    /// Commits the ordered Low pass and advances its independent cursor once.
+    fn save_auto_low_plan(
+        &mut self,
+        session: &Id,
+        plan: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError>;
+    /// Commits a successful decision once. A later pin change cannot replace it.
+    fn finish_auto_route(
+        &mut self,
+        session: &Id,
+        decision: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError>;
     /// Records one eligible model selection in the same transaction as the decision intent.
     fn set_decision_pool_cursor(&mut self, model: &Id) -> Result<(), StorageError>;
     /// Inserts `model` at revision 1 (`expected_revision` `None`; an existing ID is

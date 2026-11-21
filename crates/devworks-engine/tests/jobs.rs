@@ -357,11 +357,14 @@ impl App {
             Revision::new(1).unwrap(),
         )
     }
-    fn command(&self, op: &str, mut body: Value) -> DomainCommandReply {
+    fn command(&self, op: &str, body: Value) -> DomainCommandReply {
+        self.command_at(op, body, 2)
+    }
+    fn command_at(&self, op: &str, mut body: Value, revision: u32) -> DomainCommandReply {
         body["kind"] = json!(op);
         let key = format!("key-{}", self.n.fetch_add(1, Ordering::SeqCst));
         let frame = json!({"mode": "Command", "protocol": PROTOCOL, "requestKey": key,
-            "schemaRevision": 2, "body": body});
+            "schemaRevision": revision, "body": body});
         self.runtime
             .command(&self.user(), op, frame.to_string().as_bytes())
             .expect("addressable")
@@ -734,12 +737,19 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
     .unwrap();
     let def = json!({"kind": "Inference", "prompt": {"artifactId": "prompt-1", "versionId": "prompt-v1",
         "sha256": "a".repeat(64), "byteLength": "12", "mediaType": "text/markdown"},
-        "route": {"kind": "Tier", "tier": "High"}, "effort": "Default"});
-    let job = value(app.command(
-        "jobs.create",
-        json!({"scope": {"kind": "Workspace"}, "title": "Scan",
-        "schedule": {"kind": "Manual"}, "definition": def, "enabled": true}),
+        "route": {"kind": "DevWorksAuto"}, "effort": "Default"});
+    let body = json!({"scope": {"kind": "Workspace"}, "title": "Scan",
+        "schedule": {"kind": "Manual"}, "definition": def, "enabled": true});
+    assert!(matches!(
+        app.command("jobs.create", body.clone()),
+        CommandReply::Rejected { .. }
     ));
+    let job = value(app.command_at("jobs.create", body, 3));
+    assert_eq!(job["definition"]["route"]["kind"], "DevWorksAuto");
+    assert_eq!(
+        app.job(&id(job["id"].as_str().unwrap())).definition["route"]["kind"],
+        "DevWorksAuto"
+    );
     let run = value(app.command(
         "jobs.run_now",
         json!({"jobId": job["id"], "expectedRevision": "1"}),

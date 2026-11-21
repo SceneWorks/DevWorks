@@ -5063,6 +5063,23 @@ impl Check for JobDefinition {
     }
 }
 
+impl Revisioned for JobDefinition {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Inference { route, .. } = self {
+            route.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Inference { route, .. } => {
+                route.check_revision(revision)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JobRecord {
@@ -5229,6 +5246,11 @@ impl Revisioned for JobRecord {
         if revision < 2 {
             self.deleted_at_ms = None;
         }
+        self.definition.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.definition.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -5495,9 +5517,17 @@ impl Check for ValidationReport {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum RouteIntent {
-    Tier { tier: TierName },
-    Model { model_id: Id },
+    Tier {
+        tier: TierName,
+    },
+    Model {
+        model_id: Id,
+    },
     OpenRouterAuto {},
+    #[schemars(extend("x-since" = 3))]
+    DevWorksAuto {},
+    #[schemars(extend("x-since" = 3))]
+    OpenRouterAutoBeta {},
 }
 impl Check for RouteIntent {
     fn check(&self) -> Result<(), String> {
@@ -5509,6 +5539,24 @@ impl Check for RouteIntent {
                 model_id.check()?;
             }
             Self::OpenRouterAuto {} => {}
+            Self::DevWorksAuto {} => {}
+            Self::OpenRouterAutoBeta {} => {}
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for RouteIntent {
+    fn retain_revision(&mut self, _: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::DevWorksAuto { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: DevWorksAuto".into());
+            }
+            Self::OpenRouterAutoBeta { .. } if revision < 3 => {
+                return Err("union variant predates its introduction: OpenRouterAutoBeta".into());
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -5832,6 +5880,11 @@ impl Revisioned for RouteChoice {
         if revision < 3 {
             self.resolved_identity_origin = None;
         }
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -5897,6 +5950,12 @@ impl Revisioned for RouteAvailability {
         if revision < 2 {
             self.pin_reason = None;
         }
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        self.pin.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -8209,6 +8268,10 @@ impl Revisioned for JobInspection {
         }
         self.job.retain_revision(revision);
         self.run.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.job.check_revision(revision)?;
+        Ok(())
     }
 }
 

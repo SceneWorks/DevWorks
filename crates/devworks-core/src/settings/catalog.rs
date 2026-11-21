@@ -441,6 +441,16 @@ fn build() -> Vec<SettingDescriptor> {
             NewClonesOnly
         ),
         setting!(
+            crate::services::router::auto_routing::MANAGED_AUTO_KEY,
+            "DevWorks Auto for new managed sessions",
+            "Classify each new managed assignment once before its first reply. Existing pins and automatic tiers are retained.",
+            Routing,
+            WORKSPACE,
+            ValueKind::Bool,
+            false,
+            NextAdmission
+        ),
+        setting!(
             "routing.tierMax.members",
             "Tier Max members",
             "Configured models allocated round-robin for Tier Max.",

@@ -208,6 +208,7 @@ pub mod agent_inbox;
 pub mod agent_supervisor;
 pub mod agent_turns;
 pub mod approvals;
+mod auto_routing;
 pub mod browser;
 mod compaction;
 mod context_epoch;

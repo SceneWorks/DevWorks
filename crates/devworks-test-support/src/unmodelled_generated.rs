@@ -2791,6 +2791,12 @@ impl RouterRead for Unmodelled {
     fn tier_cursor(&self, _: &str) -> Result<i64, StorageError> {
         unmodelled()
     }
+    fn auto_route(&self, _: &Id) -> Result<Option<StoredAutoRoute>, StorageError> {
+        unmodelled()
+    }
+    fn auto_low_cursor(&self) -> Result<i64, StorageError> {
+        unmodelled()
+    }
     fn session_pin(&self, _: &Id) -> Result<Option<StoredPin>, StorageError> {
         unmodelled()
     }
@@ -2809,6 +2815,34 @@ impl RouterRead for Unmodelled {
     }
 }
 impl RouterRepository for Unmodelled {
+    fn begin_auto_route(
+        &mut self,
+        _: &Id,
+        _: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        unmodelled()
+    }
+    fn bind_auto_decision_operation(
+        &mut self,
+        _: &Id,
+        _: &OperationId,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn save_auto_low_plan(
+        &mut self,
+        _: &Id,
+        _: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        unmodelled()
+    }
+    fn finish_auto_route(
+        &mut self,
+        _: &Id,
+        _: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        unmodelled()
+    }
     fn set_decision_pool_cursor(&mut self, _: &Id) -> Result<(), StorageError> {
         unmodelled()
     }
