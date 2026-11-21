@@ -483,6 +483,9 @@ async fn run(
         {
             Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent, stopping).await {
                 Ok(next) => generation = next,
+                Err(_) if stopping.is_cancelled() => {
+                    return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
+                }
                 Err(error) => {
                     return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
                 }
@@ -577,6 +580,9 @@ async fn run(
         }
         match prepare(engine, &ctx, &intent, stopping).await {
             Ok(next) => generation = next,
+            Err(_) if stopping.is_cancelled() => {
+                return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
+            }
             Err(error) => {
                 return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
             }
@@ -928,7 +934,7 @@ async fn prepare(
             .await
             .map_err(|error| format!("{error:?}"))?;
     }
-    crate::agent_turns::wait_for_running_mcp_calls(engine, ctx, &intent.session_id, cancel)
+    crate::agent_turns::wait_for_running_tool_results(engine, ctx, &intent.session_id, cancel)
         .await
         .map_err(|error| error.to_string())?;
     loop {

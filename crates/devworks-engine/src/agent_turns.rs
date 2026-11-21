@@ -665,7 +665,7 @@ async fn run_native_loop(
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        wait_for_running_mcp_calls(engine, ctx, session_id, cancellation).await?;
+        wait_for_running_tool_results(engine, ctx, session_id, cancellation).await?;
         let (prepared_head, prepared_binding, route, windows) = {
             let (engine, ctx, session, head, is_reviewer) = (
                 engine.clone(),
@@ -1019,10 +1019,9 @@ pub(crate) fn prepare_generation_context(
     Ok((head, binding, route, windows))
 }
 
-/// An external MCP tool answers within its own call deadline, so the next provider request
-/// waits for it and carries the result instead of only the accepted receipt. A call that needs
-/// input or whose outcome is unknown does not hold the agent.
-pub(crate) async fn wait_for_running_mcp_calls(
+/// MCP and SystemOne calls have their own deadlines. Wait for their results before refreshing
+/// the provider context. Calls that need input or reconciliation release the turn.
+pub(crate) async fn wait_for_running_tool_results(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
@@ -1039,15 +1038,16 @@ pub(crate) async fn wait_for_running_mcp_calls(
                     .operations()
                     .operation(operation_id)?
                     .ok_or(StorageError::ScopeDenied)?;
-                if operation.capability == "mcp.tool"
-                    && matches!(
-                        operation.state,
-                        OperationState::IntentRecorded
-                            | OperationState::Preflighted
-                            | OperationState::Dispatching
-                            | OperationState::RetryPending
-                    )
-                {
+                if matches!(
+                    operation.capability.as_str(),
+                    "mcp.tool" | devworks_core::services::router::decisions::OPERATION
+                ) && matches!(
+                    operation.state,
+                    OperationState::IntentRecorded
+                        | OperationState::Preflighted
+                        | OperationState::Dispatching
+                        | OperationState::RetryPending
+                ) {
                     return Ok(true);
                 }
             }
