@@ -321,10 +321,11 @@ impl WebService {
 
     /// The end of the request: `limit` from now, earlier when the caller's deadline is.
     fn deadline(&self, env: &Preparation<'_>, limit: Duration) -> Instant {
-        let mut end = Instant::now() + limit;
+        let now = Instant::now();
+        let mut end = now + limit;
         if let Some(d) = env.deadline_ms {
             let left = d.saturating_sub(self.clock.now_ms().get()).max(0) as u64;
-            end = end.min(Instant::now() + Duration::from_millis(left));
+            end = end.min(now + Duration::from_millis(left));
         }
         end
     }
