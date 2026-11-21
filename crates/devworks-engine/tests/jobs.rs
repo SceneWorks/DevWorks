@@ -28,6 +28,7 @@ use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, Opera
 use devworks_core::protocol::{
     ActorId, CommandReply, Counter, Id, OperationId, OperationState, Revision, RootId,
 };
+use devworks_core::protocol::{DomainErrorCode, results::DomainQueryReply};
 use devworks_core::registry::SchemaRevision;
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
