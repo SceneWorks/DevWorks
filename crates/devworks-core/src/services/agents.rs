@@ -558,7 +558,7 @@ impl AgentService {
         // Redirects received before a coordinator existed have no transcript session link.
         // Materialization grants their validated versions to this coordinator's session.
         link_unlinked_redirect_attachments(tx, host, &root.id, &root.project_id, &session.id)?;
-        bind_role_authority(tx, host, &session.agent_id, role, &root.project_id)?;
+        bind_role_authority(tx, host, &session.agent_id, role, Some(&root.project_id))?;
         let assignment = if assignment.state == AssignmentState::Active {
             assignment
         } else {
@@ -1955,7 +1955,7 @@ fn bind_role_authority(
     host: &InvocationContext,
     actor: &ActorId,
     role: AgentRole,
-    project: &ProjectId,
+    project: Option<&ProjectId>,
 ) -> Result<(), Failure> {
     if host.principal_kind() != PrincipalKind::Host {
         return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
@@ -1964,7 +1964,7 @@ fn bind_role_authority(
         if existing.active
             && existing.kind == PrincipalKind::Agent
             && existing.role == Some(role)
-            && existing.project_id.as_ref() == Some(project)
+            && existing.project_id.as_ref() == project
         {
             return Ok(());
         }
@@ -1982,7 +1982,7 @@ fn bind_role_authority(
             actor: actor.clone(),
             kind: PrincipalKind::Agent,
             role: Some(role),
-            project_id: Some(project.clone()),
+            project_id: project.cloned(),
             tool_families: None,
             bound_by: host.principal().clone(),
         },
@@ -1998,6 +1998,44 @@ fn bind_role_authority(
         }
     })?;
     Ok(())
+}
+
+/// Enroll the application-configured workspace coordinator before opening the native session
+/// handler. It is a rootless workspace agent with ordinary selected-tool policy.
+pub fn bind_workspace_coordinator(
+    tx: &mut dyn WriteTransaction,
+    host: &InvocationContext,
+    actor: &ActorId,
+) -> Result<(), StorageError> {
+    if host.principal_kind() != PrincipalKind::Host
+        || host.principal() != &tx.store().host_actor
+        || host.store_id() != &tx.store().store_id
+        || host.restore_epoch().get() != tx.store().restore_epoch
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    match tx.actors().actor_kind(actor)? {
+        None => tx
+            .actors()
+            .register(actor, PrincipalKind::Agent, "Workspace coordinator")?,
+        Some(PrincipalKind::Agent) => {}
+        Some(_) => return Err(StorageError::ScopeDenied),
+    }
+    if tx.authority().principal(actor)?.is_some_and(|binding| {
+        !binding.active
+            && binding.kind == PrincipalKind::Agent
+            && binding.role == Some(AgentRole::WorkspaceCoordinator)
+            && binding.project_id.is_none()
+    }) {
+        // A person may revoke this agent without disabling the rest of the application.
+        return Ok(());
+    }
+    bind_role_authority(tx, host, actor, AgentRole::WorkspaceCoordinator, None).map_err(|error| {
+        match error {
+            Failure::Storage(error) => error,
+            Failure::Refused(_) => StorageError::ScopeDenied,
+        }
+    })
 }
 
 /// Trusted host materialization of a recorded child intent. An agent's delegate command cannot
@@ -2048,7 +2086,7 @@ pub fn bind_child_authority(
     if tx.actors().actor_kind(&actor)? != Some(PrincipalKind::Agent) {
         return Err(denied("session").into());
     }
-    bind_role_authority(tx, host, &actor, role, &root.project_id)?;
+    bind_role_authority(tx, host, &actor, role, Some(&root.project_id))?;
     Ok(actor)
 }
 

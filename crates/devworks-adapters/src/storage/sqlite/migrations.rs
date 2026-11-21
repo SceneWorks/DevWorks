@@ -722,6 +722,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "231e7cc738901c470870a1bf210371febea4ea30d836e73b3d2cf85c02cea09d",
         rebuilds_tables: false,
     },
+    // Older writers cannot distinguish automatic and ordinary project reservations.
+    Migration {
+        version: 64,
+        minimum_reader: 57,
+        minimum_writer: 64,
+        sql: include_str!("migrations/0064_keep_working_claims.sql"),
+        expected_sha256: "70360b84c1f238653ca0ef7272447c4d35b123fefc9df28bc3daada15fd6fcab",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

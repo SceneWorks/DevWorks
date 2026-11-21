@@ -90,6 +90,7 @@ fn claim(s: &SqliteStore, name: &str, work_id: &str, feature: bool) -> StoredAll
         } else {
             PROJECT_QUEUE.into()
         },
+        automatic: false,
         owner_id: s.info().host_actor,
         session_id: None,
         ingress_namespace: id("ingress"),

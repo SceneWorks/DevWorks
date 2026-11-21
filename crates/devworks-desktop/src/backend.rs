@@ -28,6 +28,22 @@ pub type Waker = Box<dyn Fn() + Send + Sync>;
 
 /// The application operations the shell may use.
 pub trait Backend: Send + Sync {
+    /// Boot-local automatic scheduling state. The native implementation never reads the store
+    /// or waits for a command from the frame thread.
+    fn keep_working_status(
+        &self,
+        _project: &devworks_core::protocol::ProjectId,
+    ) -> Option<devworks_engine::KeepWorkingStatus> {
+        None
+    }
+    fn set_keep_working(
+        &self,
+        _project: &devworks_core::protocol::ProjectId,
+        _enabled: bool,
+        _received: ControlEpoch,
+    ) -> Result<(), String> {
+        Err("Project keep-working is unavailable.".into())
+    }
     /// Trusted host-only append of the selected coordinator conversation's screen context.
     fn append_coordinator_notice(
         &self,
@@ -394,7 +410,7 @@ pub enum TaskOutput {
     Convention(crate::conventions_ops::TaskResult),
     /// Instruction text read or a staged draft (Roles and skills).
     Instruction(crate::instructions_ops::TaskResult),
-    /// Package runtimes and indexes were refreshed.
+    /// Native host state was refreshed or updated.
     Refreshed,
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),

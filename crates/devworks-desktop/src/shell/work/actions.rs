@@ -5,6 +5,27 @@ impl WorkCtl<'_, '_> {
     pub(crate) fn work_act(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::KeepWorking(enabled) => {
+                    let Some(project) = self.selected_project.clone() else {
+                        continue;
+                    };
+                    let Ok(id) = Id::new(&project) else {
+                        continue;
+                    };
+                    let Some(client) = self.cx.client.as_deref_mut() else {
+                        continue;
+                    };
+                    let received = client.backend().control_epoch();
+                    let id = ProjectId(id);
+                    client.task(
+                        WorkSlot::KeepWorking(project).into(),
+                        "Changing project keep-working",
+                        move |backend| {
+                            backend.set_keep_working(&id, enabled, received)?;
+                            Ok(TaskOutput::Refreshed)
+                        },
+                    );
+                }
                 Action::RefreshMessages => self.load_messages(true),
                 Action::MoreInbox => {
                     let Some(project) = self.selected_project.clone() else {
