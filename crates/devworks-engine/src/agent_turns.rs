@@ -626,7 +626,9 @@ async fn run_native_loop(
             if has_tools {
                 changes.borrow_and_update();
                 let dispatched = tokio::time::Instant::now();
-                dispatch_pending_off_thread(engine, ctx, session_id, cancellation).await?;
+                engine
+                    .dispatch_pending_async(ctx, session_id, Some(cancellation))
+                    .await?;
                 if !crate::tool_turn::pending_calls(engine.store().as_ref(), ctx, session_id)?
                     .is_empty()
                 {
@@ -1020,7 +1022,7 @@ pub(crate) fn prepare_generation_context(
 /// An external MCP tool answers within its own call deadline, so the next provider request
 /// waits for it and carries the result instead of only the accepted receipt. A call that needs
 /// input or whose outcome is unknown does not hold the agent.
-async fn wait_for_running_mcp_calls(
+pub(crate) async fn wait_for_running_mcp_calls(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
@@ -1056,28 +1058,6 @@ async fn wait_for_running_mcp_calls(
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-}
-
-async fn dispatch_pending_off_thread(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    session_id: &Id,
-    cancellation: &Cancellation,
-) -> Result<(), TurnError> {
-    // As above: the caller's upgraded Arc<Runtime> outlives this blocking task.
-    let worker = engine.clone();
-    let ctx = ctx.clone();
-    let session_id = session_id.clone();
-    let cancellation = cancellation.clone();
-    // The worker thread ends once every call is answered or parked: a receive that has nothing
-    // to read yet is awaited here without holding a thread.
-    let pass = tokio::task::spawn_blocking(move || {
-        worker.dispatch_pending_pass(&ctx, &session_id, Some(&cancellation), true)
-    })
-    .await
-    .map_err(|error| TurnError::Worker(format!("agent tool worker: {error}")))??;
-    engine.settle_pending(pass).await;
-    Ok(())
 }
 
 /// A provider exchange can be durable before its next context head is published. Recover that

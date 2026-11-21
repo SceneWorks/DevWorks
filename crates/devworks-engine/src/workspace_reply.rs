@@ -928,6 +928,9 @@ async fn prepare(
             .await
             .map_err(|error| format!("{error:?}"))?;
     }
+    crate::agent_turns::wait_for_running_mcp_calls(engine, ctx, &intent.session_id, cancel)
+        .await
+        .map_err(|error| error.to_string())?;
     loop {
         let (worker, ctx, intent) = (engine.clone(), ctx.clone(), intent.clone());
         let result = tokio::task::spawn_blocking(move || prepare_prompt(&worker, &ctx, &intent))

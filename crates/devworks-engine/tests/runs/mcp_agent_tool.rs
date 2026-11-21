@@ -17,7 +17,10 @@ const ANSWER: &str = "echo-server saw ticket DW-45";
 /// Each call returns one text block naming the `ticket` argument it received. A call for the
 /// ticket `BROKEN` fails with a protocol error instead, and one for `SLOW` answers only after
 /// the client's 15 s call deadline, which leaves its outcome unknown.
-struct EchoServer;
+#[derive(Default)]
+struct EchoServer {
+    gate: Option<Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
+}
 impl rmcp::ServerHandler for EchoServer {
     fn get_info(&self) -> rmcp::model::ServerConfig {
         rmcp::model::ServerConfig::new(
@@ -47,6 +50,10 @@ impl rmcp::ServerHandler for EchoServer {
         }
         if ticket == "SLOW" {
             tokio::time::sleep(std::time::Duration::from_secs(17)).await;
+        }
+        if let Some(gate) = &self.gate {
+            gate.0.notify_one();
+            gate.1.notified().await;
         }
         Ok(rmcp::model::CallToolResponse::Complete(
             rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(format!(
@@ -173,6 +180,155 @@ struct Turn {
     session_id: Value,
 }
 
+async fn connected_echo(
+    fx: &Fx,
+    mut composed: Composition,
+    handler: EchoServer,
+) -> (
+    Arc<devworks_engine::Runtime>,
+    rmcp::service::RunningService<rmcp::RoleServer, EchoServer>,
+    String,
+) {
+    let clients: Arc<OnceLock<Arc<NativeMcpClients>>> = Arc::default();
+    let installed = clients.clone();
+    composed.config.mcp = Some(devworks_engine::runtime::McpComposition {
+        validator: Arc::new(devworks_adapters::packages::JsonSchemaValidator),
+        factory: Arc::new(move |supervisor, handle| {
+            let native = Arc::new(NativeMcpClients::new(
+                supervisor,
+                Default::default(),
+                Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                "agent-mcp".into(),
+                Arc::new(NativeFilesystem::new()),
+                ProtectedRoots::new(vec![], vec![], None),
+                vec![],
+                handle,
+            ));
+            let _ = installed.set(native.clone());
+            native
+        }),
+    });
+    let app = Arc::new(boot(composed).await.unwrap());
+    let service = app.mcp_service().expect("the engine built the MCP service");
+
+    // A human configures the server; its catalog is published and the human selects
+    // its tool for agents.
+    let transport = json!({"kind":"Http","endpoint":"http://127.0.0.1:9/mcp"});
+    let configured = decision(
+        &app,
+        &fx.user,
+        "mcp.configure",
+        json!({"scope":{"kind":"Workspace"},"name":"Echo server","transport":transport}),
+    );
+    let server_id = configured["result"]["value"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{configured}"))
+        .to_owned();
+    let (catalog, server) = (service.clone(), id(&server_id));
+    fx.tx(move |_, tx| {
+        catalog.publish_remote_catalog(
+            tx,
+            &ConfigScope::Workspace,
+            &server,
+            &Revision::new(1).unwrap(),
+            RemoteCatalog {
+                tools: vec![RemoteTool {
+                    name: "echo_ticket".into(),
+                    description: "Echo a ticket key".into(),
+                    input_schema: json!({"type":"object",
+                        "properties":{"ticket":{"type":"string"}},
+                        "required":["ticket"]}),
+                    output_schema: None,
+                    read_only_hint: true,
+                    title: None,
+                    destructive_hint: None,
+                }],
+                resources: vec![],
+                prompts: vec![],
+            },
+        )
+    });
+    let tool_id = read(&*fx.store, |s| {
+        // Each server's catalog is saved in its own namespace.
+        let body = s
+            .configuration()
+            .current(
+                &ConfigScope::Workspace,
+                &format!("outgoing_mcp/{server_id}"),
+            )?
+            .unwrap()
+            .body;
+        Ok(body["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|cap| cap["kind"] == "tool")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned())
+    });
+    decision(
+        &app,
+        &fx.user,
+        "mcp.select_tools",
+        json!({"scope":{"kind":"Workspace"},"serverId":server_id,
+            "expectedRevision":"2","expectedCatalogRevision":"2","toolIds":[tool_id]}),
+    );
+    let capability = format!("mcp/{}", tool_id.strip_prefix("mcp-").unwrap());
+    fx.tx(move |_, tx| {
+        let current = settings::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
+        let descriptor = devworks_core::settings::catalog::descriptor(
+            devworks_core::settings::catalog::TOOL_OVERRIDES_KEY,
+        )
+        .unwrap();
+        let assignment = serde_json::from_value(json!({"key": descriptor.key,
+            "value": {"schema": descriptor.schema_ref(), "value": {(capability): true}}}))
+        .unwrap();
+        let plan = settings::plan(&current, &[assignment]);
+        let body = settings::body(
+            &plan,
+            &ActorId(id("user-a")),
+            tx.now_ms(),
+            json!({"kind": "test"}),
+        );
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            settings::NAMESPACE,
+            current.revision,
+            settings::BODY_SCHEMA_VERSION,
+            body,
+        )
+    });
+
+    // The in-process server takes the place of the endpoint's connection.
+    let (client_reader, server_writer) = tokio::io::duplex(64 * 1024);
+    let (server_reader, client_writer) = tokio::io::duplex(64 * 1024);
+    let remote = tokio::spawn(async move {
+        rmcp::serve_server(handler, (server_reader, server_writer))
+            .await
+            .expect("in-process server handshake")
+    });
+    clients
+        .get()
+        .expect("boot installed the native MCP client")
+        .attach_pipes(
+            &McpEndpoint {
+                server_id: id(&server_id),
+                scope: ConfigScope::Workspace,
+                transport: serde_json::from_value(transport).unwrap(),
+                sampling: false,
+            },
+            client_reader,
+            client_writer,
+        )
+        .await
+        .expect("attached server");
+    let remote = remote.await.unwrap();
+    let digest = tool_id.strip_prefix("mcp-").unwrap();
+    (app, remote, format!("mcp_{}", &digest[..60]))
+}
+
 /// Runs one agent turn whose first provider response calls the selected echo tool once per
 /// `(call id, ticket)` of `calls`, and asserts the turn completed.
 fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
@@ -202,142 +358,9 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
             });
             composed.config.providers =
                 Some(devworks_engine::providers::driver::ProviderComposition::new(wire.clone()));
-            let clients: Arc<OnceLock<Arc<NativeMcpClients>>> = Arc::default();
-            let installed = clients.clone();
-            composed.config.mcp = Some(devworks_engine::runtime::McpComposition {
-                validator: Arc::new(devworks_adapters::packages::JsonSchemaValidator),
-                factory: Arc::new(move |supervisor, handle| {
-                    let native = Arc::new(NativeMcpClients::new(
-                        supervisor,
-                        Default::default(),
-                        Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
-                        "agent-mcp".into(),
-                        Arc::new(NativeFilesystem::new()),
-                        ProtectedRoots::new(vec![], vec![], None),
-                        vec![],
-                        handle,
-                    ));
-                    let _ = installed.set(native.clone());
-                    native
-                }),
-            });
-            let app = Arc::new(boot(composed).await.unwrap());
+            let (app, remote, connected_alias) =
+                connected_echo(&fx, composed, EchoServer::default()).await;
             let service = app.mcp_service().expect("the engine built the MCP service");
-
-            // A human configures the server; its catalog is published and the human selects
-            // its tool for agents.
-            let transport = json!({"kind":"Http","endpoint":"http://127.0.0.1:9/mcp"});
-            let configured = decision(
-                &app,
-                &fx.user,
-                "mcp.configure",
-                json!({"scope":{"kind":"Workspace"},"name":"Echo server","transport":transport}),
-            );
-            let server_id = configured["result"]["value"]["id"]
-                .as_str()
-                .unwrap_or_else(|| panic!("{configured}"))
-                .to_owned();
-            let (catalog, server) = (service.clone(), id(&server_id));
-            fx.tx(move |_, tx| {
-                catalog.publish_remote_catalog(
-                    tx,
-                    &ConfigScope::Workspace,
-                    &server,
-                    &Revision::new(1).unwrap(),
-                    RemoteCatalog {
-                        tools: vec![RemoteTool {
-                            name: "echo_ticket".into(),
-                            description: "Echo a ticket key".into(),
-                            input_schema: json!({"type":"object",
-                                "properties":{"ticket":{"type":"string"}},
-                                "required":["ticket"]}),
-                            output_schema: None,
-                            read_only_hint: true,
-                            title: None,
-                            destructive_hint: None,
-                        }],
-                        resources: vec![],
-                        prompts: vec![],
-                    },
-                )
-            });
-            let tool_id = read(&*fx.store, |s| {
-                // Each server's catalog is saved in its own namespace.
-                let body = s
-                    .configuration()
-                    .current(
-                        &ConfigScope::Workspace,
-                        &format!("outgoing_mcp/{server_id}"),
-                    )?
-                    .unwrap()
-                    .body;
-                Ok(body["capabilities"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|cap| cap["kind"] == "tool")
-                    .unwrap()["id"]
-                    .as_str()
-                    .unwrap()
-                    .to_owned())
-            });
-            decision(
-                &app,
-                &fx.user,
-                "mcp.select_tools",
-                json!({"scope":{"kind":"Workspace"},"serverId":server_id,
-                    "expectedRevision":"2","expectedCatalogRevision":"2","toolIds":[tool_id]}),
-            );
-            let capability = format!("mcp/{}", tool_id.strip_prefix("mcp-").unwrap());
-            fx.tx(move |_, tx| {
-                let current = settings::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
-                let descriptor = devworks_core::settings::catalog::descriptor(
-                    devworks_core::settings::catalog::TOOL_OVERRIDES_KEY,
-                )
-                .unwrap();
-                let assignment = serde_json::from_value(json!({"key": descriptor.key,
-                    "value": {"schema": descriptor.schema_ref(), "value": {(capability): true}}}))
-                .unwrap();
-                let plan = settings::plan(&current, &[assignment]);
-                let body = settings::body(
-                    &plan,
-                    &ActorId(id("user-a")),
-                    tx.now_ms(),
-                    json!({"kind": "test"}),
-                );
-                tx.configuration().append_revision(
-                    &ConfigScope::Workspace,
-                    settings::NAMESPACE,
-                    current.revision,
-                    settings::BODY_SCHEMA_VERSION,
-                    body,
-                )
-            });
-
-            // The in-process server takes the place of the endpoint's connection.
-            let (client_reader, server_writer) = tokio::io::duplex(64 * 1024);
-            let (server_reader, client_writer) = tokio::io::duplex(64 * 1024);
-            let remote = tokio::spawn(async move {
-                rmcp::serve_server(EchoServer, (server_reader, server_writer))
-                    .await
-                    .expect("in-process server handshake")
-            });
-            clients
-                .get()
-                .expect("boot installed the native MCP client")
-                .attach_pipes(
-                    &McpEndpoint {
-                        server_id: id(&server_id),
-                        scope: ConfigScope::Workspace,
-                        transport: serde_json::from_value(transport).unwrap(),
-                        sampling: false,
-                    },
-                    client_reader,
-                    client_writer,
-                )
-                .await
-                .expect("attached server");
-            let remote = remote.await.unwrap();
 
             // A coordinator agent session pinned to a tool-capable model.
             applied(&fx.start(&fx.user, "root-i", 1, 1));
@@ -452,6 +475,7 @@ fn agent_turn(calls: Vec<(&'static str, &'static str)>) -> Turn {
                 .expect("selected agent tool")
                 .alias
                 .wire_name;
+            assert_eq!(alias, connected_alias);
             *wire.tool.lock().unwrap() = alias.clone();
 
             // Boot-time Help generation holds the single store writer for several seconds in a
@@ -523,6 +547,72 @@ fn tool_result<'a>(body: &'a Value, call_id: &str) -> &'a Value {
         .iter()
         .find(|message| message["role"] == "tool" && message["tool_call_id"] == call_id)
         .unwrap_or_else(|| panic!("no tool result for {call_id}: {body}"))
+}
+
+#[test]
+fn a_workspace_reply_waits_for_the_selected_mcp_result_before_followup() {
+    use super::workspace_reply::{open_home, send_workspace, wait_for_replies, workspace_ports};
+
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    seed_local_route(&fx);
+    let wire = Arc::new(ToolWire {
+        tool: Mutex::default(),
+        calls: vec![("workspace-call", "DW-45")],
+        bodies: Mutex::default(),
+    });
+    let mut ports = workspace_ports(&fx, wire.clone());
+    ports.application.mcp = true;
+    let gate = Arc::new((tokio::sync::Notify::new(), tokio::sync::Notify::new()));
+    runtime().block_on(async {
+        let (app, remote, alias) = connected_echo(
+            &fx,
+            ports,
+            EchoServer {
+                gate: Some(gate.clone()),
+            },
+        )
+        .await;
+        *wire.tool.lock().unwrap() = alias;
+        let session = open_home(&fx, &app);
+        send_workspace(
+            &fx,
+            &app,
+            &session,
+            "workspace-echo",
+            "Use the selected echo tool",
+            "watch-model",
+        );
+        within(
+            "the workspace MCP request reaches the remote tool",
+            gate.0.notified(),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let still_in_flight = wire.bodies.lock().unwrap().len() == 1;
+        gate.1.notify_one();
+        wait_for_replies(&fx, 1).await;
+        {
+            let requests = wire.bodies.lock().unwrap();
+            assert!(
+                still_in_flight,
+                "generation continued while the MCP tool was running"
+            );
+            let [_, followup] = requests.as_slice() else {
+                panic!(
+                    "expected exactly two provider requests, got {}",
+                    requests.len()
+                );
+            };
+            let result = tool_result(followup, "workspace-call");
+            assert!(
+                result.to_string().contains(ANSWER) || followup.to_string().contains(ANSWER),
+                "the follow-up lacked the remote MCP result: {result}"
+            );
+        }
+        let _ = remote.cancel().await;
+        app.shutdown().await;
+    });
 }
 
 #[test]

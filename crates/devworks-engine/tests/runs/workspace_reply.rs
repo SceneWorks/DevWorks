@@ -461,6 +461,111 @@ impl StreamingHttp for WorkspaceWire {
 }
 
 #[test]
+fn a_blocking_workspace_tool_leaves_current_thread_timers_and_shutdown_responsive() {
+    use devworks_core::gateway::AdmittedQuery;
+    use devworks_core::ports::{QueryAnswer, QueryHandler};
+    use devworks_core::protocol::DomainFault;
+    use devworks_core::protocol::records::ScreenContext;
+    use devworks_core::protocol::support::BoundedList;
+    use devworks_core::services::navigation::NavigationContextService;
+
+    #[derive(Default)]
+    struct HeldScreen {
+        navigation: NavigationContextService,
+        started: tokio::sync::Notify,
+        release: (Mutex<bool>, Condvar),
+        exited: AtomicBool,
+    }
+    impl QueryHandler for HeldScreen {
+        fn query(
+            &self,
+            ctx: &InvocationContext,
+            query: &AdmittedQuery,
+            snapshot: &dyn ReadSnapshot,
+        ) -> Result<QueryAnswer, DomainFault> {
+            self.started.notify_one();
+            let (lock, changed) = &self.release;
+            let _wait = changed
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(8), |release| {
+                    !*release
+                })
+                .unwrap();
+            self.exited.store(true, Ordering::SeqCst);
+            self.navigation.query(ctx, query, snapshot)
+        }
+    }
+
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let wire = Arc::new(WorkspaceWire::default());
+    *wire.release_first.0.lock().unwrap() = true;
+    let screen = Arc::new(HeldScreen::default());
+    let mut ports = workspace_ports(&f, wire.clone());
+    ports
+        .use_cases
+        .register("ui.current_screen", Some(screen.clone()), None);
+    runtime().block_on(async {
+        let app = boot(ports).await.unwrap();
+        let session = open_home(&f, &app);
+        screen.navigation.publish(
+            Some((
+                session.clone(),
+                ScreenContext {
+                    screen_id: id("held-screen"),
+                    project_id: None,
+                    root_id: None,
+                    selected_ids: BoundedList(vec![]),
+                    help_topic_id: id("held-help"),
+                    revision: Revision::new(1).unwrap(),
+                },
+            )),
+            "held-screen",
+        );
+        send_workspace(
+            &f,
+            &app,
+            &session,
+            "held-screen-reply",
+            "Read the screen",
+            "watch-model",
+        );
+        within(
+            "a synchronous workspace tool starts",
+            screen.started.notified(),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !screen.exited.load(Ordering::SeqCst),
+            "the host timer ran only after tool dispatch returned"
+        );
+
+        let release = async {
+            let cancelling = tokio::time::timeout(Duration::from_secs(5), async {
+                while app.shutdown_stage() < ShutdownStage::StoppingWork {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            let exited = screen.exited.load(Ordering::SeqCst);
+            *screen.release.0.lock().unwrap() = true;
+            screen.release.1.notify_all();
+            assert!(
+                cancelling.is_ok() && !exited,
+                "shutdown could not signal cancellation while tool dispatch was held"
+            );
+        };
+        tokio::join!(app.shutdown(), release);
+        assert_eq!(
+            wire.requests.lock().unwrap().len(),
+            1,
+            "shutdown sends no follow-up request"
+        );
+    });
+}
+
+#[test]
 fn a_workspace_tool_finishes_before_the_next_saved_message_enters_context() {
     use devworks_core::protocol::records::ScreenContext;
     use devworks_core::protocol::support::BoundedList;

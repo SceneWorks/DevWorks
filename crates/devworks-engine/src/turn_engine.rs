@@ -185,8 +185,9 @@ impl TurnEngine {
         })?;
         let mut dispatches = Vec::new();
         if has_tools && dispatch_tools {
-            let pass = self.dispatch_pending_pass(ctx, session_id, cancellation, true)?;
-            dispatches = self.settle_pending(pass).await;
+            dispatches = self
+                .dispatch_pending_async(ctx, session_id, cancellation)
+                .await?;
         }
         if !crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?.is_empty() {
             return Ok((dispatches, None));
@@ -313,10 +314,30 @@ impl TurnEngine {
             .collect())
     }
 
+    /// Run synchronous tool handlers off the host executor, then await any parked receives.
+    pub(crate) async fn dispatch_pending_async(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<Vec<ToolDispatch>, StorageError> {
+        let worker = self.clone();
+        let (ctx, session_id, cancellation) =
+            (ctx.clone(), session_id.clone(), cancellation.cloned());
+        let pass = tokio::task::spawn_blocking(move || {
+            worker.dispatch_pending_pass(&ctx, &session_id, cancellation.as_ref(), true)
+        })
+        .await
+        .map_err(|error| {
+            StorageError::unavailable(Unavailable::Io, format!("tool dispatch worker: {error}"))
+        })??;
+        Ok(self.settle_pending(pass).await)
+    }
+
     /// The synchronous part of dispatching a session's pending calls on a bounded worker set.
     /// With `defer_receive`, an `agents.receive` that has nothing to read yet comes back parked,
     /// holding no thread; [`Self::settle_pending`] awaits it.
-    pub(crate) fn dispatch_pending_pass(
+    fn dispatch_pending_pass(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
@@ -388,7 +409,7 @@ impl TurnEngine {
 
     /// The asynchronous part: awaits every parked receive together, without a thread each, and
     /// returns every call's dispatch in the order the calls were listed.
-    pub(crate) async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
+    async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
         let mut waiting: Vec<
             std::pin::Pin<Box<dyn std::future::Future<Output = ToolDispatch> + Send + '_>>,
         > = Vec::new();
