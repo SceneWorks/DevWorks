@@ -199,12 +199,14 @@ fn definitions() -> Vec<PreparedTool> {
                 json!({"anyOf":[str_bound(128), int_bound(1, MAX_SAFE_INTEGER)]}),
             ),
             ("detail", one_of(&["auto", "full"])),
+            ("cursor", str_bound(4096)),
         ],
         &[],
     );
     source["oneOf"] = json!([
-        {"required":["node_id"],"not":{"anyOf":[{"required":["repository"]},{"required":["path"]}]}},
-        {"required":["repository","path"],"not":{"required":["node_id"]}}
+        {"required":["node_id"],"not":{"anyOf":[{"required":["repository"]},{"required":["path"]},{"required":["cursor"]}]}},
+        {"required":["repository","path"],"not":{"anyOf":[{"required":["node_id"]},{"required":["cursor"]}]}},
+        {"required":["cursor"],"not":{"anyOf":[{"required":["repository"]},{"required":["path"]},{"required":["node_id"]},{"required":["detail"]}]}}
     ]);
     vec![
         definition(
@@ -270,7 +272,7 @@ fn definitions() -> Vec<PreparedTool> {
                     (
                         "kind",
                         one_of(&[
-                            "revision", "attempt", "handoff", "thread", "message", "review",
+                            "revision", "item", "attempt", "handoff", "thread", "message", "review",
                         ]),
                     ),
                     ("id", str_bound(128)),
@@ -298,7 +300,7 @@ fn definitions() -> Vec<PreparedTool> {
         ),
         definition(
             "dream_read_source",
-            "Read an exact selected repository path or graph node. Only matching content and index fingerprints provide current proof.",
+            "Read exact captured project source by node or path. Use only the returned cursor to continue a source selection. Complete each exact result with dream_read_prior if it was split.",
             source,
         ),
         definition(

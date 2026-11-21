@@ -12,12 +12,14 @@ use devworks_core::providers::context::{
 };
 use devworks_core::services::artifacts::{StagedFile, host::HostArtifactPublication, version_ref};
 use devworks_core::services::dreaming::windows::{
-    WindowPosition, json_fragment, prior_action, sign_cursor, verify_owned_cursor,
+    WindowPosition, action_in_lineage, json_fragment, prior_action, sign_cursor,
+    verify_owned_cursor,
 };
 use devworks_core::services::dreaming::{DreamTools, SweepLease};
 use serde_json::{Value, json};
 
-const TOOL_RESULT_LIMIT: usize = 48 * 1024;
+const TOOL_RESULT_LIMIT: usize = 12_000;
+const FRAGMENT_LIMIT: usize = TOOL_RESULT_LIMIT - 512;
 
 impl NativeDreaming {
     pub(super) fn apply_tool_round(
@@ -122,6 +124,7 @@ impl NativeDreaming {
                 "ProviderToolResultWasEmpty",
             ));
         }
+        let delivered = context.messages.len();
         context.messages.push(Message {
             role: MessageRole::Assistant,
             content: assistant,
@@ -130,8 +133,11 @@ impl NativeDreaming {
             role: MessageRole::User,
             content: response,
         });
-        let next =
-            serde_json::to_vec(&context).map_err(|_| invalid("Dreaming continuation encoding"))?;
+        let remaining = u64::from(run.policy.max_tokens)
+            .saturating_sub(checkpoint.input_tokens)
+            .saturating_sub(checkpoint.output_tokens);
+        let overhead = super::model::prompt_overhead(&DreamTools::frozen().aliases())?;
+        let next = continuation_bytes(&mut context, delivered, remaining.saturating_sub(overhead))?;
         let material = self.publish(
             lease,
             ctx,
@@ -157,15 +163,14 @@ impl NativeDreaming {
         args: Result<Value, StorageError>,
     ) -> Result<DreamActionRow, StorageError> {
         let tool = alias.wire_name.clone();
+        if let Some(prior) = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            action_in_lineage(read.dreaming()?, run, action)
+        })? {
+            return Ok(prior);
+        }
         let graph = if let Ok(args) = &args
             && matches!(tool.as_str(), "dream_search_graph" | "dream_read_source")
         {
-            let prior = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-                read.dreaming()?.dream_action(&run.id, action)
-            })?;
-            if let Some(prior) = prior {
-                return Ok(prior);
-            }
             self.read_graph(ctx, run, action, &tool, args)?
         } else {
             None
@@ -205,6 +210,8 @@ impl NativeDreaming {
                     );
                 }
             };
+            let (graph, continuation) =
+                graph.map_or((None, None), |read| (Some(read.result), read.continuation));
             let result = match graph.or(lease.consolidate(tx, &tool, &args, &checked_sources)?) {
                 Some(result) => result,
                 None => match execute_read(tx, &row, &tool, &args) {
@@ -216,12 +223,12 @@ impl NativeDreaming {
                     Err(error) => return Err(error),
                 },
             };
-            tx.dreaming()?.put_dream_action(
-                &row.id,
-                row.generation,
-                &action,
-                &json!({"tool":tool,"arguments":args,"result":result}),
-            )
+            let mut record = json!({"tool":tool,"arguments":args,"result":result});
+            if let Some(continuation) = continuation {
+                record["sourceContinuation"] = continuation;
+            }
+            tx.dreaming()?
+                .put_dream_action(&row.id, row.generation, &action, &record)
         })
     }
 
@@ -233,10 +240,14 @@ impl NativeDreaming {
         args: &Value,
     ) -> Result<DreamActionRow, StorageError> {
         if let Some(prior) = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-            read.dreaming()?.dream_action(&run.id, action)
+            action_in_lineage(read.dreaming()?, run, action)
         })? {
             return Ok(prior);
         }
+        let evidence = args["evidence"].as_array().map_or(&[][..], Vec::as_slice);
+        let source_selection =
+            devworks_core::services::dreaming::proposal_evidence_selection(evidence);
+        let refreshed = self.refresh_proofs(run, &json!({"evidence":source_selection}))?;
         let draft = serde_json::to_vec(args).map_err(|_| invalid("Dreaming proposal encoding"))?;
         let staged = self
             .artifacts
@@ -262,21 +273,22 @@ impl NativeDreaming {
             }
             let point = tx.savepoint()?;
             let artifact = publish_draft(tx, &artifacts, &pending, &row, &action)?;
-            let (result, keep) = match lease.stage_proposal(tx, &args, artifact.clone())? {
-                Some(result) if result["proposal"]["artifact"] == json!(artifact) => {
-                    tx.release(point)?;
-                    (result, true)
-                }
-                Some(result) => {
-                    // Suppressed duplicate: keep the original proposal and discard the new draft.
-                    tx.rollback_to(point)?;
-                    (result, false)
-                }
-                None => {
-                    tx.rollback_to(point)?;
-                    (json!({"error":"DreamingProposalPolicyRefused"}), false)
-                }
-            };
+            let (result, keep) =
+                match lease.stage_proposal(tx, &args, artifact.clone(), &refreshed)? {
+                    Some(result) if result["proposal"]["artifact"] == json!(artifact) => {
+                        tx.release(point)?;
+                        (result, true)
+                    }
+                    Some(result) => {
+                        // Suppressed duplicate: keep the original proposal and discard the new draft.
+                        tx.rollback_to(point)?;
+                        (result, false)
+                    }
+                    None => {
+                        tx.rollback_to(point)?;
+                        (json!({"error":"DreamingProposalPolicyRefused"}), false)
+                    }
+                };
             let receipt = tx.dreaming()?.put_dream_action(
                 &row.id,
                 row.generation,
@@ -321,18 +333,89 @@ fn publish_draft(
     Ok(version_ref(&saved))
 }
 
+fn continuation_bytes(
+    context: &mut ProviderContext,
+    delivered: usize,
+    budget: u64,
+) -> Result<Vec<u8>, StorageError> {
+    let encode = |context: &ProviderContext| {
+        serde_json::to_vec(context).map_err(|_| invalid("Dreaming continuation encoding"))
+    };
+    let encoded = encode(context)?;
+    if (encoded.len() as u64) < budget {
+        return Ok(encoded);
+    }
+    let mut known_size = encoded.len() as u64;
+    for message in context.messages.iter_mut().take(delivered) {
+        for part in &mut message.content {
+            let ContentBlock::ToolResult {
+                content,
+                is_error: false,
+                ..
+            } = part
+            else {
+                continue;
+            };
+            let [ResultBlock::Text { text }] = content.as_mut_slice() else {
+                continue;
+            };
+            let Ok(receipt) = serde_json::from_str::<Value>(text) else {
+                continue;
+            };
+            if !matches!(
+                receipt["tool"].as_str(),
+                Some(
+                    "dream_read"
+                        | "dream_lessons"
+                        | "dream_similar"
+                        | "dream_review_queue"
+                        | "dream_work_trail"
+                        | "dream_search_graph"
+                        | "dream_read_source"
+                        | "dream_read_prior"
+                )
+            ) || receipt["replay_archive"] == true
+            {
+                continue;
+            }
+            let archive = json!({"tool":receipt["tool"],"previously_delivered":true,
+            "replay_archive":true,"metadata_not_evidence":true,
+            "read":{"tool":"dream_read_prior","arguments":{
+                "action_index":receipt["action_index"],"expected_hash":receipt["expected_hash"]
+            }}})
+            .to_string();
+            let serialized_len = |value: &str| -> Result<u64, StorageError> {
+                serde_json::to_vec(value)
+                    .map(|raw| raw.len() as u64)
+                    .map_err(|_| invalid("Dreaming replay encoding"))
+            };
+            let saved = serialized_len(text)?.saturating_sub(serialized_len(&archive)?);
+            if saved > 0 {
+                *text = archive;
+                known_size = known_size.saturating_sub(saved);
+            }
+            if known_size < budget {
+                return encode(context);
+            }
+        }
+    }
+    encode(context)
+}
+
 fn result_text(receipt: &DreamActionRow) -> Result<String, StorageError> {
     let result = &receipt.action["result"];
+    let tool = &receipt.action["tool"];
     let encoded = result.to_string();
     let hash = devworks_core::fingerprint::sha256_hex(encoded.as_bytes());
-    if encoded.len() <= TOOL_RESULT_LIMIT {
-        return Ok(
-            json!({"action_index":receipt.position,"expected_hash":hash,"result":result})
-                .to_string(),
-        );
+    let complete =
+        json!({"tool":tool,"action_index":receipt.position,"expected_hash":hash,"result":result})
+            .to_string();
+    if complete.len() <= TOOL_RESULT_LIMIT {
+        return Ok(complete);
     }
-    let (fragment, following) = json_fragment(&encoded, 0, TOOL_RESULT_LIMIT)?;
+    let (fragment, following) = json_fragment(&encoded, 0, FRAGMENT_LIMIT)?;
     Ok(json!({
+        "tool":tool,
         "action_index":receipt.position,
         "content":fragment,
         "next_offset_chars":following,
@@ -370,10 +453,12 @@ fn execute_read(
                 .as_u64()
                 .and_then(|value| usize::try_from(value).ok())
                 .unwrap_or(0);
-            let (fragment, next) = json_fragment(&raw, offset, TOOL_RESULT_LIMIT)?;
+            let (fragment, next) = json_fragment(&raw, offset, FRAGMENT_LIMIT - 300)?;
             Ok(
                 json!({"content":fragment,"next_offset_chars":next,"expected_hash":digest,
-                      "encoding":"exactUtf8Json","historyOnly":true}),
+                    "encoding":"exactUtf8Json","format":"json","historyOnly":true,"untrusted_data":true,
+                    "original_tool":previous.action["tool"],"action_index":index,"offset_chars":offset,
+                    "has_more":next.is_some(),"total_chars":raw.encode_utf16().count()}),
             )
         }
         "dream_read" | "dream_lessons" => read_knowledge(tx, row, tool, args, limit),
@@ -532,10 +617,7 @@ fn read_knowledge(
                     let repository = tx.knowledge();
                     let events = repository.knowledge_lesson_events(&reference.id, 500)?;
                     let mut history = Vec::new();
-                    for event in events
-                        .into_iter()
-                        .filter(|event| event.at_ms <= row.started_at_ms)
-                    {
+                    for event in events {
                         let event_ref =
                             devworks_core::fingerprint::sha256_hex(event.event_key.as_bytes());
                         let record = json!({"id":event_ref,"kind":"lesson_event","source":event.source,

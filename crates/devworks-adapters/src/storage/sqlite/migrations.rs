@@ -798,7 +798,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 66,
         minimum_writer: 72,
         sql: include_str!("migrations/0072_dreaming.sql"),
-        expected_sha256: "d7789f61ad59560b608db9997711b882456e5e16d3efa9c83cf120a8f9a0645e",
+        expected_sha256: "ad454b3c27199b7d7c21931c8f82f724266391b4dfe3f2a2f98912c59c2d6e2c",
         rebuilds_tables: false,
     },
 ];

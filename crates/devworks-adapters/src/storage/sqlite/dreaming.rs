@@ -200,6 +200,11 @@ fn trail(
              WHERE e.project_id IS ?1 AND e.kind='KnowledgeWritten' AND e.seq<=?2
                AND h.target_kind='Claim' AND h.lifecycle<>'Deleted' AND (?5 IS NULL OR ?5='revision')
             UNION ALL
+            SELECT 'item',w.id,w.id,coalesce(d.updated_at,w.created_at),
+                json_object('title',w.title,'revision',w.revision,'brief',json(w.brief_json))
+              FROM work_items w LEFT JOIN work_details d ON d.work_id=w.id
+             WHERE w.project_id=?1 AND ?5='item'
+            UNION ALL
             SELECT 'attempt',json_extract(a.value,'$.id'),w.id,coalesce(d.updated_at,w.created_at),a.value
               FROM work_items w LEFT JOIN work_details d ON d.work_id=w.id
                 JOIN json_each(w.brief_json,'$.attempts') a
@@ -355,13 +360,13 @@ macro_rules! dreaming_reads {
                         coalesce(json_extract(frozen.snapshot_json,'$.entryKind'),json_extract(frozen.snapshot_json,'$.kind'))
                        FROM knowledge_claims claim
                        JOIN knowledge_history frozen ON frozen.target_id=claim.id
-                            AND frozen.revision=(
+                            AND frozen.revision=CASE WHEN ?4 IS NOT NULL THEN claim.revision ELSE (
                                 SELECT h.revision FROM knowledge_history h
                                  JOIN events e ON e.aggregate_kind='knowledge_write'
                                     AND e.aggregate_id=h.write_id AND e.kind='KnowledgeWritten'
                                  WHERE h.target_id=claim.id AND e.seq<=?2
                                     AND e.project_id IS ?7
-                                 ORDER BY h.revision DESC LIMIT 1)
+                                 ORDER BY h.revision DESC LIMIT 1) END
                       WHERE claim.scope_key=?1 AND claim.id>?3 AND claim.lifecycle<>'Deleted'
                         AND frozen.lifecycle<>'Deleted'
                         AND (?4 IS NULL OR claim.id=?4)
@@ -395,6 +400,36 @@ macro_rules! dreaming_reads {
                 Ok(result)
             }
 
+            fn dream_prior_proposal(
+                &self, scope: &KnowledgeScope, target: &Id, action: &str,
+            ) -> Result<Option<Id>, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT id FROM decision_approvals
+                      WHERE scope_key=?1 AND target_id=?2 AND operation_kind='dreaming.propose'
+                        AND json_extract(payload_json,'$.reviewed.change.kind')=?3
+                        AND state IN ('Pending','Rejected')
+                      ORDER BY (state='Pending') DESC, coalesce(decided_at,created_at) DESC,
+                               created_at DESC, id DESC LIMIT 1",
+                    params![scope.key(), target.as_str(), action],
+                    |row| row.get::<_, String>(0),
+                ).optional())?.map(id_of).transpose()
+            }
+
+            fn dream_lesson_recurred_while_served(&self, claim: &Id) -> Result<bool, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT EXISTS(
+                       SELECT 1 FROM knowledge_lesson_events e
+                       JOIN knowledge_deliveries d
+                         ON d.claim_id=e.claim_id AND d.session_id=e.session_id AND d.delivered_at<=e.at
+                       JOIN knowledge_history h ON h.target_id=d.claim_id AND h.revision=d.revision
+                       WHERE e.claim_id=?1 AND json_extract(h.snapshot_json,'$.lesson.ruleState')='Effective'
+                         AND EXISTS (SELECT 1 FROM knowledge_lesson_events first
+                                      WHERE first.claim_id=e.claim_id AND first.at<e.at)
+                     )",
+                    [claim.as_str()], |row| row.get(0),
+                ))
+            }
+
             fn dream_instructions(
                 &self, scope: &KnowledgeScope, before_revision: Option<i64>, limit: u16,
             ) -> Result<Vec<DreamInstruction>, StorageError> {
@@ -424,6 +459,29 @@ macro_rules! dreaming_reads {
 
             fn dream_live_run(&self, scope: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
                 live_run(self.conn, scope)
+            }
+
+            fn dream_resumable_run(&self, scope: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
+                let id = db(self.conn.query_row(
+                    "SELECT r.id FROM dreaming_runs r WHERE r.scope_key=?1
+                       AND r.state IN ('Blocked','BudgetExhausted','Partial','Cancelled')
+                       AND r.checkpoint_json IS NOT NULL
+                       AND (json_type(r.checkpoint_json,'$.continuation')='object'
+                            OR json_type(r.checkpoint_json,'$.request')='object')
+                       AND NOT EXISTS (SELECT 1 FROM dreaming_runs child
+                           WHERE child.continued_from=r.id AND child.operation_id IS NOT NULL)
+                       ORDER BY r.started_at DESC,r.id DESC LIMIT 1",
+                    [scope.key()], |row| row.get::<_,String>(0),
+                ).optional())?;
+                match id { Some(id) => run(self.conn, &id_of(id)?), None => Ok(None) }
+            }
+
+            fn dream_continuation_used(&self, run: &Id) -> Result<bool, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM dreaming_runs
+                                   WHERE continued_from=?1 AND operation_id IS NOT NULL)",
+                    [run.as_str()], |row| row.get(0),
+                ))
             }
 
             fn dream_runs(
@@ -523,7 +581,7 @@ fn validate_checkpoint(
         return Err(invalid("Dreaming checkpoint counters went backwards"));
     }
     if let Some(request) = next_request
-        && ((request.stage == DreamRequestStage::Observed) != request.result.is_some()
+        && ((request.stage != DreamRequestStage::Observed && request.result.is_some())
             || (request.stage != DreamRequestStage::Prepared && request.attempt_id.is_none()))
     {
         return Err(invalid("Dreaming provider observation is incomplete"));

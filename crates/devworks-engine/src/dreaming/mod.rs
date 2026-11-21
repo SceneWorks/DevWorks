@@ -78,28 +78,31 @@ impl NativeDreaming {
         observe_only: bool,
     ) -> Result<EffectOutcome, StorageError> {
         let captured = lease.clone();
-        let (context, mut run, now, cancelled) =
+        let (context, mut run, now, stopped) =
             run_write(self.store.as_ref(), WriteOptions::observed(), move |tx| {
                 let row = captured.read(tx, false)?;
                 if row.phase.ended() && row.phase != DreamPhase::OutcomeUnknown {
-                    return Ok((None, row, tx.now_ms(), false));
+                    return Ok((None, row, tx.now_ms(), None));
                 }
-                let cancelled = captured.cancel_requested(tx)?;
-                if cancelled
+                let stopped = if captured.cancel_requested(tx)? {
+                    Some((DreamPhase::Cancelled, "CancellationRequested"))
+                } else if !captured.settings_current(tx, &row)? {
+                    Some((DreamPhase::Blocked, "DreamingSettingsChanged"))
+                } else {
+                    None
+                };
+                if stopped.is_some()
                     && !row
                         .checkpoint
                         .as_ref()
                         .and_then(|cp| cp.request.as_ref())
                         .is_some_and(|request| request.stage == DreamRequestStage::PossiblySent)
                 {
-                    return Ok((None, row, tx.now_ms(), true));
+                    return Ok((None, row, tx.now_ms(), stopped));
                 }
-                let row = if observe_only || cancelled {
-                    row
-                } else {
-                    captured.start(tx)?
-                };
-                let context = if observe_only || cancelled {
+                let recovery = observe_only || stopped.is_some();
+                let row = if recovery { row } else { captured.start(tx)? };
+                let context = if recovery {
                     captured.recovery_context(tx)?
                 } else {
                     captured.context(tx)?
@@ -107,18 +110,38 @@ impl NativeDreaming {
                 let root = context.root_id().cloned();
                 let assignment = context.assignment_id().cloned();
                 let context = context.with_lineage(row.scope.project().cloned(), root, assignment);
-                Ok((Some(context), row, tx.now_ms(), cancelled))
+                Ok((Some(context), row, tx.now_ms(), stopped))
             })?;
-        if cancelled && context.is_none() {
-            return self.finish(lease, DreamPhase::Cancelled, "CancellationRequested", None);
-        }
         let Some(context) = context else {
-            return completed(run);
+            return if let Some((phase, reason)) = stopped {
+                self.finish(lease, phase, reason, None)
+            } else {
+                completed(run)
+            };
         };
         let elapsed_at_start = now.saturating_sub(run.started_at_ms).max(0) as u64;
         let clock = std::time::Instant::now();
 
         loop {
+            let stopped = if stopped.is_some() {
+                stopped
+            } else {
+                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+                    if snapshot
+                        .queue()
+                        .entry(&run.id)?
+                        .is_some_and(|ticket| ticket.cancel_requested)
+                    {
+                        Ok(Some((DreamPhase::Cancelled, "CancellationRequested")))
+                    } else {
+                        let scope = snapshot.dreaming()?.dream_scope(&run.scope)?;
+                        Ok(
+                            (scope.revision != run.settings_revision || !scope.policy.enabled)
+                                .then_some((DreamPhase::Blocked, "DreamingSettingsChanged")),
+                        )
+                    }
+                })?
+            };
             let checkpoint = run.checkpoint.clone().unwrap_or_default();
             if let Some(request) = &checkpoint.request
                 && request.stage == DreamRequestStage::Observed
@@ -126,7 +149,10 @@ impl NativeDreaming {
                 let round = self
                     .recorded_round(&context, &request.logical_id)?
                     .ok_or_else(|| invalid("observed Dreaming round has no journal result"))?;
-                if cancelled || cancellation.is_cancelled() {
+                if let Some((phase, reason)) = stopped {
+                    return self.finish(lease, phase, reason, Some(&round));
+                }
+                if cancellation.is_cancelled() {
                     return self.finish(
                         lease,
                         DreamPhase::Cancelled,
@@ -143,6 +169,15 @@ impl NativeDreaming {
                     RoundStep::Finish(phase, reason) => {
                         return self.finish(lease, phase, reason, Some(&round));
                     }
+                    RoundStep::Report(narrative) => {
+                        return self.finish_with_report(
+                            lease,
+                            DreamPhase::Completed,
+                            "SweepReported",
+                            Some(&round),
+                            Some(narrative),
+                        );
+                    }
                     RoundStep::Continue(next) => {
                         run = *next;
                         continue;
@@ -152,19 +187,17 @@ impl NativeDreaming {
             if let Some(original) = &checkpoint.request
                 && let Some(recorded) = self.recorded_round(&context, &original.logical_id)?
             {
-                if let (Some(result), AttemptState::Settled) =
-                    (&recorded.result.result_artifact, recorded.attempt.state)
-                {
+                if recorded.attempt.state == AttemptState::Settled {
                     let (lease, id, attempt, result) = (
                         lease.clone(),
                         original.logical_id.clone(),
                         AttemptId(recorded.attempt.attempt_id.clone()),
-                        result.clone(),
+                        recorded.result.result_artifact.clone(),
                     );
                     let mut next = checkpoint;
                     recorded.meter(&mut next)?;
                     run = run_write(self.store.as_ref(), WriteOptions::observed(), move |tx| {
-                        lease.observe(tx, &id, &attempt, &result, next)
+                        lease.observe(tx, &id, &attempt, result.as_ref(), next)
                     })?;
                     continue;
                 }
@@ -180,16 +213,8 @@ impl NativeDreaming {
                         Some(&recorded),
                     );
                 }
-                if recorded.attempt.state == AttemptState::Settled {
-                    return self.finish(
-                        lease,
-                        DreamPhase::Failed,
-                        "OriginalProviderResultUnavailable",
-                        Some(&recorded),
-                    );
-                }
             }
-            if observe_only {
+            if observe_only || stopped.is_some() {
                 if checkpoint
                     .request
                     .as_ref()
@@ -201,6 +226,9 @@ impl NativeDreaming {
                         "AwaitingOriginalProviderOutcome",
                         None,
                     );
+                }
+                if let Some((phase, reason)) = stopped {
+                    return self.finish(lease, phase, reason, None);
                 }
                 return Ok(EffectOutcome::NotApplied(
                     "Resume Dreaming before the next provider send".into(),
@@ -467,6 +495,17 @@ impl NativeDreaming {
         reason: &str,
         round: Option<&RoundObservation>,
     ) -> Result<EffectOutcome, StorageError> {
+        self.finish_with_report(lease, phase, reason, round, None)
+    }
+
+    fn finish_with_report(
+        &self,
+        lease: &SweepLease,
+        phase: DreamPhase,
+        reason: &str,
+        round: Option<&RoundObservation>,
+        narrative: Option<String>,
+    ) -> Result<EffectOutcome, StorageError> {
         let run_id = lease.run_id().clone();
         let (row, proposals, journal) = read_snapshot(
             self.store.as_ref(),
@@ -524,9 +563,13 @@ impl NativeDreaming {
         report["cutoffs"] = json!(row.cutoffs);
         report["proposalIds"] = json!(proposals);
         report["actions"] = json!(journal);
+        if let Some(narrative) = narrative {
+            report["narrative"] = json!(narrative);
+        }
         let bytes = serde_json::to_vec(&report).map_err(|_| invalid("Dreaming report encoding"))?;
         if let Some(report) = report.as_object_mut() {
             report.remove("actions");
+            report.remove("narrative");
             report.insert(
                 "proposalIds".into(),
                 json!(proposals.into_iter().take(128).collect::<Vec<_>>()),
@@ -590,6 +633,15 @@ impl NativeDreaming {
         if round.result.outcome == Some(AttemptEnd::Incomplete) {
             return Ok(RoundStep::Finish(DreamPhase::Partial, "ProviderIncomplete"));
         }
+        if round.result.outcome == Some(AttemptEnd::Cancelled) {
+            return Ok(RoundStep::Finish(
+                DreamPhase::Cancelled,
+                "ProviderCancelled",
+            ));
+        }
+        if matches!(round.result.outcome, None | Some(AttemptEnd::Failed)) {
+            return Ok(RoundStep::Finish(DreamPhase::Failed, "ProviderFailed"));
+        }
         let Some(artifact) = &round.result.result_artifact else {
             return Ok(RoundStep::Finish(
                 DreamPhase::Failed,
@@ -601,10 +653,19 @@ impl NativeDreaming {
                 let bytes = self.exact(ctx, artifact, 2 * 1024 * 1024)?;
                 let bodies: Vec<ProviderBody> = serde_json::from_slice(&bytes)
                     .map_err(|_| invalid("invalid Dreaming report artifact"))?;
-                if bodies.iter().any(|body| matches!(body, ProviderBody::TextDelta { text, .. } if !text.trim().is_empty())) {
-                    Ok(RoundStep::Finish(DreamPhase::Completed, "SweepReported"))
+                let mut narrative = String::new();
+                for body in bodies {
+                    if let ProviderBody::TextDelta { text, .. } = body {
+                        narrative.push_str(&text);
+                    }
+                }
+                if narrative.trim().is_empty() {
+                    Ok(RoundStep::Finish(
+                        DreamPhase::Partial,
+                        "ProviderReportWasEmpty",
+                    ))
                 } else {
-                    Ok(RoundStep::Finish(DreamPhase::Partial, "ProviderReportWasEmpty"))
+                    Ok(RoundStep::Report(narrative))
                 }
             }
             Some(AttemptEnd::ToolCallsReady) => {
@@ -619,6 +680,7 @@ impl NativeDreaming {
 }
 
 enum RoundStep {
+    Report(String),
     Finish(DreamPhase, &'static str),
     Continue(Box<DreamRunRow>),
 }

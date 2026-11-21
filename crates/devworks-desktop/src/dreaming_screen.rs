@@ -673,10 +673,14 @@ impl DreamingScreen {
             && let Some(client) = cx.client.as_deref_mut()
         {
             let reference = artifact.clone();
+            let project = match &run.scope {
+                DataScope::Workspace => None,
+                DataScope::Project { project_id } => Some(project_id.clone()),
+            };
             client.task(
                 DreamingSlot::DreamReportText(self.project.clone(), run.id.clone()).into(),
                 "Reading Dreaming report",
-                move |backend| read_report(backend, &reference),
+                move |backend| read_report(backend, project.as_ref(), &reference),
             );
         }
         if let Some(text) = &self.report_text {
@@ -779,16 +783,19 @@ fn prepare_text(
 
 fn read_report(
     backend: &dyn Backend,
+    project: Option<&ProjectId>,
     reference: &devworks_core::protocol::provider::ArtifactRef,
 ) -> Result<TaskOutput, String> {
-    let raw = ops::read_artifact_bytes(backend, reference)?;
+    let raw = ops::read_artifact_bytes_in(backend, project, reference)?;
     let report: serde_json::Value =
         serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
     let mut text = String::new();
-    if !report["modelResult"].is_null() {
+    if let Some(narrative) = report["narrative"].as_str() {
+        text.push_str(narrative);
+    } else if !report["modelResult"].is_null() {
         let result = serde_json::from_value(report["modelResult"].clone())
             .map_err(|error| error.to_string())?;
-        let raw = ops::read_artifact_bytes(backend, &result)?;
+        let raw = ops::read_artifact_bytes_in(backend, project, &result)?;
         let bodies: Vec<devworks_core::protocol::provider::ProviderBody> =
             serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
         for body in bodies {

@@ -124,3 +124,26 @@ CREATE TABLE dreaming_reversions (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX dreaming_claim_scope ON knowledge_claims(scope_key,id);
+CREATE UNIQUE INDEX dreaming_one_continuation ON dreaming_runs(continued_from)
+    WHERE continued_from IS NOT NULL AND operation_id IS NOT NULL;
+
+-- The native baseline publisher is the authority for changes in a project's tracked graph.
+-- A re-index of the same revision should not send another model request.
+CREATE TRIGGER dreaming_repository_published AFTER INSERT ON repository_index_views
+WHEN NEW.coverage IN ('Complete','Partial')
+  AND NOT EXISTS(SELECT 1 FROM repository_index_views old
+       WHERE old.repository_id=NEW.repository_id AND old.rowid=(
+           SELECT max(prior.rowid) FROM repository_index_views prior
+            WHERE prior.repository_id=NEW.repository_id AND prior.rowid<NEW.rowid)
+         AND old.source_revision=NEW.source_revision)
+BEGIN
+    INSERT INTO dreaming_source_changes(scope_key,project_id,source_ref,source_revision,observed_at)
+        SELECT 'project:' || pr.project_id,pr.project_id,'repo:' || NEW.repository_id,
+               NEW.source_revision,NEW.published_at
+          FROM project_repositories pr JOIN repository_details r ON r.repository_id=pr.repository_id
+         WHERE pr.repository_id=NEW.repository_id AND r.lifecycle='Active' AND r.is_primary=1;
+END;
+
+CREATE INDEX dreaming_proposal_target ON decision_approvals(
+    scope_key,target_id,json_extract(payload_json,'$.reviewed.change.kind'),state,decided_at,created_at
+) WHERE operation_kind='dreaming.propose' AND state IN ('Pending','Rejected');

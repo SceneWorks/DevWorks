@@ -6,15 +6,32 @@ use devworks_core::ports::storage::{
     DreamRunRow, KnowledgeScope, ReadOptions, StorageError, read_snapshot,
 };
 use devworks_core::protocol::Id;
-use devworks_core::protocol::data::{GraphPage, GraphResult, RepositoryView};
+use devworks_core::protocol::data::{GraphCompletion, GraphPage, GraphResult, RepositoryView};
 use devworks_core::protocol::records::{CodeSearchHit, CodeSourceText};
 use devworks_core::protocol::results::{DomainQueryReply, OperationResult};
+use devworks_core::services::dreaming::windows::{
+    WindowPosition, sign_cursor, verify_owned_cursor,
+};
 use devworks_core::services::indexing::views;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
 
 const MAX_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+
+pub(super) struct GraphRead {
+    pub result: Value,
+    pub continuation: Option<Value>,
+}
+
+impl GraphRead {
+    fn error(code: &str) -> Self {
+        Self {
+            result: json!({"error":code}),
+            continuation: None,
+        }
+    }
+}
 
 impl NativeDreaming {
     pub(super) fn read_graph(
@@ -24,31 +41,60 @@ impl NativeDreaming {
         action: &Id,
         tool: &str,
         args: &Value,
-    ) -> Result<Option<Value>, StorageError> {
+    ) -> Result<Option<GraphRead>, StorageError> {
+        let prior = if let Some(cursor) = args["cursor"].as_str() {
+            match self.source_continuation(run, cursor) {
+                Ok(value) => Some(value),
+                Err(StorageError::CursorExpired) => {
+                    return Ok(Some(GraphRead::error("CursorExpired")));
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
         let (op, selection) = match tool {
             "dream_search_graph" => ("code.search", search(args)),
-            "dream_read_source" => ("code.source", source(args)),
+            "dream_read_source" => (
+                "code.source",
+                prior
+                    .as_ref()
+                    .map_or_else(|| source(args), |prior| prior["query"].clone()),
+            ),
             _ => return Ok(None),
         };
         let KnowledgeScope::Project(project) = &run.scope else {
-            return Ok(Some(json!({"error":"ProjectRepositoryRequired"})));
+            return Ok(Some(GraphRead::error("ProjectRepositoryRequired")));
         };
         let Some(gateway) = self.gateway.upgrade() else {
-            return Ok(Some(json!({"error":"GraphUnavailable"})));
+            return Ok(Some(GraphRead::error("GraphUnavailable")));
         };
-        let request = serde_json::to_vec(&json!({
+        let mut request = json!({
             "protocol":"1.0-draft.1", "schemaRevision":3, "queryId":action,
-            "scope":{"kind":"Project","projectId":project}, "current":true,
+            "scope":{"kind":"Project","projectId":project},
             "query":selection,
             "limits":{"maxResults":args["limit"].as_u64().unwrap_or(20),"maxVisited":5000,"deadlineMs":1500}
-        })).map_err(|_| invalid("invalid private graph query"))?;
+        });
+        if let Some(previous) = &prior {
+            request["cursor"] = previous["cursor"].clone();
+            request["view"] = json!({"kind":"Pinned","pinId":previous["pinId"]});
+        } else {
+            request["current"] = json!(true);
+        }
+        let request =
+            serde_json::to_vec(&request).map_err(|_| invalid("invalid private graph query"))?;
         let outcome = gateway.query_with(ctx, op, &request, &ReadOptions::default());
         let Ok(DomainQueryReply::Result { result, .. }) = outcome else {
-            return Ok(Some(json!({"error":"SelectedGraphViewUnavailable"})));
+            return Ok(Some(GraphRead::error("SelectedGraphViewUnavailable")));
         };
         let result = match result {
-            OperationResult::CodeSearch { value } => render_search(value)?,
-            OperationResult::CodeSource { value } => self.render_source(run, value)?,
+            OperationResult::CodeSearch { value } => GraphRead {
+                result: render_search(value)?,
+                continuation: None,
+            },
+            OperationResult::CodeSource { value } => {
+                self.render_source(run, action, selection, prior.as_ref(), value)?
+            }
             _ => {
                 return Err(invalid(
                     "private graph result did not match selected operation",
@@ -56,6 +102,24 @@ impl NativeDreaming {
             }
         };
         Ok(Some(result))
+    }
+
+    fn source_continuation(&self, run: &DreamRunRow, cursor: &str) -> Result<Value, StorageError> {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            let repo = read.dreaming()?;
+            let position = verify_owned_cursor(repo, run, "dream_read_source", cursor)?;
+            let owner = Id::new(position.run).map_err(|_| StorageError::CursorExpired)?;
+            let id = Id::new(position.window).map_err(|_| StorageError::CursorExpired)?;
+            let receipt = repo
+                .dream_action(&owner, &id)?
+                .filter(|row| row.action["tool"] == "dream_read_source")
+                .ok_or(StorageError::CursorExpired)?;
+            let previous = &receipt.action["sourceContinuation"];
+            if previous["offset"].as_u64() != Some(position.offset as u64) {
+                return Err(StorageError::CursorExpired);
+            }
+            Ok(previous.clone())
+        })
     }
 
     /// Recheck the current bytes outside SQLite's writer before a prior capture can back a write.
@@ -140,23 +204,68 @@ impl NativeDreaming {
             .collect())
     }
 
-    fn render_source(&self, run: &DreamRunRow, page: GraphPage) -> Result<Value, StorageError> {
+    fn render_source(
+        &self,
+        run: &DreamRunRow,
+        action: &Id,
+        query: Value,
+        previous: Option<&Value>,
+        page: GraphPage,
+    ) -> Result<GraphRead, StorageError> {
         let GraphResult::SourceText { value: source } = page.result else {
             return Err(invalid("unexpected private source reply"));
         };
         let repository = &source.source.snapshot.repository_id;
-        let Some(view) = page.view.as_ref().and_then(|set| {
-            set.views
-                .iter()
-                .find(|view| &view.snapshot.repository_id == repository)
-        }) else {
-            return Ok(json!({"error":"ExactGraphViewUnavailable"}));
+        let Some(set) = page.view else {
+            return Ok(GraphRead::error("ExactGraphViewUnavailable"));
         };
-        let proof = self.source_proof(run, view, &source)?;
-        Ok(
-            json!({"source":source,"view":view,"completion":page.completion,
-            "nextGraphCursor":page.next_cursor,"verifiedIndexMatch":proof.is_some(),"proofs":proof.into_iter().collect::<Vec<_>>() }),
-        )
+        let Some(view) = set
+            .views
+            .iter()
+            .find(|view| &view.snapshot.repository_id == repository)
+        else {
+            return Ok(GraphRead::error("ExactGraphViewUnavailable"));
+        };
+        let start = source.start_byte.get();
+        let end = source.end_byte.get();
+        if previous.is_some_and(|prior| prior["offset"].as_i64() != Some(start)) {
+            return Ok(GraphRead::error("CursorExpired"));
+        }
+        let (cursor, continuation) = if let Some(native) = page.next_cursor {
+            let key = run
+                .checkpoint
+                .as_ref()
+                .and_then(|cp| cp.cursor_key.as_ref())
+                .ok_or(StorageError::CursorExpired)?;
+            let cursor = sign_cursor(
+                key,
+                &WindowPosition {
+                    run: run.id.as_str().into(),
+                    scope: run.scope.key(),
+                    tool: "dream_read_source".into(),
+                    selection: "source".into(),
+                    window: action.as_str().into(),
+                    offset: usize::try_from(end).map_err(|_| StorageError::CursorExpired)?,
+                },
+            )?;
+            (
+                Some(cursor),
+                Some(json!({"query":query,"cursor":native,"pinId":set.pin_id,"offset":end})),
+            )
+        } else {
+            (None, None)
+        };
+        let proof = if cursor.is_none() && page.completion == GraphCompletion::Complete {
+            self.source_proof(run, view, &source)?
+        } else {
+            None
+        };
+        Ok(GraphRead {
+            result: json!({"source":source,"view":view,"completion":page.completion,
+                "sourceNextCursor":cursor,"verifiedIndexMatch":proof.is_some(),
+                "proofs":proof.into_iter().collect::<Vec<_>>() }),
+            continuation,
+        })
     }
 
     fn source_proof(
@@ -231,7 +340,7 @@ impl NativeDreaming {
             "kind":"graph_node","id":reference,
             "sourceRef":source_ref,"sourceRevision":capture.source_digest,"fingerprint":capture.blob_digest,
             "repositoryId":repository,"repositoryRevision":record.revision,"viewId":view.view_id,
-            "unitKey":unit_key,"verifiedIndexMatch":true
+            "unitKey":unit_key,"captureId":capture.id,"verifiedIndexMatch":true
         })))
     }
 }

@@ -101,6 +101,29 @@ pub fn verify_owned_cursor(
     Err(StorageError::CursorExpired)
 }
 
+/// Reuse a provider call's receipt when an observed round resumes on a child run.
+pub fn action_in_lineage(
+    repo: &dyn DreamingRead,
+    run: &DreamRunRow,
+    action: &Id,
+) -> Result<Option<crate::ports::storage::DreamActionRow>, StorageError> {
+    if let Some(receipt) = repo.dream_action(&run.id, action)? {
+        return Ok(Some(receipt));
+    }
+    let mut next = run.continued_from.clone();
+    while let Some(id) = next {
+        let row = repo
+            .dream_run(&id)?
+            .filter(|row| row.scope == run.scope)
+            .ok_or(StorageError::ViewUnavailable)?;
+        if let Some(receipt) = repo.dream_action(&id, action)? {
+            return Ok(Some(receipt));
+        }
+        next = row.continued_from;
+    }
+    Ok(None)
+}
+
 pub fn prior_action(
     repo: &dyn DreamingRead,
     run: &DreamRunRow,
@@ -143,23 +166,43 @@ fn decoded_cursor(key: &[u8; 32], cursor: &str) -> Result<WindowPosition, Storag
     Ok(position)
 }
 
-/// Preserve complete JSON without inventing a truncated object. The same byte offset can
-/// resume only the original text digest, and each fragment ends at a UTF-8 boundary.
+/// Read a bounded exact JSON substring, using the recorded UTF-16 offset convention.
+/// The byte limit applies to the escaped JSON string so multibyte and control text stay bounded.
 pub fn json_fragment(
     raw: &str,
     offset: usize,
     limit: usize,
 ) -> Result<(String, Option<usize>), StorageError> {
-    if offset > raw.len() || !raw.is_char_boundary(offset) || limit < 4 {
+    let mut chars = raw.char_indices().peekable();
+    let mut position = 0;
+    while position < offset {
+        let (_, ch) = chars.next().ok_or(StorageError::CursorExpired)?;
+        position += ch.len_utf16();
+    }
+    if position != offset || limit < 6 {
         return Err(StorageError::CursorExpired);
     }
-    let mut end = offset.saturating_add(limit).min(raw.len());
-    while !raw.is_char_boundary(end) {
-        end -= 1;
+    let start = chars.peek().map_or(raw.len(), |(index, _)| *index);
+    let mut next = offset;
+    let mut used: usize = 0;
+    let mut end = start;
+    while let Some(&(index, ch)) = chars.peek() {
+        let encoded_byte_count = match ch {
+            '\\' | '"' | '\n' | '\r' | '\t' | '\u{0008}' | '\u{000c}' => 2,
+            '\u{0000}'..='\u{001f}' => 6,
+            _ => ch.len_utf8(),
+        };
+        used += encoded_byte_count;
+        if used > limit {
+            break;
+        }
+        chars.next();
+        end = index + ch.len_utf8();
+        next += ch.len_utf16();
     }
     Ok((
-        raw[offset..end].to_owned(),
-        (end < raw.len()).then_some(end),
+        raw[start..end].to_owned(),
+        (end < raw.len()).then_some(next),
     ))
 }
 
@@ -197,10 +240,12 @@ mod tests {
         let mut result = String::new();
         let mut offset = Some(0);
         while let Some(next) = offset {
-            let (text, following) = json_fragment(data, next, 5).unwrap();
+            let (text, following) = json_fragment(data, next, 7).unwrap();
             result.push_str(&text);
             offset = following;
         }
+        assert!(json_fragment("a🦀z", 2, 12).is_err());
+        assert_eq!(json_fragment("a🦀z", 3, 12).unwrap(), ("z".into(), None));
         assert_eq!(result, data);
     }
 }

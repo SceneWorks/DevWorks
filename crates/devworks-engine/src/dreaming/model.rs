@@ -9,7 +9,7 @@ use devworks_core::ports::storage::{
 use devworks_core::ports::usage::{PriceQuery, PriceResolver};
 use devworks_core::protocol::provider::{
     ArtifactRef, Attribution, InferenceInput, InferenceOptions, InferencePurpose, InferenceRequest,
-    ModelSelection,
+    ModelSelection, ToolSchema,
 };
 use devworks_core::protocol::records::{EffortName, RouteIntent, TierName};
 use devworks_core::protocol::{Counter, Id, Protocol, Revision};
@@ -36,6 +36,17 @@ pub(super) struct RoundObservation {
     pub result: crate::providers::sink::ProviderResult,
 }
 
+pub(super) fn prompt_overhead(tools: &[ToolSchema]) -> Result<u64, StorageError> {
+    tools.iter().try_fold(16_384u64, |total, tool| {
+        let schema = DreamTools::frozen()
+            .resolve(tool)
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let document = serde_json::to_vec(&schema.schema)
+            .map_err(|_| invalid("invalid private tool schema"))?;
+        Ok(total.saturating_add(document.len() as u64 + 256))
+    })
+}
+
 impl NativeDreaming {
     pub(super) fn round(
         &self,
@@ -54,20 +65,11 @@ impl NativeDreaming {
             .saturating_sub(checkpoint.input_tokens)
             .saturating_sub(checkpoint.output_tokens);
         let tools = DreamTools::frozen().aliases();
-        let schemas_bytes = tools.iter().try_fold(0u64, |total, tool| {
-            let schema = DreamTools::frozen()
-                .resolve(tool)
-                .map_err(|_| StorageError::ScopeDenied)?;
-            let document = serde_json::to_vec(&schema.schema)
-                .map_err(|_| invalid("invalid private tool schema"))?;
-            Ok::<_, StorageError>(total.saturating_add(document.len() as u64 + 256))
-        })?;
-        // The source owner also verifies the whole native encoded body before send. Count
-        // UTF-8 bytes as an upper bound on prompt tokens, including the tool definitions.
+        // The source owner also verifies the full encoded body before send. UTF-8 bytes
+        // conservatively reserve prompt tokens, including tool definitions and framing.
         let reserve_input = u64::try_from(frame.byte_length.get())
             .map_err(|_| invalid("negative prompt length"))?
-            .saturating_add(schemas_bytes)
-            .saturating_add(16_384);
+            .saturating_add(prompt_overhead(&tools)?);
         let remaining_ms = u64::from(run.policy.max_elapsed_ms).saturating_sub(elapsed_ms);
         if checkpoint.turn >= run.policy.max_turns
             || remaining_ms < 1

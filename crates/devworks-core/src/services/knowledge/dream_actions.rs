@@ -462,12 +462,20 @@ pub(crate) fn current_work_proof(
     run: &DreamRunRow,
     proof: &Value,
 ) -> Result<bool, Failure> {
+    Ok(work_proof_observed_at(tx, run, proof)?.is_some())
+}
+
+pub(crate) fn work_proof_observed_at(
+    tx: &mut dyn WriteTransaction,
+    run: &DreamRunRow,
+    proof: &Value,
+) -> Result<Option<i64>, Failure> {
     let (Some(kind), Some(reference), Some(fingerprint)) = (
         proof["kind"].as_str(),
         proof["id"].as_str(),
         proof["fingerprint"].as_str(),
     ) else {
-        return Ok(false);
+        return Ok(None);
     };
     let exact = tx.dreaming()?.dream_trail(&DreamTrailQuery {
         scope: &run.scope,
@@ -485,9 +493,12 @@ pub(crate) fn current_work_proof(
     if let Some(row) = exact.first() {
         let canonical = crate::jcs::canonicalize(&row.content)
             .map_err(|_| invalid("dreaming_work_evidence"))?;
-        return Ok(crate::fingerprint::sha256_hex(canonical.as_bytes()) == fingerprint);
+        return Ok(
+            (crate::fingerprint::sha256_hex(canonical.as_bytes()) == fingerprint)
+                .then_some(row.position.at_ms),
+        );
     }
-    Ok(false)
+    Ok(None)
 }
 
 pub(crate) fn current_graph_proof(
@@ -505,10 +516,18 @@ pub(crate) fn current_graph_proof(
     if !refreshed.contains(&format!("{reference}:{fingerprint}")) {
         return Ok(false);
     }
+    Ok(graph_proof_observed_at(tx, run, proof)?.is_some())
+}
+
+pub(crate) fn graph_proof_observed_at(
+    tx: &mut dyn WriteTransaction,
+    run: &DreamRunRow,
+    proof: &Value,
+) -> Result<Option<i64>, Failure> {
     let repository: Id = serde_json::from_value(proof["repositoryId"].clone())
         .map_err(|_| invalid("dreaming_proof_repository"))?;
     let Some(project) = run.scope.project() else {
-        return Ok(false);
+        return Ok(None);
     };
     if !tx
         .projects()
@@ -519,12 +538,27 @@ pub(crate) fn current_graph_proof(
                 && Some(repo.revision) == proof["repositoryRevision"].as_i64()
         })
     {
-        return Ok(false);
+        return Ok(None);
     }
-    Ok(tx
+    if !tx
         .indexing()
         .published(&repository)?
-        .is_some_and(|view| json!(view.view_id) == proof["viewId"]))
+        .is_some_and(|view| json!(view.view_id) == proof["viewId"])
+    {
+        return Ok(None);
+    }
+    let capture: Id = serde_json::from_value(proof["captureId"].clone())
+        .map_err(|_| invalid("dreaming_proof_capture"))?;
+    Ok(tx
+        .graph()
+        .graph_source_capture(&capture)?
+        .filter(|capture| {
+            capture.repository_id == repository
+                && proof["unitKey"] == capture.unit_key
+                && proof["fingerprint"] == capture.blob_digest
+                && proof["sourceRevision"] == capture.source_digest
+        })
+        .map(|capture| capture.created_at_ms))
 }
 
 fn invalid(kind: &'static str) -> Failure {

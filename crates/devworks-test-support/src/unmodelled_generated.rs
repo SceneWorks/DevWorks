@@ -1043,6 +1043,17 @@ impl DreamingRead for Unmodelled {
     ) -> Result<Vec<DreamClaimRef>, StorageError> {
         unmodelled()
     }
+    fn dream_prior_proposal(
+        &self,
+        _: &KnowledgeScope,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<Id>, StorageError> {
+        unmodelled()
+    }
+    fn dream_lesson_recurred_while_served(&self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
     fn dream_instructions(
         &self,
         _: &KnowledgeScope,
@@ -1055,6 +1066,12 @@ impl DreamingRead for Unmodelled {
         unmodelled()
     }
     fn dream_live_run(&self, _: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_resumable_run(&self, _: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_continuation_used(&self, _: &Id) -> Result<bool, StorageError> {
         unmodelled()
     }
     fn dream_runs(

@@ -316,6 +316,13 @@ pub trait DreamingRead {
         &self,
         window: &DreamClaimWindow<'_>,
     ) -> Result<Vec<DreamClaimRef>, StorageError>;
+    fn dream_prior_proposal(
+        &self,
+        scope: &KnowledgeScope,
+        target: &Id,
+        action: &str,
+    ) -> Result<Option<Id>, StorageError>;
+    fn dream_lesson_recurred_while_served(&self, claim: &Id) -> Result<bool, StorageError>;
     fn dream_instructions(
         &self,
         scope: &KnowledgeScope,
@@ -324,6 +331,11 @@ pub trait DreamingRead {
     ) -> Result<Vec<DreamInstruction>, StorageError>;
     fn dream_run(&self, id: &Id) -> Result<Option<DreamRunRow>, StorageError>;
     fn dream_live_run(&self, scope: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError>;
+    fn dream_resumable_run(
+        &self,
+        scope: &KnowledgeScope,
+    ) -> Result<Option<DreamRunRow>, StorageError>;
+    fn dream_continuation_used(&self, run: &Id) -> Result<bool, StorageError>;
     fn dream_runs(
         &self,
         scope: &KnowledgeScope,

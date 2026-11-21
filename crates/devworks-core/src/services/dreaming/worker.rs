@@ -10,6 +10,7 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{AttemptId, Id};
 use crate::services::effect_job;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// Immutable operation and delivery coordinates. Every state change rechecks the live lease.
 #[derive(Clone, Debug)]
@@ -83,14 +84,17 @@ impl SweepLease {
         tx: &mut dyn WriteTransaction,
         arguments: &Value,
         artifact: crate::protocol::provider::ArtifactRef,
+        refreshed_sources: &BTreeSet<String>,
     ) -> Result<Option<Value>, StorageError> {
         self.context(tx)?;
         let run = self.read(tx, true)?;
-        match super::proposals::stage_from_tool(tx, &run, arguments, artifact) {
+        match super::proposals::stage_from_tool(tx, &run, arguments, artifact, refreshed_sources) {
             Ok(result) => Ok(Some(result)),
             Err(
                 crate::services::kernel::Failure::Refused(_)
-                | crate::services::kernel::Failure::Storage(StorageError::ScopeDenied),
+                | crate::services::kernel::Failure::Storage(
+                    StorageError::ScopeDenied | StorageError::RevisionConflict(_),
+                ),
             ) => Ok(None),
             Err(crate::services::kernel::Failure::Storage(error)) => Err(error),
         }
@@ -105,7 +109,7 @@ impl SweepLease {
         tx: &mut dyn WriteTransaction,
     ) -> Result<InvocationContext, StorageError> {
         self.read(tx, true)?;
-        self.delivery.restore(tx, &self.operation.id)
+        self.delivery.restore(tx, &self.operation.id, true)
     }
 
     pub fn recovery_context(
@@ -113,7 +117,7 @@ impl SweepLease {
         tx: &mut dyn WriteTransaction,
     ) -> Result<InvocationContext, StorageError> {
         self.read(tx, false)?;
-        self.delivery.restore(tx, &self.operation.id)
+        self.delivery.restore(tx, &self.operation.id, false)
     }
 
     pub fn send_fences(&self, request: &Id) -> Vec<AuthorityFence> {
@@ -149,6 +153,14 @@ impl SweepLease {
         tx.dreaming()?
             .dream_run(self.run_id())?
             .ok_or_else(|| lease_lost(self.run_id()))
+    }
+
+    pub fn settings_current(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        row: &DreamRunRow,
+    ) -> Result<bool, StorageError> {
+        super::intake::settings_current(tx.dreaming()?, row)
     }
 
     pub fn cancel_requested(&self, tx: &mut dyn WriteTransaction) -> Result<bool, StorageError> {
@@ -325,7 +337,7 @@ impl SweepLease {
         tx: &mut dyn WriteTransaction,
         logical: &Id,
         attempt: &AttemptId,
-        result: &ArtifactRef,
+        result: Option<&ArtifactRef>,
         mut checkpoint: DreamCheckpoint,
     ) -> Result<DreamRunRow, StorageError> {
         let row = self.read(tx, false)?;
@@ -337,7 +349,7 @@ impl SweepLease {
             .ok_or_else(|| invalid("Dreaming observation has no matching request"))?;
         request.attempt_id = Some(attempt.clone());
         request.stage = DreamRequestStage::Observed;
-        request.result = Some(result.clone());
+        request.result = result.cloned();
         checkpoint.request = Some(request);
         self.advance(
             tx,
@@ -355,7 +367,7 @@ impl SweepLease {
         report: Value,
     ) -> Result<DreamRunRow, StorageError> {
         if phase == DreamPhase::Completed {
-            self.recovery_context(tx)?;
+            self.delivery.restore(tx, &self.operation.id, true)?;
         }
         let row = self.read(tx, false)?;
         let checkpoint = row.checkpoint.clone();

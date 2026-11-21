@@ -35,6 +35,16 @@ use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault};
 use serde_json::json;
 use std::sync::Arc;
 
+/// Normalize the proposal tool's evidence IDs to the shared proof selection shape.
+pub fn proposal_evidence_selection(evidence: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::Value::Array(
+        evidence
+            .iter()
+            .map(|item| json!({"kind":item["kind"],"reference":item["id"]}))
+            .collect(),
+    )
+}
+
 pub const OPERATIONS: &[&str] = &[
     "dreaming.run",
     "dreaming.runs",

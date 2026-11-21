@@ -228,34 +228,59 @@ enum Component {
     Conflict(DreamRevertConflict),
 }
 
+fn causal_conflict<'a>(
+    actions: impl Iterator<Item = &'a Intent>,
+    mut current_revision: impl FnMut(&Id) -> Result<Option<i64>, StorageError>,
+) -> Result<Option<DreamRevertConflict>, Failure> {
+    let mut current = BTreeMap::new();
+    // At each step the older action's output must be the exact input consumed by the next
+    // action in this component. The current head alone cannot prove there was no intervening edit.
+    let mut required_older_output = BTreeMap::new();
+    for action in actions {
+        for (id, expected) in &action.targets {
+            let target = wire_id(id)?;
+            let actual = if let Some(older_output) = required_older_output.get(id) {
+                *older_output
+            } else {
+                let actual = current_revision(&target)?;
+                if let Some(actual) = actual {
+                    current.insert(id.clone(), actual);
+                }
+                actual
+            };
+            if actual != Some(*expected) {
+                return Ok(Some(DreamRevertConflict {
+                    action_id: action.row.id.clone(),
+                    target_id: target,
+                    expected_revision: rev(*expected),
+                    current_revision: current.get(id).copied().map(rev),
+                }));
+            }
+            let prior = action
+                .changes
+                .iter()
+                .find(|change| change.target_kind == "Claim" && change.id == target)
+                .map_or(Some(*expected), |change| change.before);
+            required_older_output.insert(id.clone(), prior);
+        }
+    }
+    Ok(None)
+}
+
 fn reverse_component<'a>(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     run: &DreamRunRow,
     actions: impl Iterator<Item = &'a Intent> + Clone,
 ) -> Result<Component, Failure> {
-    let mut current = BTreeMap::new();
-    for action in actions.clone() {
-        for (id, expected) in &action.targets {
-            if current.contains_key(id) {
-                continue;
-            }
-            let target = wire_id(id)?;
-            let actual = tx
-                .knowledge()
-                .knowledge_claim(&target)?
-                .filter(|claim| claim.scope == run.scope && claim.lifecycle != "Deleted")
-                .map(|claim| claim.revision);
-            if actual != Some(*expected) {
-                return Ok(Component::Conflict(DreamRevertConflict {
-                    action_id: action.row.id.clone(),
-                    target_id: target,
-                    expected_revision: rev(*expected),
-                    current_revision: actual.map(rev),
-                }));
-            }
-            current.insert(id.clone(), *expected);
-        }
+    if let Some(conflict) = causal_conflict(actions.clone(), |target| {
+        Ok(tx
+            .knowledge()
+            .knowledge_claim(target)?
+            .filter(|claim| claim.scope == run.scope && claim.lifecycle != "Deleted")
+            .map(|claim| claim.revision))
+    })? {
+        return Ok(Component::Conflict(conflict));
     }
     let point = tx.savepoint()?;
     let result = (|| {
@@ -272,8 +297,14 @@ fn reverse_component<'a>(
             );
             let receipt = match reversed {
                 Ok(receipt) => receipt,
-                Err(Failure::Storage(error)) => return Err(error.into()),
-                Err(Failure::Refused(_)) => {
+                Err(
+                    Failure::Refused(_)
+                    | Failure::Storage(
+                        StorageError::RevisionConflict(_)
+                        | StorageError::ViewUnavailable
+                        | StorageError::ScopeDenied,
+                    ),
+                ) => {
                     let (id, expected) = action
                         .targets
                         .iter()
@@ -288,6 +319,7 @@ fn reverse_component<'a>(
                         current_revision: terminal.map(|claim| rev(claim.revision)),
                     }));
                 }
+                Err(Failure::Storage(error)) => return Err(error.into()),
             };
             let written = tx
                 .knowledge()
@@ -322,4 +354,45 @@ fn reverse_component<'a>(
 
 fn wire_id(id: &str) -> Result<Id, Failure> {
     Id::new(id).map_err(|_| invalid("dreaming_journal_target").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn edit(action: &str, before: i64, after: i64) -> Intent {
+        let target = Id::new("lesson-1").unwrap();
+        Intent {
+            row: DreamActionRow {
+                id: Id::new(action).unwrap(),
+                position: after,
+                committed_at_ms: 0,
+                action: json!({}),
+            },
+            changes: vec![WriteChange {
+                id: target.clone(),
+                target_kind: "Claim".into(),
+                before: Some(before),
+                after: Some(after),
+            }],
+            before: Vec::new(),
+            targets: BTreeMap::from([(target.as_str().to_owned(), after)]),
+        }
+    }
+
+    #[test]
+    fn revert_rejects_intervening_human_edit_between_two_dream_actions() {
+        let separated = [edit("dream-second", 3, 4), edit("dream-first", 1, 2)];
+        let conflict = causal_conflict(separated.iter(), |_| Ok(Some(4)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(conflict.action_id.as_str(), "dream-first");
+        assert_eq!(conflict.expected_revision.get(), 2);
+        let contiguous = [edit("dream-second", 2, 3), edit("dream-first", 1, 2)];
+        assert!(
+            causal_conflict(contiguous.iter(), |_| Ok(Some(3)))
+                .unwrap()
+                .is_none()
+        );
+    }
 }

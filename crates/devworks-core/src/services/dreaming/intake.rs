@@ -39,6 +39,7 @@ impl SweepDelivery {
         &self,
         tx: &mut dyn WriteTransaction,
         operation: &OperationId,
+        needs_current_settings: bool,
     ) -> Result<InvocationContext, StorageError> {
         let (_, context) = effect_job::restore(
             tx,
@@ -70,11 +71,36 @@ impl SweepDelivery {
         {
             return Err(StorageError::ScopeDenied);
         }
-        let settings = repo.dream_scope(&row.scope)?;
-        if settings.revision != row.settings_revision || !settings.policy.enabled {
+        if needs_current_settings && !settings_current(repo, &row)? {
             return Err(StorageError::ScopeDenied);
         }
         Ok(context)
+    }
+}
+
+pub(super) fn settings_current(
+    repo: &dyn DreamingRead,
+    row: &DreamRunRow,
+) -> Result<bool, StorageError> {
+    let settings = repo.dream_scope(&row.scope)?;
+    Ok(settings.revision == row.settings_revision && settings.policy.enabled)
+}
+
+fn resume_checkpoint(mut prior: DreamCheckpoint) -> DreamCheckpoint {
+    // A new run has a fresh budget. A prepared request retains its immutable frame but must
+    // not reuse the retired delivery's request identity and authority.
+    if prior
+        .request
+        .as_ref()
+        .is_some_and(|request| request.stage == crate::ports::storage::DreamRequestStage::Prepared)
+    {
+        prior.continuation = prior.request.take().map(|request| request.frame);
+    }
+    DreamCheckpoint {
+        cursor_key: prior.cursor_key,
+        request: prior.request,
+        continuation: prior.continuation,
+        ..Default::default()
     }
 }
 
@@ -145,11 +171,17 @@ impl DreamingService {
             .completed
             .as_ref()
             .map_or_else(DreamCutoffs::default, |(c, _)| c.clone());
-        let parent = input
-            .resume_run_id
-            .as_ref()
-            .map(|id| visible_run(tx, &scope, id))
-            .transpose()?;
+        let parent = if let Some(id) = &input.resume_run_id {
+            let run = visible_run(tx, &scope, id)?;
+            if tx.dreaming()?.dream_continuation_used(id)? {
+                return Err(invalid("dreaming_resume_consumed").into());
+            }
+            Some(run)
+        } else {
+            tx.dreaming()?
+                .dream_resumable_run(&scope)?
+                .filter(|run| run.cutoffs.does_not_precede(&prior))
+        };
         if let Some(parent) = &parent
             && (!parent.phase.resumable()
                 || parent.checkpoint.is_none()
@@ -208,7 +240,8 @@ impl DreamingService {
             ended_at_ms: phase.ended().then_some(now),
             checkpoint: parent
                 .and_then(|parent| parent.checkpoint)
-                .filter(|_| operation_id.is_some()),
+                .filter(|_| operation_id.is_some())
+                .map(resume_checkpoint),
             report: phase.ended().then(|| json!({"reason":phase})),
         };
         if let Some(operation) = &operation_id {
@@ -339,13 +372,19 @@ impl DreamingService {
                     continue;
                 }
                 let current = tx.dreaming()?.dream_cutoffs(&scope)?;
-                if !has_signal(
-                    tx.dreaming()?,
-                    &scope,
-                    &prior,
-                    &current,
-                    completed_at.is_some(),
-                )? {
+                let saved = tx
+                    .dreaming()?
+                    .dream_resumable_run(&scope)?
+                    .is_some_and(|run| run.cutoffs.does_not_precede(&prior));
+                if !saved
+                    && !has_signal(
+                        tx.dreaming()?,
+                        &scope,
+                        &prior,
+                        &current,
+                        completed_at.is_some(),
+                    )?
+                {
                     continue;
                 }
                 let scoped = RunInput {

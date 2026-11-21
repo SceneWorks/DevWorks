@@ -17,6 +17,7 @@ use crate::protocol::{DomainErrorCode, Id, Revision, RevisionDimension};
 use crate::services::kernel::{Failure, Refusal, content, label, not_found};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 pub const PROPOSAL_OPERATION: &str = "dreaming.propose";
 
@@ -27,6 +28,8 @@ struct Proposal {
     targets: Vec<RevisionedRef>,
     change: Option<DreamProposalChange>,
     evidence: Vec<DreamEvidenceReference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    proofs: Vec<Value>,
     rationale: String,
     prevalence: String,
     artifact: ArtifactRef,
@@ -35,43 +38,18 @@ struct Proposal {
 impl DreamingService {
     pub(super) fn propose(
         &self,
-        tx: &mut dyn WriteTransaction,
-        ctx: &InvocationContext,
+        _tx: &mut dyn WriteTransaction,
+        _ctx: &InvocationContext,
         input: &ops::ProposeInput,
     ) -> Result<OperationResult, Failure> {
-        let run = tx
-            .dreaming()?
-            .dream_run(&input.run_id)?
-            .filter(|run| authorize(ctx, &run.scope).is_ok())
-            .ok_or_else(|| not_found("dreaming_run", &input.run_id))?;
-        if run.revision != input.expected_revision.get() || ctx.principal() != &run.initiator {
-            return Err(StorageError::ScopeDenied.into());
-        }
-        let proposal = Proposal {
-            run_id: run.id.clone(),
-            targets: input.claim_ids.0.clone(),
-            change: input.change.clone(),
-            evidence: input
-                .evidence
-                .as_ref()
-                .map(|evidence| evidence.0.clone())
-                .unwrap_or_default(),
-            rationale: input
-                .rationale
-                .as_ref()
-                .map(|part| part.0.clone())
-                .unwrap_or_default(),
-            prevalence: input
-                .prevalence
-                .as_ref()
-                .map(|part| part.0.clone())
-                .unwrap_or_default(),
-            artifact: input.content.clone(),
-        };
-        let record = stage(tx, &run, proposal, ctx.principal(), ctx.principal_kind())?;
-        Ok(OperationResult::DreamingPropose {
-            value: render(&record)?,
-        })
+        // The gateway shape remains decodable. Only the worker holding the scoped sweep
+        // lease can stage a proposal, using the receipt for its selected private tool call.
+        Err(Refusal::new(
+            DomainErrorCode::PermissionDenied,
+            "dreaming_worker_lease",
+            Some(input.run_id.clone()),
+        )
+        .into())
     }
 
     pub(super) fn review(
@@ -141,6 +119,7 @@ pub(super) fn stage_from_tool(
     run: &DreamRunRow,
     args: &Value,
     artifact: ArtifactRef,
+    refreshed_sources: &BTreeSet<String>,
 ) -> Result<Value, Failure> {
     use crate::protocol::records::DreamProposalChange::*;
     let target = |id: &str, version: &str| {
@@ -171,16 +150,13 @@ pub(super) fn stage_from_tool(
     let requested = args["evidence"]
         .as_array()
         .ok_or_else(|| invalid("dreaming_proposal_evidence"))?;
-    let selection = Value::Array(
-        requested
-            .iter()
-            .map(|item| {
-                json!({
-                    "kind":item["kind"],"reference":item["id"]
-                })
-            })
-            .collect(),
-    );
+    let selection = super::proposal_evidence_selection(requested);
+    if matches!(&change, Supersede { replacement } if replacement.supersedes.is_some()) {
+        return Err(invalid("dreaming_proposal_replacement").into());
+    }
+    if matches!(&change, SkillDraft {} | HookDraft {} | TestDraft {}) {
+        required_text(args, "draft")?;
+    }
     let proofs =
         crate::services::knowledge::dream_actions::load_proofs(tx.dreaming()?, run, &selection)?;
     let primary = target("target", "expected_version")?;
@@ -204,6 +180,12 @@ pub(super) fn stage_from_tool(
                 .map_err(|_| invalid("dreaming_proposal_evidence_fingerprint"))?;
             let kind = match proof["kind"].as_str() {
                 Some("entry") => DreamEvidenceKind::Knowledge,
+                Some("lesson_event" | "challenge") => DreamEvidenceKind::Lesson,
+                Some("graph_node") => DreamEvidenceKind::Graph,
+                Some("review") => DreamEvidenceKind::Review,
+                Some("item" | "attempt" | "handoff" | "thread" | "message") => {
+                    DreamEvidenceKind::Work
+                }
                 _ => return Err(invalid("dreaming_proposal_evidence_kind").into()),
             };
             Ok::<_, Failure>(DreamEvidenceReference {
@@ -219,13 +201,15 @@ pub(super) fn stage_from_tool(
         targets: vec![primary],
         change: Some(change),
         evidence,
+        proofs,
         rationale,
         prevalence,
         artifact,
     };
-    let actor = tx.store().host_actor.clone();
-    let row = stage(tx, run, proposal, &actor, PrincipalKind::Host)?;
-    Ok(json!({"proposal":render(&row)?,"proposalId":row.id,"changed":false}))
+    let (row, suppressed) = stage(tx, run, proposal, refreshed_sources)?;
+    Ok(
+        json!({"proposal":render(&row)?,"proposalId":row.id,"changed":false,"suppressed":suppressed}),
+    )
 }
 
 fn required_text(value: &Value, key: &str) -> Result<String, Failure> {
@@ -246,35 +230,11 @@ fn stage(
     tx: &mut dyn WriteTransaction,
     run: &DreamRunRow,
     proposal: Proposal,
-    author: &crate::protocol::ActorId,
-    author_kind: PrincipalKind,
-) -> Result<StoredApproval, Failure> {
+    refreshed_sources: &BTreeSet<String>,
+) -> Result<(StoredApproval, bool), Failure> {
     check_targets(tx, &run.scope, &proposal)?;
     valid_draft(tx, &run.scope, &proposal.artifact)?;
-    if proposal.change.is_some() {
-        verify_evidence(tx, &run.scope, &proposal.evidence)?;
-    }
-    let mut fingerprints = proposal
-        .evidence
-        .iter()
-        .map(|proof| (proof.reference.0.as_str(), proof.fingerprint.as_str()))
-        .collect::<Vec<_>>();
-    fingerprints.sort_unstable();
-    let target_keys = proposal
-        .targets
-        .iter()
-        .map(|row| row.id.as_str())
-        .collect::<Vec<_>>();
-    let suppression = stamp(&json!({
-        "scope":run.scope.key(),"targets":target_keys,"action":proposal.change,
-        "artifact": if proposal.change.is_none(){Some(proposal.artifact.sha256.as_str())}else{None},
-        "evidence":fingerprints,
-    }))?;
-    let id = Id::new(format!("dream-proposal-{suppression}"))
-        .map_err(|_| invalid("dreaming_proposal"))?;
-    if let Some(prior) = tx.decisions().approval(&id)? {
-        return Ok(prior);
-    }
+    let evidence_times = verify_evidence(tx, run, &proposal.proofs, Some(refreshed_sources))?;
     let reviewed = serde_json::to_value(&proposal).map_err(|_| invalid("dreaming_proposal"))?;
     let digest = stamp(&reviewed)?;
     let now = tx.now_ms();
@@ -282,6 +242,40 @@ fn stage(
         .targets
         .first()
         .ok_or_else(|| invalid("dreaming_proposal_targets"))?;
+    let action = required_text(&reviewed["change"], "kind")?;
+    if let Some(prior_id) = tx
+        .dreaming()?
+        .dream_prior_proposal(&run.scope, &target.id, &action)?
+    {
+        let prior = tx
+            .decisions()
+            .approval(&prior_id)?
+            .ok_or(StorageError::ViewUnavailable)?;
+        if prior.state == "Pending" {
+            return Ok((prior, false));
+        }
+        let old: Proposal = serde_json::from_value(prior.payload["reviewed"].clone())
+            .map_err(|_| invalid("dreaming_proposal_snapshot"))?;
+        let decision_at = prior
+            .decided_at_ms
+            .ok_or_else(|| invalid("dreaming_decision_time"))?;
+        let new = proposal
+            .proofs
+            .iter()
+            .zip(evidence_times)
+            .any(|(proof, at)| {
+                at > decision_at
+                    && !old.proofs.iter().any(|previous| {
+                        proof["kind"] == previous["kind"]
+                            && proof["id"] == previous["id"]
+                            && proof["fingerprint"] == previous["fingerprint"]
+                    })
+            });
+        if !new {
+            return Ok((prior, true));
+        }
+    }
+    let id = tx.new_id(crate::ports::IdKind::Proposal);
     let stored = StoredApproval {
         id,
         scope: ConfigScope::from(&run.scope),
@@ -300,8 +294,8 @@ fn stage(
         artifact: Some(json!(proposal.artifact)),
         payload: json!({"content":{"kind":"DreamingProposal","runId":run.id},
             "reviewed":reviewed,"binding":{"scope":run.scope.key()}}),
-        author: author.clone(),
-        author_kind,
+        author: tx.store().host_actor.clone(),
+        author_kind: PrincipalKind::Host,
         created_at_ms: now,
         decided_by: None,
         decided_at_ms: None,
@@ -317,7 +311,7 @@ fn stage(
         "Dreaming proposal",
         &stored.summary,
     )?;
-    Ok(stored)
+    Ok((stored, false))
 }
 
 pub(crate) fn decide_effect(
@@ -352,7 +346,7 @@ pub(crate) fn decide_effect(
         check_targets(tx, &run.scope, &proposed)?;
         valid_draft(tx, &run.scope, &proposed.artifact)?;
         if let Some(change) = proposed.change {
-            verify_evidence(tx, &run.scope, &proposed.evidence)?;
+            verify_evidence(tx, &run, &proposed.proofs, None)?;
             let target = proposed
                 .targets
                 .first()
@@ -385,7 +379,7 @@ fn check_targets(
     if targets.is_empty() {
         return Err(invalid("dreaming_proposal_targets").into());
     }
-    for target in targets {
+    for (position, target) in targets.into_iter().enumerate() {
         let claim = tx
             .knowledge()
             .knowledge_claim(&target.id)?
@@ -400,6 +394,40 @@ fn check_targets(
                 rev(claim.revision),
             )
             .into());
+        }
+        match &proposal.change {
+            Some(DreamProposalChange::Retract {} | DreamProposalChange::Supersede { .. })
+                if position == 0
+                    && claim.lesson.as_ref().is_some_and(|lesson| {
+                        matches!(
+                            lesson.source.as_str(),
+                            "Prompt" | "Review" | "RelayedPrompt" | "RelayedReview"
+                        )
+                    }) =>
+            {
+                return Err(invalid("dreaming_proposal_prompt_lesson").into());
+            }
+            Some(DreamProposalChange::Merge { .. }) if claim.lesson.is_none() => {
+                return Err(invalid("dreaming_proposal_merge_requires_lessons").into());
+            }
+            Some(
+                DreamProposalChange::SkillDraft {}
+                | DreamProposalChange::HookDraft {}
+                | DreamProposalChange::TestDraft {},
+            ) => {
+                let history = tx
+                    .knowledge()
+                    .knowledge_history_at(&target.id, claim.revision)?
+                    .ok_or(StorageError::ViewUnavailable)?;
+                if history.snapshot["lesson"]["ruleState"] != "Effective"
+                    || !tx
+                        .dreaming()?
+                        .dream_lesson_recurred_while_served(&target.id)?
+                {
+                    return Err(invalid("dreaming_proposal_rule_recurrence").into());
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -435,39 +463,88 @@ fn valid_draft(
 
 fn verify_evidence(
     tx: &mut dyn WriteTransaction,
-    scope: &KnowledgeScope,
-    evidence: &[DreamEvidenceReference],
-) -> Result<(), Failure> {
-    if evidence.is_empty() {
+    run: &DreamRunRow,
+    proofs: &[Value],
+    refreshed_sources: Option<&BTreeSet<String>>,
+) -> Result<Vec<i64>, Failure> {
+    use crate::services::knowledge::dream_actions::{
+        graph_proof_observed_at, work_proof_observed_at,
+    };
+    if proofs.is_empty() {
         return Err(invalid("dreaming_proposal_evidence").into());
     }
-    for proof in evidence {
-        if !matches!(
-            proof.kind,
-            DreamEvidenceKind::Knowledge | DreamEvidenceKind::Lesson
-        ) {
-            return Err(Refusal::new(
-                DomainErrorCode::ViewUnavailable,
-                "dreaming_evidence_source",
-                None,
-            )
-            .into());
-        }
-        let id = Id::new(proof.reference.0.as_str())
-            .map_err(|_| invalid("dreaming_evidence_reference"))?;
-        let k = tx.knowledge();
-        let current = k
-            .knowledge_claim(&id)?
-            .filter(|claim| &claim.scope == scope && claim.lifecycle != "Deleted")
-            .ok_or_else(|| not_found("dreaming_evidence", &id))?;
-        let snapshot = k
-            .knowledge_history_at(&id, current.revision)?
-            .ok_or_else(|| not_found("dreaming_evidence", &id))?;
-        if stamp(&snapshot.snapshot)? != proof.fingerprint.as_str() {
-            return Err(invalid("dreaming_evidence_changed").into());
+    proofs
+        .iter()
+        .map(|proof| {
+            let at = match proof["kind"].as_str() {
+                Some("entry" | "lesson_event" | "challenge") => knowledge_proof_at(tx, run, proof)?,
+                Some("graph_node") => {
+                    let id = required_text(proof, "id")?;
+                    let fingerprint = required_text(proof, "fingerprint")?;
+                    if refreshed_sources
+                        .is_some_and(|sources| !sources.contains(&format!("{id}:{fingerprint}")))
+                    {
+                        None
+                    } else {
+                        graph_proof_observed_at(tx, run, proof)?
+                    }
+                }
+                Some("item" | "review" | "attempt" | "handoff" | "thread" | "message") => {
+                    work_proof_observed_at(tx, run, proof)?
+                }
+                _ => None,
+            };
+            at.ok_or_else(|| invalid("dreaming_evidence_changed").into())
+        })
+        .collect()
+}
+
+fn knowledge_proof_at(
+    tx: &mut dyn WriteTransaction,
+    run: &DreamRunRow,
+    proof: &Value,
+) -> Result<Option<i64>, Failure> {
+    let kind = required_text(proof, "kind")?;
+    let reference = required_text(proof, "id")?;
+    let fingerprint = required_text(proof, "fingerprint")?;
+    let selected = if kind == "entry" {
+        reference.clone()
+    } else {
+        required_text(proof, "claimId")?
+    };
+    let id = Id::new(selected).map_err(|_| invalid("dreaming_evidence_reference"))?;
+    let k = tx.knowledge();
+    let Some(current) = k.knowledge_claim(&id)?.filter(|claim| {
+        claim.scope == run.scope
+            && claim.lifecycle != "Deleted"
+            && proof["revision"].as_i64() == Some(claim.revision)
+    }) else {
+        return Ok(None);
+    };
+    let snapshot = k
+        .knowledge_history_at(&id, current.revision)?
+        .ok_or(StorageError::ViewUnavailable)?;
+    if kind == "entry" {
+        return Ok((stamp(&snapshot.snapshot)? == fingerprint).then_some(snapshot.at_ms));
+    }
+    if kind == "lesson_event" {
+        for event in k.knowledge_lesson_events(&id, 500)? {
+            if crate::fingerprint::sha256_hex(event.event_key.as_bytes()) != reference {
+                continue;
+            }
+            let record = json!({"id":reference,"kind":"lesson_event","source":event.source,
+                "source_ref":event.source_ref,"actor":event.actor,"at_ms":event.at_ms,"write_id":event.write_id});
+            return Ok((stamp(&record)? == fingerprint).then_some(event.at_ms));
         }
     }
-    Ok(())
+    if kind == "challenge"
+        && let Some(challenge) = snapshot.snapshot["lesson"]["challenges"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["id"] == reference))
+    {
+        return Ok((stamp(challenge)? == fingerprint).then_some(snapshot.at_ms));
+    }
+    Ok(None)
 }
 
 fn render(row: &StoredApproval) -> Result<ProposalRecord, Failure> {
