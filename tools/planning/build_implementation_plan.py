@@ -220,7 +220,7 @@ lines = ['# Local implementation plan', '',
  f'{counts["capabilityAcceptanceGroups"]} acceptance groups and {counts["workloadSpecifications"]} workloads. '
  f'The {counts["excludedSourceEntries"]} excluded source entries retain their reasons and an exclusion audit. '
  f'There are {counts["slices"]} local slices and no unowned operations, requirements or retained entries.', '',
- 'All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. '
+ f'All {counts["inputSchemaCandidates"]} operation inputs have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. '
  'Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI '
  'integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. '
  'A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.', '',

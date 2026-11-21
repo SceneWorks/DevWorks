@@ -4,9 +4,9 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 390 requirements, 380 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 390 requirements, 387 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
 
-All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
+All 387 operation inputs have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
 [Machine-readable register](implementation-plan.json) preserves each requirement statement/status, every frozen source span/digest, resolved operation binding, acceptance text and workload specification. [Editable slice source](implementation-slices.json) owns sequencing and concrete outcomes. [Handoff gates](architecture-handoff.md) distinguish interface decisions from later production acceptance.
 
@@ -981,7 +981,7 @@ Preview/configure/apply/runs/inspection bind source snapshots and identity maps;
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `imports.preview`, `imports.configure`, `imports.apply`, `imports.runs`, `imports.inspect`
+**Operations:** `imports.preview`, `imports.configure`, `imports.apply`, `imports.runs`, `imports.inspect`, `imports.settings`, `imports.history`, `imports.cancel`, `imports.sync`
 
 **Primary requirement cases:** AT-IMPORT-01, AT-IMPORT-02
 
@@ -997,7 +997,7 @@ Diagnostics/index runs/messages/sessions have distinct eligibility, authored his
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `maintenance.prune_diagnostics`, `maintenance.prune_index_runs`, `maintenance.prune_messages`, `maintenance.prune_sessions`
+**Operations:** `maintenance.prune_diagnostics`, `maintenance.prune_index_runs`, `maintenance.prune_messages`, `maintenance.prune_sessions`, `maintenance.inspect`, `maintenance.scheduled_prune`, `maintenance.cancel`
 
 **Primary requirement cases:** AT-OPS-01, AT-OPS-02
 

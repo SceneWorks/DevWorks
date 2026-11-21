@@ -31,13 +31,13 @@ fn registry_matches_implementation_plan_and_family_register() {
         .map(|o| (o["operation"].as_str().unwrap(), o))
         .collect();
 
-    assert_eq!(registry::all().len(), 380);
+    assert_eq!(registry::all().len(), 387);
     assert_eq!(registry::all().len(), planned.len());
     assert_eq!(
         registry::all().len() as u64,
         register["operationCount"].as_u64().unwrap()
     );
-    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 380);
+    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 387);
     assert_eq!(
         registry::families().len() as u64,
         register["familyCount"].as_u64().unwrap()
@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 385);
+    assert_eq!(count, 392);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
@@ -467,6 +467,13 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "features.prioritize",
             "issues.prioritize",
             "tasks.prioritize",
+            "imports.apply",
+            "imports.configure",
+            "imports.inspect",
+            "imports.preview",
+            "imports.runs",
+            "imports.settings",
+            "imports.sync",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail
