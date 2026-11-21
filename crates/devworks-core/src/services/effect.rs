@@ -26,6 +26,10 @@ pub trait JournaledEffect: Send + Sync + 'static {
     fn observes_delivery_cancellation(&self) -> bool {
         false
     }
+    /// A reconciled delivery may be requeued to settle a proved result or safely resume custody.
+    fn resumes_after_observation(&self) -> bool {
+        false
+    }
     /// Performs the effect of a `Dispatching` operation once.
     fn execute(&self, operation: &OperationRecord) -> EffectOutcome;
     /// Reads the target for an operation whose outcome is unknown, using its saved identity.

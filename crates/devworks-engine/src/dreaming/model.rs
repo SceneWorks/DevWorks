@@ -337,6 +337,7 @@ impl RoundObservation {
             "connectionId": self.attempt.connection_id,
             "attemptId": self.attempt.attempt_id,
             "inputSource": self.result.source_context,
+            "modelResult": self.result.result_artifact,
             "monetaryComplete": self.balance.monetary_complete,
         })
     }

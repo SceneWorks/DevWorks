@@ -247,7 +247,7 @@ fn definitions() -> Vec<PreparedTool> {
                             "unlearned_reviews",
                         ]),
                     ),
-                    ("since_days", int_bound(0, 3650)),
+                    ("since_days", int_bound(1, 3650)),
                 ],
                 &["view"],
             ),

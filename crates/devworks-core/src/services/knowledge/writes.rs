@@ -94,6 +94,7 @@ pub(super) struct Writer<'a> {
     pub diagnostics: Vec<Diagnostic>,
     touched: BTreeMap<String, KnowledgeScope>,
     th: BTreeMap<String, i64>,
+    dreaming_origin: bool,
     /// The fenced `(scope key, source)` this write may change: a deletion job's own batch.
     exempt: Option<(String, String)>,
 }
@@ -126,6 +127,7 @@ impl<'a> Writer<'a> {
             diagnostics: Vec::new(),
             touched: BTreeMap::new(),
             th: BTreeMap::new(),
+            dreaming_origin: false,
             exempt: None,
         }
     }
@@ -672,9 +674,13 @@ fn attach_basis(
 fn origin_for(
     ctx: &InvocationContext,
     draft: &ClaimDraft,
+    dreaming: bool,
 ) -> Result<(String, Option<String>), Failure> {
     let origin = draft.origin.as_ref().map(wire);
     let reference = draft.origin_ref.as_ref().map(|r| r.0.clone());
+    if dreaming {
+        return Ok(("Agent".into(), reference));
+    }
     if is_user(ctx) {
         if origin.as_deref() == Some("Agent") {
             return Err(invalid("origin"));
@@ -762,7 +768,7 @@ fn build_claim(
             .map(|t| t.0.as_str())
             .chain(std::iter::once(category)),
     );
-    let (origin, origin_ref) = origin_for(w.ctx, d)?;
+    let (origin, origin_ref) = origin_for(w.ctx, d, w.dreaming_origin)?;
     let autonomous = entry == "Decision" && origin == "Agent";
     let basis = basis_of(
         w,
@@ -954,8 +960,18 @@ fn record(
     ctx: &InvocationContext,
     i: &ops::RecordInput,
 ) -> Result<DomainDecision, Failure> {
+    record_with_origin(tx, ctx, i, false)
+}
+
+fn record_with_origin(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::RecordInput,
+    dreaming_origin: bool,
+) -> Result<DomainDecision, Failure> {
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
     let mut w = Writer::new(tx, ctx, "knowledge.record")?;
+    w.dreaming_origin = dreaming_origin;
     let mut refs = Refs::default();
     for e in &i.batch.entities.0 {
         if refs.entities.contains_key(e.client_id.as_str()) {
@@ -3501,7 +3517,7 @@ pub(crate) fn consolidate(
 ) -> Result<DomainDecision, Failure> {
     use super::dream_actions::Consolidation::*;
     match action {
-        Record(draft) => record(
+        Record(draft, evidence) => record_with_origin(
             tx,
             ctx,
             &ops::RecordInput {
@@ -3509,9 +3525,10 @@ pub(crate) fn consolidate(
                 batch: KnowledgeBatch {
                     entities: BoundedList(vec![]),
                     claims: BoundedList(vec![*draft]),
-                    evidence: BoundedList(vec![]),
+                    evidence: BoundedList(evidence),
                 },
             },
+            true,
         ),
         Relate(input) => relate(tx, ctx, &input),
         Promote(input) => promote(tx, ctx, &input),
@@ -3659,6 +3676,10 @@ pub(crate) fn reverse_dream_changes(
             if !removed {
                 return Err(invalid("dreaming_relation_changed"));
             }
+            continue;
+        }
+        if target.target_kind == "Evidence" && tool == "dream_record" {
+            // The citation remains as audit evidence, including if another claim now uses it.
             continue;
         }
         if target.target_kind != "Claim" {

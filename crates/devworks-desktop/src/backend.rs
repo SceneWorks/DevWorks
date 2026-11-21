@@ -475,6 +475,7 @@ pub enum TaskOutput {
     Convention(crate::conventions_ops::TaskResult),
     /// Instruction text read or a staged draft (Roles and skills).
     Instruction(crate::instructions_ops::TaskResult),
+    DreamingReport(String),
     /// Native host state was refreshed or updated.
     Refreshed,
     /// The text of an MCP resource or prompt a person opened in Settings.

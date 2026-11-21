@@ -84,7 +84,12 @@ impl DreamingService {
             || tx.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human)
             || input.rationale.0.trim().is_empty()
         {
-            return Err(StorageError::ScopeDenied.into());
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "dreaming_review",
+                Some(input.proposal_id.clone()),
+            )
+            .into());
         }
         let stored = tx
             .decisions()

@@ -4,10 +4,12 @@ use super::writes;
 use crate::context::InvocationContext;
 use crate::operations::knowledge as ops;
 use crate::ports::storage::{
-    DreamRunRow, DreamingRead, KnowledgeScope, StorageError, StoredClaim, WriteTransaction,
+    DreamRunRow, DreamTrailQuery, DreamingRead, KnowledgeScope, StorageError, StoredClaim,
+    WriteTransaction,
 };
 use crate::protocol::records::{
-    Applicability, ClaimDraft, KnowledgeEntryKind, KnowledgeOrigin, LessonSource, PromoteAction,
+    Applicability, ClaimDraft, EvidenceKind, EvidenceLocator, KnowledgeEntryKind, KnowledgeOrigin,
+    LessonSource, PromoteAction, SourceEvidence,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Check};
@@ -17,7 +19,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 pub(crate) enum Consolidation {
-    Record(Box<ClaimDraft>),
+    Record(Box<ClaimDraft>, Vec<SourceEvidence>),
     Relate(ops::RelateInput),
     Promote(ops::PromoteInput),
     Verify(ops::VerifyInput, std::collections::BTreeMap<String, String>),
@@ -53,8 +55,29 @@ pub(crate) fn apply(
 ) -> Result<Value, Failure> {
     let proofs = load_proofs(tx.dreaming()?, run, &args["evidence"])?;
     for proof in &proofs {
-        if proof["kind"] == "graph_node" && !current_graph_proof(tx, run, proof, refreshed)? {
-            return Err(invalid("dreaming_source_changed"));
+        match proof["kind"].as_str() {
+            Some("graph_node") if !current_graph_proof(tx, run, proof, refreshed)? => {
+                return Err(invalid("dreaming_source_changed"));
+            }
+            Some("entry") => {
+                let current = target(tx, &run.scope, &proof["id"])?;
+                if Some(current.revision) != proof["revision"].as_i64() {
+                    return Err(invalid("dreaming_evidence_changed"));
+                }
+            }
+            Some("lesson_event" | "challenge") => {
+                let current = target(tx, &run.scope, &proof["claimId"])?;
+                if Some(current.revision) != proof["revision"].as_i64() || current.lesson.is_none()
+                {
+                    return Err(invalid("dreaming_lesson_evidence_changed"));
+                }
+            }
+            Some("review" | "thread" | "message" | "attempt" | "handoff")
+                if !current_work_proof(tx, run, proof)? =>
+            {
+                return Err(invalid("dreaming_work_evidence_changed"));
+            }
+            _ => {}
         }
     }
     let evidence: Vec<Id> = proofs
@@ -94,8 +117,15 @@ pub(crate) fn apply(
         }
         draft.origin = Some(KnowledgeOrigin::Agent);
         draft.origin_ref = Some(BoundedText(run.id.as_str().into()));
+        let sources = proofs
+            .iter()
+            .enumerate()
+            .map(|(index, proof)| citation(index, proof))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut evidence = evidence;
+        evidence.extend(sources.iter().map(|citation| citation.id.clone()));
         draft.evidence_ids = BoundedList(evidence);
-        Consolidation::Record(Box::new(draft))
+        Consolidation::Record(Box::new(draft), sources)
     } else {
         let target = target(tx, scope, &args["id"])?;
         let expected = args["expected_version"].as_i64().unwrap_or(target.revision);
@@ -384,7 +414,83 @@ pub(crate) fn load_proofs(
     Ok(proofs)
 }
 
-fn current_graph_proof(
+fn citation(index: usize, proof: &Value) -> Result<SourceEvidence, Failure> {
+    let kind = proof["kind"]
+        .as_str()
+        .ok_or_else(|| invalid("dreaming_proof_kind"))?;
+    let reference = proof["id"]
+        .as_str()
+        .ok_or_else(|| invalid("dreaming_proof_id"))?;
+    let fingerprint = proof["fingerprint"]
+        .as_str()
+        .ok_or_else(|| invalid("dreaming_proof_fingerprint"))?;
+    let source = if let Some(source) = proof["sourceRef"].as_str() {
+        source.to_owned()
+    } else {
+        format!("{kind}:{reference}")
+    };
+    let id =
+        Id::new(format!("dream-evidence-{index}")).map_err(|_| invalid("dreaming_evidence_id"))?;
+    Ok(SourceEvidence {
+        id,
+        claim_id: None,
+        source: EvidenceLocator {
+            kind: if kind == "graph_node" {
+                EvidenceKind::Code
+            } else {
+                EvidenceKind::Observation
+            },
+            source_ref: BoundedText(source),
+            artifact: None,
+            locator: Some(BoundedText(format!("sha256:{fingerprint}"))),
+        },
+        snippet: BoundedText(format!("{kind} {reference}")),
+        metadata: None,
+        source_revision: proof["sourceRevision"]
+            .as_str()
+            .map(|revision| BoundedText(revision.to_owned()))
+            .or_else(|| {
+                proof["revision"]
+                    .as_i64()
+                    .map(|revision| BoundedText(revision.to_string()))
+            }),
+    })
+}
+
+pub(crate) fn current_work_proof(
+    tx: &mut dyn WriteTransaction,
+    run: &DreamRunRow,
+    proof: &Value,
+) -> Result<bool, Failure> {
+    let (Some(kind), Some(reference), Some(fingerprint)) = (
+        proof["kind"].as_str(),
+        proof["id"].as_str(),
+        proof["fingerprint"].as_str(),
+    ) else {
+        return Ok(false);
+    };
+    let exact = tx.dreaming()?.dream_trail(&DreamTrailQuery {
+        scope: &run.scope,
+        through_ms: run.started_at_ms,
+        knowledge_through: run.cutoffs.knowledge,
+        reviews_through: run.cutoffs.reviews,
+        since_ms: None,
+        kind: Some(kind),
+        id: Some(reference),
+        item_id: None,
+        before: None,
+        offset: 0,
+        limit: 1,
+    })?;
+    if let Some(row) = exact.first() {
+        let canonical = crate::jcs::canonicalize(&row.content)
+            .map_err(|_| invalid("dreaming_work_evidence"))?;
+        return Ok(crate::fingerprint::sha256_hex(canonical.as_bytes()) == fingerprint);
+    }
+    Ok(false)
+}
+
+pub(crate) fn current_graph_proof(
     tx: &mut dyn WriteTransaction,
     run: &DreamRunRow,
     proof: &Value,

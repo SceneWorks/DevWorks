@@ -5,7 +5,8 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::ports::storage::StorageError;
+use crate::ports::storage::{DreamRunRow, DreamingRead, StorageError};
+use crate::protocol::Id;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -16,6 +17,12 @@ pub struct WindowPosition {
     pub selection: String,
     pub window: String,
     pub offset: usize,
+}
+
+pub fn trail_timestamp(text: &str) -> Result<i64, StorageError> {
+    text.parse::<jiff::Timestamp>()
+        .map(|time| time.as_millisecond())
+        .map_err(|_| StorageError::InvalidRecord("invalid work trail timestamp".into()))
 }
 
 pub fn cursor_key() -> Result<[u8; 32], StorageError> {
@@ -54,6 +61,70 @@ pub fn verify_cursor(
     scope: &str,
     tool: &str,
 ) -> Result<WindowPosition, StorageError> {
+    let position = decoded_cursor(key, cursor)?;
+    if position.run != run || position.scope != scope || position.tool != tool {
+        return Err(StorageError::CursorExpired);
+    }
+    Ok(position)
+}
+
+/// Restore a signed cursor only along the owner’s surviving continuation lineage.
+pub fn verify_owned_cursor(
+    repo: &dyn DreamingRead,
+    run: &DreamRunRow,
+    tool: &str,
+    cursor: &str,
+) -> Result<WindowPosition, StorageError> {
+    let key = run
+        .checkpoint
+        .as_ref()
+        .and_then(|checkpoint| checkpoint.cursor_key.as_ref())
+        .ok_or(StorageError::CursorExpired)?;
+    let position = decoded_cursor(key, cursor)?;
+    if position.scope != run.scope.key() || position.tool != tool {
+        return Err(StorageError::CursorExpired);
+    }
+    if position.run == run.id.as_str() {
+        return Ok(position);
+    }
+    let mut previous = run.continued_from.clone();
+    while let Some(id) = previous {
+        let parent = repo
+            .dream_run(&id)?
+            .filter(|parent| parent.scope == run.scope)
+            .ok_or(StorageError::CursorExpired)?;
+        if parent.id.as_str() == position.run {
+            return Ok(position);
+        }
+        previous = parent.continued_from;
+    }
+    Err(StorageError::CursorExpired)
+}
+
+pub fn prior_action(
+    repo: &dyn DreamingRead,
+    run: &DreamRunRow,
+    index: i64,
+) -> Result<crate::ports::storage::DreamActionRow, StorageError> {
+    let mut next: Option<Id> = Some(run.id.clone());
+    while let Some(id) = next {
+        let row = repo
+            .dream_run(&id)?
+            .filter(|row| row.scope == run.scope)
+            .ok_or(StorageError::ViewUnavailable)?;
+        if let Some(action) = repo
+            .dream_actions(&id, index.checked_add(1), 1)?
+            .into_iter()
+            .find(|action| action.position == index)
+        {
+            return Ok(action);
+        }
+        next = row.continued_from;
+    }
+    Err(StorageError::ViewUnavailable)
+}
+
+fn decoded_cursor(key: &[u8; 32], cursor: &str) -> Result<WindowPosition, StorageError> {
     if cursor.len() > 4096 {
         return Err(StorageError::CursorExpired);
     }
@@ -69,9 +140,6 @@ pub fn verify_cursor(
         .map_err(|_| StorageError::CursorExpired)?;
     let position: WindowPosition =
         serde_json::from_slice(&payload).map_err(|_| StorageError::CursorExpired)?;
-    if position.run != run || position.scope != scope || position.tool != tool {
-        return Err(StorageError::CursorExpired);
-    }
     Ok(position)
 }
 

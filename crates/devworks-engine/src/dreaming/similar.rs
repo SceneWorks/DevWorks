@@ -4,7 +4,9 @@ use devworks_core::ports::storage::{
     DreamClaimRef, DreamClaimWindow, DreamRunRow, StorageError, WriteTransaction,
 };
 use devworks_core::protocol::Id;
-use devworks_core::services::dreaming::windows::{WindowPosition, sign_cursor, verify_cursor};
+use devworks_core::services::dreaming::windows::{
+    WindowPosition, sign_cursor, verify_owned_cursor,
+};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -28,14 +30,7 @@ pub(super) fn read(
     let scope = run.scope.key();
     let (mut left, mut right, mut offset) = match args["cursor"].as_str() {
         Some(cursor) => {
-            let position =
-                verify_cursor(key, cursor, run.id.as_str(), &scope, TOOL).or_else(|_| {
-                    let parent = run
-                        .continued_from
-                        .as_ref()
-                        .ok_or(StorageError::CursorExpired)?;
-                    verify_cursor(key, cursor, parent.as_str(), &scope, TOOL)
-                })?;
+            let position = verify_owned_cursor(tx.dreaming()?, run, TOOL, cursor)?;
             serde_json::from_str(&position.window).map_err(|_| StorageError::CursorExpired)?
         }
         None => (None, None, args["offset"].as_u64().unwrap_or(0)),
@@ -147,6 +142,10 @@ fn lesson_refs(
         exact,
         kind: Some("Lesson"),
         status: Some("Active"),
+        possibly_stale: None,
+        lessons: None,
+        delivered_since_ms: 0,
+        captured_at_ms: run.started_at_ms,
         limit,
     })
 }

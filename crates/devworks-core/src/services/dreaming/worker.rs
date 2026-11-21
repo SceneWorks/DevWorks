@@ -66,9 +66,12 @@ impl SweepLease {
             Err(failure) => {
                 tx.rollback_to(point)?;
                 match failure {
-                    Failure::Refused(_) | Failure::Storage(StorageError::ScopeDenied) => Ok(Some(
-                        serde_json::json!({"error":"DreamingKnowledgePolicyRefused"}),
-                    )),
+                    Failure::Refused(reason) => Ok(Some(serde_json::json!({
+                        "error":"DreamingKnowledgePolicyRefused","code":reason.code,"reason":reason.target_kind,
+                    }))),
+                    Failure::Storage(StorageError::ScopeDenied) => Ok(Some(serde_json::json!({
+                        "error":"DreamingKnowledgePolicyRefused","code":"ScopeDenied",
+                    }))),
                     Failure::Storage(error) => Err(error),
                 }
             }
@@ -146,6 +149,14 @@ impl SweepLease {
         tx.dreaming()?
             .dream_run(self.run_id())?
             .ok_or_else(|| lease_lost(self.run_id()))
+    }
+
+    pub fn cancel_requested(&self, tx: &mut dyn WriteTransaction) -> Result<bool, StorageError> {
+        self.read(tx, false)?;
+        Ok(tx
+            .queue()
+            .entry(self.run_id())?
+            .is_some_and(|ticket| ticket.cancel_requested))
     }
 
     pub fn start(&self, tx: &mut dyn WriteTransaction) -> Result<DreamRunRow, StorageError> {

@@ -5,8 +5,8 @@ use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::{
     DreamActionRow, DreamCheckpoint, DreamClaimRef, DreamClaimWindow, DreamCutoffs,
     DreamInstruction, DreamPhase, DreamPolicy, DreamProgress, DreamRequestStage, DreamRunRow,
-    DreamScopeState, DreamSignal, DreamStream, DreamTrigger, DreamingRead, DreamingRepository,
-    KnowledgeScope, StorageError,
+    DreamScopeState, DreamSignal, DreamStream, DreamTrailPosition, DreamTrailQuery, DreamTrailRow,
+    DreamTrigger, DreamingRead, DreamingRepository, KnowledgeScope, StorageError,
 };
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::{ActorId, Id, OperationId, RevisionDimension};
@@ -160,8 +160,10 @@ fn event_tip(
         DreamStream::Knowledge => {
             "SELECT coalesce(max(seq),0) FROM events WHERE project_id IS ?1 AND kind='KnowledgeWritten'"
         }
-        DreamStream::Reviews => {
-            "SELECT coalesce(max(seq),0) FROM events WHERE project_id IS ?1 AND kind='PlanReviewSettled'"
+        DreamStream::Reviews | DreamStream::UnlearnedReviews => {
+            "SELECT max(
+                (SELECT coalesce(max(seq),0) FROM events WHERE project_id IS ?1 AND kind='PlanReviewSettled'),
+                (SELECT coalesce(max(seq),0) FROM history_links WHERE project_id=?1 AND kind='review'))"
         }
         DreamStream::Sources => {
             return db(conn.query_row(
@@ -186,9 +188,100 @@ fn instruction_tip(conn: &Connection, scope: &KnowledgeScope) -> Result<i64, Sto
     ))
 }
 
+fn trail(
+    conn: &Connection,
+    query: &DreamTrailQuery<'_>,
+) -> Result<Vec<DreamTrailRow>, StorageError> {
+    let project = query.scope.project().map(|id| id.0.as_str());
+    let mut statement = db(conn.prepare_cached(
+        "WITH trail(kind,id,item_id,at,content) AS (
+            SELECT 'revision',h.target_id || ':' || h.revision,NULL,h.at,h.snapshot_json
+              FROM events e JOIN knowledge_history h ON h.write_id=e.aggregate_id
+             WHERE e.project_id IS ?1 AND e.kind='KnowledgeWritten' AND e.seq<=?2
+               AND h.target_kind='Claim' AND h.lifecycle<>'Deleted' AND (?5 IS NULL OR ?5='revision')
+            UNION ALL
+            SELECT 'attempt',json_extract(a.value,'$.id'),w.id,coalesce(d.updated_at,w.created_at),a.value
+              FROM work_items w LEFT JOIN work_details d ON d.work_id=w.id
+                JOIN json_each(w.brief_json,'$.attempts') a
+             WHERE w.project_id=?1 AND (?5 IS NULL OR ?5='attempt')
+            UNION ALL
+            SELECT 'handoff',json_extract(h.value,'$.id'),w.id,coalesce(d.updated_at,w.created_at),h.value
+              FROM work_items w LEFT JOIN work_details d ON d.work_id=w.id
+                JOIN json_each(w.brief_json,'$.handoffs') h
+             WHERE w.project_id=?1 AND (?5 IS NULL OR ?5='handoff')
+            UNION ALL
+            SELECT 'thread',json_extract(c.value,'$.id'),w.id,coalesce(d.updated_at,w.created_at),c.value
+              FROM work_items w LEFT JOIN work_details d ON d.work_id=w.id
+                JOIN json_each(w.brief_json,'$.comments') c
+             WHERE w.project_id=?1 AND (?5 IS NULL OR ?5='thread')
+            UNION ALL
+            SELECT 'message',m.id,coalesce(m.target_item_id,m.root_id),coalesce(m.resolved_at,m.created_at),
+                json_object('body',m.body,'kind',m.message_class,'author',m.from_actor_id,
+                    'state',m.state,'revision',m.revision)
+              FROM agent_messages m
+             WHERE m.project_id=?1 AND m.channel<>'Session' AND (?5 IS NULL OR ?5='message')
+            UNION ALL
+            SELECT 'review',e.id,e.aggregate_id,e.created_at,e.payload_json
+              FROM events e WHERE e.project_id IS ?1 AND e.kind='PlanReviewSettled' AND e.seq<=?3
+               AND (?5 IS NULL OR ?5='review')
+            UNION ALL
+            SELECT 'review',l.id,l.root_id,l.created_at,
+                json_object('kind',l.kind,'summary',l.summary,'author',l.actor_id,'evidence',json(l.body_json))
+              FROM history_links l
+             WHERE l.project_id=?1 AND l.kind='review' AND l.seq<=?3 AND (?5 IS NULL OR ?5='review')
+        ) SELECT kind,id,item_id,at,content FROM trail
+           WHERE id IS NOT NULL AND (at<=?4 OR (?6 IS NOT NULL AND id=?6))
+             AND (?6 IS NULL OR id=?6) AND (?7 IS NULL OR item_id=?7)
+             AND (?8 IS NULL OR at>=?8)
+             AND (?9 IS NULL OR at<?9 OR (at=?9 AND (id>?10 OR (id=?10 AND kind>?11))))
+           ORDER BY at DESC,id,kind LIMIT ?12 OFFSET ?13"
+    ))?;
+    let offset = i64::try_from(query.offset).map_err(|_| invalid("invalid work trail offset"))?;
+    let limit = page_limit(query.limit)?;
+    let after = query.before;
+    db(statement.query_map(
+        params![
+            project,
+            query.knowledge_through,
+            query.reviews_through,
+            query.through_ms,
+            query.kind,
+            query.id,
+            query.item_id,
+            query.since_ms,
+            after.map(|row| row.at_ms),
+            after.map(|row| row.id.as_str()),
+            after.map(|row| row.kind.as_str()),
+            limit,
+            offset,
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        },
+    ))?
+    .map(|row| {
+        let (kind, id, item_id, at_ms, content) = db(row)?;
+        Ok(DreamTrailRow {
+            position: DreamTrailPosition { at_ms, id, kind },
+            item_id,
+            content: decode(&content)?,
+        })
+    })
+    .collect()
+}
+
 macro_rules! dreaming_reads {
     ($reader:ty) => {
         impl DreamingRead for $reader {
+            fn dream_trail(&self, query: &DreamTrailQuery<'_>) -> Result<Vec<DreamTrailRow>, StorageError> {
+                trail(self.conn, query)
+            }
             fn dream_scope(&self, scope: &KnowledgeScope) -> Result<DreamScopeState, StorageError> {
                 state(self.conn, scope)
             }
@@ -227,7 +320,20 @@ macro_rules! dreaming_reads {
                                AND d.state='Completed'
                         ) ORDER BY e.seq LIMIT ?4", project),
                     DreamStream::Reviews => ("SELECT seq,id,created_at,NULL FROM events WHERE project_id IS ?1
-                        AND kind='PlanReviewSettled' AND seq>?2 AND seq<=?3 ORDER BY seq LIMIT ?4", project),
+                        AND kind='PlanReviewSettled' AND seq>?2 AND seq<=?3
+                        UNION ALL SELECT seq,id,created_at,NULL FROM history_links
+                        WHERE project_id=?1 AND kind='review' AND seq>?2 AND seq<=?3
+                        ORDER BY seq LIMIT ?4", project),
+                    DreamStream::UnlearnedReviews => ("SELECT review.seq,review.id,review.at,NULL FROM (
+                        SELECT e.seq,e.id,e.created_at AS at,NULL AS ref FROM events e WHERE e.project_id IS ?1
+                          AND e.kind='PlanReviewSettled' AND e.seq>?2 AND e.seq<=?3
+                        UNION ALL SELECT l.seq,l.id,l.created_at,json_extract(l.body_json,'$.url') FROM history_links l
+                         WHERE l.project_id=?1 AND l.kind='review' AND l.seq>?2 AND l.seq<=?3
+                        ) review WHERE NOT EXISTS(
+                            SELECT 1 FROM knowledge_lesson_events l JOIN knowledge_claims c ON c.id=l.claim_id
+                            WHERE c.project_id IS ?1 AND c.lifecycle='Active'
+                              AND (l.source_ref=review.id OR l.source_ref=review.ref))
+                        ORDER BY review.seq LIMIT ?4", project),
                     DreamStream::Sources => ("SELECT seq,source_ref,observed_at,source_revision FROM dreaming_source_changes
                         WHERE scope_key=?1 AND seq>?2 AND seq<=?3 ORDER BY seq LIMIT ?4", Some(key.as_str())),
                 };
@@ -262,12 +368,23 @@ macro_rules! dreaming_reads {
                         AND (?5 IS NULL OR coalesce(json_extract(frozen.snapshot_json,'$.entryKind'),
                             json_extract(frozen.snapshot_json,'$.kind'))=?5)
                         AND (?6 IS NULL OR frozen.lifecycle=?6)
+                        AND (?9 IS NULL OR coalesce(json_extract(frozen.snapshot_json,'$.stale'),0)=?9)
+                        AND (?10 IS NULL OR (
+                          frozen.lifecycle='Active' AND (
+                            (?10='recurrence' AND cast(json_extract(frozen.snapshot_json,'$.lesson.recurrence') AS INTEGER)>1)
+                            OR (?10 IN('unaddressed','unmatched')
+                              AND json_extract(frozen.snapshot_json,'$.lesson.ruleState')='Effective'
+                              AND coalesce(json_array_length(frozen.snapshot_json,'$.lesson.addressedBy'),0)=0
+                              AND (?10='unaddressed' OR NOT EXISTS(
+                                SELECT 1 FROM knowledge_deliveries d WHERE d.claim_id=claim.id
+                                  AND d.delivered_at>=?11 AND d.delivered_at<=?12))))))
                       ORDER BY claim.id LIMIT ?8",
                 ))?;
                 let mut rows = db(statement.query(params![
                     window.scope.key(),window.through,window.after.map_or("",Id::as_str),
                     window.exact.map(Id::as_str),window.kind,window.status,
-                    window.scope.project().map(|project| project.0.as_str()),page_limit(window.limit)?,
+                    window.scope.project().map(|project| project.0.as_str()),page_limit(window.limit)?, window.possibly_stale, window.lessons,
+                    window.delivered_since_ms, window.captured_at_ms,
                 ]))?;
                 let mut result = Vec::new();
                 while let Some(row) = db(rows.next())? {
@@ -750,10 +867,36 @@ impl DreamingRepository for Unit<'_> {
                 id: action.as_str().to_owned(),
             });
         }
+        // All actions in a continuation keep their original ordinal namespace.
+        let latest: Option<i64> = db(self.conn.query_row(
+            "SELECT max(position) FROM dreaming_actions WHERE run_id=?1",
+            [id.as_str()],
+            |row| row.get(0),
+        ))?;
+        let latest = match (latest, run.continued_from) {
+            (Some(latest), _) => latest,
+            (None, Some(parent)) => db(self.conn.query_row(
+                "WITH RECURSIVE ancestors(id,continued_from) AS (
+                   SELECT id,continued_from FROM dreaming_runs WHERE id=?1
+                   UNION ALL SELECT p.id,p.continued_from FROM dreaming_runs p JOIN ancestors a ON p.id=a.continued_from
+                 ) SELECT coalesce(max(position),0) FROM dreaming_actions JOIN ancestors ON ancestors.id=run_id",
+                [parent.as_str()], |row| row.get(0),
+            ))?,
+            (None, None) => 0,
+        };
+        let position = latest
+            .checked_add(1)
+            .ok_or_else(|| invalid("Dreaming action position is exhausted"))?;
         db(self.conn.execute(
             "INSERT INTO dreaming_actions(run_id,action_id,position,committed_at,action_json)
-             SELECT ?1,?2,coalesce(max(position),0)+1,?3,?4 FROM dreaming_actions WHERE run_id=?1",
-            params![id.as_str(), action.as_str(), self.now, encode(outcome)?],
+             VALUES (?1,?2,?3,?4,?5)",
+            params![
+                id.as_str(),
+                action.as_str(),
+                position,
+                self.now,
+                encode(outcome)?
+            ],
         ))?;
         self.dream_action(id, action)?
             .ok_or_else(|| corrupt("committed Dreaming action disappeared"))

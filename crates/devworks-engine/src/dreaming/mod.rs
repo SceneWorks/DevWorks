@@ -2,8 +2,10 @@
 //! independently, and an uncertain original send never grants a second network request.
 mod graph;
 mod model;
+mod reviews;
 mod similar;
 mod tools;
+mod trail;
 
 use crate::providers::driver::NativeProviders;
 use devworks_core::context::InvocationContext;
@@ -76,18 +78,28 @@ impl NativeDreaming {
         observe_only: bool,
     ) -> Result<EffectOutcome, StorageError> {
         let captured = lease.clone();
-        let (context, mut run, now) =
+        let (context, mut run, now, cancelled) =
             run_write(self.store.as_ref(), WriteOptions::observed(), move |tx| {
                 let row = captured.read(tx, false)?;
                 if row.phase.ended() && row.phase != DreamPhase::OutcomeUnknown {
-                    return Ok((None, row, tx.now_ms()));
+                    return Ok((None, row, tx.now_ms(), false));
                 }
-                let row = if observe_only {
+                let cancelled = captured.cancel_requested(tx)?;
+                if cancelled
+                    && !row
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|cp| cp.request.as_ref())
+                        .is_some_and(|request| request.stage == DreamRequestStage::PossiblySent)
+                {
+                    return Ok((None, row, tx.now_ms(), true));
+                }
+                let row = if observe_only || cancelled {
                     row
                 } else {
                     captured.start(tx)?
                 };
-                let context = if observe_only {
+                let context = if observe_only || cancelled {
                     captured.recovery_context(tx)?
                 } else {
                     captured.context(tx)?
@@ -95,8 +107,11 @@ impl NativeDreaming {
                 let root = context.root_id().cloned();
                 let assignment = context.assignment_id().cloned();
                 let context = context.with_lineage(row.scope.project().cloned(), root, assignment);
-                Ok((Some(context), row, tx.now_ms()))
+                Ok((Some(context), row, tx.now_ms(), cancelled))
             })?;
+        if cancelled && context.is_none() {
+            return self.finish(lease, DreamPhase::Cancelled, "CancellationRequested", None);
+        }
         let Some(context) = context else {
             return completed(run);
         };
@@ -111,13 +126,18 @@ impl NativeDreaming {
                 let round = self
                     .recorded_round(&context, &request.logical_id)?
                     .ok_or_else(|| invalid("observed Dreaming round has no journal result"))?;
-                if observe_only && round.result.outcome == Some(AttemptEnd::ToolCallsReady) {
+                if cancelled || cancellation.is_cancelled() {
                     return self.finish(
                         lease,
-                        DreamPhase::Partial,
-                        "RecoveredToolCalls",
+                        DreamPhase::Cancelled,
+                        "CancellationRequested",
                         Some(&round),
                     );
+                }
+                if observe_only && round.result.outcome == Some(AttemptEnd::ToolCallsReady) {
+                    return Ok(EffectOutcome::NotApplied(
+                        "Resume the journaled Dreaming tool calls".into(),
+                    ));
                 }
                 match self.consume(lease, &context, &run, &round)? {
                     RoundStep::Finish(phase, reason) => {
@@ -170,12 +190,21 @@ impl NativeDreaming {
                 }
             }
             if observe_only {
-                return self.finish(
-                    lease,
-                    DreamPhase::Partial,
-                    "InterruptedBeforeProviderOutcome",
-                    None,
-                );
+                if checkpoint
+                    .request
+                    .as_ref()
+                    .is_some_and(|request| request.stage == DreamRequestStage::PossiblySent)
+                {
+                    return self.finish(
+                        lease,
+                        DreamPhase::OutcomeUnknown,
+                        "AwaitingOriginalProviderOutcome",
+                        None,
+                    );
+                }
+                return Ok(EffectOutcome::NotApplied(
+                    "Resume Dreaming before the next provider send".into(),
+                ));
             }
             if cancellation.is_cancelled() {
                 return self.finish(lease, DreamPhase::Cancelled, "CancellationRequested", None);
@@ -439,31 +468,40 @@ impl NativeDreaming {
         round: Option<&RoundObservation>,
     ) -> Result<EffectOutcome, StorageError> {
         let run_id = lease.run_id().clone();
-        let (row, proposals) =
-            read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+        let (row, proposals, journal) = read_snapshot(
+            self.store.as_ref(),
+            &ReadOptions::default(),
+            |read| {
                 let dreaming = read.dreaming()?;
                 let row = dreaming
                     .dream_run(&run_id)?
                     .ok_or(StorageError::ViewUnavailable)?;
                 let mut proposals = Vec::new();
+                let mut journal = Vec::new();
                 let mut before = None;
-                while proposals.len() < 128 {
+                loop {
                     let actions = dreaming.dream_actions(&row.id, before, 100)?;
                     let Some(last) = actions.last() else { break };
                     before = Some(last.position);
                     for action in actions {
-                        if let Some(id) = action.action["result"]["proposalId"].as_str()
+                        let answer = &action.action["result"];
+                        if let Some(id) = answer["proposalId"].as_str()
                             && !proposals.iter().any(|old| old == id)
                         {
                             proposals.push(id.to_owned());
-                            if proposals.len() == 128 {
-                                break;
-                            }
                         }
+                        let proof_ids = answer["evidence"].as_array().or_else(|| answer["proofs"].as_array())
+                            .map(|evidence| evidence.iter().map(|proof| json!({
+                                "reference":proof["id"],"kind":proof["kind"],"fingerprint":proof["fingerprint"]
+                            })).collect::<Vec<_>>());
+                        journal.push(json!({"id":action.id,"position":action.position, "tool":action.action["tool"],
+                            "changed":answer["changed"],"error":answer["error"],"writeId":answer["receipt"]["writeId"],
+                            "proposalId":answer["proposalId"],"evidence":proof_ids}));
                     }
                 }
-                Ok((row, proposals))
-            })?;
+                Ok((row, proposals, journal))
+            },
+        )?;
         if row.phase == DreamPhase::OutcomeUnknown && phase == DreamPhase::OutcomeUnknown {
             return Ok(EffectOutcome::Unknown(
                 "Dreaming provider outcome is unknown".into(),
@@ -485,7 +523,15 @@ impl NativeDreaming {
         report["usageUncertain"] = json!(cp.usage_uncertain || phase == DreamPhase::OutcomeUnknown);
         report["cutoffs"] = json!(row.cutoffs);
         report["proposalIds"] = json!(proposals);
+        report["actions"] = json!(journal);
         let bytes = serde_json::to_vec(&report).map_err(|_| invalid("Dreaming report encoding"))?;
+        if let Some(report) = report.as_object_mut() {
+            report.remove("actions");
+            report.insert(
+                "proposalIds".into(),
+                json!(proposals.into_iter().take(128).collect::<Vec<_>>()),
+            );
+        }
         let staged = self
             .artifacts
             .stage_host_bytes(
@@ -551,10 +597,16 @@ impl NativeDreaming {
             ));
         };
         match round.result.outcome {
-            Some(AttemptEnd::Completed) => Ok(RoundStep::Finish(
-                DreamPhase::Completed,
-                "ProviderCompleted",
-            )),
+            Some(AttemptEnd::Completed) => {
+                let bytes = self.exact(ctx, artifact, 2 * 1024 * 1024)?;
+                let bodies: Vec<ProviderBody> = serde_json::from_slice(&bytes)
+                    .map_err(|_| invalid("invalid Dreaming report artifact"))?;
+                if bodies.iter().any(|body| matches!(body, ProviderBody::TextDelta { text, .. } if !text.trim().is_empty())) {
+                    Ok(RoundStep::Finish(DreamPhase::Completed, "SweepReported"))
+                } else {
+                    Ok(RoundStep::Finish(DreamPhase::Partial, "ProviderReportWasEmpty"))
+                }
+            }
             Some(AttemptEnd::ToolCallsReady) => {
                 let bytes = self.exact(ctx, artifact, 2 * 1024 * 1024)?;
                 let bodies: Vec<ProviderBody> = serde_json::from_slice(&bytes)
@@ -600,6 +652,10 @@ impl DeferredSweep {
 
 impl JournaledEffect for DeferredSweep {
     fn observes_delivery_cancellation(&self) -> bool {
+        true
+    }
+
+    fn resumes_after_observation(&self) -> bool {
         true
     }
 

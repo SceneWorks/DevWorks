@@ -1018,6 +1018,9 @@ impl DocumentRepository for Unmodelled {
     }
 }
 impl DreamingRead for Unmodelled {
+    fn dream_trail(&self, _: &DreamTrailQuery<'_>) -> Result<Vec<DreamTrailRow>, StorageError> {
+        unmodelled()
+    }
     fn dream_scope(&self, _: &KnowledgeScope) -> Result<DreamScopeState, StorageError> {
         unmodelled()
     }

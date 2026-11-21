@@ -3,17 +3,16 @@ use super::{NativeDreaming, RoundStep, invalid};
 use devworks_core::context::InvocationContext;
 use devworks_core::ports::storage::{
     ArtifactScope, DreamActionRow, DreamClaimWindow, DreamPhase, DreamRunRow, DreamStream,
-    KnowledgeReviewKind, ReadOptions, StorageError, WriteOptions, WriteTransaction, read_snapshot,
-    run_write,
+    ReadOptions, StorageError, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
+use devworks_core::protocol::Id;
 use devworks_core::protocol::provider::{ProviderBody, ToolSchema};
-use devworks_core::protocol::{EventId, Id};
 use devworks_core::providers::context::{
     ContentBlock, Message, MessageRole, ProviderContext, ResultBlock,
 };
 use devworks_core::services::artifacts::{StagedFile, host::HostArtifactPublication, version_ref};
 use devworks_core::services::dreaming::windows::{
-    WindowPosition, json_fragment, sign_cursor, verify_cursor,
+    WindowPosition, json_fragment, prior_action, sign_cursor, verify_owned_cursor,
 };
 use devworks_core::services::dreaming::{DreamTools, SweepLease};
 use serde_json::{Value, json};
@@ -175,6 +174,11 @@ impl NativeDreaming {
             && let Ok(args) = &args
         {
             return self.record_proposal(lease, run, action, args);
+        }
+        if tool == "dream_review_queue"
+            && let Ok(args) = &args
+        {
+            return self.record_review_page(lease, ctx, run, action, args);
         }
         let checked_sources = if let Ok(args) = &args {
             self.refresh_proofs(run, args)?
@@ -348,18 +352,12 @@ fn execute_read(
         .as_u64()
         .and_then(|n| u16::try_from(n).ok())
         .unwrap_or(20);
-    let scope = row.scope.key();
     match tool {
         "dream_read_prior" => {
             let index = args["action_index"]
                 .as_i64()
                 .ok_or_else(|| invalid("invalid prior action"))?;
-            let previous = tx
-                .dreaming()?
-                .dream_actions(&row.id, index.checked_add(1), 1)?
-                .into_iter()
-                .find(|row| row.position == index)
-                .ok_or(StorageError::ViewUnavailable)?;
+            let previous = prior_action(tx.dreaming()?, row, index)?;
             let raw = previous.action["result"].to_string();
             let digest = devworks_core::fingerprint::sha256_hex(raw.as_bytes());
             if args["expected_hash"]
@@ -380,62 +378,7 @@ fn execute_read(
         }
         "dream_read" | "dream_lessons" => read_knowledge(tx, row, tool, args, limit),
         "dream_similar" => super::similar::read(tx, row, args, limit),
-        "dream_review_queue" => {
-            if args["cursor"].is_string() {
-                return Ok(json!({"error":"CursorExpired"}));
-            }
-            let k = tx.knowledge();
-            let mut review = Vec::new();
-            for kind in [
-                KnowledgeReviewKind::Challenge,
-                KnowledgeReviewKind::ProposedRule,
-            ] {
-                for item in
-                    k.knowledge_review_candidates(std::slice::from_ref(&scope), kind, limit)?
-                {
-                    review.push(json!({"claimId":item.id,"revision":item.revision,
-                        "kind":format!("{kind:?}"),"scope":scope,"value":item.body.value}));
-                }
-            }
-            Ok(json!({"items":review}))
-        }
-        "dream_work_trail" if args["id"].is_string() => {
-            let id = EventId(
-                Id::new(args["id"].as_str().unwrap())
-                    .map_err(|_| invalid("invalid work evidence ID"))?,
-            );
-            let event = tx
-                .history()
-                .event(&id)?
-                .filter(|event| {
-                    event.project_id.as_ref() == row.scope.project()
-                        && event.sequence <= row.cutoffs.reviews
-                        && event.kind == "PlanReviewSettled"
-                })
-                .ok_or(StorageError::ViewUnavailable)?;
-            let raw = json!({"id":event.id,"kind":event.kind,"atMs":event.created_at_ms,
-                "revision":event.aggregate_revision,"payload":event.payload});
-            let digest = devworks_core::fingerprint::sha256_hex(raw.to_string().as_bytes());
-            if args["expected_hash"]
-                .as_str()
-                .is_some_and(|expected| expected != digest)
-            {
-                return Ok(json!({"error":"WorkEvidenceChanged"}));
-            }
-            Ok(json!({"evidence":raw,"expected_hash":digest}))
-        }
-        "dream_work_trail" => {
-            let reviews = tx.dreaming()?.dream_signals(
-                &row.scope,
-                DreamStream::Reviews,
-                0,
-                row.cutoffs.reviews,
-                limit,
-            )?;
-            Ok(json!({"items":reviews.iter().map(|item| json!({
-                "id":item.reference,"kind":"review","observedAtMs":item.observed_at_ms,
-            })).collect::<Vec<_>>()}))
-        }
+        "dream_work_trail" => super::trail::read(tx, row, args, limit),
         _ => Ok(json!({"error":"SelectedOperationUnavailable"})),
     }
 }
@@ -453,15 +396,7 @@ fn read_knowledge(
         .and_then(|checkpoint| checkpoint.cursor_key.as_ref())
         .ok_or(StorageError::CursorExpired)?;
     let (selection, after) = if let Some(cursor) = args["cursor"].as_str() {
-        let position = verify_cursor(key, cursor, row.id.as_str(), &row.scope.key(), tool)
-            .or_else(|_| {
-                row.continued_from
-                    .as_ref()
-                    .ok_or(StorageError::CursorExpired)
-                    .and_then(|parent| {
-                        verify_cursor(key, cursor, parent.as_str(), &row.scope.key(), tool)
-                    })
-            })?;
+        let position = verify_owned_cursor(tx.dreaming()?, row, tool, cursor)?;
         let filters: Value =
             serde_json::from_str(&position.selection).map_err(|_| StorageError::CursorExpired)?;
         (filters, Some(position.window))
@@ -487,6 +422,9 @@ fn read_knowledge(
             },
         )
     };
+    if selection["since_days"].is_number() && selection["view"] != "unmatched" {
+        return Ok(json!({"error":"SinceDaysRequiresUnmatchedLessons"}));
+    }
     if tool == "dream_lessons" && selection["view"] == "unlearned_reviews" {
         let start = after
             .as_deref()
@@ -496,7 +434,7 @@ fn read_knowledge(
             .unwrap_or(0);
         let mut rows = tx.dreaming()?.dream_signals(
             &row.scope,
-            DreamStream::Reviews,
+            DreamStream::UnlearnedReviews,
             start,
             row.cutoffs.reviews,
             limit + 1,
@@ -546,6 +484,14 @@ fn read_knowledge(
         exact: exact.as_ref(),
         kind: kind.as_deref(),
         status: status.as_deref(),
+        possibly_stale: selection["possibly_stale"].as_bool(),
+        lessons: selection["view"]
+            .as_str()
+            .filter(|_| tool == "dream_lessons"),
+        delivered_since_ms: row
+            .started_at_ms
+            .saturating_sub(selection["since_days"].as_i64().unwrap_or(30) * 86_400_000),
+        captured_at_ms: row.started_at_ms,
         limit: limit + 1,
     })?;
     let more = refs.len() > usize::from(limit);
@@ -572,12 +518,44 @@ fn read_knowledge(
                 .map_err(|_| invalid("invalid frozen Knowledge snapshot"))?;
             let fingerprint = devworks_core::fingerprint::sha256_hex(canonical.as_bytes());
             item["snapshot"] = snapshot.snapshot;
+            if tool == "dream_lessons" && selection["view"] == "unaddressed" {
+                item["activity"] =
+                    item["snapshot"]["lesson"]["applicability"]["activities"].clone();
+            }
             item["fingerprint"] = json!(fingerprint);
             if reference.current_revision == reference.revision && include && exact.is_some() {
                 proofs.push(
                     json!({"kind":"entry","id":reference.id,"revision":reference.revision,
                     "fingerprint":fingerprint}),
                 );
+                if reference.entry_kind == "Lesson" {
+                    let repository = tx.knowledge();
+                    let events = repository.knowledge_lesson_events(&reference.id, 500)?;
+                    let mut history = Vec::new();
+                    for event in events
+                        .into_iter()
+                        .filter(|event| event.at_ms <= row.started_at_ms)
+                    {
+                        let event_ref =
+                            devworks_core::fingerprint::sha256_hex(event.event_key.as_bytes());
+                        let record = json!({"id":event_ref,"kind":"lesson_event","source":event.source,
+                            "source_ref":event.source_ref,"actor":event.actor,"at_ms":event.at_ms,"write_id":event.write_id});
+                        let digest = devworks_core::jcs::canonicalize(&record)
+                            .map_err(|_| invalid("invalid lesson event"))?;
+                        proofs.push(json!({"kind":"lesson_event","id":event_ref,"claimId":reference.id,
+                            "revision":reference.revision,"fingerprint":devworks_core::fingerprint::sha256_hex(digest.as_bytes())}));
+                        history.push(record);
+                    }
+                    item["lesson_events"] = json!(history);
+                    if let Some(challenges) = item["snapshot"]["lesson"]["challenges"].as_array() {
+                        for challenge in challenges {
+                            let digest = devworks_core::jcs::canonicalize(challenge)
+                                .map_err(|_| invalid("invalid lesson challenge"))?;
+                            proofs.push(json!({"kind":"challenge","id":challenge["id"],"claimId":reference.id,
+                                "revision":reference.revision,"fingerprint":devworks_core::fingerprint::sha256_hex(digest.as_bytes())}));
+                        }
+                    }
+                }
             }
         }
         items.push(item);

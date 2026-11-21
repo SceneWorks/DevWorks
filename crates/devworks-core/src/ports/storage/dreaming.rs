@@ -73,6 +73,7 @@ pub struct DreamCutoffs {
 pub enum DreamStream {
     Knowledge,
     Reviews,
+    UnlearnedReviews,
     Sources,
 }
 
@@ -254,6 +255,10 @@ pub struct DreamClaimWindow<'a> {
     pub exact: Option<&'a Id>,
     pub kind: Option<&'a str>,
     pub status: Option<&'a str>,
+    pub possibly_stale: Option<bool>,
+    pub lessons: Option<&'a str>,
+    pub delivered_since_ms: i64,
+    pub captured_at_ms: i64,
     pub limit: u16,
 }
 
@@ -266,7 +271,37 @@ pub struct DreamClaimRef {
     pub entry_kind: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DreamTrailPosition {
+    pub at_ms: i64,
+    pub id: String,
+    pub kind: String,
+}
+
+pub struct DreamTrailQuery<'a> {
+    pub scope: &'a KnowledgeScope,
+    pub through_ms: i64,
+    pub knowledge_through: i64,
+    pub reviews_through: i64,
+    pub since_ms: Option<i64>,
+    pub kind: Option<&'a str>,
+    pub id: Option<&'a str>,
+    pub item_id: Option<&'a str>,
+    pub before: Option<&'a DreamTrailPosition>,
+    pub offset: u64,
+    pub limit: u16,
+}
+
+#[derive(Clone, Debug)]
+pub struct DreamTrailRow {
+    pub position: DreamTrailPosition,
+    pub item_id: Option<String>,
+    pub content: Value,
+}
+
 pub trait DreamingRead {
+    fn dream_trail(&self, query: &DreamTrailQuery<'_>) -> Result<Vec<DreamTrailRow>, StorageError>;
     fn dream_scope(&self, scope: &KnowledgeScope) -> Result<DreamScopeState, StorageError>;
     fn dream_cutoffs(&self, scope: &KnowledgeScope) -> Result<DreamCutoffs, StorageError>;
     fn dream_signals(

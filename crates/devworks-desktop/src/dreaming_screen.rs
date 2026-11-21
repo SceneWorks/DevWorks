@@ -24,6 +24,7 @@ pub enum DreamingSlot {
     DreamRuns(Option<String>, bool),
     DreamInstructions(Option<String>, bool),
     DreamReport(Option<String>, Id),
+    DreamReportText(Option<String>, Id),
     DreamRunCommand(Option<String>),
     DreamRevert(Option<String>),
     DreamSaveSettings(Option<String>),
@@ -42,6 +43,7 @@ impl DreamingSlot {
             | DreamRuns(project, _)
             | DreamInstructions(project, _)
             | DreamReport(project, _)
+            | DreamReportText(project, _)
             | DreamRunCommand(project)
             | DreamRevert(project)
             | DreamSaveSettings(project)
@@ -62,6 +64,7 @@ pub struct DreamingScreen {
     runs_cursor: Option<String>,
     selected: Option<Id>,
     report: Option<DreamRun>,
+    report_text: Option<String>,
     confirm_revert: bool,
     instructions: Vec<InstructionRecord>,
     instruction_cursor: Option<String>,
@@ -327,6 +330,13 @@ impl Screen for DreamingScreen {
                 Ok(_) => {}
                 Err(error) => self.message = Some(error.describe()),
             },
+            Reply::Task(Ok(TaskOutput::DreamingReport(text))) => {
+                if let DreamingSlot::DreamReportText(_, id) = &slot
+                    && self.selected.as_ref() == Some(id)
+                {
+                    self.report_text = Some(text);
+                }
+            }
             Reply::Task(result) => self.apply_instruction_task(cx, result),
             Reply::Command(outcome) => {
                 if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
@@ -444,6 +454,7 @@ impl Screen for DreamingScreen {
             if let Some(id) = open {
                 self.selected = Some(id.clone());
                 self.report = None;
+                self.report_text = None;
                 self.confirm_revert = false;
                 self.load_report(cx, id);
             }
@@ -657,6 +668,20 @@ impl DreamingScreen {
                 }
             }
         }
+        if let Some(artifact) = &run.report
+            && ui.button("Read run report").clicked()
+            && let Some(client) = cx.client.as_deref_mut()
+        {
+            let reference = artifact.clone();
+            client.task(
+                DreamingSlot::DreamReportText(self.project.clone(), run.id.clone()).into(),
+                "Reading Dreaming report",
+                move |backend| read_report(backend, &reference),
+            );
+        }
+        if let Some(text) = &self.report_text {
+            ui.label(text);
+        }
         for proposal in &run.proposal_ids.0 {
             if ui
                 .link(format!("Review proposal {}", proposal.as_str()))
@@ -750,4 +775,46 @@ fn prepare_text(
             Err(error)
         }
     }
+}
+
+fn read_report(
+    backend: &dyn Backend,
+    reference: &devworks_core::protocol::provider::ArtifactRef,
+) -> Result<TaskOutput, String> {
+    let raw = ops::read_artifact_bytes(backend, reference)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+    let mut text = String::new();
+    if !report["modelResult"].is_null() {
+        let result = serde_json::from_value(report["modelResult"].clone())
+            .map_err(|error| error.to_string())?;
+        let raw = ops::read_artifact_bytes(backend, &result)?;
+        let bodies: Vec<devworks_core::protocol::provider::ProviderBody> =
+            serde_json::from_slice(&raw).map_err(|error| error.to_string())?;
+        for body in bodies {
+            if let devworks_core::protocol::provider::ProviderBody::TextDelta {
+                text: delta, ..
+            } = body
+            {
+                text.push_str(&delta);
+            }
+        }
+    }
+    if let Some(actions) = report["actions"].as_array() {
+        for action in actions.iter().rev() {
+            let Some(tool) = action["tool"].as_str() else {
+                continue;
+            };
+            use std::fmt::Write;
+            let label = action["error"]
+                .as_str()
+                .unwrap_or(if action["changed"] == true {
+                    "changed Knowledge"
+                } else {
+                    "journaled"
+                });
+            let _ = write!(text, "\n{}  {tool}  {label}", action["position"]);
+        }
+    }
+    Ok(TaskOutput::DreamingReport(text))
 }
