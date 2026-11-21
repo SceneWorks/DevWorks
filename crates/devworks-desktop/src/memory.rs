@@ -189,6 +189,9 @@ pub struct SettingsMemory {
     pub query: String,
     /// Unsaved drafts by setting key; re-applied (and re-validated) once settings load.
     pub drafts: BTreeMap<String, Value>,
+    /// Most recently reviewed retention preview, including an accepted operation after restart.
+    #[serde(default)]
+    pub retention_preview: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

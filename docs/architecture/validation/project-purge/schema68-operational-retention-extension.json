@@ -1,0 +1,7 @@
+{
+  "schema": 68,
+  "policy": "dw55-workspace-retention-audit",
+  "additionalTables": [
+    {"table": "operational_retention_previews", "class": "workspace_configuration", "disposition": "preserve_independent"}
+  ]
+}

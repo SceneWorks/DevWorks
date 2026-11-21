@@ -2739,6 +2739,64 @@
         "expires_at_ms": "Counter"
       }
     },
+    "PrunePhase": {
+      "kind": "enum",
+      "values": [
+        "Previewed",
+        "Queued",
+        "Applied",
+        "Cancelled",
+        "Refused"
+      ]
+    },
+    "PruneHold": {
+      "kind": "enum",
+      "values": [
+        "AuthoredHistory",
+        "PublishedEvidence",
+        "LiveOperation",
+        "CurrentWitness",
+        "UnresolvedFailure",
+        "OpenConversation",
+        "PendingDelivery",
+        "HandoverWindow",
+        "ReplayHead",
+        "Referenced",
+        "UnclassifiedReference"
+      ]
+    },
+    "PruneHeldRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "reason": "PruneHold"
+      }
+    },
+    "PruneOutcome": {
+      "kind": "record",
+      "fields": {
+        "records_removed": "Counter",
+        "owned_rows_removed": "Counter",
+        "settled_at_ms": "Counter",
+        "reason": "?Label"
+      }
+    },
+    "PruneInspection": {
+      "kind": "record",
+      "fields": {
+        "preview": "PrunePreview",
+        "requested_cutoff_ms": "Counter",
+        "effective_cutoff_ms": "Counter",
+        "captured_at_ms": "Counter",
+        "max_items": "Limit",
+        "held": "Rows<PruneHeldRecord>",
+        "more_candidates": "bool",
+        "more_held": "bool",
+        "phase": "PrunePhase",
+        "operation_id": "?OperationId",
+        "outcome": "?PruneOutcome"
+      }
+    },
     "TaskPlanEntry": {
       "kind": "record",
       "fields": {
@@ -11362,6 +11420,42 @@
       "authority": "HostMaintenance",
       "rules": "Only kind=Sessions. Mutation requires unexpired exact preview/revisions; live references/authored history/unknown effects held. Preview is durably identified. Never delete retained imported documents or authored artifacts under storage pressure."
     },
+    "maintenance.inspect": {
+      "operation": "maintenance.inspect",
+      "mode": "Query",
+      "fields": {
+        "preview_id": "Id"
+      },
+      "result": "PruneInspection",
+      "effect": "Local",
+      "authority": "HostMaintenance",
+      "rules": "Only the preview owner may inspect its workspace retention request."
+    },
+    "maintenance.cancel": {
+      "operation": "maintenance.cancel",
+      "mode": "Command",
+      "fields": {
+        "preview_id": "Id",
+        "expected_revision": "Revision"
+      },
+      "result": "PruneInspection",
+      "effect": "Local",
+      "authority": "HumanMaintenance",
+      "rules": "The exact workspace preview owner can cancel before deletion commits. Return any already committed outcome."
+    },
+    "maintenance.scheduled_prune": {
+      "operation": "maintenance.scheduled_prune",
+      "mode": "Command",
+      "fields": {
+        "target": "PruneKind",
+        "retention_days": "?Limit",
+        "max_items": "Limit"
+      },
+      "result": "PruneInspection",
+      "effect": "Journaled",
+      "authority": "HostMaintenance",
+      "rules": "Requires one current authorized workspace Jobs firing. An omitted age uses the diagnostics settings or the default 30 days for the other targets. Replays use the exact preview and operation of the saved firing."
+    },
     "repository_docs.generate": {
       "operation": "repository_docs.generate",
       "mode": "Command",
@@ -13148,6 +13242,9 @@
     "maintenance.prune_index_runs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "maintenance.prune_messages": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "maintenance.prune_sessions": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "maintenance.inspect": {"assignmentScope": "assignmentDenied", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "maintenance.cancel": {"assignmentScope": "assignmentDenied", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "maintenance.scheduled_prune": {"assignmentScope": "assignmentDenied", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "repository_docs.generate": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "mcp_server.status": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "mcp_server.configure": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

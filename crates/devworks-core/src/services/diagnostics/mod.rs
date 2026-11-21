@@ -935,7 +935,7 @@ impl DiagnosticService {
                     // The pass's own record must not leave the log above its cap.
                     pruned.over_cap += tx
                         .diagnostics()
-                        .prune_diagnostics(older, r.max_records)?
+                        .prune_diagnostics(0, r.max_records)?
                         .over_cap;
                 }
                 Ok(pruned)
@@ -1024,8 +1024,8 @@ impl DiagnosticService {
             let Some(audience) = audience(s.authority(), ctx)? else {
                 return Ok(None);
             };
-            let pruned = s.diagnostics().diagnostic_stats()?.pruned_through;
-            if retention_gap(query.descending, query.after_sequence, None, pruned) {
+            let stats = s.diagnostics().diagnostic_stats()?;
+            if retention_gap(query.descending, query.after_sequence, None, &stats) {
                 return Err(StorageError::CursorExpired);
             }
             let rows = s
@@ -1498,39 +1498,49 @@ fn fault_of(code: DomainErrorCode, retry: RetryAdvice, correlation: &Correlation
     super::fault(code, retry, correlation)
 }
 
-/// A log position: the last sequence read and the retention boundary when it was issued.
-fn log_position(at: &str) -> Result<(i64, i64), StorageError> {
-    let (position, boundary) = at.split_once('.').ok_or(StorageError::CursorExpired)?;
-    Ok((
-        position.parse().map_err(|_| StorageError::CursorExpired)?,
-        boundary.parse().map_err(|_| StorageError::CursorExpired)?,
-    ))
+/// A log position and the retention state of the snapshot that issued it. Legacy positions
+/// have only two fields, from when retention could only delete a prefix.
+fn log_position(at: &str) -> Result<(i64, i64, i64), StorageError> {
+    let mut fields = at.split('.');
+    let parse = |field: Option<&str>| {
+        field
+            .ok_or(StorageError::CursorExpired)?
+            .parse()
+            .map_err(|_| StorageError::CursorExpired)
+    };
+    let position = parse(fields.next())?;
+    let boundary = parse(fields.next())?;
+    let generation = fields
+        .next()
+        .map(|field| parse(Some(field)))
+        .transpose()?
+        .unwrap_or(0);
+    if fields.next().is_some() {
+        return Err(StorageError::CursorExpired);
+    }
+    Ok((position, boundary, generation))
 }
 
-/// Whether retention removed part of a log read's unread range (shared contracts: return
-/// `CursorExpired` rather than pretend a page is complete). `pruned_through` is the current
-/// retention boundary.
-///
-/// * Oldest first, the unread range starts after the cursor position (or `afterSequence`): it
-///   lost records when the boundary passed that position. Reading from 0 means "from the oldest
-///   retained record" and never expires.
-/// * Newest first, the unread range lies between `afterSequence` and the cursor: it lost
-///   records when the boundary passed `afterSequence` since the cursor was issued, or (a first
-///   page) when the boundary already lies above a nonzero `afterSequence`.
+/// A cursor issued after a removal can page across gaps already visible in its snapshot. A
+/// subsequent removal below the high-water mark can open another gap, so it also needs an epoch.
+/// An explicit tail or a continuation only expires when its unread span could cross a removal.
 fn retention_gap(
     descending: bool,
     after: i64,
-    cursor: Option<(i64, i64)>,
-    pruned_through: i64,
+    cursor: Option<(i64, i64, i64)>,
+    stats: &crate::ports::storage::DiagnosticStats,
 ) -> bool {
-    if descending {
-        match cursor {
-            Some((_, issued)) => pruned_through > issued && pruned_through > after,
-            None => after > 0 && pruned_through > after,
+    match cursor {
+        Some((position, boundary, generation)) => {
+            let from = if descending {
+                after
+            } else {
+                position.max(after)
+            };
+            (stats.retention_generation != generation || stats.pruned_through > boundary)
+                && stats.pruned_through > from
         }
-    } else {
-        let from = cursor.map_or(after, |(position, _)| position.max(after));
-        from > 0 && pruned_through > from
+        None => after > 0 && stats.pruned_through > after,
     }
 }
 
@@ -1566,12 +1576,7 @@ impl QueryHandler for DiagnosticService {
                     .resume(&i.page)
                     .and_then(|at| at.as_deref().map(log_position).transpose())
                     .map_err(storage)?;
-                if retention_gap(
-                    filter.descending,
-                    filter.after_sequence,
-                    cursor,
-                    stats.pruned_through,
-                ) {
+                if retention_gap(filter.descending, filter.after_sequence, cursor, &stats) {
                     return Err(fault(
                         DomainErrorCode::CursorExpired,
                         RetryAdvice::RefreshAndNewRequest,
@@ -1583,7 +1588,7 @@ impl QueryHandler for DiagnosticService {
                     |after, n| {
                         let mut read = filter.clone();
                         if let Some(at) = after {
-                            let (at, _) = log_position(at)?;
+                            let (at, _, _) = log_position(at)?;
                             if read.descending {
                                 read.before_sequence = Some(at);
                             } else {
@@ -1592,7 +1597,12 @@ impl QueryHandler for DiagnosticService {
                         }
                         snapshot.diagnostics().diagnostics(&read, n)
                     },
-                    |r| format!("{}.{}", r.sequence, stats.pruned_through),
+                    |r| {
+                        format!(
+                            "{}.{}.{}",
+                            r.sequence, stats.pruned_through, stats.retention_generation
+                        )
+                    },
                 )
                 .map_err(storage)?;
                 let next_cursor = rows.next_cursor;

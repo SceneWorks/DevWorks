@@ -7927,6 +7927,119 @@ impl Check for PrunePreview {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PrunePhase {
+    Previewed,
+    Queued,
+    Applied,
+    Cancelled,
+    Refused,
+}
+impl Check for PrunePhase {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PruneHold {
+    AuthoredHistory,
+    PublishedEvidence,
+    LiveOperation,
+    CurrentWitness,
+    UnresolvedFailure,
+    OpenConversation,
+    PendingDelivery,
+    HandoverWindow,
+    ReplayHead,
+    Referenced,
+    UnclassifiedReference,
+}
+impl Check for PruneHold {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneHeldRecord {
+    pub id: Id,
+    pub reason: PruneHold,
+}
+impl Check for PruneHeldRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "PruneHeldRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneOutcome {
+    pub records_removed: Counter,
+    pub owned_rows_removed: Counter,
+    pub settled_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Label>,
+}
+impl Check for PruneOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.records_removed.check()?;
+        self.owned_rows_removed.check()?;
+        self.settled_at_ms.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "PruneOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneInspection {
+    pub preview: PrunePreview,
+    pub requested_cutoff_ms: Counter,
+    pub effective_cutoff_ms: Counter,
+    pub captured_at_ms: Counter,
+    pub max_items: Limit,
+    pub held: Rows<PruneHeldRecord>,
+    pub more_candidates: bool,
+    pub more_held: bool,
+    pub phase: PrunePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<PruneOutcome>,
+}
+impl Check for PruneInspection {
+    fn check(&self) -> Result<(), String> {
+        self.preview.check()?;
+        self.requested_cutoff_ms.check()?;
+        self.effective_cutoff_ms.check()?;
+        self.captured_at_ms.check()?;
+        self.max_items.check()?;
+        self.held.check()?;
+        self.more_candidates.check()?;
+        self.more_held.check()?;
+        self.phase.check()?;
+        self.operation_id.check()?;
+        self.outcome.check()?;
+        super::domain_rules::record(
+            "PruneInspection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanEntry {
     pub client_key: Id,
@@ -20354,6 +20467,8 @@ pub enum DomainQuery {
         project_id: Option<ProjectId>,
         page: PageRequest,
     },
+    #[serde(rename = "maintenance.inspect")]
+    MaintenanceInspect { preview_id: Id },
     #[serde(rename = "mcp_server.status")]
     McpServerStatus {},
     #[serde(rename = "mcp_server.clients")]
@@ -20559,6 +20674,7 @@ impl DomainQuery {
             Self::ImportsInspect { .. } => "imports.inspect",
             Self::ImportsSettings { .. } => "imports.settings",
             Self::ImportsHistory { .. } => "imports.history",
+            Self::MaintenanceInspect { .. } => "maintenance.inspect",
             Self::McpServerStatus { .. } => "mcp_server.status",
             Self::McpServerClients { .. } => "mcp_server.clients",
             Self::EvalsResults { .. } => "evals.results",
@@ -21767,6 +21883,9 @@ impl Check for DomainQuery {
                 work_id.check()?;
                 project_id.check()?;
                 page.check()?;
+            }
+            Self::MaintenanceInspect { preview_id } => {
+                preview_id.check()?;
             }
             Self::McpServerStatus {} => {}
             Self::McpServerClients { page } => {
@@ -24141,6 +24260,18 @@ pub enum DomainCommand {
         older_than_ms: Counter,
         max_items: Limit,
     },
+    #[serde(rename = "maintenance.cancel")]
+    MaintenanceCancel {
+        preview_id: Id,
+        expected_revision: Revision,
+    },
+    #[serde(rename = "maintenance.scheduled_prune")]
+    MaintenanceScheduledPrune {
+        target: PruneKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retention_days: Option<Limit>,
+        max_items: Limit,
+    },
     #[serde(rename = "repository_docs.generate")]
     RepositoryDocsGenerate {
         repository_id: Id,
@@ -24424,6 +24555,8 @@ impl DomainCommand {
             Self::MaintenancePruneIndexRuns { .. } => "maintenance.prune_index_runs",
             Self::MaintenancePruneMessages { .. } => "maintenance.prune_messages",
             Self::MaintenancePruneSessions { .. } => "maintenance.prune_sessions",
+            Self::MaintenanceCancel { .. } => "maintenance.cancel",
+            Self::MaintenanceScheduledPrune { .. } => "maintenance.scheduled_prune",
             Self::RepositoryDocsGenerate { .. } => "repository_docs.generate",
             Self::McpServerConfigure { .. } => "mcp_server.configure",
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
@@ -26327,6 +26460,22 @@ impl Check for DomainCommand {
                 older_than_ms.check()?;
                 max_items.check()?;
             }
+            Self::MaintenanceCancel {
+                preview_id,
+                expected_revision,
+            } => {
+                preview_id.check()?;
+                expected_revision.check()?;
+            }
+            Self::MaintenanceScheduledPrune {
+                target,
+                retention_days,
+                max_items,
+            } => {
+                target.check()?;
+                retention_days.check()?;
+                max_items.check()?;
+            }
             Self::RepositoryDocsGenerate {
                 repository_id,
                 views,
@@ -27665,6 +27814,12 @@ pub enum OperationResult {
     MaintenancePruneMessages { value: PrunePreview },
     #[serde(rename = "maintenance.prune_sessions")]
     MaintenancePruneSessions { value: PrunePreview },
+    #[serde(rename = "maintenance.inspect")]
+    MaintenanceInspect { value: PruneInspection },
+    #[serde(rename = "maintenance.cancel")]
+    MaintenanceCancel { value: PruneInspection },
+    #[serde(rename = "maintenance.scheduled_prune")]
+    MaintenanceScheduledPrune { value: PruneInspection },
     #[serde(rename = "repository_docs.generate")]
     RepositoryDocsGenerate { value: OperationRef },
     #[serde(rename = "mcp_server.status")]
@@ -28151,6 +28306,9 @@ impl OperationResult {
             Self::MaintenancePruneIndexRuns { .. } => "maintenance.prune_index_runs",
             Self::MaintenancePruneMessages { .. } => "maintenance.prune_messages",
             Self::MaintenancePruneSessions { .. } => "maintenance.prune_sessions",
+            Self::MaintenanceInspect { .. } => "maintenance.inspect",
+            Self::MaintenanceCancel { .. } => "maintenance.cancel",
+            Self::MaintenanceScheduledPrune { .. } => "maintenance.scheduled_prune",
             Self::RepositoryDocsGenerate { .. } => "repository_docs.generate",
             Self::McpServerStatus { .. } => "mcp_server.status",
             Self::McpServerConfigure { .. } => "mcp_server.configure",
@@ -28541,6 +28699,9 @@ impl Check for OperationResult {
             Self::MaintenancePruneIndexRuns { value } => value.check()?,
             Self::MaintenancePruneMessages { value } => value.check()?,
             Self::MaintenancePruneSessions { value } => value.check()?,
+            Self::MaintenanceInspect { value } => value.check()?,
+            Self::MaintenanceCancel { value } => value.check()?,
+            Self::MaintenanceScheduledPrune { value } => value.check()?,
             Self::RepositoryDocsGenerate { value } => value.check()?,
             Self::McpServerStatus { value } => value.check()?,
             Self::McpServerConfigure { value } => value.check()?,

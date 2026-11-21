@@ -957,6 +957,19 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let maintenance =
+        Arc::new(devworks_core::services::maintenance::MaintenanceService::new(store.clone()));
+    consumers.push(crate::effect_consumer::effect_consumer(
+        devworks_core::services::maintenance::EFFECT_CONSUMER,
+        maintenance.clone(),
+        crate::effect_consumer::PanicReasons {
+            execute: "Operational retention stopped unexpectedly after dispatch",
+            observe: "Operational retention observation stopped unexpectedly",
+        },
+        crate::effect_consumer::STANDARD_RETRY,
+        Some(1),
+    ));
+    let use_cases = use_cases.with_maintenance(maintenance);
     let schemas = config.schemas.as_ref().map(|ports| {
         Arc::new(
             devworks_core::services::schemas::SchemaService::new(ids.clone(), clock.clone())

@@ -29,6 +29,7 @@ pub mod instructions;
 pub mod jobs;
 pub mod kernel;
 pub mod knowledge;
+pub mod maintenance;
 pub mod mcp;
 pub mod navigation;
 pub mod notifications;
@@ -117,6 +118,7 @@ pub fn queue_service() -> queue::QueueService {
         Arc::new(artifacts::replies::ReplyQueueHook),
         Arc::new(schemas::indexing::QueueHook),
         Arc::new(imports::QueueHook),
+        Arc::new(maintenance::QueueHook),
     ])
 }
 
@@ -233,6 +235,13 @@ impl UseCases {
     /// Authored guidance shares one owner across native UI, tools and durable jobs.
     pub fn with_conventions(mut self, service: Arc<conventions::ConventionService>) -> Self {
         for operation in conventions::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_maintenance(mut self, service: Arc<maintenance::MaintenanceService>) -> Self {
+        for operation in maintenance::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self

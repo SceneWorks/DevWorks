@@ -262,11 +262,26 @@ fn stats(conn: &Connection) -> Result<DiagnosticStats, StorageError> {
         [],
         |r| r.get(0),
     ))?;
+    let version: i64 = db(conn.query_row(
+        "SELECT schema_version FROM store_meta WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    ))?;
+    let retention_generation = if version >= 68 {
+        db(conn.query_row(
+            "SELECT retention_generation FROM diagnostic_retention WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        ))?
+    } else {
+        0
+    };
     Ok(DiagnosticStats {
         records,
         latest_sequence: latest.unwrap_or(0),
         oldest_recorded_at_ms: oldest,
         pruned_through,
+        retention_generation,
     })
 }
 
@@ -404,33 +419,41 @@ impl DiagnosticRepository for Unit<'_> {
         if keep_at_most < 0 {
             return Err(invalid("the record cap is non-negative"));
         }
-        // The highest sequence each removal takes raises the retention boundary first.
-        let expired_through: Option<i64> = db(self.conn.query_row(
-            "SELECT max(sequence) FROM diagnostic_records WHERE recorded_at < ?1",
-            [older_than_ms],
-            |r| r.get(0),
-        ))?;
-        let expired = db(self.conn.execute(
-            "DELETE FROM diagnostic_records WHERE recorded_at < ?1",
-            [older_than_ms],
-        ))? as i64;
-        let capped_through: Option<i64> = db(self.conn.query_row(
-            "SELECT max(sequence) FROM (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT -1 OFFSET ?1)",
-            [keep_at_most],
-            |r| r.get(0),
-        ))?;
-        let over_cap = db(self.conn.execute(
-            "DELETE FROM diagnostic_records WHERE sequence IN (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT -1 OFFSET ?1)",
-            [keep_at_most],
-        ))? as i64;
-        if let Some(through) = expired_through.max(capped_through) {
-            db(self.conn.execute(
-                "UPDATE diagnostic_retention SET pruned_through=max(pruned_through, ?1) WHERE singleton=1",
-                [through],
-            ))?;
+        use super::maintenance::raise_diagnostic_boundary;
+        use super::retention_policy::DIAGNOSTIC_HOLD;
+
+        let mut boundary = 0;
+        let mut remove = |filter: &str, argument: i64| {
+            let sql = format!(
+                "DELETE FROM diagnostic_records WHERE sequence IN (
+                   SELECT r.sequence FROM diagnostic_records r
+                   WHERE ({filter}) AND ({DIAGNOSTIC_HOLD}) IS NULL
+                   ORDER BY r.sequence LIMIT 500
+                 ) RETURNING sequence"
+            );
+            let mut statement = db(self.conn.prepare_cached(&sql))?;
+            let rows = db(statement.query_map([argument], |row| row.get::<_, i64>(0)))?;
+            let mut removed = 0;
+            for row in rows {
+                boundary = boundary.max(db(row)?);
+                removed += 1;
+            }
+            Ok::<_, StorageError>(removed)
+        };
+        let expired = remove("r.recorded_at < ?1", older_than_ms)?;
+        let over_cap = remove(
+            "r.sequence <= (SELECT sequence FROM diagnostic_records ORDER BY sequence DESC LIMIT 1 OFFSET ?1)",
+            keep_at_most,
+        )?;
+        if boundary > 0 {
+            raise_diagnostic_boundary(self.conn, boundary)?;
         }
+        // An intent with a command is replay evidence owned by the gateway.
         db(self.conn.execute(
-            "DELETE FROM diagnostic_exports WHERE created_at < ?1",
+            "DELETE FROM diagnostic_exports WHERE rowid IN (
+                SELECT rowid FROM diagnostic_exports WHERE command IS NULL AND created_at < ?1
+                ORDER BY created_at,rowid LIMIT 500
+            )",
             [older_than_ms],
         ))?;
         Ok(PrunedDiagnostics { expired, over_cap })

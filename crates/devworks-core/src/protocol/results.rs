@@ -787,6 +787,12 @@ pub enum OperationResult {
     MaintenancePruneMessages { value: PrunePreview },
     #[serde(rename = "maintenance.prune_sessions")]
     MaintenancePruneSessions { value: PrunePreview },
+    #[serde(rename = "maintenance.inspect")]
+    MaintenanceInspect { value: PruneInspection },
+    #[serde(rename = "maintenance.scheduled_prune")]
+    MaintenanceScheduledPrune { value: PruneInspection },
+    #[serde(rename = "maintenance.cancel")]
+    MaintenanceCancel { value: PruneInspection },
     #[serde(rename = "repository_docs.generate")]
     RepositoryDocsGenerate { value: OperationRef },
     #[serde(rename = "mcp_server.status")]
@@ -1194,6 +1200,9 @@ impl OperationResult {
             Self::MaintenancePruneIndexRuns { .. } => "maintenance.prune_index_runs",
             Self::MaintenancePruneMessages { .. } => "maintenance.prune_messages",
             Self::MaintenancePruneSessions { .. } => "maintenance.prune_sessions",
+            Self::MaintenanceInspect { .. } => "maintenance.inspect",
+            Self::MaintenanceScheduledPrune { .. } => "maintenance.scheduled_prune",
+            Self::MaintenanceCancel { .. } => "maintenance.cancel",
             Self::RepositoryDocsGenerate { .. } => "repository_docs.generate",
             Self::McpServerStatus { .. } => "mcp_server.status",
             Self::McpServerConfigure { .. } => "mcp_server.configure",
@@ -1584,6 +1593,9 @@ impl Check for OperationResult {
             Self::MaintenancePruneIndexRuns { value } => value.check()?,
             Self::MaintenancePruneMessages { value } => value.check()?,
             Self::MaintenancePruneSessions { value } => value.check()?,
+            Self::MaintenanceInspect { value } => value.check()?,
+            Self::MaintenanceScheduledPrune { value } => value.check()?,
+            Self::MaintenanceCancel { value } => value.check()?,
             Self::RepositoryDocsGenerate { value } => value.check()?,
             Self::McpServerStatus { value } => value.check()?,
             Self::McpServerConfigure { value } => value.check()?,

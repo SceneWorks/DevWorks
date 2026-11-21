@@ -738,7 +738,10 @@
         "prune_diagnostics",
         "prune_index_runs",
         "prune_messages",
-        "prune_sessions"
+        "prune_sessions",
+        "inspect",
+        "scheduled_prune",
+        "cancel"
       ],
       "effectAndAuthority": "Explicit eligible retention/pruning with history, artifact and active-pin protection",
       "status": "Proposed native operation contract; exact schemas and actual implementation pending"

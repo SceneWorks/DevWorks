@@ -61,8 +61,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
 /// routing source linked to its owning session. The linked input artifact follows the ordinary
 /// project artifact ownership and the operation journal follows its existing scope.
+/// Migration 68 adds workspace-owned retention receipts containing opaque record witnesses,
+/// a diagnostics retention generation, and lookup indexes. Only workspace operations can own
+/// the new records. Retention adds no project ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "67e62aede03b6abbe7bc9bb394482ebc638530c72bee9aa9a5f89c5bd48c4aad";
+    "13e91fc815b2889f2ff60dd7aa71d94c3e5bc82bd2708635de8c5f2f96f83df2";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

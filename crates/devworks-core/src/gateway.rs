@@ -1931,6 +1931,11 @@ impl WriteTransaction for HandlerTx<'_> {
     fn watchers(&mut self) -> &mut dyn crate::ports::storage::WatcherRepository {
         self.inner.get_mut().watchers()
     }
+    fn retention(
+        &mut self,
+    ) -> Result<&mut dyn crate::ports::storage::RetentionRepository, StorageError> {
+        self.inner.get_mut().retention()
+    }
     fn work_imports(
         &mut self,
     ) -> Result<&mut dyn crate::ports::storage::WorkImportRepository, StorageError> {

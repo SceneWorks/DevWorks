@@ -1748,3 +1748,32 @@ fn secrets_with_quotes_backslashes_or_newlines_never_reach_an_export_in_any_enco
         );
     }
 }
+
+#[test]
+fn an_ascending_cursor_can_cross_known_gaps_but_expires_on_new_ones_below_the_high_water_mark() {
+    let fx = Fx::new();
+    let user = fx.user();
+    for offset in [26, 24, 0] {
+        fx.h.clock
+            .0
+            .store(T0 + offset * 86_400_000, Ordering::SeqCst);
+        fx.log(LogEntry::new(
+            "client",
+            "retention",
+            Severity::Info,
+            "fixture",
+        ));
+    }
+    fx.h.clock.0.store(T0 + 31 * 86_400_000, Ordering::SeqCst);
+    assert_eq!(fx.svc.prune().unwrap().expired, 1);
+    let first = logs_page(&fx, &user, 0, "Ascending", 1, None).unwrap();
+    assert_eq!(sequences(&first), [1]);
+    let cursor = first.next_cursor.unwrap().0;
+    let next = logs_page(&fx, &user, 0, "Ascending", 1, Some(&cursor)).unwrap();
+    assert_eq!(sequences(&next), [2]);
+
+    fx.h.clock.0.store(T0 + 55 * 86_400_000, Ordering::SeqCst);
+    assert_eq!(fx.svc.prune().unwrap().expired, 1);
+    let stale = logs_page(&fx, &user, 0, "Ascending", 1, Some(&cursor));
+    assert!(matches!(stale, Err(fault) if fault.code == DomainErrorCode::CursorExpired));
+}

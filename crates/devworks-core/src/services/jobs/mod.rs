@@ -109,17 +109,14 @@ pub const RUN_CAPABILITY: &str = "jobs.run";
 /// retained CodeGraph job type to (`job:src/CodeGraph.Jobs/Jobs/*`), plus approved native schema sync.
 /// Only those with a registered
 /// use case are offered and accepted ([`NativeCatalog::qualified`]).
-pub const MAINTENANCE_OPERATIONS: [&str; 14] = [
-    "maintenance.prune_diagnostics",
+pub const MAINTENANCE_OPERATIONS: [&str; 11] = [
+    super::maintenance::SCHEDULED_OPERATION,
     "analysis.community_analysis",
     "indexing.discover",
     "dreaming.run",
-    "maintenance.prune_index_runs",
     "conventions.index",
     "analysis.link_and_detect",
     "analysis.process_batch",
-    "maintenance.prune_messages",
-    "maintenance.prune_sessions",
     "indexing.reindex",
     "help.generate_capability_docs",
     super::imports::SYNC_OPERATION,
@@ -686,6 +683,9 @@ impl JobService {
                 if op == super::imports::SYNC_OPERATION {
                     super::imports::validate_schedule(tx, ctx, project, &body)?;
                 }
+                if op == super::maintenance::SCHEDULED_OPERATION {
+                    super::maintenance::validate_schedule(ctx, project, &body)?;
+                }
                 (binding.decode)(body, revision).map_err(|_| invalid("arguments"))?;
                 Ok("Native")
             }
@@ -1143,6 +1143,15 @@ impl JobService {
         i: &ops::RunNowInput,
     ) -> Result<(DomainDecision, Option<OperationId>), Failure> {
         let job = visible_job(tx.jobs(), ctx, &i.job_id)?;
+        if super::maintenance::is_retention_job(&job.definition)?
+            && (!authorizes(ctx) || !job.enabled || !job.authorized)
+        {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                JOB,
+                Some(&job.id),
+            ));
+        }
         if job.revision != i.expected_revision.get() {
             return Err(conflict(
                 JOB,

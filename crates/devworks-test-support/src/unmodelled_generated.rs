@@ -2755,6 +2755,46 @@ impl ResourceRepository for Unmodelled {
         unmodelled()
     }
 }
+impl RetentionRead for Unmodelled {
+    fn retention_preview(&self, _: &Id) -> Result<Option<StoredRetention>, StorageError> {
+        unmodelled()
+    }
+    fn retention_for_job_run(&self, _: &Id) -> Result<Option<StoredRetention>, StorageError> {
+        unmodelled()
+    }
+    fn retention_for_operation(
+        &self,
+        _: &OperationId,
+    ) -> Result<Option<StoredRetention>, StorageError> {
+        unmodelled()
+    }
+    fn preview_retention(&self, _: &RetentionWindow) -> Result<RetentionSelection, StorageError> {
+        unmodelled()
+    }
+    fn retention_witnesses(
+        &self,
+        _: &RetentionWindow,
+        _: &[Id],
+    ) -> Result<Vec<RetentionWitness>, StorageError> {
+        unmodelled()
+    }
+}
+impl RetentionRepository for Unmodelled {
+    fn put_retention_preview(
+        &mut self,
+        _: &StoredRetention,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn apply_retention(
+        &mut self,
+        _: &RetentionWindow,
+        _: &[RetentionWitness],
+    ) -> Result<RetentionOutcome, StorageError> {
+        unmodelled()
+    }
+}
 impl RouterRead for Unmodelled {
     fn route_model(&self, _: &Id) -> Result<Option<StoredRouteModel>, StorageError> {
         unmodelled()

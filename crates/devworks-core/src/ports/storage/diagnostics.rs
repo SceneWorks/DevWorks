@@ -119,6 +119,8 @@ pub struct DiagnosticStats {
     /// boundary a log cursor checks, so a continuation whose unread range was pruned expires
     /// visibly instead of skipping the gap.
     pub pruned_through: i64,
+    /// Advances on every deletion, including removals below the highest pruned sequence.
+    pub retention_generation: i64,
 }
 
 /// What one retention pass removed.

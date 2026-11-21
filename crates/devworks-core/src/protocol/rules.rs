@@ -1429,17 +1429,37 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             }
         }
     }
-    if op.starts_with("maintenance.") && v["previewOnly"] == false {
+    if op.starts_with("maintenance.prune_") {
+        let preview = v["previewOnly"] == true;
         require(
-            present(v, "previewId") && present(v, "expectedRevision"),
-            "prune needs exact preview and revision",
-        )?
+            present(v, "previewId") != preview && present(v, "expectedRevision") != preview,
+            "prune confirmation requires exactly a preview and revision",
+        )?;
+    }
+    if op == "maintenance.scheduled_prune" && v["target"] == "Diagnostics" {
+        require(
+            !present(v, "retentionDays"),
+            "diagnostics use the current retention setting",
+        )?;
     }
     Ok(())
 }
 
 pub fn result(op: &str, v: &Value) -> Result<(), String> {
     let value = &v["value"];
+    let retention_kind = match op {
+        "maintenance.prune_diagnostics" => Some("Diagnostics"),
+        "maintenance.prune_index_runs" => Some("IndexRuns"),
+        "maintenance.prune_messages" => Some("Messages"),
+        "maintenance.prune_sessions" => Some("Sessions"),
+        _ => None,
+    };
+    if let Some(kind) = retention_kind {
+        require(
+            value["kind"] == kind,
+            "retention result must match its selected operation",
+        )?;
+    }
     if op.starts_with("code.") && op != "code.set_trust" || op == "repositories.nodes" {
         let kind = value["result"]["kind"].as_str().unwrap_or("");
         let allowed = match op {

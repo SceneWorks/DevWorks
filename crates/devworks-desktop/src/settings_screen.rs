@@ -18,6 +18,7 @@ use devworks_core::settings::view::{Health, Item, SettingsView, Source, Status};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+pub(crate) mod retention;
 mod secrets;
 
 /// The keys whose runtime health is checked: configured directories and keep-awake.
@@ -41,6 +42,7 @@ pub struct SettingsScreen {
     pub message: Option<(Tone, String)>,
     pub category: Option<Category>,
     pub query: String,
+    pub(crate) retention: retention::Panel,
     /// Drafts restored from the previous launch, applied once the view loads.
     pub restored: BTreeMap<String, Value>,
     pub explained: BTreeSet<String>,
@@ -94,6 +96,7 @@ pub enum SettingsAction {
     OpenJobs,
     OpenNotifications,
     OpenImports,
+    OpenRetention,
     /// The provider-connections topic was opened (load connections and the catalog).
     OpenConnections,
     OpenHelp(String),
@@ -119,6 +122,8 @@ impl SettingsScreen {
             .and_then(|l| Category::ALL.into_iter().find(|c| c.label() == l));
         self.query = m.query.clone();
         self.restored = m.drafts.clone();
+        self.retention
+            .restore_preview(m.retention_preview.as_deref());
     }
     pub fn memory(&self) -> SettingsMemory {
         let drafts = match &self.view {
@@ -133,6 +138,7 @@ impl SettingsScreen {
             category: self.category.map(|c| c.label().to_owned()),
             query: self.query.clone(),
             drafts,
+            retention_preview: self.retention.preview_id(),
         }
     }
 
@@ -462,6 +468,12 @@ impl SettingsScreen {
                     actions.push(SettingsAction::OpenImports);
                 }
                 host(ui, HostSection::Indexing);
+            }
+            if matches!(self.category, None | Some(Category::Storage))
+                && self.query.trim().is_empty()
+                && widgets::secondary_button(ui, "Review operational retention").clicked()
+            {
+                actions.push(SettingsAction::OpenRetention);
             }
             if self.category == Some(Category::Tools) {
                 let settings = self.web_settings();

@@ -7921,6 +7921,119 @@ impl Check for PrunePreview {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PrunePhase {
+    Previewed,
+    Queued,
+    Applied,
+    Cancelled,
+    Refused,
+}
+impl Check for PrunePhase {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum PruneHold {
+    AuthoredHistory,
+    PublishedEvidence,
+    LiveOperation,
+    CurrentWitness,
+    UnresolvedFailure,
+    OpenConversation,
+    PendingDelivery,
+    HandoverWindow,
+    ReplayHead,
+    Referenced,
+    UnclassifiedReference,
+}
+impl Check for PruneHold {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneHeldRecord {
+    pub id: Id,
+    pub reason: PruneHold,
+}
+impl Check for PruneHeldRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "PruneHeldRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneOutcome {
+    pub records_removed: Counter,
+    pub owned_rows_removed: Counter,
+    pub settled_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Label>,
+}
+impl Check for PruneOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.records_removed.check()?;
+        self.owned_rows_removed.check()?;
+        self.settled_at_ms.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "PruneOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PruneInspection {
+    pub preview: PrunePreview,
+    pub requested_cutoff_ms: Counter,
+    pub effective_cutoff_ms: Counter,
+    pub captured_at_ms: Counter,
+    pub max_items: Limit,
+    pub held: Rows<PruneHeldRecord>,
+    pub more_candidates: bool,
+    pub more_held: bool,
+    pub phase: PrunePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<OperationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<PruneOutcome>,
+}
+impl Check for PruneInspection {
+    fn check(&self) -> Result<(), String> {
+        self.preview.check()?;
+        self.requested_cutoff_ms.check()?;
+        self.effective_cutoff_ms.check()?;
+        self.captured_at_ms.check()?;
+        self.max_items.check()?;
+        self.held.check()?;
+        self.more_candidates.check()?;
+        self.more_held.check()?;
+        self.phase.check()?;
+        self.operation_id.check()?;
+        self.outcome.check()?;
+        crate::protocol::rules::record(
+            "PruneInspection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskPlanEntry {
     pub client_key: Id,
