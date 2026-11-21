@@ -900,7 +900,7 @@ fn entry_block(ui: &mut Ui, entry: &TranscriptEntry, notice_texts: &HashMap<Stri
                     for c in content {
                         match c {
                             UserContent::Text { text } => {
-                                ui.label(text);
+                                widgets::text_with_github_links(ui, text);
                             }
                             UserContent::Attachment { artifact } => {
                                 chip(
@@ -921,7 +921,7 @@ fn entry_block(ui: &mut Ui, entry: &TranscriptEntry, notice_texts: &HashMap<Stri
                     interrupted,
                     ..
                 } => {
-                    ui.label(visible_text);
+                    widgets::text_with_github_links(ui, visible_text);
                     if *interrupted {
                         chip(ui, "Interrupted", Tone::Attention);
                     }
@@ -953,7 +953,10 @@ fn entry_block(ui: &mut Ui, entry: &TranscriptEntry, notice_texts: &HashMap<Stri
                         None if watcher_notice(body) => "Watcher event".into(),
                         None => "Host notice".into(),
                     };
-                    ui.label(RichText::new(shown).color(theme::MUTED));
+                    ui.label(RichText::new(&shown).color(theme::MUTED));
+                    for (label, url) in widgets::extract_github_links(&shown) {
+                        ui.hyperlink_to(label, url);
+                    }
                 }
                 TranscriptBody::NativeItem { .. } => {
                     ui.label(RichText::new("Provider continuation material").color(theme::DIM));

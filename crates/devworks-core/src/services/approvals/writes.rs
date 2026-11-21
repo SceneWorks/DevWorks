@@ -262,6 +262,51 @@ impl ApprovalService {
                             return Err(conflict(id));
                         }
                     }
+                    None if p.operation_kind == "github.issue_update" => {
+                        let mut work = tx
+                            .work()
+                            .work(&p.target_id)?
+                            .ok_or_else(|| not_found("work", &p.target_id))?;
+                        if work.revision != p.target_revision {
+                            return Err(conflict(id));
+                        }
+                        let mut brief = crate::kernel::work_brief::WorkBrief::of(&work)?;
+                        let reviewed = &p.payload["reviewed"];
+                        let url = reviewed["url"].as_str().unwrap_or("");
+                        let retention_note = format!(
+                            "Retained prior local specification before adopting approved GitHub issue update ({url}):\nTitle: {}\n\n{}",
+                            work.title, brief.description
+                        );
+                        brief.comments.push(crate::kernel::work_brief::Noted {
+                            item: crate::protocol::records::WorkComment {
+                                id: tx.new_id(crate::ports::IdKind::Event),
+                                content: crate::services::kernel::content(&retention_note),
+                                evidence: crate::protocol::support::BoundedList(Vec::new()),
+                            },
+                            actor: ctx.principal().clone(),
+                            at_ms: tx.now_ms(),
+                        });
+                        if let Some(next_title) = reviewed["currentTitle"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            work.title = next_title.chars().take(256).collect();
+                        }
+                        if let Some(next_body) = reviewed["currentBody"].as_str() {
+                            brief.description = next_body.chars().take(65_536).collect();
+                        }
+                        work.search_key = crate::services::work::model::search_key(
+                            &work.title,
+                            &brief.description,
+                        );
+                        work.brief = brief.value();
+                        work.updated_by = Some(ctx.principal().clone());
+                        work.updated_at_ms = tx.now_ms();
+                        let expected_work = work.revision;
+                        work.revision += 1;
+                        tx.work().update_work(&work, expected_work)?;
+                    }
                     Some("FindingRisk") => {
                         let payload: ApprovalContent =
                             serde_json::from_value(p.payload["content"].clone())

@@ -76,6 +76,10 @@ pub enum WorkSlot {
     ArchiveCount(String, bool),
     /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
     WorkOpen(String, bool),
+    GithubIssuePublish(String),
+    GithubIssueLink(String),
+    GithubPullChecks(String),
+    GithubPullReviews(String),
 }
 crate::backend::screen_slot!(WorkSlot, Work);
 

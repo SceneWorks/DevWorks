@@ -2,6 +2,7 @@
 //! request another page; this client performs no automatic retry or pagination loop.
 use super::response::ResponseControl;
 use crate::ports::http::{HttpExchange, HttpRequest};
+use crate::ports::secrets::Secret;
 use crate::ports::storage::ApplicationStore;
 use crate::services::git::github::{Fault, GitHubClient};
 use serde_json::Value;
@@ -128,6 +129,59 @@ impl GitHubClient {
         now_ms: i64,
         minimum_poll_ms: i64,
     ) -> Result<ApiPage, Fault> {
+        self.observe_authenticated_page(
+            endpoint,
+            page,
+            validators,
+            now_ms,
+            minimum_poll_ms,
+            self.token(store)?,
+        )
+    }
+
+    /// Executes a bound mutation document. Only journaled owners select the document and
+    /// supply the exact saved resource IDs; an ambiguous transport result is never retried here.
+    pub(super) fn graphql_mutation(
+        &self,
+        token: Secret,
+        document: &'static str,
+        input: Value,
+    ) -> Result<Value, Fault> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "query": document,
+            "variables": {"input":input},
+        }))
+        .map_err(|_| Fault::InvalidResponse)?;
+        let mut request =
+            HttpRequest::post("https://api.github.com/graphql", "application/json", body)
+                .secret_header("Authorization", token);
+        request.timeout_ms = 15_000;
+        request.max_response_bytes = 524_288;
+        let response = self.http.send(&request).map_err(|_| Fault::Ambiguous)?;
+        if !response.success() {
+            return Err(Fault::Rejected(response.status));
+        }
+        serde_json::from_slice(&response.body).map_err(|_| Fault::Ambiguous)
+    }
+
+    pub(super) fn observe_sign_in(
+        &self,
+        store: &dyn ApplicationStore,
+        endpoint: &Endpoint,
+        now_ms: i64,
+    ) -> Result<ApiPage, Fault> {
+        self.observe_authenticated_page(endpoint, None, None, now_ms, 0, self.sign_in_token(store)?)
+    }
+
+    pub(super) fn observe_authenticated_page(
+        &self,
+        endpoint: &Endpoint,
+        page: Option<&str>,
+        validators: Option<&Validators>,
+        now_ms: i64,
+        minimum_poll_ms: i64,
+        token: Secret,
+    ) -> Result<ApiPage, Fault> {
         if now_ms < 0 || minimum_poll_ms < 0 || now_ms.checked_add(minimum_poll_ms).is_none() {
             return Err(Fault::InvalidResponse);
         }
@@ -137,7 +191,7 @@ impl GitHubClient {
         )?
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        .secret_header("Authorization", self.token(store)?);
+        .secret_header("Authorization", token);
         request.timeout_ms = 15_000;
         request.max_response_bytes = 8 * 1024 * 1024;
         let response = self

@@ -234,11 +234,6 @@ impl AgentRole {
 /// [`NOT_YET_ACTIVE_PREFIX`] and says what is missing; Settings marks the row not yet active.
 /// Remove a key here, and the prefix from its description, in the change that makes it work.
 pub const NOT_YET_ACTIVE: &[&str] = &[
-    // GitHub change polling, issue import, issue synchronization and triage: DW-40.
-    "github.pollForChanges",
-    "github.importOpenIssues",
-    "github.syncLinkedIssueFields",
-    "github.issueTriageIntervalSeconds",
     // Exact-head review resolution, the review/fix cycle and merge: DW-41.
     "delivery.autoMerge",
     "delivery.maxReviewFixCycles",
@@ -732,9 +727,8 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.pollForChanges",
             "Poll GitHub for changes",
-            "Not yet active: DevWorks does not poll GitHub yet, so this switch \
-                changes nothing. Once polling is built, pushes, merges, reviews and \
-                checks notify agents through authenticated polling.",
+            "Pushes, merges, reviews and checks notify agents through authenticated \
+                polling.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -744,9 +738,8 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.importOpenIssues",
             "Import open issues",
-            "Not yet active: GitHub issue import is not built yet, so this switch \
-                changes nothing. Once it is, existing open issues are imported when a \
-                repository is connected, and newly reported ones thereafter.",
+            "Existing open issues are imported when a repository is connected, and \
+                newly reported ones thereafter.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -756,10 +749,9 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.syncLinkedIssueFields",
             "Receive linked issue updates",
-            "Not yet active: GitHub issue synchronization is not built yet, so this \
-                switch changes nothing. Once it is, remote issue updates are reflected \
-                locally; intermediate execution details stay local and a resolution is \
-                published only after completed work is verified.",
+            "Remote issue updates are reflected locally; intermediate execution \
+                details stay local and a resolution is published only after completed \
+                work is verified.",
             GitHub,
             INHERITED,
             ValueKind::Bool,
@@ -769,9 +761,7 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "github.issueTriageIntervalSeconds",
             "Issue triage interval (seconds)",
-            "Not yet active: automatic issue triage is not built yet, so this value \
-                changes nothing. Once it is, this is the app-wide minimum interval \
-                between automatic issue triage admissions.",
+            "The app-wide minimum interval between automatic issue triage admissions.",
             GitHub,
             WORKSPACE,
             POSITIVE,

@@ -12663,6 +12663,69 @@
     "schemaValid": false
   },
   {
+    "id": "dw13-r3-admission-issues.publish-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.publish\",\"issueId\":\"root-a\",\"expectedRevision\":\"1\",\"repositoryId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-issues.publish",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.publish\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"root-a\",\"remoteRepositoryId\":\"fixture\",\"remoteIssueId\":\"fixture\",\"remoteIssueNumber\":\"1\",\"url\":\"https://fixture.invalid/path\",\"sourceRevision\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-issues.link-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.link\",\"issueId\":\"root-a\",\"expectedRevision\":\"1\",\"repositoryId\":\"id-a\",\"remoteIssueNumber\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-issues.link",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.link\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"root-a\",\"remoteRepositoryId\":\"fixture\",\"remoteIssueId\":\"fixture\",\"remoteIssueNumber\":\"1\",\"url\":\"https://fixture.invalid/path\",\"sourceRevision\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-github.account-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"github.account\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-github.account-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"github.account\",\"action\":\"BeginSignIn\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-github.account",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"github.account\",\"value\":{\"state\":\"Enabled\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-github.poll_status-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"github.poll_status\",\"repositoryId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-github.poll_status",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"github.poll_status\",\"value\":{\"repositoryId\":\"id-a\",\"endpoints\":[],\"intake\":{\"items\":[],\"hasMore\":false},\"intervalSeconds\":\"1\",\"nextAdmissionAtMs\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-admission-history.work_lineage-Query",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"history.work_lineage\",\"rootId\":\"root-a\",\"page\":{\"limit\":20}},\"schemaRevision\":3}",
@@ -14731,6 +14794,111 @@
     "id": "reject-r2-result-knowledge.tagged_lessons-skills",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"knowledge.tagged_lessons\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-input-issues.publish",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.publish\",\"issueId\":\"root-a\",\"expectedRevision\":\"1\",\"repositoryId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-issues.publish",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.publish\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"root-a\",\"remoteRepositoryId\":\"fixture\",\"remoteIssueId\":\"fixture\",\"remoteIssueNumber\":\"1\",\"url\":\"https://github.com/Acme/kit/issues/42\",\"sourceRevision\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-issues.publish-issue-link",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"issues.publish\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"root-a\",\"remoteRepositoryId\":\"fixture\",\"remoteIssueId\":\"fixture\",\"remoteIssueNumber\":\"1\",\"url\":\"https://github.com/Acme/kit/issues/42\",\"sourceRevision\":\"fixture\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-input-issues.link",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"issues.link\",\"issueId\":\"root-a\",\"expectedRevision\":\"1\",\"repositoryId\":\"id-a\",\"remoteIssueNumber\":\"1\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-issues.link",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"issues.link\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"root-a\",\"remoteRepositoryId\":\"fixture\",\"remoteIssueId\":\"fixture\",\"remoteIssueNumber\":\"1\",\"url\":\"https://github.com/Acme/kit/issues/42\",\"sourceRevision\":\"fixture\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-issues.link-issue-link",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"issues.link\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"root-a\",\"remoteRepositoryId\":\"fixture\",\"remoteIssueId\":\"fixture\",\"remoteIssueNumber\":\"1\",\"url\":\"https://github.com/Acme/kit/issues/42\",\"sourceRevision\":\"fixture\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-input-github.account-query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"github.account\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-github.account-command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"github.account\",\"action\":\"BeginSignIn\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-result-github.account",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"github.account\",\"value\":{\"state\":\"Enabled\",\"apiHost\":\"github.com\",\"authorizationState\":\"Connected\",\"permissionRevision\":\"2\",\"grantedScopes\":[\"repo\"],\"failure\":\"Token expired\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-github.account-diagnostics",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"github.account\",\"value\":{\"state\":\"Enabled\",\"apiHost\":\"github.com\",\"authorizationState\":\"Connected\",\"permissionRevision\":\"2\",\"grantedScopes\":[\"repo\"],\"failure\":\"Token expired\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-input-github.poll_status",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"github.poll_status\",\"repositoryId\":\"id-a\"},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r3-input-github.poll_status-page",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"github.poll_status\",\"repositoryId\":\"id-a\",\"page\":{\"limit\":50,\"cursor\":\"cursor-a\"}},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-input-github.poll_status-page",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"github.poll_status\",\"repositoryId\":\"id-a\",\"page\":{\"limit\":50}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r3-result-github.poll_status",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"github.poll_status\",\"value\":{\"repositoryId\":\"id-a\",\"endpoints\":[{\"endpoint\":\"fixture\",\"state\":\"fixture\",\"nextPollAtMs\":\"0\"}],\"intake\":{\"items\":[{\"remoteIssueNumber\":\"1\",\"sourceRevision\":\"fixture\",\"state\":\"fixture\",\"url\":\"https://github.com/Acme/kit/issues/42\"}],\"hasMore\":false},\"intervalSeconds\":\"1\",\"nextAdmissionAtMs\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-github.poll_status-view",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"github.poll_status\",\"value\":{\"repositoryId\":\"id-a\",\"endpoints\":[{\"endpoint\":\"fixture\",\"state\":\"fixture\",\"nextPollAtMs\":\"0\"}],\"intake\":{\"items\":[{\"remoteIssueNumber\":\"1\",\"sourceRevision\":\"fixture\",\"state\":\"fixture\",\"url\":\"https://github.com/Acme/kit/issues/42\"}],\"hasMore\":false},\"intervalSeconds\":\"1\",\"nextAdmissionAtMs\":\"0\"}}",
     "typedValid": false,
     "schemaValid": false
   }

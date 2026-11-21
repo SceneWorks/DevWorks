@@ -155,7 +155,7 @@ pub(crate) fn snapshot_record(
         (None, None)
     };
     let live = live_attempt(read.runs(), w)?;
-    model::record(
+    let mut rec = model::record(
         read.work(),
         w,
         Extras {
@@ -169,7 +169,9 @@ pub(crate) fn snapshot_record(
             pending_readiness,
             detail,
         },
-    )
+    )?;
+    rec.github_issue = github_issue_tracking(read.github(), w, &rec.repository_ids.0)?;
+    Ok(rec)
 }
 /// The wire record of `w` read inside a write transaction.
 pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<WorkRecord> {
@@ -191,7 +193,7 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
     } else {
         None
     };
-    Ok(model::record(
+    let mut rec = model::record(
         tx.work(),
         w,
         Extras {
@@ -201,7 +203,88 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
             pending_readiness,
             detail: Detail::Summary,
         },
-    )?)
+    )?;
+    rec.github_issue = github_issue_tracking(tx.github(), w, &rec.repository_ids.0)?;
+    Ok(rec)
+}
+
+fn github_issue_tracking(
+    github: &dyn crate::ports::storage::GithubRead,
+    w: &StoredWork,
+    repo_ids: &[Id],
+) -> Result<Option<crate::protocol::records::GithubIssueTracking>, StorageError> {
+    use crate::ports::storage::GithubScope;
+    use crate::protocol::records::{GithubIssueIntakeState, GithubIssueTracking};
+    use crate::protocol::support::{BoundedText, PositiveCounter, Url};
+    if w.is_feature() {
+        return Ok(None);
+    }
+    let root = RootId(w.id.clone());
+    for repo_id in repo_ids {
+        let Some(binding) = github
+            .github_repository_binding(repo_id)?
+            .filter(|b| b.state == "Active")
+        else {
+            continue;
+        };
+        let Some(intake) = github
+            .github_issues_for_work(&root, &binding.github_repository_id, 1)?
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let key = &intake.key;
+        let scope = GithubScope {
+            project_id: None,
+            repositories: vec![repo_id.clone()],
+        };
+        let obs = github.github_observation(&intake.observation_id, &scope)?;
+        let url = match obs.as_ref().map(|o| o.url.clone()) {
+            Some(url) => url,
+            None => match github.github_discovered_repository(&binding.github_repository_id)? {
+                Some(repo) => format!("{}/issues/{}", repo.url, key.number),
+                None => continue,
+            },
+        };
+        let remote_state = obs
+            .as_ref()
+            .and_then(|o| o.payload["state"].as_str())
+            .unwrap_or("open");
+        let remote_revision = intake.remote_revision.clone();
+        let case = github.github_triage_case(key, &w.project_id)?;
+        let raw_state = if intake.state == "Resolved" {
+            "Resolved"
+        } else if let Some(c) = &case {
+            c.state.as_str()
+        } else {
+            intake.state.as_str()
+        };
+        let intake_state = match raw_state {
+            "Resolved" => GithubIssueIntakeState::Resolved,
+            "Closed" => GithubIssueIntakeState::Closed,
+            "Working" | "Verified" => GithubIssueIntakeState::Working,
+            "AwaitingDecision" => GithubIssueIntakeState::AwaitingDecision,
+            "Triaging" | "NeedsProof" => GithubIssueIntakeState::Triaging,
+            _ => GithubIssueIntakeState::Queued,
+        };
+        let resolution_operation_id = github
+            .github_resolutions(key, None, 1)?
+            .into_iter()
+            .next()
+            .map(|r| r.close_operation_id.0);
+        return Ok(Some(GithubIssueTracking {
+            repository_id: repo_id.clone(),
+            remote_issue_number: PositiveCounter(key.number.to_string()),
+            url: Url(url),
+            remote_revision: BoundedText(remote_revision),
+            remote_state: crate::services::kernel::label(remote_state, "open"),
+            intake_state,
+            next_admission_at: None,
+            resolution_operation_id,
+        }));
+    }
+    Ok(None)
 }
 
 fn position(p: &str) -> Result<WorkPosition, StorageError> {

@@ -77,6 +77,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
+            'github.account', 'github.poll_status', 'issues.link', 'issues.publish',
             'browser.upload', 'browser.console', 'browser.network',
             'desktop.inspect', 'desktop.capture', 'desktop.request_control',
             'desktop.input', 'desktop.release_control',
