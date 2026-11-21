@@ -3823,13 +3823,13 @@ impl WorkImportRead for Unmodelled {
     ) -> Result<Option<WorkImportRun>, StorageError> {
         unmodelled()
     }
-    fn latest_import_issues(
+    fn import_retry_keys(
         &self,
         _: &ActorId,
         _: &Id,
         _: &str,
-        _: Option<i64>,
-    ) -> Result<Option<WorkImportRun>, StorageError> {
+        _: i64,
+    ) -> Result<Vec<(String, Id)>, StorageError> {
         unmodelled()
     }
     fn import_mapping(
@@ -3853,6 +3853,16 @@ impl WorkImportRepository for Unmodelled {
         unmodelled()
     }
     fn put_import_mapping(&mut self, _: &WorkImportMapping) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_import_retry(
+        &mut self,
+        _: &WorkImportRun,
+        _: &ProjectId,
+        _: &str,
+        _: &Id,
+        _: Option<&str>,
+    ) -> Result<(), StorageError> {
         unmodelled()
     }
 }

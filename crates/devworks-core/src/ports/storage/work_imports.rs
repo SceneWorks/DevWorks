@@ -57,12 +57,20 @@ pub struct WorkImportRun {
     pub input: Option<ArtifactRef>,
     pub cursor: usize,
     pub imported_ids: Vec<Id>,
-    pub retry_issues: Vec<WorkImportIssue>,
+    pub repository_bindings: Vec<WorkImportRepositoryBinding>,
     pub issues: Vec<WorkImportIssue>,
+    pub issue_count: i64,
     pub rows: i64,
     pub counts: WorkImportCounts,
     pub started_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkImportRepositoryBinding {
+    pub source_id: Id,
+    pub target: Option<(Id, i64)>,
+    pub already_member: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,13 +127,13 @@ pub trait WorkImportRead {
         scope_digest: &str,
         config_revision: Option<i64>,
     ) -> Result<Option<WorkImportRun>, StorageError>;
-    fn latest_import_issues(
+    fn import_retry_keys(
         &self,
         owner: &ActorId,
         namespace: &Id,
         scope_digest: &str,
-        config_revision: Option<i64>,
-    ) -> Result<Option<WorkImportRun>, StorageError>;
+        config_revision: i64,
+    ) -> Result<Vec<(String, Id)>, StorageError>;
     fn import_mapping(
         &self,
         namespace: &Id,
@@ -146,4 +154,12 @@ pub trait WorkImportRepository: WorkImportRead {
         expected_revision: Option<i64>,
     ) -> Result<(), StorageError>;
     fn put_import_mapping(&mut self, record: &WorkImportMapping) -> Result<(), StorageError>;
+    fn put_import_retry(
+        &mut self,
+        run: &WorkImportRun,
+        project: &ProjectId,
+        kind: &str,
+        id: &Id,
+        reason: Option<&str>,
+    ) -> Result<(), StorageError>;
 }

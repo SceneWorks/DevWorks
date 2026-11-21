@@ -134,14 +134,18 @@ macro_rules! read_imports {
                     ORDER BY json_extract(record_json,'$.captured_through_ms') DESC, sequence DESC LIMIT 1",
                     params![owner.0.as_str(), namespace.as_str(), scope_digest, revision])
             }
-            fn latest_import_issues(&self, owner: &ActorId, namespace: &Id, scope_digest: &str, revision: Option<i64>)
-                -> Result<Option<WorkImportRun>, StorageError>
+            fn import_retry_keys(&self, owner: &ActorId, namespace: &Id, scope: &str, revision: i64)
+                -> Result<Vec<(String, Id)>, StorageError>
             {
-                lookup(self.conn,"SELECT record_json FROM work_import_runs WHERE
-                    owner=?1 AND source_namespace=?2 AND scope_digest=?3 AND is_preview=0
-                    AND completed_at_ms IS NOT NULL AND json_extract(record_json,'$.config_revision') IS ?4
-                    ORDER BY sequence DESC LIMIT 1",
-                    params![owner.0.as_str(), namespace.as_str(), scope_digest, revision])
+                let mut stmt = db(self.conn.prepare_cached("SELECT source_kind,source_id FROM work_import_retry
+                    WHERE owner=?1 AND source_namespace=?2 AND scope_digest=?3 AND config_revision=?4
+                    ORDER BY source_kind,source_id"))?;
+                let rows = db(stmt.query_map(params![owner.0.as_str(),namespace.as_str(),scope,revision],
+                    |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?))))?;
+                rows.map(|row| {
+                    let (kind,id) = db(row)?;
+                    Ok((kind,identifier(id)?))
+                }).collect()
             }
             fn import_mapping(&self, namespace: &Id, kind: &str, source_id: &Id)
                 -> Result<Option<WorkImportMapping>, StorageError>
@@ -238,6 +242,36 @@ impl WorkImportRepository for Unit<'_> {
                 kind: "work_import_mapping",
                 id: record.source_id.as_str().into(),
             });
+        }
+        Ok(())
+    }
+
+    fn put_import_retry(
+        &mut self,
+        run: &WorkImportRun,
+        project: &ProjectId,
+        kind: &str,
+        id: &Id,
+        reason: Option<&str>,
+    ) -> Result<(), StorageError> {
+        let revision = run
+            .config_revision
+            .ok_or_else(|| StorageError::InvalidRecord("work import approval missing".into()))?;
+        if let Some(reason) = reason {
+            db(self.conn.execute(
+                "INSERT INTO work_import_retry(owner,source_namespace,scope_digest,config_revision,
+                    source_kind,source_id,project_id,reason) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+                 ON CONFLICT(owner,source_namespace,scope_digest,config_revision,source_kind,source_id)
+                 DO UPDATE SET reason=excluded.reason",
+                params![run.owner.0.as_str(),run.source_namespace.as_str(),run.scope_digest,revision,
+                    kind,id.as_str(),project.0.as_str(),reason],
+            ))?;
+        } else {
+            db(self.conn.execute(
+                "DELETE FROM work_import_retry WHERE owner=?1 AND source_namespace=?2 AND scope_digest=?3
+                    AND config_revision=?4 AND source_kind=?5 AND source_id=?6",
+                params![run.owner.0.as_str(),run.source_namespace.as_str(),run.scope_digest,revision,kind,id.as_str()],
+            ))?;
         }
         Ok(())
     }

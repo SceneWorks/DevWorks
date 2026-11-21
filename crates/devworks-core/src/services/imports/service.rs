@@ -1,4 +1,4 @@
-use super::publish::destination;
+use super::publish::{destination, repository_target};
 use super::source::Captured;
 use super::{ImportSources, SnapshotError, SourceRecord};
 use crate::context::{InvocationContext, PrincipalKind};
@@ -7,8 +7,8 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, imports as ops};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, ReadSnapshot, StorageError, StoredVersion, WorkImportConfig,
-    WorkImportCounts, WorkImportIssue, WorkImportMapping, WorkImportMode, WorkImportRun,
-    WriteOptions, WriteTransaction, run_write,
+    WorkImportCounts, WorkImportMapping, WorkImportMode, WorkImportRepositoryBinding,
+    WorkImportRun, WriteOptions, WriteTransaction, run_write,
 };
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, Preparation, Prepared, QueryAnswer,
@@ -56,7 +56,7 @@ pub(super) struct Preview {
     pub(super) binding_digest: String,
     pub(super) since: Option<i64>,
     pub(super) counts: WorkImportCounts,
-    pub(super) retry_issues: Vec<WorkImportIssue>,
+    pub(super) repository_bindings: Vec<WorkImportRepositoryBinding>,
     pub(super) rows: i64,
     pub(super) bytes: Vec<u8>,
 }
@@ -195,8 +195,9 @@ impl ImportService {
                 input: None,
                 cursor: 0,
                 imported_ids: Vec::new(),
-                retry_issues: preview.retry_issues,
+                repository_bindings: preview.repository_bindings,
                 issues: Vec::new(),
+                issue_count: 0,
                 rows: preview.rows,
                 counts: preview.counts,
                 started_at_ms: tx.now_ms(),
@@ -559,19 +560,22 @@ pub(super) fn calculate(
     } else {
         None
     };
-    let retry_issues = if since.is_some() {
-        imports
-            .latest_import_issues(actor, namespace, &scope_digest, config_revision)?
-            .map_or_else(Vec::new, |run| run.issues)
-    } else {
-        Vec::new()
-    };
     let records = snapshot
         .select(config, config.all_projects.unwrap_or(false))
         .map_err(selection_failure)?
         .records;
+    let delta = DeltaSelection::new(
+        read,
+        actor,
+        namespace,
+        &scope_digest,
+        config_revision,
+        since,
+        &records,
+    )?;
     let mut hash = Sha256::new();
     let mut counts = WorkImportCounts::default();
+    let mut repository_bindings = Vec::new();
     let mut missing = std::collections::BTreeMap::<&str, usize>::new();
     let mut row_counts = std::collections::BTreeMap::<&str, usize>::new();
     for record in &records {
@@ -599,6 +603,15 @@ pub(super) fn calculate(
             .work_imports()?
             .import_mapping(namespace, record.kind(), record.id())?;
         let local = destination(namespace, record.kind(), record.id());
+        if let SourceRecord::Repository { remote, .. } = record {
+            let project = ProjectId(destination(namespace, "Project", record.project()));
+            repository_bindings.push(repository_target(
+                read.projects(),
+                record.id(),
+                &project,
+                remote.as_deref(),
+            )?);
+        }
         let current = match record {
             SourceRecord::Project { .. } => read
                 .projects()
@@ -611,7 +624,8 @@ pub(super) fn calculate(
             _ => None,
         };
         let digest = record.digest().map_err(selection_failure)?;
-        if outside_window(record, since, mapping.as_ref(), &retry_issues) {
+        let skip = delta.outside_window(record, mapping.as_ref());
+        if skip {
             counts.skipped += 1;
         } else if mapping.as_ref().is_some_and(|m| m.source_digest == digest) {
             counts.unchanged += 1;
@@ -630,6 +644,7 @@ pub(super) fn calculate(
                 record.id(),
                 local,
                 digest,
+                skip,
                 current,
                 mapping.map(|m| {
                     (
@@ -651,7 +666,8 @@ pub(super) fn calculate(
         .collect::<String>();
     let binding_digest = digest(&json!({
         "sourceSnapshot":snapshot.digest, "scopeDigest":scope_digest, "mode":mode, "updatedSinceMs":since,
-        "rootIdentity":source.root_identity, "destinationWitness":witness, "retryIssues":retry_issues,
+        "rootIdentity":source.root_identity, "destinationWitness":witness,
+        "repositoryBindings":repository_bindings,
     }))?;
     let bytes = serde_json::to_vec(&json!({
         "format": "DevWorksWorkImportPreview", "version":1,
@@ -661,6 +677,7 @@ pub(super) fn calculate(
         "sourceSnapshot":snapshot.digest, "scopeDigest":scope_digest,
         "bindingDigest":binding_digest, "mode":mode, "updatedSinceMs":since, "counts":counts,
         "selectedKinds":row_counts, "missingSelectedEvidence":missing, "selection":config,
+        "repositories":repository_bindings,
     }))
     .map_err(|_| invalid("import preview report"))?;
     Ok(Preview {
@@ -668,31 +685,95 @@ pub(super) fn calculate(
         binding_digest,
         since,
         counts,
-        retry_issues,
+        repository_bindings,
         rows: records.len() as i64,
         bytes,
     })
 }
 
-pub(super) fn outside_window(
-    record: &SourceRecord,
+#[derive(Default)]
+pub(super) struct DeltaSelection {
     since: Option<i64>,
-    mapping: Option<&WorkImportMapping>,
-    issues: &[WorkImportIssue],
-) -> bool {
-    since.is_some_and(|since| {
-        record
-            .stamp()
-            .is_some_and(|stamp| stamp.updated_at_ms < since)
-            && !issues
-                .iter()
-                .any(|issue| issue.source_id == *record.id() && issue.kind == record.kind())
-            && !(mapping.is_none()
-                && matches!(
-                    record,
-                    SourceRecord::Project { .. } | SourceRecord::Feature { .. }
-                ))
-    })
+    retries: std::collections::HashMap<String, std::collections::HashSet<Id>>,
+    required_work: std::collections::HashSet<Id>,
+}
+
+impl DeltaSelection {
+    pub(super) fn new(
+        read: &dyn ReadSnapshot,
+        actor: &crate::protocol::ActorId,
+        namespace: &Id,
+        scope: &str,
+        approval: Option<i64>,
+        since: Option<i64>,
+        records: &[&SourceRecord],
+    ) -> Result<Self, StorageError> {
+        let mut delta = Self {
+            since,
+            ..Default::default()
+        };
+        if since.is_none() {
+            return Ok(delta);
+        }
+        if let Some(revision) = approval {
+            for (kind, id) in read
+                .work_imports()?
+                .import_retry_keys(actor, namespace, scope, revision)?
+            {
+                delta.retries.entry(kind).or_default().insert(id);
+            }
+        }
+        for record in records {
+            if !delta.in_window(record) {
+                continue;
+            }
+            match record {
+                SourceRecord::History { subject_id, .. } => {
+                    delta.required_work.insert(subject_id.clone());
+                }
+                SourceRecord::Dependency {
+                    blocked, blocker, ..
+                } => {
+                    delta.required_work.insert(blocked.clone());
+                    delta.required_work.insert(blocker.clone());
+                }
+                _ => {}
+            }
+        }
+        Ok(delta)
+    }
+
+    pub(super) fn retries(&self, record: &SourceRecord) -> bool {
+        self.retries
+            .get(record.kind())
+            .is_some_and(|ids| ids.contains(record.id()))
+    }
+
+    fn in_window(&self, record: &SourceRecord) -> bool {
+        self.since.is_none_or(|since| {
+            let updated = match record {
+                SourceRecord::Dependency { created_at_ms, .. } => Some(*created_at_ms),
+                _ => record.stamp().map(|stamp| stamp.updated_at_ms),
+            };
+            updated.is_none_or(|time| time >= since) || self.retries(record)
+        })
+    }
+
+    pub(super) fn outside_window(
+        &self,
+        record: &SourceRecord,
+        mapping: Option<&WorkImportMapping>,
+    ) -> bool {
+        if self.in_window(record) {
+            return false;
+        }
+        let necessary = matches!(
+            record,
+            SourceRecord::Project { .. } | SourceRecord::Feature { .. }
+        ) || matches!(record, SourceRecord::Item { .. })
+            && self.required_work.contains(record.id());
+        !(necessary && mapping.is_none())
+    }
 }
 
 pub(super) fn scope_digest(namespace: &Id, config: &ImportConfig) -> Result<String, StorageError> {

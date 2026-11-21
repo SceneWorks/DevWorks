@@ -2109,7 +2109,7 @@
   {
     "id": "input-imports.history-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.history\",\"workId\":\"id-a\",\"page\":{\"limit\":20}}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.history\",\"page\":{\"limit\":20}}}",
     "typedValid": true,
     "schemaValid": true
   },

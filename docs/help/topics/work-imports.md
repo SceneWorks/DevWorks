@@ -4,7 +4,7 @@ Open **Settings → General → Import work history**. Choose a sealed CodeGraph
 
 Use **Preview import** to see the source namespace, snapshot hash, selected record counts, and unavailable evidence. Read the preview report, approve that selection, and apply the snapshot. If the source file, selection, or destination changed, preview again. **Import runs** shows the durable state and report for each run. **Stop import** stops further publication and keeps any records already committed. A fresh preview and apply resumes safely from the published records.
 
-Open **Imported work history** from a feature or card to read its source status, decisions, dates, and evidence. Imported cards enter Backlog. Move a card on the board when you want it to take part in the current workflow. The current index appears beside a historical code reference only when the repository, commit, and file match.
+Open **Imported work history** from a feature or card to read its source status, decisions, dates, and evidence. **Imported project history** on Overview shows source project changes and referenced sessions, including unavailable transcript evidence. Imported cards enter Backlog. Move a card on the board when you want it to take part in the current workflow. The current index appears beside a historical code reference only when the repository, commit, and file match.
 
 ## Prepare the source export
 

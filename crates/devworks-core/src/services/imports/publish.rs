@@ -4,7 +4,7 @@ use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
 use crate::ports::storage::{
     ACTIVE, FEATURE, NewEvent, ProjectRead, RepositoryFilter, StorageError, StoredProject,
-    StoredWork, WorkImportMapping, WriteTransaction,
+    StoredWork, WorkImportMapping, WorkImportRepositoryBinding, WriteTransaction,
 };
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::{EventId, Id, ProjectId, RootId};
@@ -33,7 +33,11 @@ pub(super) fn publish_record(
     namespace: &Id,
     record: &SourceRecord,
     captured_through_ms: i64,
-    attachment: Option<ArtifactRef>,
+    repository_binding: Option<&WorkImportRepositoryBinding>,
+    publish_attachment: impl FnOnce(
+        &mut dyn WriteTransaction,
+        ProjectId,
+    ) -> Result<Option<ArtifactRef>, StorageError>,
 ) -> Result<Publication, StorageError> {
     let previous = tx
         .work_imports()?
@@ -246,7 +250,12 @@ pub(super) fn publish_record(
             }
         }
         SourceRecord::Repository { remote, role, .. } => {
-            let Some(repository) = match_repository(tx.projects(), remote.as_deref(), None)? else {
+            let observed =
+                repository_target(tx.projects(), record.id(), &project, remote.as_deref())?;
+            if repository_binding != Some(&observed) {
+                return Ok(Publication::DestinationChanged);
+            }
+            let Some((repository, _)) = observed.target else {
                 return Ok(Publication::MissingReference);
             };
             let memberships = tx.projects().repository_projects(&repository)?;
@@ -255,16 +264,31 @@ pub(super) fn publish_record(
             }
             let mut members = tx.projects().members(&project)?;
             if !members.contains(&repository) {
-                members.push(repository);
-                tx.projects().set_members(&project, &members)?;
-                if let Some(mut imported) =
-                    tx.work_imports()?
-                        .import_mapping(namespace, "Project", record.project())?
-                    && let Some(updated) = tx.projects().project(&project)?
-                {
-                    imported.destination_revision = Some(updated.revision);
-                    tx.work_imports()?.put_import_mapping(&imported)?;
+                let mut imported = tx
+                    .work_imports()?
+                    .import_mapping(namespace, "Project", record.project())?
+                    .ok_or_else(|| {
+                        StorageError::InvalidRecord("missing imported project witness".into())
+                    })?;
+                let before = tx
+                    .projects()
+                    .project(&project)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if Some(before.revision) != imported.destination_revision {
+                    return Ok(Publication::DestinationChanged);
                 }
+                members.push(repository.clone());
+                let updated = crate::services::projects::publish_membership(
+                    tx,
+                    context,
+                    &before,
+                    &members,
+                    &[repository],
+                    &[],
+                )
+                .map_err(failure)?;
+                imported.destination_revision = Some(updated.revision);
+                tx.work_imports()?.put_import_mapping(&imported)?;
             }
             None
         }
@@ -288,7 +312,7 @@ pub(super) fn publish_record(
                     history_kind,
                     HistoryKind::Attachment | HistoryKind::TranscriptEvidence
                 ),
-                attachment,
+                publish_attachment(tx, project.clone())?,
             );
             HistoricalEvent {
                 project: project.clone(),
@@ -374,12 +398,39 @@ fn evidence_with_attachment(
     attachment: bool,
     artifact: Option<ArtifactRef>,
 ) -> Value {
+    if let Some(full) = artifact
+        .as_ref()
+        .filter(|a| a.media_type == "application/json")
+    {
+        return json!({"fullEvidence":full,"title":data.get("title"),"sourceLink":data.get("url")});
+    }
     let mut evidence = data.clone();
     if attachment && let Some(object) = evidence.as_object_mut() {
         object.remove("bytesBase64");
         object.insert("artifact".into(), json!(artifact));
     }
     evidence
+}
+
+pub(super) fn repository_target(
+    read: &dyn ProjectRead,
+    source_id: &Id,
+    project: &ProjectId,
+    remote: Option<&str>,
+) -> Result<WorkImportRepositoryBinding, StorageError> {
+    let target = match match_repository(read, remote, None)? {
+        Some(id) => read.repository(&id)?.map(|row| (id, row.revision)),
+        None => None,
+    };
+    let already_member = match &target {
+        Some((id, _)) => read.members(project)?.contains(id),
+        None => false,
+    };
+    Ok(WorkImportRepositoryBinding {
+        source_id: source_id.clone(),
+        target,
+        already_member,
+    })
 }
 
 pub(super) fn match_repository(
@@ -426,10 +477,10 @@ fn remote_identity(remote: &str) -> Option<(String, String)> {
         && matches!(url.scheme(), "https" | "http" | "ssh")
     {
         let mut host = url.host_str()?.to_ascii_lowercase();
-        if let Some(port) = url.port() {
-            if url.scheme() != "ssh" || port != 22 {
-                host.push_str(&format!(":{port}"));
-            }
+        if let Some(port) = url.port()
+            && (url.scheme() != "ssh" || port != 22)
+        {
+            host.push_str(&format!(":{port}"));
         }
         (host, url.path().to_owned())
     } else {
@@ -469,14 +520,19 @@ fn record_evidence(
         event.payload["subject"] = json!({"kind":"Root","rootId":root});
     }
     let id = EventId(tx.new_id(IdKind::Event));
+    let (aggregate_kind, aggregate_id) = if event.root.is_none() {
+        ("imported_project_work", event.project.0.as_str().to_owned())
+    } else {
+        ("imported_work", event.aggregate)
+    };
     tx.history().append(NewEvent {
         id,
         actor: context.principal().clone(),
         project_id: Some(event.project),
         root_id: event.root,
         operation_id: None,
-        aggregate_kind: "imported_work".into(),
-        aggregate_id: event.aggregate,
+        aggregate_kind: aggregate_kind.into(),
+        aggregate_id,
         aggregate_revision: 1,
         kind: event.kind.into(),
         payload: event.payload,

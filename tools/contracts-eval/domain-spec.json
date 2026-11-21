@@ -11269,13 +11269,14 @@
       "operation": "imports.history",
       "mode": "Query",
       "fields": {
-        "work_id": "Id",
+        "work_id": "?Id",
+        "project_id": "?ProjectId",
         "page": "PageRequest"
       },
       "result": "Page<ImportedWorkEvidence>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Return inert imported evidence for the requested work and independently resolve its exact historical code location against the published native view when available."
+      "rules": "Return inert imported evidence for the requested project or work and independently resolve its exact historical code location against the published native view when available."
     },
     "imports.cancel": {
       "operation": "imports.cancel",

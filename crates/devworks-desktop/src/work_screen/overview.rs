@@ -51,6 +51,11 @@ impl WorkCtl<'_, '_> {
             },
             &mut actions,
             |ui, actions| {
+                if let Some(id) = project.as_ref().filter(|id| id.starts_with("import-"))
+                    && widgets::secondary_button(ui, "Imported project history").clicked()
+                {
+                    actions.push(Action::OpenImportedHistory(id.clone(), true));
+                }
                 if widgets::secondary_button(ui, "Refresh").clicked() {
                     actions.push(if messages_tab {
                         Action::RefreshMessages

@@ -43,3 +43,17 @@ CREATE TABLE work_import_mappings (
     PRIMARY KEY(import_id, source_kind, source_id)
 ) STRICT;
 CREATE INDEX work_import_mappings_project ON work_import_mappings(project_id);
+
+-- Retry identities are independent of the human-readable report's size bound.
+CREATE TABLE work_import_retry (
+    owner TEXT NOT NULL REFERENCES actors(id),
+    source_namespace TEXT NOT NULL,
+    scope_digest TEXT NOT NULL CHECK(length(scope_digest) = 64),
+    config_revision INTEGER NOT NULL CHECK(config_revision > 0),
+    source_kind TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY(owner, source_namespace, scope_digest, config_revision, source_kind, source_id)
+) STRICT;
+CREATE INDEX work_import_retry_project ON work_import_retry(project_id);

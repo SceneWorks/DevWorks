@@ -3,7 +3,7 @@ use super::publish::match_repository;
 use super::service::invalid;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::imports::HistoryInput;
-use crate::ports::storage::{ACTIVE, ReadSnapshot, StorageError, UNIT_REPLACE};
+use crate::ports::storage::{ACTIVE, EventFilter, ReadSnapshot, StorageError, UNIT_REPLACE};
 use crate::protocol::records::{ImportedCodeReference, ImportedWorkEvidence};
 use crate::protocol::support::{BoundedList, BoundedText, DynamicJson, Page, RelativePath};
 use crate::protocol::{DomainErrorCode, Id, ProjectId, RootId};
@@ -28,22 +28,34 @@ pub(super) fn history(
             "work_import_history",
         ));
     }
-    let root = visible_root(read.sessions(), ctx, &RootId(input.work_id.clone()))?;
-    if !read
+    let root = match (&input.work_id, &input.project_id) {
+        (Some(work), None) => Some(visible_root(read.sessions(), ctx, &RootId(work.clone()))?),
+        (None, Some(project)) => {
+            crate::services::kernel::require_project(ctx, project)?;
+            None
+        }
+        _ => {
+            return Err(super::service::refuse(
+                DomainErrorCode::InvalidArgument,
+                "work_import_history_scope",
+            ));
+        }
+    };
+    let project_id = root
+        .as_ref()
+        .map(|root| &root.project_id)
+        .or(input.project_id.as_ref())
+        .ok_or_else(|| invalid("import project scope"))?;
+    let project = read
         .projects()
-        .project(&root.project_id)?
-        .is_some_and(|project| project.lifecycle == ACTIVE)
-    {
-        return Err(
-            crate::services::kernel::not_found("work_import_history", &input.work_id).into(),
-        );
-    }
-    let cursor = CursorBinding::new(
-        ctx,
-        "imports.history",
-        &[input.work_id.as_str()],
-        root.scope_revision,
-    );
+        .project(project_id)?
+        .filter(|project| project.lifecycle == ACTIVE)
+        .ok_or_else(|| crate::services::kernel::not_found("work_import_history", &project_id.0))?;
+    let (kind, key, revision) = match &root {
+        Some(root) => ("work", &root.id.0, root.scope_revision),
+        None => ("project", &project.id.0, project.scope_revision),
+    };
+    let cursor = CursorBinding::new(ctx, "imports.history", &[kind, key.as_str()], revision);
     let after = cursor
         .resume(&input.page)?
         .map(|pos| pos.parse::<i64>())
@@ -51,9 +63,16 @@ pub(super) fn history(
         .map_err(|_| StorageError::CursorExpired)?
         .unwrap_or(0);
     let limit = input.page.limit.get().min(50) as u16;
-    let rows = read
-        .sessions()
-        .root_events(&root.id, &KINDS, after, limit + 1)?;
+    let rows = if let Some(root) = &root {
+        read.sessions()
+            .root_events(&root.id, &KINDS, after, limit + 1)?
+    } else {
+        let filter = EventFilter::Aggregate {
+            kind: "imported_project_work".into(),
+            id: project.id.0.as_str().into(),
+        };
+        read.history().page(&filter, after, limit + 1)?.events
+    };
     let mut output = Vec::new();
     let mut position = after;
     let mut bytes = 0;
@@ -69,7 +88,7 @@ pub(super) fn history(
             .or_else(|| payload.get("source"))
             .ok_or_else(|| invalid("imported history payload"))?;
         let current_reference = if kind == "CodeReference" {
-            current_reference(read, &root.project_id, evidence)?
+            current_reference(read, &project.id, evidence)?
         } else {
             None
         };

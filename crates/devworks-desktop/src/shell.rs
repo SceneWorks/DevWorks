@@ -658,9 +658,9 @@ impl Shell {
                     });
                 }
                 Effect::OpenNotifications => self.decisions.notifications_open = true,
-                Effect::OpenImportedHistory(id) => {
+                Effect::OpenImportedHistory(id, project) => {
                     self.with_typed(|screen: &mut work_imports::ImportsUi, cx| {
-                        screen.open_history(cx, &id)
+                        screen.open_history(cx, &id, project)
                     });
                 }
                 Effect::OpenImports => {

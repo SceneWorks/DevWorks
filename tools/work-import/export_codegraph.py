@@ -119,7 +119,7 @@ EXTRA_PREDICATES = {
     "SessionClaim": "d.released_at IS NOT NULL",
 }
 
-ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+~=-]{0,127}\Z")
+ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 CREDENTIAL_URL = re.compile(r"(?:https?|ssh)://[^/\s]+@", re.IGNORECASE)
 
 
@@ -229,6 +229,10 @@ def convert(kind, project, subject, row, capture, attachment_root, missing):
         return {"kind": "Dependency", "id": digest_id(subject, row["blocker_item_id"]), "projectId": project,
                 "blocked": subject, "blocker": row["blocker_item_id"], "createdAtMs": source_stamp["createdAtMs"]}
     original_kind = kind
+    if kind == "Change":
+        changes = list_json(row["changes"])
+        row["changes"] = compact([change for change in changes
+                                  if change.get("field") != "claim_marker"])
     if kind == "Link":
         kind = categorize_link(row)
     if kind == "Attachment":

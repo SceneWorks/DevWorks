@@ -10992,13 +10992,29 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "projectId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "workId": {
-              "$ref": "#/$defs/Id"
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
             "kind",
-            "workId",
             "page"
           ],
           "type": "object"

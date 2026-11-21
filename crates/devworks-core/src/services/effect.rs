@@ -23,6 +23,10 @@ pub enum EffectOutcome {
 /// Both methods block and run on a blocking thread, never on the async runtime. `observe` must
 /// not perform the effect again.
 pub trait JournaledEffect: Send + Sync + 'static {
+    /// A proven local checkpoint may continue through the same delivery and journaled request.
+    fn resumes_after_observation(&self) -> bool {
+        false
+    }
     fn observes_delivery_cancellation(&self) -> bool {
         false
     }

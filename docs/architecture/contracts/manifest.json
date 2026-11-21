@@ -160,35 +160,35 @@
     },
     {
       "file": "domain-request.r2.schema.json",
-      "sha256": "b83eec6647f1c3bdd490c01dd192f146615c0fb7030d1231aea32867e703bb59"
+      "sha256": "7050570dfdbc69203c766009170fcc6cd20477b8740902a034339f90c8853b69"
     },
     {
       "file": "domain-request.r3.schema.json",
-      "sha256": "4ee892ca31616ba25a34d40a0e4f443492f7902aca5292bea368a6f387306377"
+      "sha256": "15983064ee119a06e60b214caef067bc1db0d5b280b682016dc702dbff259dd7"
     },
     {
       "file": "domain-request.r4.schema.json",
-      "sha256": "a0df7a1a2b0e14d309cd37983559cdc95e4ad02fbbd2d82f66808178bf3737d9"
+      "sha256": "b75a57c8a3ec8287e795ec64bf8e6c5a54cbb669cf16e14cf50f0a6ce2d10049"
     },
     {
       "file": "domain-request.r5.schema.json",
-      "sha256": "f7556134e900a46ce59d617c69e56d9c76a4954a20b48a223702f1e5f80b285f"
+      "sha256": "d133f12eb68483f41140472664c7a6adf9bd5ad54d87419e5ea84e86401aa002"
     },
     {
       "file": "domain-request.r6.schema.json",
-      "sha256": "843a4e77b86fbcdb35a167c8970614fa3006377512c78ab1496a2b0161326cf1"
+      "sha256": "7636f78bf76750d070dd465b0a82cd42ba970628dce4571d14f8b06c6af425fb"
     },
     {
       "file": "domain-request.r7.schema.json",
-      "sha256": "fbd30373ff336a78a8483b216f9202f3e1cd6d2675d9dc5d4be460c851509b62"
+      "sha256": "50e85762e3bbe1852319b93c5752a1a675a26632fdd1be6b3fe5a91acaec5c26"
     },
     {
       "file": "domain-request.r8.schema.json",
-      "sha256": "d5d5e63d2a435834c5d7120a4d0a5e882645204aface9ace21399f97b0a253c3"
+      "sha256": "924eceb3fa6ab5348f9373a8fda6c76ffd8f60196cc49c99fcb45aa3d2b6563e"
     },
     {
       "file": "domain-request.schema.json",
-      "sha256": "d5363ded3217dd4e8893f828db9c8fb9a07f7005e1c1783c618a1a5314ab89d7"
+      "sha256": "33ef58c74945ca956bb5eb17e04ecf16ac01faaaf6c98f92ec8fe58ac649b5b0"
     },
     {
       "file": "event.r2.schema.json",

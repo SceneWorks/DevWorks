@@ -13,7 +13,7 @@ use crate::protocol::provider::Digest;
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision};
+use crate::protocol::{Counter, Id, ProjectId, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -184,12 +184,16 @@ impl Revisioned for SettingsInput {
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HistoryInput {
-    pub work_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
     pub page: PageRequest,
 }
 impl Check for HistoryInput {
     fn check(&self) -> Result<(), String> {
         self.work_id.check()?;
+        self.project_id.check()?;
         self.page.check()?;
         Ok(())
     }

@@ -4,6 +4,7 @@
   "additionalTables": [
     {"table": "work_import_configs", "class": "workspace_configuration", "disposition": "preserve_independent"},
     {"table": "work_import_runs", "class": "workspace_configuration", "disposition": "preserve_independent"},
-    {"table": "work_import_mappings", "class": "project", "selector": "project_id = target", "disposition": "owned_lineage"}
+    {"table": "work_import_mappings", "class": "project", "selector": "project_id = target", "disposition": "owned_lineage"},
+    {"table": "work_import_retry", "class": "project", "selector": "project_id = target", "disposition": "owned_lineage"}
   ]
 }

@@ -511,6 +511,36 @@ pub struct ProjectService {
     purge: Option<Arc<purge::PurgeCoordinator>>,
 }
 
+/// Publishes one already authorized project membership change, including its visibility fence.
+pub(crate) fn publish_membership(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    before: &StoredProject,
+    wanted: &[Id],
+    added: &[Id],
+    removed: &[Id],
+) -> Result<StoredProject, Failure> {
+    tx.projects().set_members(&before.id, wanted)?;
+    let mut after = before.clone();
+    after.revision = before.revision + 1;
+    after.scope_revision = before.scope_revision + 1;
+    after.updated_at_ms = tx.now_ms();
+    tx.projects().update_project(&after, before.revision)?;
+    event(
+        tx,
+        ctx,
+        Some(&after.id),
+        (PROJECT_AGGREGATE, &after.id.0, after.revision),
+        "ProjectMembershipChanged",
+        json!({
+            "added": ids(added),
+            "removed": ids(removed),
+            "scopeRevision": after.scope_revision,
+        }),
+    )?;
+    Ok(after)
+}
+
 impl ProjectService {
     /// A service whose archival stops roots through `runs` (the runtime's one control service).
     pub fn new(ids: Arc<dyn IdSource>, runs: Arc<ControlService>) -> Self {
@@ -788,24 +818,7 @@ impl ProjectService {
                 return Err(conflict("repository_in_use", r));
             }
         }
-        tx.projects().set_members(&before.id, &wanted)?;
-        let mut after = before.clone();
-        after.revision = before.revision + 1;
-        after.scope_revision = before.scope_revision + 1;
-        after.updated_at_ms = tx.now_ms();
-        tx.projects().update_project(&after, before.revision)?;
-        event(
-            tx,
-            ctx,
-            Some(&after.id),
-            (PROJECT_AGGREGATE, &after.id.0, after.revision),
-            "ProjectMembershipChanged",
-            json!({
-                "added": ids(&added),
-                "removed": ids(&removed),
-                "scopeRevision": after.scope_revision,
-            }),
-        )?;
+        let after = publish_membership(tx, ctx, &before, &wanted, &added, &removed)?;
         Ok(DomainDecision::Applied {
             result: OperationResult::ProjectsMembership {
                 value: tx_record(tx, &after)?,

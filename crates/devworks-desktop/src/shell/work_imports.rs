@@ -19,23 +19,38 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum WorkImportsSlot {
-    WorkImportPreview,
-    WorkImportSettings,
-    WorkImportConfigure,
-    WorkImportApply,
-    WorkImportRuns,
-    WorkImportInspect,
-    WorkImportReport,
-    WorkImportCancel,
-    WorkImportHistory,
+    #[serde(rename = "WorkImportPreview")]
+    Preview,
+    #[serde(rename = "WorkImportSettings")]
+    Settings,
+    #[serde(rename = "WorkImportConfigure")]
+    Configure,
+    #[serde(rename = "WorkImportApply")]
+    Apply,
+    #[serde(rename = "WorkImportRuns")]
+    Runs,
+    #[serde(rename = "WorkImportInspect")]
+    Inspect,
+    #[serde(rename = "WorkImportReport")]
+    Report,
+    #[serde(rename = "WorkImportCancel")]
+    Cancel,
+    #[serde(rename = "WorkImportHistory")]
+    History,
 }
 screen_slot!(WorkImportsSlot, Imports);
 use WorkImportsSlot::*;
 
+#[derive(Clone)]
+enum HistoryTarget {
+    Work(Id),
+    Project(ProjectId),
+}
+
 #[derive(Default)]
 pub struct ImportsUi {
     open: bool,
-    history_work: Option<Id>,
+    history_target: Option<HistoryTarget>,
     history_rows: Vec<devworks_core::protocol::records::ImportedWorkEvidence>,
     history_cursor: Option<String>,
     root: Option<PathBuf>,
@@ -70,7 +85,7 @@ impl ImportsUi {
             self.root = root;
         }
         self.open = true;
-        self.history_work = None;
+        self.history_target = None;
         self.list(cx, false);
     }
 
@@ -79,7 +94,7 @@ impl ImportsUi {
             return;
         }
         let mut open = self.open;
-        let title = if self.history_work.is_some() {
+        let title = if self.history_target.is_some() {
             "Imported work history"
         } else {
             "Import work history"
@@ -88,7 +103,7 @@ impl ImportsUi {
             .open(&mut open)
             .default_width(600.0)
             .show(ctx, |ui| {
-                if self.history_work.is_some() {
+                if self.history_target.is_some() {
                     self.draw_history(cx, ui);
                 } else {
                     self.draw(cx, ui);
@@ -103,25 +118,32 @@ impl ImportsUi {
         }
     }
 
-    pub fn open_history(&mut self, cx: &mut Cx, work: &str) {
+    pub fn open_history(&mut self, cx: &mut Cx, work: &str, project: bool) {
         let Ok(work) = Id::new(work.to_owned()) else {
             return;
         };
         self.open = true;
         self.error = None;
-        self.history_work = Some(work);
+        self.history_target = Some(if project {
+            HistoryTarget::Project(ProjectId(work))
+        } else {
+            HistoryTarget::Work(work)
+        });
+        self.report = None;
         self.history_rows.clear();
         self.history_cursor = None;
         self.load_history(cx);
     }
 
     fn load_history(&mut self, cx: &mut Cx) {
-        let Some(work_id) = self.history_work.clone() else {
-            return;
+        let (work_id, project_id) = match &self.history_target {
+            Some(HistoryTarget::Work(id)) => (Some(id.clone()), None),
+            Some(HistoryTarget::Project(id)) => (None, Some(id.clone())),
+            None => return,
         };
         let cursor = self.history_cursor.clone();
         cx.query(
-            WorkImportHistory,
+            History,
             "Reading imported evidence",
             "imports.history",
             move |b| {
@@ -129,6 +151,7 @@ impl ImportsUi {
                     Some(OperationInput::Imports(api::Input::History(
                         api::HistoryInput {
                             work_id,
+                            project_id,
                             page: frame::page(20, cursor.as_deref())?,
                         },
                     )))
@@ -147,6 +170,12 @@ impl ImportsUi {
                     } else if row.kind.0 == "CodeReference" {
                         ui.label("No matching published index view for this historical reference.");
                     }
+                    if let Some(reference) = row.evidence.0.pointer("/source/fullEvidence")
+                        .and_then(|value| serde_json::from_value::<ArtifactRef>(value.clone()).ok())
+                        && ui.button("Read full historical evidence").clicked()
+                    {
+                        Self::read_report(cx, reference);
+                    }
                     if let Ok(text) = serde_json::to_string_pretty(&row.evidence.0) {
                         ui.add(egui::Label::new(rich_report(&text)).selectable(true));
                     }
@@ -154,6 +183,11 @@ impl ImportsUi {
             }
             if let Some(error) = &self.error {
                 ui.colored_label(crate::theme::RED, error);
+            }
+            if let Some(report) = &self.report {
+                ui.collapsing("Full historical evidence", |ui| {
+                    ui.add(egui::Label::new(rich_report(report)).selectable(true));
+                });
             }
             if self.history_cursor.is_some() && ui.button("More historical evidence").clicked() {
                 self.load_history(cx);
@@ -165,9 +199,7 @@ impl ImportsUi {
         egui::ScrollArea::vertical()
             .max_height(600.0)
             .show(ui, |ui| {
-                let freeze = cx.waiting(&WorkImportPreview)
-                    || cx.waiting(&WorkImportConfigure)
-                    || cx.waiting(&WorkImportApply);
+                let freeze = cx.waiting(&Preview) || cx.waiting(&Configure) || cx.waiting(&Apply);
                 let before = self
                     .config()
                     .ok()
@@ -314,28 +346,20 @@ impl ImportsUi {
                     if self.run_id.as_ref() == Some(&run.id)
                         && self.poll_after.is_some()
                         && ui
-                            .add_enabled(
-                                !cx.waiting(&WorkImportCancel),
-                                egui::Button::new("Stop import"),
-                            )
+                            .add_enabled(!cx.waiting(&Cancel), egui::Button::new("Stop import"))
                             .clicked()
                     {
                         let input = api::CancelInput {
                             run_id: run.id.clone(),
                             expected_revision: run.revision.clone(),
                         };
-                        cx.command(
-                            WorkImportCancel,
-                            "Stopping the import",
-                            "imports.cancel",
-                            move |b| {
-                                frame::build(
-                                    b,
-                                    Negotiate::Latest,
-                                    Some(OperationInput::Imports(api::Input::Cancel(input))),
-                                )
-                            },
-                        );
+                        cx.command(Cancel, "Stopping the import", "imports.cancel", move |b| {
+                            frame::build(
+                                b,
+                                Negotiate::Latest,
+                                Some(OperationInput::Imports(api::Input::Cancel(input))),
+                            )
+                        });
                     }
                 }
                 if let Some(report) = &self.report {
@@ -413,7 +437,7 @@ impl ImportsUi {
             ImportIntentMode::Full
         });
         cx.query(
-            WorkImportPreview,
+            Preview,
             "Previewing selected work",
             "imports.preview",
             move |b| {
@@ -436,7 +460,7 @@ impl ImportsUi {
         self.settings = None;
         self.settings_ready = false;
         cx.query(
-            WorkImportSettings,
+            Settings,
             "Reading saved import selection",
             "imports.settings",
             move |b| {
@@ -466,7 +490,7 @@ impl ImportsUi {
             approve: Some(true),
         };
         cx.command(
-            WorkImportConfigure,
+            Configure,
             "Approving the reviewed import",
             "imports.configure",
             move |b| {
@@ -491,7 +515,7 @@ impl ImportsUi {
             preview_digest: preview.report.sha256.clone(),
         };
         cx.command(
-            WorkImportApply,
+            Apply,
             "Submitting the approved import",
             "imports.apply",
             move |b| {
@@ -510,7 +534,7 @@ impl ImportsUi {
             return;
         };
         cx.query(
-            WorkImportInspect,
+            Inspect,
             "Checking import progress",
             "imports.inspect",
             move |b| {
@@ -530,35 +554,25 @@ impl ImportsUi {
         if !append {
             self.runs.clear();
         }
-        cx.query(
-            WorkImportRuns,
-            "Reading work import runs",
-            "imports.runs",
-            move |b| {
-                frame::with(b, Negotiate::Latest, || {
-                    Some(OperationInput::Imports(api::Input::Runs(api::RunsInput {
-                        page: frame::page(20, cursor.as_deref())?,
-                        source_namespace: None,
-                    })))
-                })
-            },
-        );
+        cx.query(Runs, "Reading work import runs", "imports.runs", move |b| {
+            frame::with(b, Negotiate::Latest, || {
+                Some(OperationInput::Imports(api::Input::Runs(api::RunsInput {
+                    page: frame::page(20, cursor.as_deref())?,
+                    source_namespace: None,
+                })))
+            })
+        });
     }
 
     fn read_report(cx: &mut Cx, artifact: ArtifactRef) {
         if let Some(client) = cx.client.as_deref_mut() {
-            client.task(
-                WorkImportReport.into(),
-                "Reading exact import report",
-                move |b| {
-                    let bytes = ops::read_artifact_bytes(b, &artifact)?;
-                    let report = serde_json::from_slice::<serde_json::Value>(&bytes)
-                        .map_err(|e| e.to_string())?;
-                    let formatted =
-                        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
-                    Ok(TaskOutput::WorkImportReport(formatted))
-                },
-            );
+            client.task(Report.into(), "Reading exact import report", move |b| {
+                let bytes = ops::read_artifact_bytes(b, &artifact)?;
+                let report = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map_err(|e| e.to_string())?;
+                let formatted = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+                Ok(TaskOutput::WorkImportReport(formatted))
+            });
         }
     }
 
@@ -581,7 +595,7 @@ impl ImportsUi {
                 self.settings_ready = true;
             }
             Err(ops::Failure::Refused(fault))
-                if slot == WorkImportSettings && fault.code == DomainErrorCode::NotFound =>
+                if slot == Settings && fault.code == DomainErrorCode::NotFound =>
             {
                 self.settings_ready = true;
             }
@@ -653,12 +667,12 @@ impl Screen for ImportsUi {
     fn apply(&mut self, cx: &mut Cx, slot: Self::Slot, reply: Reply) {
         match (slot.clone(), reply) {
             (_, Reply::Query(query)) => self.query_reply(cx, slot, query),
-            (WorkImportConfigure, Reply::Command(command)) => match ops::command_result(command) {
+            (Configure, Reply::Command(command)) => match ops::command_result(command) {
                 Ok(OperationResult::ImportsConfigure { value }) => self.approval = Some(value),
                 Ok(_) => self.error = Some("Unexpected import approval receipt.".into()),
                 Err(error) => self.error = Some(error.describe()),
             },
-            (WorkImportApply, Reply::Command(command)) => match ops::accepted_decision(command) {
+            (Apply, Reply::Command(command)) => match ops::accepted_decision(command) {
                 Ok(id) => {
                     self.run_id = Some(id.0);
                     self.approval = None;
@@ -666,15 +680,15 @@ impl Screen for ImportsUi {
                 }
                 Err(error) => self.error = Some(error.describe()),
             },
-            (WorkImportCancel, Reply::Command(command)) => match ops::command_result(command) {
+            (Cancel, Reply::Command(command)) => match ops::command_result(command) {
                 Ok(OperationResult::ImportsCancel { .. }) => self.inspect(cx),
                 Ok(_) => self.error = Some("Unexpected cancellation receipt.".into()),
                 Err(error) => self.error = Some(error.describe()),
             },
-            (WorkImportReport, Reply::Task(Ok(TaskOutput::WorkImportReport(report)))) => {
+            (Report, Reply::Task(Ok(TaskOutput::WorkImportReport(report)))) => {
                 self.report = Some(report)
             }
-            (WorkImportReport, Reply::Task(Err(error))) => self.error = Some(error),
+            (Report, Reply::Task(Err(error))) => self.error = Some(error),
             (_, reply) => cx.unhandled(&slot, reply),
         }
     }

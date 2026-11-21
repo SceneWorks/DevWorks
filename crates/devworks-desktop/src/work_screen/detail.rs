@@ -107,7 +107,7 @@ pub(crate) fn feature_detail(
             source_control(ui, work, f.id.as_str(), actions);
             if f.id.as_str().starts_with("import-") && ui.button("Imported work history").clicked()
             {
-                actions.push(Action::OpenImportedHistory(f.id.as_str().to_owned()));
+                actions.push(Action::OpenImportedHistory(f.id.as_str().to_owned(), false));
             }
             ui.add_space(6.0);
             // Approval and readiness are separate facts, shown apart.
@@ -986,7 +986,7 @@ pub(crate) fn card_detail(
             source_control(ui, work, w.id.as_str(), actions);
             if w.id.as_str().starts_with("import-") && ui.button("Imported work history").clicked()
             {
-                actions.push(Action::OpenImportedHistory(w.id.as_str().to_owned()));
+                actions.push(Action::OpenImportedHistory(w.id.as_str().to_owned(), false));
             }
             // Workflow status: moving it never starts, pauses or completes execution.
             let mut target = w.status_id.as_str().to_owned();

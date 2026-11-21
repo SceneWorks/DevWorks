@@ -20347,7 +20347,13 @@ pub enum DomainQuery {
         proposal: Option<ImportConfig>,
     },
     #[serde(rename = "imports.history")]
-    ImportsHistory { work_id: Id, page: PageRequest },
+    ImportsHistory {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        work_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        page: PageRequest,
+    },
     #[serde(rename = "mcp_server.status")]
     McpServerStatus {},
     #[serde(rename = "mcp_server.clients")]
@@ -21753,8 +21759,13 @@ impl Check for DomainQuery {
                 source_namespace.check()?;
                 proposal.check()?;
             }
-            Self::ImportsHistory { work_id, page } => {
+            Self::ImportsHistory {
+                work_id,
+                project_id,
+                page,
+            } => {
                 work_id.check()?;
+                project_id.check()?;
                 page.check()?;
             }
             Self::McpServerStatus {} => {}

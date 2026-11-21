@@ -1,6 +1,6 @@
 use super::publish::{Publication, destination, publish_record};
 use super::service::{
-    ImportService, artifact_ref, calculate, check_revision, human, invalid, outside_window, refuse,
+    DeltaSelection, ImportService, artifact_ref, calculate, check_revision, human, invalid, refuse,
     run_view, scope_digest, stopped,
 };
 use super::source::Captured;
@@ -34,6 +34,7 @@ const KIND: &str = "SelectedWorkImportV1";
 const CHUNK: usize = 64;
 const RETAINED_IDS: usize = 128;
 const RETAINED_ISSUES: usize = 1024;
+const INLINE_EVIDENCE_BYTES: usize = 64 * 1024;
 
 struct PreparedRun {
     preview: WorkImportRun,
@@ -389,7 +390,22 @@ impl ImportService {
         if run.completed_at_ms.is_some() {
             return Ok(run);
         }
-        let should_stop = || self.stopped(&job, stopped);
+        let checked_at = std::cell::Cell::new(None::<std::time::Instant>);
+        let cancelled = std::cell::Cell::new(false);
+        let should_stop = || {
+            if stopped.is_cancelled() || cancelled.get() {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if checked_at
+                .get()
+                .is_none_or(|previous| now.duration_since(previous).as_millis() >= 50)
+            {
+                checked_at.set(Some(now));
+                cancelled.set(self.stopped(&job, stopped));
+            }
+            cancelled.get()
+        };
         let root_identity = self.sources.root_identity(&config.settings.source)?;
         if root_identity != run.root_identity {
             return Err(invalid("import source root changed after admission"));
@@ -442,25 +458,40 @@ impl ImportService {
                 return Err(invalid("import destination changed after preview"));
             }
         }
+        let delta = std::sync::Arc::new(read_snapshot(
+            &*self.store,
+            &ReadOptions::default(),
+            |read| {
+                DeltaSelection::new(
+                    read,
+                    &run.owner,
+                    &run.source_namespace,
+                    &run.scope_digest,
+                    run.config_revision,
+                    run.updated_since_ms,
+                    &records.records,
+                )
+            },
+        )?);
         let mut remaining = &records.records[run.cursor..];
         while !remaining.is_empty() {
             if should_stop() {
                 return Err(StorageError::Cancelled);
             }
-            let count = if needs_attachment(remaining[0]) {
+            let count = if needs_evidence(remaining[0]) {
                 1
             } else {
                 remaining
                     .iter()
                     .take(CHUNK)
-                    .take_while(|record| !needs_attachment(record))
+                    .take_while(|record| !needs_evidence(record))
                     .count()
             };
             let partition: Vec<_> = remaining[..count]
                 .iter()
                 .map(|record| (*record).clone())
                 .collect();
-            self.publish_chunk(operation, &job, partition)?;
+            self.publish_chunk(operation, &job, partition, delta.clone())?;
             remaining = &remaining[count..];
         }
         self.finish(operation, &job, None)
@@ -482,41 +513,51 @@ impl ImportService {
         operation: &OperationRecord,
         job: &Job,
         records: Vec<SourceRecord>,
+        delta: std::sync::Arc<DeltaSelection>,
     ) -> Result<(), StorageError> {
-        let attachment = if records.len() == 1 {
-            self.stage_attachment(&records[0])?
+        let evidence = if records.len() == 1 {
+            self.stage_evidence(&records[0])?
         } else {
             None
         };
-        let data = attachment.clone();
+        let data = evidence.clone();
         let artifacts = self.artifacts.clone();
         let result = self.write_checked(operation, job, move |tx, mut run, _, actor| {
             let previous = run.revision;
             let mut published_artifact = false;
             for record in &records {
                 let mapping = tx.work_imports()?.import_mapping(&run.source_namespace, record.kind(), record.id())?;
-                if outside_window(record, run.updated_since_ms, mapping.as_ref(), &run.retry_issues) {
+                if delta.outside_window(record, mapping.as_ref()) {
                     run.counts.skipped += 1;
                     continue;
                 }
-                let artifact = if let Some(staged) = &data {
-                    let same = tx.work_imports()?.import_mapping(&run.source_namespace, record.kind(), record.id())?
-                        .is_some_and(|mapping| record.digest().is_ok_and(|digest| mapping.source_digest == digest));
-                    let project = ProjectId(destination(&run.source_namespace, "Project", record.project()));
-                    if same || tx.projects().project(&project)?.is_none() { None } else {
+                let result = publish_record(
+                    tx,
+                    &actor,
+                    &run.source_namespace,
+                    record,
+                    run.captured_through_ms,
+                    run.repository_bindings.binary_search_by(|binding| {
+                        binding.source_id.as_str().cmp(record.id().as_str())
+                    }).ok().map(|index| &run.repository_bindings[index]),
+                    |tx, project| {
+                        let Some((staged, media_type)) = &data else { return Ok(None) };
                         let version = artifacts.commit_host_bytes_in_scope(tx, staged, HostArtifactPublication {
                             title: "Imported historical evidence",
-                            media_type: "application/octet-stream",
-                            provenance: json!({"kind":"WorkImportAttachment","sourceIdentity":record.id()}),
+                            media_type,
+                            provenance: json!({"kind":"WorkImportEvidence","sourceIdentity":record.id()}),
                             scope: ArtifactScope::Project(project),
                             owner: run.owner.clone(),
                         })?;
                         published_artifact = true;
-                        Some(artifact_ref(version))
-                    }
-                } else { None };
-                let result = publish_record(tx, &actor, &run.source_namespace, record, run.captured_through_ms, artifact)?;
-                record_result(&mut run, record, result);
+                        Ok(Some(artifact_ref(version)))
+                    },
+                )?;
+                let reason = record_result(&mut run, record, result);
+                if reason.is_some() || delta.retries(record) {
+                    let project = ProjectId(destination(&run.source_namespace, "Project", record.project()));
+                    tx.work_imports()?.put_import_retry(&run, &project, record.kind(), record.id(), reason)?;
+                }
             }
             run.revision += 1;
             run.state = OperationState::Dispatching;
@@ -524,7 +565,7 @@ impl ImportService {
             tx.work_imports()?.put_import_run(&run, Some(previous))?;
             Ok(published_artifact)
         });
-        if let Some(staged) = &attachment {
+        if let Some((staged, _)) = &evidence {
             self.artifacts.settle_host_bytes(
                 &*self.store,
                 staged,
@@ -534,29 +575,48 @@ impl ImportService {
         result.map(|_| ())
     }
 
-    fn stage_attachment(&self, record: &SourceRecord) -> Result<Option<StagedFile>, StorageError> {
-        let SourceRecord::History { evidence, .. } = record else {
+    fn stage_evidence(
+        &self,
+        record: &SourceRecord,
+    ) -> Result<Option<(StagedFile, &'static str)>, StorageError> {
+        let SourceRecord::History {
+            evidence,
+            history_kind,
+            ..
+        } = record
+        else {
             return Ok(None);
         };
-        let Some(encoded) = evidence["bytesBase64"].as_str() else {
-            return Ok(None);
-        };
-        let bytes = STANDARD
-            .decode(encoded)
-            .map_err(|_| invalid("invalid import attachment"))?;
-        if evidence["sha256"]
-            .as_str()
-            .is_none_or(|digest| !digest.eq_ignore_ascii_case(&sha256_hex(&bytes)))
+        let (bytes, media_type) = if matches!(
+            history_kind,
+            HistoryKind::Attachment | HistoryKind::TranscriptEvidence
+        ) && let Some(encoded) = evidence["bytesBase64"].as_str()
         {
-            return Err(invalid("import attachment digest mismatch"));
-        }
+            let bytes = STANDARD
+                .decode(encoded)
+                .map_err(|_| invalid("invalid import attachment"))?;
+            if evidence["sha256"]
+                .as_str()
+                .is_none_or(|digest| !digest.eq_ignore_ascii_case(&sha256_hex(&bytes)))
+            {
+                return Err(invalid("import attachment digest mismatch"));
+            }
+            (bytes, "application/octet-stream")
+        } else {
+            let bytes =
+                serde_json::to_vec(evidence).map_err(|_| invalid("import historical evidence"))?;
+            if bytes.len() <= INLINE_EVIDENCE_BYTES {
+                return Ok(None);
+            }
+            (bytes, "application/json")
+        };
         self.artifacts
             .stage_host_bytes(
                 &*self.store,
                 &bytes,
-                json!({"kind":"WorkImportAttachment","sourceIdentity":record.id()}),
+                json!({"kind":"WorkImportEvidence","sourceIdentity":record.id()}),
             )?
-            .map(Some)
+            .map(|staged| Some((staged, media_type)))
             .map_err(|_| StorageError::ViewUnavailable)
     }
 
@@ -657,6 +717,7 @@ impl ImportService {
             "updatedSinceMs":run.updated_since_ms,"coverageThroughMs":run.captured_through_ms,
             "processed":run.cursor,"total":run.rows,"counts":run.counts,"issues":run.issues,
             "importedIds":run.imported_ids,"problem":problem,
+            "omittedIssueDetails":run.issue_count.saturating_sub(run.issues.len() as i64),
         }))
         .map_err(|_| invalid("work import result report"))?;
         let staged = self
@@ -731,7 +792,11 @@ fn finalize(
     Ok(run)
 }
 
-fn record_result(run: &mut WorkImportRun, record: &SourceRecord, result: Publication) {
+fn record_result(
+    run: &mut WorkImportRun,
+    record: &SourceRecord,
+    result: Publication,
+) -> Option<&'static str> {
     match result {
         Publication::Added | Publication::Changed => {
             if result == Publication::Added {
@@ -756,6 +821,7 @@ fn record_result(run: &mut WorkImportRun, record: &SourceRecord, result: Publica
                 run.counts.failures += 1;
                 "destination_revision_changed"
             };
+            run.issue_count += 1;
             if run.issues.len() < RETAINED_ISSUES {
                 run.issues.push(WorkImportIssue {
                     source_id: record.id().clone(),
@@ -763,13 +829,16 @@ fn record_result(run: &mut WorkImportRun, record: &SourceRecord, result: Publica
                     reason: reason.into(),
                 });
             }
+            return Some(reason);
         }
     }
+    None
 }
 
-fn needs_attachment(record: &SourceRecord) -> bool {
-    matches!(record, SourceRecord::History { history_kind: HistoryKind::Attachment |
-        HistoryKind::TranscriptEvidence, evidence, .. } if evidence["bytesBase64"].is_string())
+fn needs_evidence(record: &SourceRecord) -> bool {
+    matches!(record, SourceRecord::History { evidence, .. }
+        if evidence["bytesBase64"].is_string()
+        || serde_json::to_vec(evidence).is_ok_and(|bytes| bytes.len() > INLINE_EVIDENCE_BYTES))
 }
 
 fn scheduled_owner(
@@ -1007,6 +1076,10 @@ fn effect_result(operation: &OperationRecord, run: &WorkImportRun) -> EffectOutc
 }
 
 impl JournaledEffect for ImportService {
+    fn resumes_after_observation(&self) -> bool {
+        true
+    }
+
     fn observes_delivery_cancellation(&self) -> bool {
         true
     }
@@ -1050,35 +1123,38 @@ impl JournaledEffect for ImportService {
     }
 
     fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
-        let run = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            read.work_imports()?.import_run(&operation.id.0)
-        });
-        match run {
-            Ok(Some(run)) if run.completed_at_ms.is_some() => effect_result(operation, &run),
-            Ok(Some(run))
-                if run.cursor == 0
-                    && !read_snapshot(&*self.store, &ReadOptions::default(), |r| {
-                        let job: Job = serde_json::from_value(operation.payload.clone())
-                            .map_err(|_| invalid("work import job"))?;
-                        Ok(r.queue()
-                            .entry(&job.delivery)?
-                            .is_some_and(|entry| entry.cancel_requested))
-                    })
-                    .unwrap_or(false) =>
+        let Ok(job) = serde_json::from_value::<Job>(operation.payload.clone()) else {
+            return EffectOutcome::Failed("invalid work import job".into());
+        };
+        let observed = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let run = read.work_imports()?.import_run(&operation.id.0)?;
+            let delivery = read
+                .queue()
+                .entry(&job.delivery)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if delivery.consumer != EFFECT_CONSUMER
+                || delivery.operation_id.as_ref() != Some(&operation.id)
             {
-                EffectOutcome::NotApplied("no work snapshot records committed".into())
+                return Err(StorageError::ScopeDenied);
             }
-            Ok(Some(_)) => {
-                let job = match serde_json::from_value(operation.payload.clone()) {
-                    Ok(job) => job,
-                    Err(_) => return EffectOutcome::Failed("invalid work import job".into()),
-                };
-                match self.finish(operation, &job, Some("interrupted_at_durable_checkpoint")) {
-                    Ok(run) => effect_result(operation, &run),
-                    Err(_) => EffectOutcome::Unknown(
-                        "durable import checkpoint awaits a result report".into(),
-                    ),
+            Ok((run, delivery.cancel_requested))
+        });
+        match observed {
+            Ok((Some(run), _)) if run.completed_at_ms.is_some() => effect_result(operation, &run),
+            Ok((Some(_), true)) => match self.finish(operation, &job, Some("cancelled")) {
+                Ok(run) => effect_result(operation, &run),
+                Err(_) => {
+                    EffectOutcome::Unknown("cancelled import awaits its checkpoint report".into())
                 }
+            },
+            Ok((Some(run), false)) if run.input.is_some() && run.cursor as i64 <= run.rows => {
+                // This observation does not publish anything. Each target row, source mapping
+                // and checkpoint commit together, so only the work after the saved cursor
+                // remains. The dispatcher may redeliver that same intent and saved input.
+                EffectOutcome::NotApplied(format!(
+                    "no unobserved records beyond the durable checkpoint of {}",
+                    run.cursor,
+                ))
             }
             _ => EffectOutcome::Unknown("work import checkpoint is unavailable".into()),
         }

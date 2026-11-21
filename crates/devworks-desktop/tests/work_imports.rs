@@ -85,8 +85,10 @@ fn query(
     op: &str,
     rev: u32,
     body: Value,
-) -> Result<OperationResult, ops::Failure> {
-    ops::query_result(b.query(op, &wire(b, op, rev, body, true))).map(|(result, _)| result)
+) -> Result<OperationResult, Box<ops::Failure>> {
+    ops::query_result(b.query(op, &wire(b, op, rev, body, true)))
+        .map(|(result, _)| result)
+        .map_err(Box::new)
 }
 
 fn preview(b: &dyn Backend, cfg: &Value, revision: u32, since: Option<i64>) -> ImportRun {
@@ -257,10 +259,8 @@ fn native_v1_import_deduplicates_preserves_history_and_never_adopts_source_work(
     .unwrap();
     assert_eq!(restored.title, "Updated source title");
     export(&path, captured - 1000, "Stale source title");
-    let stale = query(b, "imports.preview", 1, json!({"config":config}));
-    assert!(
-        matches!(stale, Err(ops::Failure::Refused(f)) if f.code == DomainErrorCode::SourceChanged)
-    );
+    let stale = query(b, "imports.preview", 1, json!({"config":config})).unwrap_err();
+    assert!(matches!(*stale, ops::Failure::Refused(f) if f.code == DomainErrorCode::SourceChanged));
 }
 
 #[test]
@@ -284,6 +284,47 @@ fn native_runtime_accepts_export_from_frozen_mariadb_schema_when_supplied() {
     let (observed, report) = completed(b, &run.0);
     assert!(observed.imported_ids.0.contains(&local("Item", ITEM)));
     assert_eq!(report["counts"]["failures"], 0);
+    let project = match query(
+        b,
+        "imports.history",
+        1,
+        json!({"projectId":local("Project",PROJECT),"page":{"limit":20}}),
+    )
+    .unwrap()
+    {
+        OperationResult::ImportsHistory { value } => value.items.0,
+        other => panic!("unexpected project history {other:?}"),
+    };
+    assert!(project.iter().any(|row| row.kind.0 == "Session"
+        && row.evidence.0["source"]["transcriptAvailability"].is_string()));
+    let history = match query(
+        b,
+        "imports.history",
+        1,
+        json!({"workId":local("Item",ITEM),"page":{"limit":20}}),
+    )
+    .unwrap()
+    {
+        OperationResult::ImportsHistory { value } => value.items.0,
+        other => panic!("unexpected work history {other:?}"),
+    };
+    for kind in [
+        "Attachment",
+        "Attempt",
+        "GitEvidence",
+        "Handoff",
+        "ItemThread",
+    ] {
+        assert!(
+            history.iter().any(|row| row.kind.0 == kind),
+            "missing {kind}"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&history)
+            .unwrap()
+            .contains("PRIVATE-DIRECT-MESSAGE")
+    );
 }
 
 #[test]
@@ -597,11 +638,31 @@ fn staged_import_survives_source_replacement_and_a_queued_stop_survives_restart(
         matches!(ops::command_result(b.command("imports.cancel", &cancel)),
         Ok(OperationResult::ImportsCancel { value }) if value.changed)
     );
-    assert_eq!(
-        inspect(b, &cancel_candidate.0).state,
-        OperationState::CancelledBeforeDispatch
-    );
+    drop(backend);
+    drop(engine);
 
+    // The delivery may have been claimed just before stop. Verify the durable cancellation
+    // through boot recovery in either case, with no selected work published.
+    let engine = start(&root);
+    let backend = engine.backend();
+    let b = &*backend;
+    let deadline = Instant::now() + SETTLE_BOUND;
+    loop {
+        let run = inspect(b, &cancel_candidate.0);
+        if matches!(
+            run.state,
+            OperationState::CancelledBeforeDispatch | OperationState::Failed
+        ) {
+            assert_eq!(run.processed.unwrap().get(), 0);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "cancellation did not settle: {run:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    engine.host().runtime().dispatcher().stop();
     let exact = apply_frame(b, &cfg, &reviewed, 1);
     let saved = ops::accepted_decision(b.command("imports.apply", &exact)).unwrap();
     assert_eq!(inspect(b, &saved.0).state, OperationState::IntentRecorded);
@@ -612,10 +673,10 @@ fn staged_import_survives_source_replacement_and_a_queued_stop_survives_restart(
     let engine = start(&root);
     let backend = engine.backend();
     let b = &*backend;
-    assert_eq!(
+    assert!(matches!(
         inspect(b, &cancel_candidate.0).state,
-        OperationState::CancelledBeforeDispatch
-    );
+        OperationState::CancelledBeforeDispatch | OperationState::Failed
+    ));
     let duplicate = ops::accepted_decision(b.command("imports.apply", &exact)).unwrap();
     assert_eq!(saved, duplicate);
     let (_, result) = completed(b, &saved.0);
@@ -669,4 +730,80 @@ fn settings_opens_the_native_snapshot_preview() {
         .unwrap()
         .is_none()
     );
+}
+
+#[test]
+fn first_delta_retains_the_older_parent_of_current_and_large_history() {
+    let _case = native_runtime_case();
+    let root = Root::new("work-import-history-window");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let b = &*backend;
+    let path = root.0.join("work-imports/source.ndjson");
+    let captured = 1795300702715_i64;
+    export(&path, captured, "Older task required by recent history");
+    let original = std::fs::read_to_string(&path).unwrap();
+    let (header, body) = original.split_once('\n').unwrap();
+    let mut header: Value = serde_json::from_str(header).unwrap();
+    let oversized = "e".repeat(1_100_000);
+    let mut rows = body
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    for row in &mut rows {
+        if row["id"] == "legacy-comment" {
+            row["stamp"]["updatedAtMs"] = json!(captured);
+            row["evidence"]["body"] = json!(oversized);
+        }
+    }
+    let mut body = Vec::new();
+    for row in rows {
+        serde_json::to_writer(&mut body, &row).unwrap();
+        body.push(b'\n');
+    }
+    header["recordsSha256"] = json!(sha256_hex(&body));
+    let mut sealed = serde_json::to_vec(&header).unwrap();
+    sealed.push(b'\n');
+    sealed.extend(body);
+    std::fs::write(&path, sealed).unwrap();
+
+    let config = config_body();
+    let reviewed = preview(b, &config, 2, Some(captured - 50));
+    let profile = approve(b, &config, 2);
+    let run =
+        ops::accepted_decision(b.command("imports.apply", &apply_frame(b, &profile, &reviewed, 2)))
+            .unwrap();
+    let (_, report) = completed(b, &run.0);
+    assert_eq!(report["counts"]["added"], 4);
+    assert_eq!(report["counts"]["skipped"], 2);
+    let first = match query(
+        b,
+        "imports.history",
+        1,
+        json!({"workId":local("Item",ITEM),"page":{"limit":1}}),
+    )
+    .unwrap()
+    {
+        OperationResult::ImportsHistory { value } => value,
+        other => panic!("unexpected work history {other:?}"),
+    };
+    let cursor = first.next_cursor.unwrap();
+    let second = match query(
+        b,
+        "imports.history",
+        1,
+        json!({"workId":local("Item",ITEM),"page":{"limit":1,"cursor":cursor}}),
+    )
+    .unwrap()
+    {
+        OperationResult::ImportsHistory { value } => value,
+        other => panic!("unexpected continued work history {other:?}"),
+    };
+    let evidence = &second.items.0[0];
+    assert_eq!(evidence.kind.0, "Comment");
+    let reference =
+        serde_json::from_value(evidence.evidence.0["source"]["fullEvidence"].clone()).unwrap();
+    let bytes = ops::read_artifact_bytes(b, &reference).unwrap();
+    let decoded: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(decoded["body"], oversized);
 }

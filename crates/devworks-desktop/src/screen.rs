@@ -154,7 +154,7 @@ pub enum Effect {
     /// Opens the notification center.
     OpenNotifications,
     OpenImports,
-    OpenImportedHistory(String),
+    OpenImportedHistory(String, bool),
     /// The navigation's project list reply, read.
     ProjectList(Result<Page<ProjectRecord>, String>),
     /// The repository list reply, read.
