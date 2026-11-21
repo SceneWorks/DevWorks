@@ -484,7 +484,8 @@ fn the_registry_lists_the_wire_revisions_the_desktop_expects() {
         ("agents.events", 7),
         ("next_work.inspect_queue", 3),
         ("next_work.inspect_claim", 3),
-        ("watch.list", 8),
+        ("watch.list", 10),
+        ("watch.cancel", 10),
     ] {
         assert_eq!(latest_revision(operation), Some(revision), "{operation}");
     }

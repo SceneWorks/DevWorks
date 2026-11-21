@@ -102,7 +102,7 @@ class SchemaRevisionRules(unittest.TestCase):
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
         for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):
-            self.assertEqual(carried[name], {8, 9})
+            self.assertEqual(carried[name], {8, 9, 10})
         for name in ('schemas.code_references', 'settings.read_effective', 'settings.validate',
                      'settings.save_revision', 'settings.explain_source'):
             self.assertEqual(carried[name], {8})

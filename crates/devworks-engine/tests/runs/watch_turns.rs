@@ -155,6 +155,11 @@ fn assert_completed(end: LaunchEnd) {
 }
 
 fn select_watch_tools(fx: &Fx, ctx: &InvocationContext) {
+    select_tool_families(fx, ctx, &["router", "watch"]);
+}
+
+fn select_tool_families(fx: &Fx, ctx: &InvocationContext, families: &[&str]) {
+    let families: Vec<String> = families.iter().map(|family| (*family).to_owned()).collect();
     let actor = ctx.principal().clone();
     write(fx.store.as_ref(), move |tx| {
         let principal = tx.authority().principal(&actor)?.unwrap();
@@ -164,7 +169,7 @@ fn select_watch_tools(fx: &Fx, ctx: &InvocationContext) {
                 kind: principal.kind,
                 role: principal.role,
                 project_id: principal.project_id,
-                tool_families: Some(vec!["router".into(), "watch".into()]),
+                tool_families: Some(families),
                 bound_by: principal.bound_by,
             },
             Some(principal.revision),
@@ -638,23 +643,6 @@ fn watch_assignment(
     id(record["id"].as_str().unwrap())
 }
 
-fn assignment_transition(fx: &Fx, child: &StoredAssignment, state: &str) -> EventRecord {
-    read(fx.store.as_ref(), |snapshot| {
-        snapshot.history().page(
-            &EventFilter::Aggregate {
-                kind: "assignment".into(),
-                id: child.id.0.as_str().into(),
-            },
-            0,
-            100,
-        )
-    })
-    .events
-    .into_iter()
-    .find(|event| event.kind == "AssignmentStateChanged" && event.payload["to"] == state)
-    .unwrap()
-}
-
 #[test]
 fn completed_delegated_assignment_wakes_its_idle_parent_with_session_and_evidence() {
     let _native_case = native_runtime_case();
@@ -662,7 +650,7 @@ fn completed_delegated_assignment_wakes_its_idle_parent_with_session_and_evidenc
     runtime().block_on(async {
         let (app, mut receive) = scenario(&fx).await;
         let (parent, primary) = agent_context(&fx);
-        select_watch_tools(&fx, &parent);
+        select_tool_families(&fx, &parent, &["router", "watch", "agents", "sessions"]);
         let child = delegate(&fx, &parent);
         let watcher = watch_assignment(&app, &parent, &child, "watch-child-completion");
         let supervisor = app.watchers().unwrap();
@@ -699,7 +687,7 @@ fn completed_delegated_assignment_wakes_its_idle_parent_with_session_and_evidenc
                 ..
             })
         ));
-        let evidence = assignment_transition(&fx, &child, "Completed");
+
         let pass = supervisor.tick().unwrap();
         assert_eq!((pass.settled, pass.delivered), (1, 1));
         let delivery = event(&fx, &watcher);
@@ -712,10 +700,42 @@ fn completed_delegated_assignment_wakes_its_idle_parent_with_session_and_evidenc
             "Child session: sessions.transcript for {}",
             child.session_id.as_str()
         )));
+        let evidence = result(
+            &app.query(
+                &parent,
+                "agents.inspect",
+                &frame_at(
+                    "Query",
+                    "agents.inspect",
+                    json!({"assignmentId":child.id}),
+                    "child-evidence",
+                    1,
+                ),
+            )
+            .unwrap(),
+        );
+        assert_eq!(evidence["state"], "ObservedComplete");
+        assert_eq!(evidence["assignmentId"], json!(child.id));
         assert!(messages.contains(&format!(
-            "Evidence: history.events for root root-i, event {}",
-            evidence.id.0.as_str()
+            "Evidence: agents.inspect for assignment {} at revision {}",
+            child.id.0.as_str(),
+            evidence["revision"].as_str().unwrap()
         )));
+        let transcript = result(
+            &app.query(
+                &parent,
+                "sessions.transcript",
+                &serde_json::to_vec(&json!({
+                    "protocol": PROTOCOL,
+                    "queryId": "child-transcript",
+                    "sessionId": child.session_id,
+                    "limit": 10
+                }))
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(transcript["sessionId"], json!(child.session_id));
         assert!(messages.contains("Child assignment Completed"));
         wake.answer(COMPLETED);
         assert_completed(finished(task).await);
@@ -802,7 +822,7 @@ fn delegated_assignment_backup_reads_terminal_state_without_primary_observation(
                 })?;
             Ok(())
         });
-        let evidence = assignment_transition(&fx, &child, "Failed");
+
         assert_eq!(
             inspect_at(&app, &parent, watcher.as_str(), 10)["state"],
             "Active"
@@ -827,7 +847,10 @@ fn delegated_assignment_backup_reads_terminal_state_without_primary_observation(
             caught.payload["outcome"]["detail"]
                 .as_str()
                 .unwrap()
-                .contains(evidence.id.0.as_str())
+                .contains(&format!(
+                    "agents.inspect for assignment {}",
+                    child.id.0.as_str()
+                ))
         );
         assert_eq!(supervisor.tick().unwrap().delivered, 0);
         assert_eq!(event(&fx, &watcher).id, caught.id);

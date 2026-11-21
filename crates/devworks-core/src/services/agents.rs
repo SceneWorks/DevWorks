@@ -259,20 +259,6 @@ fn fenced(error: Fenced) -> Failure {
     Refusal::new(code, "assignment", None).into()
 }
 
-pub(super) fn assignment_checkpoint(
-    assignment: &StoredAssignment,
-) -> Result<Option<ArtifactRef>, StorageError> {
-    assignment
-        .checkpoint
-        .as_ref()
-        .map(|value| {
-            serde_json::from_value::<CheckpointRecord>(value.clone())
-                .map(|record| record.content)
-                .map_err(|_| corrupt("assignment checkpoint"))
-        })
-        .transpose()
-}
-
 fn agent_record(
     read: &dyn RunRead,
     assignment: &StoredAssignment,
@@ -280,7 +266,15 @@ fn agent_record(
     let context = read
         .agent_assignment_context(&assignment.id)?
         .ok_or_else(|| corrupt("assignment context"))?;
-    let checkpoint = assignment_checkpoint(assignment)?;
+    let checkpoint = assignment
+        .checkpoint
+        .as_ref()
+        .map(|value| {
+            serde_json::from_value::<CheckpointRecord>(value.clone())
+                .map(|record| record.content)
+                .map_err(|_| corrupt("assignment checkpoint"))
+        })
+        .transpose()?;
     let state = match assignment.state {
         AssignmentState::Ready => OperationState::IntentRecorded,
         AssignmentState::Active => OperationState::Dispatching,
