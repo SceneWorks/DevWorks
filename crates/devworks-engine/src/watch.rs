@@ -83,6 +83,11 @@ pub(crate) enum AgentInput {
     Finished,
 }
 
+pub(crate) fn is_notice(body: &TranscriptBody) -> bool {
+    matches!(body, TranscriptBody::HostNotice { artifact, .. }
+        if artifact.media_type == WATCHER_NOTICE_MEDIA_TYPE)
+}
+
 fn has_events(
     snapshot: &dyn ReadSnapshot,
     session: &Id,
@@ -156,11 +161,8 @@ fn notice_since(
         for entry in entries {
             position = entry.sequence;
             if entry.kind == "HostNotice"
-                && matches!(
-                    serde_json::from_value::<TranscriptBody>(entry.body),
-                    Ok(TranscriptBody::HostNotice { artifact, .. })
-                        if artifact.media_type == WATCHER_NOTICE_MEDIA_TYPE
-                )
+                && serde_json::from_value::<TranscriptBody>(entry.body)
+                    .is_ok_and(|body| is_notice(&body))
             {
                 return Ok(true);
             }

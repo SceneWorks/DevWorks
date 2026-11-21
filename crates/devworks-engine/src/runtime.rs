@@ -832,6 +832,11 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         consumers.push(crate::process_tools::consumer(service.clone()));
         consumers.push(crate::process_tools::cancel_consumer(service.clone()));
     }
+    let workspace_replies_enabled = config.providers.is_some()
+        && application
+            .sessions
+            .as_ref()
+            .is_some_and(|sessions| sessions.coordinator.is_some());
     // Watchers launch through the process tools, so they are composed with them.
     let watchers = process_tools.as_ref().map(|service| {
         Arc::new(crate::watch::WatchSupervisor::new(
@@ -847,6 +852,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                     clock.clone(),
                 )
                 .with_root_control(control.clone())
+                .with_workspace_replies(workspace_replies_enabled)
                 .with_diagnostics(diagnostics.clone()),
             ),
         ))
@@ -1026,12 +1032,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
-    let workspace_replies = (config.providers.is_some()
-        && application
-            .sessions
-            .as_ref()
-            .is_some_and(|sessions| sessions.coordinator.is_some()))
-    .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
+    let workspace_replies = workspace_replies_enabled
+        .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
     if let Some(worker) = &workspace_replies {
         consumers.push(worker.consumer());
     }

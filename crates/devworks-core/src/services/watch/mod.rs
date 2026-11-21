@@ -130,6 +130,7 @@ pub struct WatchService {
     clock: Arc<dyn Clock>,
     /// Root controls: a paused or held owner's events wait (WATCH-07).
     control: Option<Arc<ControlService>>,
+    workspace_replies: bool,
     /// Where backup catches are recorded as missed primary deliveries (WATCH-12).
     diagnostics: Option<Arc<DiagnosticService>>,
     /// When the backup check last came due (store clock), or `None` before the first tick.
@@ -164,6 +165,7 @@ impl WatchService {
             ids,
             clock,
             control: None,
+            workspace_replies: false,
             diagnostics: None,
             last_backup_ms: std::sync::Mutex::new(None),
             last_polled: std::sync::Mutex::new(HashMap::new()),
@@ -180,6 +182,11 @@ impl WatchService {
     /// when the waiting events are delivered in the order they were recorded.
     pub fn with_root_control(mut self, control: Arc<ControlService>) -> Self {
         self.control = Some(control);
+        self
+    }
+
+    pub fn with_workspace_replies(mut self, enabled: bool) -> Self {
+        self.workspace_replies = enabled;
         self
     }
 
@@ -429,6 +436,7 @@ impl WatchService {
         let id = watcher.id.clone();
         let host = host.clone().with_session(watcher.session_id.clone());
         let control = self.control.clone();
+        let workspace_replies = self.workspace_replies;
         let committed = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             let Some(watcher) = tx.watchers().watcher(&id)? else {
                 return Ok(false);
@@ -460,6 +468,7 @@ impl WatchService {
                     owner: session.agent_id.clone(),
                 },
             )?;
+            let entry_id = tx.new_id(IdKind::TranscriptEntry);
             let batch = turn::batch_of(
                 &watcher.session_id,
                 tx.new_id(IdKind::TranscriptBatch),
@@ -469,7 +478,7 @@ impl WatchService {
                     source: watcher.id.clone(),
                     artifact: version_ref(&version),
                 }],
-                || tx.new_id(IdKind::TranscriptEntry),
+                || entry_id.clone(),
             );
             match SessionWriter::append_in(tx, &host, &SessionBatch::entries(batch))? {
                 BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_) => {}
@@ -478,6 +487,16 @@ impl WatchService {
                         "watcher reminder refused: {refusal:?}"
                     )));
                 }
+            }
+            if workspace_replies {
+                crate::services::sessions::workspace_reply::record_watcher(
+                    tx,
+                    &host,
+                    &session,
+                    entry_id,
+                    session.next_sequence,
+                    watcher.id.clone(),
+                )?;
             }
             let operation = watcher.process_operation_id.clone();
             history(
@@ -726,6 +745,7 @@ impl WatchService {
         let host = host.clone().with_session(event.session_id.clone());
         let control = self.control.clone();
         let diagnostics = self.diagnostics.clone();
+        let workspace_replies = self.workspace_replies;
         let committed = run_write(&*self.store, WriteOptions::observed(), move |tx| {
             let Some(event) = tx.watchers().watch_event(&event_id)? else {
                 return Ok(false);
@@ -765,6 +785,7 @@ impl WatchService {
                 },
             )?;
             let sequence = session.next_sequence;
+            let entry_id = tx.new_id(IdKind::TranscriptEntry);
             let batch = turn::batch_of(
                 &event.session_id,
                 tx.new_id(IdKind::TranscriptBatch),
@@ -774,7 +795,7 @@ impl WatchService {
                     source: event.id.clone(),
                     artifact: version_ref(&version),
                 }],
-                || tx.new_id(IdKind::TranscriptEntry),
+                || entry_id.clone(),
             );
             match SessionWriter::append_in(tx, &host, &SessionBatch::entries(batch))? {
                 BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_) => {}
@@ -788,6 +809,16 @@ impl WatchService {
             let delivered = tx
                 .watchers()
                 .deliver_watch_event(&event.id, sequence, now)?;
+            if workspace_replies && delivered {
+                crate::services::sessions::workspace_reply::record_watcher(
+                    tx,
+                    &host,
+                    &session,
+                    entry_id,
+                    sequence,
+                    event.id.clone(),
+                )?;
+            }
             if backup && delivered {
                 record_backup_catch(tx, diagnostics.as_deref(), &event)?;
             }

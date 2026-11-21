@@ -658,41 +658,13 @@ async fn run_native_loop(
                     sequence,
                     facts,
                 } => {
-                    let bytes = engine
-                        .artifacts()
-                        .read_exact(engine.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
-                        .map_err(artifact_read_fault)?
-                        .0;
-                    let mut context: ProviderContext = serde_json::from_slice(&bytes)
-                        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
-                    context.messages.push(Message {
-                        role: MessageRole::User,
-                        content: vec![ContentBlock::Text {
-                            text: "Host notice: The previous assistant response was interrupted before \
-                                completion. Continue from the last completed step; do not assume the \
-                                partial response was applied.".into(),
-                            cache: None,
-                        }],
-                    });
-                    for fact in facts {
-                        crate::tool_turn::append_context_fact(
-                            &mut context,
-                            engine.store().as_ref(),
-                            engine.artifacts(),
-                            ctx,
-                            session_id,
-                            fact,
-                        )?;
-                    }
-                    publish_agent_continuation(
+                    publish_interruption(
                         engine,
                         ctx,
-                        &attempt_id,
-                        &binding,
-                        crate::tool_turn::ContinuationMaterial {
-                            context,
-                            observed_sequence: sequence,
-                        },
+                        (&head, &binding),
+                        attempt_id,
+                        sequence,
+                        facts,
                     )?;
                     recovered = engine.recover_native_context_head(ctx, session_id)?;
                     continue;
@@ -924,6 +896,75 @@ async fn run_native_loop(
             }
         }
     }
+}
+
+pub(crate) fn recover_interrupted_workspace_turn(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session: &Id,
+) -> Result<(), StorageError> {
+    loop {
+        let Some((head, binding, observed)) = engine.recover_native_context_head(ctx, session)?
+        else {
+            return Ok(());
+        };
+        let Some(UnpublishedTurn::Interrupted {
+            attempt_id,
+            sequence,
+            facts,
+        }) = unpublished_turn(engine.store().as_ref(), ctx, session, observed)?
+        else {
+            return Ok(());
+        };
+        publish_interruption(engine, ctx, (&head, &binding), attempt_id, sequence, facts)?;
+    }
+}
+
+fn publish_interruption(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    (head, binding): (&ArtifactRef, &NativeBinding),
+    attempt: AttemptId,
+    sequence: i64,
+    facts: Vec<TranscriptBody>,
+) -> Result<(), StorageError> {
+    let store = engine.store().as_ref();
+    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let bytes = engine
+        .artifacts()
+        .read_exact(store, ctx, head, 8 * 1024 * 1024)
+        .map_err(artifact_read_fault)?
+        .0;
+    let mut context: ProviderContext = serde_json::from_slice(&bytes)
+        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
+    context.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: "Host notice: The previous assistant response was interrupted before completion. \
+                Continue from the last completed step; do not assume the partial response was applied.".into(),
+            cache: None,
+        }],
+    });
+    for fact in facts {
+        crate::tool_turn::append_context_fact(
+            &mut context,
+            store,
+            engine.artifacts(),
+            ctx,
+            session,
+            fact,
+        )?;
+    }
+    publish_agent_continuation(
+        engine,
+        ctx,
+        &attempt,
+        binding,
+        crate::tool_turn::ContinuationMaterial {
+            context,
+            observed_sequence: sequence,
+        },
+    )
 }
 
 /// A watcher can publish while an interrupted or settled exchange is being rebuilt. Recheck
@@ -1272,8 +1313,15 @@ fn unpublished_turn(
                         has_tools = true;
                     }
                     fact @ (TranscriptBody::UserMessage { .. }
-                    | TranscriptBody::HostNotice { .. }
-                    | TranscriptBody::OperationUpdate { .. }) => facts.push(fact),
+                    | TranscriptBody::HostNotice { .. })
+                        if ctx
+                            .workspace_reply()
+                            .is_none_or(|reply| position <= reply.user_sequence)
+                            || crate::watch::is_notice(&fact) =>
+                    {
+                        facts.push(fact)
+                    }
+                    fact @ TranscriptBody::OperationUpdate { .. } => facts.push(fact),
                     _ => {}
                 }
             }
@@ -2704,6 +2752,33 @@ fn plan_request(
         // The origin of a workspace turn is its durable message intent, not a run activation.
         identity.push(':');
         identity.push_str(ctx.invocation_id().as_str());
+    } else if !compaction {
+        // After a disconnected carrying turn, recovery can settle its provider attempt without
+        // adding a transcript entry. Keep requests stable within the turn, but let its replacement
+        // send the same unacknowledged watcher input under its own resume/admission identity.
+        let watch_turn = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+            let turn = read.runs().session_turn(session_id)?;
+            if turn.as_ref().is_some_and(|turn| {
+                ctx.activation().is_some_and(|(owner, epoch)| {
+                    owner == &turn.execution_id && epoch == turn.owner_epoch
+                })
+            }) && !read
+                .watchers()
+                .watch_events(
+                    session_id,
+                    &[devworks_core::ports::storage::WatchEventState::Delivered],
+                    1,
+                )?
+                .is_empty()
+            {
+                return Ok(turn.map(|turn| turn.turn_id));
+            }
+            Ok(None)
+        })?;
+        if let Some(turn) = watch_turn {
+            identity.push(':');
+            identity.push_str(turn.as_str());
+        }
     }
     let info = engine.store().info();
     let (

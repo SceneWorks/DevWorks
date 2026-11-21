@@ -66,7 +66,7 @@ async fn compaction_runtime(fx: &Fx, wire: Arc<CompactionWire>) -> Arc<devworks_
 
 /// A host process with an identity, so that a later boot can tell it has stopped.
 #[derive(Default)]
-struct StoppingHost(FakeHost);
+pub(super) struct StoppingHost(FakeHost);
 impl ProcessHost for StoppingHost {
     fn platform(&self) -> &'static str {
         self.0.platform()
