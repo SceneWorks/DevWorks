@@ -167,10 +167,9 @@ pub(crate) async fn assign(
             }],
         },
     );
-    material.parameters = GenerationParameters {
-        max_output_tokens: Some(OUTPUT_TOKENS as u32),
-        ..GenerationParameters::default()
-    };
+    // The common encoder applies the request's response headroom as the output limit on
+    // endpoints that support it. A Codex subscription must omit that wire parameter.
+    material.parameters = GenerationParameters::default();
     let source = capture_source(engine, ctx, origin, material, cancel)?;
     let record = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         read.router()
@@ -886,6 +885,12 @@ fn low_invocation(
             },
             _ => return Err(StorageError::ScopeDenied),
         };
+        let output_headroom = if candidate.endpoint == "CodexSubscriptionResponses" {
+            // Apply the same conservative reserve as a conversational subscription request.
+            crate::agent_turns::output_headroom(model.context_tokens)
+        } else {
+            OUTPUT_TOKENS
+        };
         let query = PriceQuery {
             catalog_model_id: model.id.clone(),
             provider_model_id: Some(model.upstream_model_id),
@@ -943,7 +948,7 @@ fn low_invocation(
                 required_capabilities: required.to_vec(),
             },
             input_tokens: source.material.byte_length.get(),
-            output_headroom: OUTPUT_TOKENS,
+            output_headroom,
             unit_headroom: Vec::new(),
             expected_context_epoch: owner.expected_context_epoch,
             dispatch: owner.dispatch,
@@ -977,7 +982,7 @@ fn low_invocation(
                     context_epoch: Counter::new(owner.expected_context_epoch.unwrap_or(0))
                         .map_err(invalid)?,
                     tools: Vec::new(),
-                    response_headroom_tokens: revision(OUTPUT_TOKENS)?,
+                    response_headroom_tokens: revision(output_headroom)?,
                     requires_images: has_images,
                     requires_parallel_tools: false,
                 },

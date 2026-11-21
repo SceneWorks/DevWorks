@@ -36,7 +36,7 @@ impl StreamingHttp for AutoWire {
         } else {
             let reply = match model {
                 "low-a-upstream" => "not one of the four tiers",
-                "low-b-upstream" => "High",
+                "gpt-6-luna" => "High",
                 _ => "completed turn",
             };
             let body = json!({
@@ -73,15 +73,36 @@ fn seed_auto(f: &Fx, managed: bool) {
             let mut model = template.clone();
             model.id = id(name);
             model.display_name = name.into();
-            model.upstream_model_id = format!("{name}-upstream");
+            model.upstream_model_id = if name == "low-b" {
+                "gpt-6-luna".into()
+            } else {
+                format!("{name}-upstream")
+            };
             model.position = position;
             if name == "same-tier-backup" {
                 model.image_input = true;
             }
             tx.router().put_route_model(&model, None)?;
         }
+        let mut connection = tx.router().connection(&id("watch-connection"))?.unwrap();
+        connection.discovered = Some(
+            [
+                "fixture-model",
+                "low-a-upstream",
+                "gpt-6-luna",
+                "same-tier-backup-upstream",
+            ]
+            .iter()
+            .map(|name| DiscoveredModel {
+                id: (*name).into(),
+                context_tokens: Some(16_000),
+            })
+            .collect(),
+        );
+        tx.router()
+            .put_connection(&connection, Some(connection.revision))?;
         let values: serde_json::Map<String, Value> = [
-            ("routing.tierLow.members", json!(["low-a","low-b"])),
+            ("routing.tierLow.members", json!(["low-a","luna-latest"])),
             ("routing.tierHigh.members", json!(["watch-model","same-tier-backup"])),
             ("routing.managedAuto", json!(managed)),
         ].into_iter().map(|(key, value)| (key.into(), json!({
@@ -289,7 +310,7 @@ fn systemone_checks_later_candidates_before_direct_low_and_reuses_the_chosen_tie
                     "decision-b-upstream",
                     "decision-a-upstream",
                     "low-a-upstream",
-                    "low-b-upstream",
+                    "gpt-6-luna",
                     "same-tier-backup-upstream",
                 ]
             );
@@ -324,6 +345,37 @@ fn systemone_checks_later_candidates_before_direct_low_and_reuses_the_chosen_tie
                 "decision-a-upstream",
                 "decision-b-upstream",
                 "fixture-model",
+            ]
+        );
+        let start = json!({"mode":"Command","protocol":PROTOCOL,"requestKey":"low-rotation-home",
+            "body":{"kind":"sessions.start","scope":{"kind":"Workspace"},"title":"Rotate Low"}});
+        let fourth = applied(
+            &app.command(
+                &f.user,
+                "sessions.start",
+                &serde_json::to_vec(&start).unwrap(),
+            )
+            .unwrap(),
+        );
+        let fourth = id(fourth["id"].as_str().unwrap());
+        send_auto(
+            &f,
+            &app,
+            &fourth,
+            "low-rotation",
+            "Use the fallback case to check Low rotation",
+        );
+        wait_for_replies(&f, 6).await;
+        assert_eq!(assignment(&f, &fourth).model_id, id("low-b"));
+        assert_eq!(read(&*f.store, |r| r.router().auto_low_cursor()), 2);
+        assert_eq!(read(&*f.store, |r| r.router().tier_cursor("Low")), 0);
+        assert_eq!(
+            request_models(&wire.requests.lock().unwrap()[13..]),
+            [
+                "decision-b-upstream",
+                "decision-a-upstream",
+                "gpt-6-luna",
+                "same-tier-backup-upstream",
             ]
         );
         app.shutdown().await;
@@ -540,7 +592,7 @@ impl StreamingHttp for StopDuringOpen {
 #[test]
 fn cancellation_before_and_after_the_tier_commit_never_sends_a_stale_generation() {
     let _native_case = native_runtime_case();
-    for (hold_model, commits_tier) in [("low-b-upstream", false), ("fixture-model", true)] {
+    for (hold_model, commits_tier) in [("gpt-6-luna", false), ("fixture-model", true)] {
         let f = Fx::new();
         seed_auto(&f, false);
         let wire = Arc::new(StopDuringOpen {

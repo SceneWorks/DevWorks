@@ -1487,7 +1487,7 @@ pub(crate) fn publish_compaction_result(
     )?)
 }
 
-fn output_headroom(context_tokens: Option<i64>) -> i64 {
+pub(crate) fn output_headroom(context_tokens: Option<i64>) -> i64 {
     context_tokens
         .map(|window| (window / 4).max(1))
         .unwrap_or(DEFAULT_OUTPUT_HEADROOM)

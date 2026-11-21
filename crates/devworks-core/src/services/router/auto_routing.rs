@@ -163,10 +163,7 @@ impl InferenceRouter {
         let mut candidates = Vec::new();
         for eligible in pool.iter().filter(|a| a.eligible()) {
             let model = eligible.model.as_ref().expect("eligible model");
-            // A classifier needs a bounded response. This subscription ignores output limits.
-            if model.endpoint_profile == "CodexSubscriptionResponses"
-                || crate::ports::router::is_open_router_auto(&model.upstream_model_id)
-            {
+            if crate::ports::router::is_open_router_auto(&model.upstream_model_id) {
                 continue;
             }
             let connection_id = eligible.connection.as_ref().expect("eligible connection");
@@ -213,7 +210,7 @@ impl InferenceRouter {
             }
             let mut codes = select::block_codes(&pool);
             if codes.is_empty() {
-                codes.push("ClassifierOutputLimitUnsupported");
+                codes.push("ClassifierNeedsConcreteModel");
             }
             return Ok(Err(super::RouteBlocked {
                 unavailable: select::unavailable(&pool),
