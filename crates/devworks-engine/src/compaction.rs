@@ -166,6 +166,22 @@ pub(crate) fn publish_compacted(
             body,
         )?;
     }
+    if ctx.assignment_id().is_some() {
+        for notice in crate::watch::unacknowledged_notices(
+            store,
+            session_id,
+            observed.ok_or(StorageError::ScopeDenied)?,
+        )? {
+            crate::tool_turn::append_context_fact(
+                &mut compacted,
+                store,
+                artifacts,
+                ctx,
+                session_id,
+                notice,
+            )?;
+        }
+    }
     if let Some(reply) = ctx.workspace_reply()
         && reply.user_sequence > 1
     {

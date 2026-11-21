@@ -386,6 +386,25 @@ macro_rules! watcher_reads {
                     ],
                 )
             }
+            fn delivered_watch_events(
+                &self,
+                session: &Id,
+                after_sequence: i64,
+                through_sequence: i64,
+                limit: u16,
+            ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+                events_where(
+                    self.conn,
+                    "session_id=?1 AND state='Delivered' AND transcript_sequence>?2
+                     AND transcript_sequence<=?3 ORDER BY transcript_sequence LIMIT ?4",
+                    params![
+                        session.as_str(),
+                        after_sequence,
+                        through_sequence,
+                        page_limit(limit)?
+                    ],
+                )
+            }
         }
     };
 }
@@ -564,10 +583,17 @@ impl WatcherRepository for Unit<'_> {
         ))?;
         Ok(changed == 1)
     }
-    fn carry_watch_events(&mut self, session: &Id, turn: &Id) -> Result<u64, StorageError> {
+    fn carry_watch_events(
+        &mut self,
+        session: &Id,
+        turn: &Id,
+        through_sequence: i64,
+    ) -> Result<u64, StorageError> {
         Ok(db(self.conn.execute(
-            "UPDATE watcher_events SET carried_turn_id=?2 WHERE session_id=?1 AND state='Delivered'",
-            params![session.as_str(), turn.as_str()],
+            "UPDATE watcher_events SET carried_turn_id=?2
+             WHERE session_id=?1 AND state='Delivered' AND transcript_sequence<=?3
+               AND carried_turn_id IS NOT ?2",
+            params![session.as_str(), turn.as_str(), through_sequence],
         ))? as u64)
     }
     fn release_watch_events(

@@ -58,6 +58,8 @@ pub(crate) struct ContextHeadFence {
     pub epoch: i64,
     pub sequence: i64,
     pub head: Option<StoredProviderContextHead>,
+    /// The cursor of the exact source artifact, when it is still the current head.
+    pub input_sequence: Option<i64>,
     workspace_reply: bool,
 }
 
@@ -418,19 +420,27 @@ pub(crate) fn require_current_head_for_new_request(
 ) -> Result<ContextHeadFence, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
         let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
+        let head = read.sessions().provider_context_head(session_id)?;
+        let source_is_head = head
+            .as_ref()
+            .is_some_and(|head| head.artifact == json!(source));
+        let input_sequence = head
+            .as_ref()
+            .filter(|_| source_is_head)
+            .map(|head| head.observed_sequence);
         if read.router().route_request(request_id)?.is_some() {
             return Ok(ContextHeadFence {
                 session_id: session_id.clone(),
                 epoch: session.context_epoch,
                 sequence: session.last_durable_sequence(),
-                head: read.sessions().provider_context_head(session_id)?,
+                head,
+                input_sequence,
                 workspace_reply: ctx.workspace_reply().is_some(),
             });
         }
-        let head = read.sessions().provider_context_head(session_id)?;
         if let Some(head) = &head
             && head.context_epoch == session.context_epoch
-            && (head.artifact != json!(source)
+            && (!source_is_head
                 || (head.observed_sequence != session.last_durable_sequence()
                     && !(ctx.workspace_reply().is_some()
                         && workspace_input_tail(
@@ -446,6 +456,7 @@ pub(crate) fn require_current_head_for_new_request(
             epoch: session.context_epoch,
             sequence: session.last_durable_sequence(),
             head,
+            input_sequence,
             workspace_reply: ctx.workspace_reply().is_some(),
         })
     })

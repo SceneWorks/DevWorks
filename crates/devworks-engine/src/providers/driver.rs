@@ -1371,6 +1371,22 @@ impl OwnedInferenceSource for LazySource {
                             return Err(StorageError::ScopeDenied);
                         }
                     }
+                    if let Some(fence) = &context_head_fence
+                        && let Some(input_sequence) = fence.input_sequence
+                        && let Some((execution, epoch)) = context.activation()
+                        && let Some(turn) = tx.runs().session_turn(&fence.session_id)?
+                        && &turn.execution_id == execution
+                        && turn.owner_epoch == epoch
+                        && context.assignment_id() == Some(&turn.assignment_id)
+                    {
+                        // The sealed context has passed the final send fence. A notice appended
+                        // after this request belongs to a later provider input.
+                        tx.watchers().carry_watch_events(
+                            &fence.session_id,
+                            &turn.turn_id,
+                            input_sequence,
+                        )?;
+                    }
                     Ok(())
                 })
         }));

@@ -4,6 +4,9 @@
 //! completes. This fixture runs `/bin/sh`; Windows compiles the service and runs its process
 //! supervisor checks in the platform CI lane.
 #![cfg(unix)]
+#[path = "watch_turns.rs"]
+mod turns;
+
 use super::*;
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::services::process::tools::{

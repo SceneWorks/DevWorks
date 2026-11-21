@@ -3749,6 +3749,15 @@ impl WatcherRead for Unmodelled {
     ) -> Result<Vec<StoredWatchEvent>, StorageError> {
         unmodelled()
     }
+    fn delivered_watch_events(
+        &self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+        unmodelled()
+    }
 }
 impl WatcherRepository for Unmodelled {
     fn insert_watcher(&mut self, _: &StoredWatcher) -> Result<(), StorageError> {
@@ -3763,7 +3772,7 @@ impl WatcherRepository for Unmodelled {
     fn deliver_watch_event(&mut self, _: &Id, _: i64, _: i64) -> Result<bool, StorageError> {
         unmodelled()
     }
-    fn carry_watch_events(&mut self, _: &Id, _: &Id) -> Result<u64, StorageError> {
+    fn carry_watch_events(&mut self, _: &Id, _: &Id, _: i64) -> Result<u64, StorageError> {
         unmodelled()
     }
     fn release_watch_events(

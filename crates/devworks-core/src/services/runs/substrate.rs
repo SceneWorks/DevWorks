@@ -1376,12 +1376,7 @@ impl ControlService {
             started_at_ms: tx.now_ms(),
         };
         match tx.runs().insert_turn(&turn) {
-            Ok(()) => {
-                // The turn carries every watcher event already delivered to the session
-                // (including one an ended turn carried but never completed).
-                tx.watchers().carry_watch_events(session, &turn.turn_id)?;
-                Ok(Ok(turn))
-            }
+            Ok(()) => Ok(Ok(turn)),
             Err(StorageError::Duplicate { .. }) => Ok(Err(Fenced::LeaseLost(
                 "another turn of this session is in flight".into(),
             ))),

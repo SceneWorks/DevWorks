@@ -2,8 +2,8 @@
 //! `process.execute` service on its own consumer and answers before the process exits. When the
 //! effect settles, [`WatchService::tick`] records the observed outcome as one durable watcher
 //! event in the same transaction as the watcher's state change, then delivers the event into the
-//! owning session's input as a host-only transcript notice. The next turn that starts carries
-//! it, and only that turn's completion acknowledges it (`runs` substrate `begin_turn`/`end_turn`).
+//! owning session's input as a host-only transcript notice. A provider request carries the
+//! notices in its input, and only completion of the carrying turn acknowledges them.
 use crate::authority::shell::{CommandVerdict, record_verdict};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
