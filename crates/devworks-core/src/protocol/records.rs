@@ -3298,6 +3298,13 @@ pub struct DreamRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<ArtifactRef>,
     pub proposal_ids: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DreamRunDetail", extend("x-since" = 9))]
+    pub detail: Option<DreamRunDetail>,
 }
 impl Check for DreamRun {
     fn check(&self) -> Result<(), String> {
@@ -3308,8 +3315,113 @@ impl Check for DreamRun {
         self.checkpoint.check()?;
         self.report.check()?;
         self.proposal_ids.check()?;
+        self.detail.check()?;
         crate::protocol::rules::record(
             "DreamRun",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DreamRun {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.detail = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DreamRunStatus {
+    Queued,
+    Running,
+    Disabled,
+    Busy,
+    TooSoon,
+    NoSignal,
+    Blocked,
+    BudgetExhausted,
+    Partial,
+    Failed,
+    Cancelled,
+    OutcomeUnknown,
+    ScheduledFanout,
+    Completed,
+}
+impl Check for DreamRunStatus {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DreamRunTrigger {
+    Manual,
+    Scheduled,
+    Resume,
+}
+impl Check for DreamRunTrigger {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamRunDetail {
+    pub status: DreamRunStatus,
+    pub trigger: DreamRunTrigger,
+    pub initiator: ActorId,
+    pub started_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<Counter>,
+    pub settings_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instruction_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_instruction_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Id>,
+    pub input_tokens: Counter,
+    pub output_tokens: Counter,
+    pub cost_micro_usd: Counter,
+    pub usage_uncertain: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<Id>,
+    pub can_continue: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_digest: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ArtifactRef>,
+}
+impl Check for DreamRunDetail {
+    fn check(&self) -> Result<(), String> {
+        self.status.check()?;
+        self.trigger.check()?;
+        self.initiator.check()?;
+        self.started_at_ms.check()?;
+        self.ended_at_ms.check()?;
+        self.settings_revision.check()?;
+        self.base_instruction_revision.check()?;
+        self.project_instruction_revision.check()?;
+        self.model_id.check()?;
+        self.connection_id.check()?;
+        self.input_tokens.check()?;
+        self.output_tokens.check()?;
+        self.cost_micro_usd.check()?;
+        self.usage_uncertain.check()?;
+        self.continued_from.check()?;
+        self.can_continue.check()?;
+        self.reason.check()?;
+        self.journal_digest.check()?;
+        self.evidence.check()?;
+        crate::protocol::rules::record(
+            "DreamRunDetail",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -3324,6 +3436,55 @@ pub struct DreamConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<Id>,
     pub batch_limit: Limit,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 9))]
+    pub model_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "EffortName", extend("x-since" = 9))]
+    pub effort: Option<EffortName>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 9))]
+    pub minimum_interval_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 9))]
+    pub max_turns: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 9))]
+    pub max_tokens: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 9))]
+    pub max_elapsed_ms: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 9))]
+    pub max_micro_usd: Option<Counter>,
 }
 impl Check for DreamConfig {
     fn check(&self) -> Result<(), String> {
@@ -3331,11 +3492,195 @@ impl Check for DreamConfig {
         self.instructions.check()?;
         self.schedule_id.check()?;
         self.batch_limit.check()?;
+        self.model_id.check()?;
+        self.effort.check()?;
+        self.minimum_interval_ms.check()?;
+        self.max_turns.check()?;
+        self.max_tokens.check()?;
+        self.max_elapsed_ms.check()?;
+        self.max_micro_usd.check()?;
         crate::protocol::rules::record(
             "DreamConfig",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DreamConfig {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.model_id = None;
+        }
+        if revision < 9 {
+            self.effort = None;
+        }
+        if revision < 9 {
+            self.minimum_interval_ms = None;
+        }
+        if revision < 9 {
+            self.max_turns = None;
+        }
+        if revision < 9 {
+            self.max_tokens = None;
+        }
+        if revision < 9 {
+            self.max_elapsed_ms = None;
+        }
+        if revision < 9 {
+            self.max_micro_usd = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DreamEvidenceKind {
+    Knowledge,
+    Lesson,
+    Review,
+    RepositorySource,
+    Graph,
+    Work,
+    PriorAction,
+}
+impl Check for DreamEvidenceKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamEvidenceReference {
+    pub kind: DreamEvidenceKind,
+    pub reference: Text,
+    pub fingerprint: Digest,
+    pub summary: Content,
+}
+impl Check for DreamEvidenceReference {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.reference.check()?;
+        self.fingerprint.check()?;
+        self.summary.check()?;
+        crate::protocol::rules::record(
+            "DreamEvidenceReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DreamProposalChange {
+    Retract {},
+    Supersede { replacement: ClaimDraft },
+    Merge { other: RevisionedRef },
+    SkillDraft {},
+    HookDraft {},
+    TestDraft {},
+}
+impl Check for DreamProposalChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Retract {} => {}
+            Self::Supersede { replacement } => {
+                replacement.check()?;
+            }
+            Self::Merge { other } => {
+                other.check()?;
+            }
+            Self::SkillDraft {} => {}
+            Self::HookDraft {} => {}
+            Self::TestDraft {} => {}
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for DreamProposalChange {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Supersede { replacement, .. } = self {
+            replacement.retain_revision(revision);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamRevertOutcome {
+    pub run_id: Id,
+    pub applied: Rows<Id>,
+    pub conflicts: Rows<DreamRevertConflict>,
+    pub remaining: Counter,
+}
+impl Check for DreamRevertOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.run_id.check()?;
+        self.applied.check()?;
+        self.conflicts.check()?;
+        self.remaining.check()?;
+        crate::protocol::rules::record(
+            "DreamRevertOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamRevertConflict {
+    pub action_id: Id,
+    pub target_id: Id,
+    pub expected_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_revision: Option<Revision>,
+}
+impl Check for DreamRevertConflict {
+    fn check(&self) -> Result<(), String> {
+        self.action_id.check()?;
+        self.target_id.check()?;
+        self.expected_revision.check()?;
+        self.current_revision.check()?;
+        crate::protocol::rules::record(
+            "DreamRevertConflict",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "KnowledgeWriteReceipt", "before": 9}))]
+pub enum DreamRevertResult {
+    #[schemars(extend("x-until" = 9))]
+    Legacy(KnowledgeWriteReceipt),
+    #[schemars(extend("x-since" = 9))]
+    Current(DreamRevertOutcome),
+}
+impl Check for DreamRevertResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for DreamRevertResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 9 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 9 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -9276,6 +9621,12 @@ impl Check for DreamSettingsRecord {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DreamSettingsRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        self.config.retain_revision(revision);
     }
 }
 

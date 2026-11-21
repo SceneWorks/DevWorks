@@ -23,9 +23,11 @@ use crate::ports::storage::{
 };
 use crate::protocol::provider::{ArtifactRef, SchemaRef};
 use crate::protocol::records::{
-    ClaimDraft, Diagnostic, KnowledgeWriteReceipt, LessonDraft, MutationSummary, Severity,
+    ClaimDraft, Diagnostic, KnowledgeBatch, KnowledgeWriteReceipt, LessonDraft, MutationSummary,
+    Severity,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{DomainErrorCode, EventId, Id, Revision, RevisionDimension};
 use crate::services::artifacts::{Viewer, visible};
 use crate::services::kernel::{Failure, Refusal, not_found, rev};
@@ -1996,6 +1998,15 @@ fn verify(
     ctx: &InvocationContext,
     i: &ops::VerifyInput,
 ) -> Result<DomainDecision, Failure> {
+    verify_at_sources(tx, ctx, i, &BTreeMap::new())
+}
+
+fn verify_at_sources(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::VerifyInput,
+    verified_sources: &BTreeMap<String, String>,
+) -> Result<DomainDecision, Failure> {
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
     let mut w = Writer::new(tx, ctx, "knowledge.verify")?;
     let c = exact_claim(&mut w, &scoped, &i.claim_id, &i.expected_revision)?;
@@ -2015,7 +2026,12 @@ fn verify(
     for id in &cited {
         if let Some(e) = w.k().knowledge_evidence(id)? {
             let head = w.k().knowledge_source_head(&e.source_ref)?;
-            if let Some(r) = revision.clone().or(head).or(e.source_revision.clone()) {
+            if let Some(r) = revision
+                .clone()
+                .or_else(|| verified_sources.get(&e.source_ref).cloned())
+                .or(head)
+                .or(e.source_revision.clone())
+            {
                 basis.retain(|(s, _): &(String, String)| *s != e.source_ref);
                 basis.push((e.source_ref.clone(), r));
             }
@@ -2026,7 +2042,11 @@ fn verify(
             let head = w.k().knowledge_source_head(source)?;
             basis.push((
                 source.clone(),
-                revision.clone().or(head).unwrap_or_else(|| old.clone()),
+                revision
+                    .clone()
+                    .or_else(|| verified_sources.get(source).cloned())
+                    .or(head)
+                    .unwrap_or_else(|| old.clone()),
             ));
         }
     }
@@ -2482,6 +2502,15 @@ fn challenge(
     ctx: &InvocationContext,
     i: &ops::ChallengeInput,
 ) -> Result<DomainDecision, Failure> {
+    challenge_with_id(tx, ctx, i, None)
+}
+
+fn challenge_with_id(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::ChallengeInput,
+    own_challenge_id: Option<Id>,
+) -> Result<DomainDecision, Failure> {
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
     let mut w = Writer::new(tx, ctx, "knowledge.challenge")?;
     let c = exact_claim(&mut w, &scoped, &i.claim_id, &i.expected_revision)?;
@@ -2502,7 +2531,7 @@ fn challenge(
                 ));
             }
             let ch = StoredChallenge {
-                id: w.tx.new_id(IdKind::KnowledgeChallenge),
+                id: own_challenge_id.unwrap_or_else(|| w.tx.new_id(IdKind::KnowledgeChallenge)),
                 claim_id: c.id.clone(),
                 state: "Open".into(),
                 reason: i.reason.0.clone(),
@@ -3461,4 +3490,257 @@ fn import_user_data(
     outcome(w, &primary, |value| {
         OperationResult::KnowledgeImportUserData { value }
     })
+}
+
+/// The same writer, lesson policy and snapshots used by human and agent Knowledge commands.
+pub(crate) fn consolidate(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+    action: super::dream_actions::Consolidation,
+) -> Result<DomainDecision, Failure> {
+    use super::dream_actions::Consolidation::*;
+    match action {
+        Record(draft) => record(
+            tx,
+            ctx,
+            &ops::RecordInput {
+                scope: scope.into(),
+                batch: KnowledgeBatch {
+                    entities: BoundedList(vec![]),
+                    claims: BoundedList(vec![*draft]),
+                    evidence: BoundedList(vec![]),
+                },
+            },
+        ),
+        Relate(input) => relate(tx, ctx, &input),
+        Promote(input) => promote(tx, ctx, &input),
+        Verify(input, sources) => verify_at_sources(tx, ctx, &input, &sources),
+        Challenge {
+            input,
+            challenge_id,
+        } => challenge_with_id(tx, ctx, &input, Some(challenge_id)),
+        Applicability {
+            target,
+            expected,
+            applicable,
+        } => {
+            let (scoped, _) = scope_for(tx, ctx, &scope.into(), true)?;
+            let mut writer = Writer::new(tx, ctx, "knowledge.revise")?;
+            let mut current = exact_claim(&mut writer, &scoped, &target, &expected)?;
+            require_active(&current)?;
+            let Some(lesson) = current.lesson.as_mut() else {
+                return Err(invalid("lesson"));
+            };
+            if matches!(
+                lesson.source.as_str(),
+                "Prompt" | "Review" | "RelayedPrompt" | "RelayedReview"
+            ) {
+                return Err(invalid("prompt_sourced_rule"));
+            }
+            let applicable =
+                serde_json::to_value(applicable).map_err(|_| invalid("lesson_applicability"))?;
+            if lesson.applicability != applicable {
+                lesson.applicability = applicable;
+                writer.put_claim(current, Some(expected.get()), "Revised")?;
+            }
+            outcome(writer, scope, |value| OperationResult::KnowledgeRevise {
+                value,
+            })
+        }
+    }
+}
+
+/// Invert only an action selected by the run journal and fenced by its owning human command.
+/// The caller holds the exact terminal/cause revisions for every target in the action.
+pub(crate) fn reverse_dream_changes(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+    action: &Value,
+    targets: &[WriteChange],
+    before: &[StoredClaim],
+    current: &BTreeMap<String, i64>,
+) -> Result<KnowledgeWriteReceipt, Failure> {
+    let tool = action["tool"]
+        .as_str()
+        .ok_or_else(|| invalid("dreaming_reversion"))?;
+    let arguments = &action["arguments"];
+    if tool == "dream_challenge" {
+        let id = action["result"]["challengeId"]
+            .as_str()
+            .and_then(|raw| Id::new(raw).ok())
+            .ok_or_else(|| invalid("dreaming_challenge_receipt"))?;
+        let target = before
+            .first()
+            .ok_or_else(|| invalid("dreaming_reversion"))?;
+        let revision = current
+            .get(target.id.as_str())
+            .ok_or_else(|| invalid("dreaming_reversion"))?;
+        let result = challenge(
+            tx,
+            ctx,
+            &ops::ChallengeInput {
+                scope: scope.into(),
+                claim_id: target.id.clone(),
+                expected_revision: rev(*revision),
+                reason: BoundedText("Reverted Dreaming challenge".into()),
+                evidence_ids: BoundedList(vec![]),
+                resolve_challenge_id: Some(id),
+                outcome: Some(crate::protocol::records::ChallengeOutcome::Uphold),
+            },
+        )?;
+        if let DomainDecision::Applied {
+            result: OperationResult::KnowledgeChallenge { value },
+        } = result
+        {
+            return Ok(value);
+        }
+        return Err(invalid("dreaming_challenge_reversion"));
+    }
+    if tool == "dream_relate"
+        && let Some(object) = arguments["same_as"].as_str()
+    {
+        let id = |value: &str| Id::new(value).map_err(|_| invalid("dreaming_reversion"));
+        let result = relate(
+            tx,
+            ctx,
+            &ops::RelateInput {
+                scope: scope.into(),
+                subject_id: id(arguments["id"]
+                    .as_str()
+                    .ok_or_else(|| invalid("dreaming_reversion"))?)?,
+                predicate: BoundedText(model::UNMERGE.into()),
+                object_id: id(object)?,
+                evidence_ids: BoundedList(vec![]),
+            },
+        )?;
+        if let DomainDecision::Applied {
+            result: OperationResult::KnowledgeRelate { value },
+        } = result
+        {
+            return Ok(value);
+        }
+        return Err(invalid("dreaming_unmerge_unavailable"));
+    }
+    let (scoped, _) = scope_for(tx, ctx, &scope.into(), true)?;
+    let mut writer = Writer::new(tx, ctx, "dreaming.revert")?;
+    let mut handled = HashSet::new();
+    let now = writer.now;
+    for target in targets.iter().rev() {
+        if !handled.insert(target.id.clone()) {
+            continue;
+        }
+        if target.target_kind == "Relation" {
+            let witness = before
+                .iter()
+                .filter_map(|row| current.get(row.id.as_str()).map(|r| (&row.id, *r)))
+                .map(|(id, revision)| exact_claim(&mut writer, &scoped, id, &rev(revision)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut removed = false;
+            for row in &witness {
+                if let Some(relation) = writer
+                    .k()
+                    .knowledge_relations_touching(std::slice::from_ref(&row.id))?
+                    .into_iter()
+                    .find(|relation| relation.id == target.id && relation.scope == *scope)
+                    && writer.k().remove_knowledge_relation(&relation.id, now)?
+                {
+                    writer.changes.push(WriteChange {
+                        target_kind: "Relation".into(),
+                        id: relation.id,
+                        before: None,
+                        after: None,
+                    });
+                    removed = true;
+                    break;
+                }
+            }
+            if !removed {
+                return Err(invalid("dreaming_relation_changed"));
+            }
+            continue;
+        }
+        if target.target_kind != "Claim" {
+            return Err(invalid("dreaming_unrecognized_reversion"));
+        }
+        let expected = current
+            .get(target.id.as_str())
+            .copied()
+            .ok_or_else(|| invalid("dreaming_reversion"))?;
+        let active = exact_claim(&mut writer, &scoped, &target.id, &rev(expected))?;
+        if let Some(original) = before.iter().find(|original| original.id == target.id) {
+            writer.put_claim(original.clone(), Some(active.revision), "DreamingReverted")?;
+        } else if targets
+            .iter()
+            .any(|change| change.id == target.id && change.before.is_none())
+        {
+            let mut retained = active.clone();
+            retained.lifecycle = "Retracted".into();
+            retained.body.reason = Some("Reverted Dreaming record".into());
+            writer.put_claim(retained, Some(active.revision), "DreamingReverted")?;
+        } else {
+            return Err(invalid("dreaming_prior_revision_unavailable"));
+        }
+    }
+    writer.finish(scope)
+}
+
+/// A current, explicitly approved Dreaming proposal mutates Knowledge as the reviewing person.
+pub(crate) fn review_dream_change(
+    tx: &mut dyn WriteTransaction,
+    human: &InvocationContext,
+    scope: &KnowledgeScope,
+    target: &crate::protocol::records::RevisionedRef,
+    change: crate::protocol::records::DreamProposalChange,
+    rationale: &str,
+) -> Result<(), Failure> {
+    use crate::protocol::records::DreamProposalChange::*;
+    let result = match change {
+        Retract {} => retract(
+            tx,
+            human,
+            &ops::RetractInput {
+                scope: scope.into(),
+                claim_id: target.id.clone(),
+                expected_revision: target.revision.clone(),
+                reason: BoundedText(rationale.into()),
+                evidence_ids: BoundedList(vec![]),
+            },
+        )?,
+        Supersede { mut replacement } => {
+            if replacement.supersedes.is_some() {
+                return Err(invalid("embedded_supersession"));
+            }
+            replacement.supersedes = Some(target.id.clone());
+            record(
+                tx,
+                human,
+                &ops::RecordInput {
+                    scope: scope.into(),
+                    batch: KnowledgeBatch {
+                        entities: BoundedList(vec![]),
+                        claims: BoundedList(vec![replacement]),
+                        evidence: BoundedList(vec![]),
+                    },
+                },
+            )?
+        }
+        Merge { other } => relate(
+            tx,
+            human,
+            &ops::RelateInput {
+                scope: scope.into(),
+                subject_id: target.id.clone(),
+                object_id: other.id,
+                predicate: BoundedText(model::SAME_AS.into()),
+                evidence_ids: BoundedList(vec![]),
+            },
+        )?,
+        SkillDraft {} | HookDraft {} | TestDraft {} => return Ok(()),
+    };
+    match result {
+        DomainDecision::Applied { .. } | DomainDecision::NoChange { .. } => Ok(()),
+        _ => Err(invalid("dreaming_review_knowledge_result")),
+    }
 }

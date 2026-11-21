@@ -1015,7 +1015,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         config.providers.as_ref(),
     ) {
         (Some(router), Some(connections), Some(provider)) => {
-            provider.systemone_validator.clone().map(|validator| {
+            provider.schema_validator.clone().map(|validator| {
                 Arc::new(crate::providers::systemone::SystemOne {
                     store: store.clone(),
                     artifacts: artifacts.clone(),
@@ -1041,6 +1041,25 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let use_cases = if let Some(systemone) = &systemone {
         consumers.push(systemone.consumer());
         use_cases.with_systemone(systemone.decisions.clone())
+    } else {
+        use_cases
+    };
+    let dreaming = config
+        .providers
+        .as_ref()
+        .and_then(|provider| provider.schema_validator.clone())
+        .zip(use_cases.inference_router());
+    let dreaming_worker = Arc::new(crate::dreaming::DeferredSweep::default());
+    let use_cases = if dreaming.is_some() {
+        devworks_core::services::dreaming::DreamingService::ensure_base(
+            store.as_ref(),
+            artifacts.clone(),
+        )
+        .map_err(BootError::Composition)?;
+        consumers.push(dreaming_worker.consumer());
+        use_cases.with_dreaming(Arc::new(
+            devworks_core::services::dreaming::DreamingService::new(ids.clone()),
+        ))
     } else {
         use_cases
     };
@@ -1128,6 +1147,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
             .with_approval_control(control.clone()),
     );
+    jobs.install_nightly_dreaming(store.as_ref())
+        .map_err(BootError::Composition)?;
     let use_cases = use_cases.with_jobs(jobs.clone());
     let instructions = config.instructions.clone().map(|c| {
         Arc::new(
@@ -1342,6 +1363,17 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         changes: watch::channel(0).0,
         handle: tokio::runtime::Handle::current(),
     });
+    if let Some(((validator, router), providers)) = dreaming.zip(providers.as_ref()) {
+        dreaming_worker.install(crate::dreaming::NativeDreaming::new(
+            store.clone(),
+            artifacts.clone(),
+            router,
+            providers,
+            validator,
+            &admitter,
+            index_supervisor.as_ref().map(|ix| ix.env().source.clone()),
+        ));
+    }
     let scheduler = Scheduler::with_stop(
         store.clone(),
         jobs.clone(),

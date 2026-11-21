@@ -63,6 +63,7 @@ enum ArtifactKind {
     CompactionSummary,
     SampledText,
     DocumentVision,
+    Dreaming,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Detached {
@@ -70,6 +71,7 @@ enum Detached {
     Compaction,
     SampledText,
     DocumentVision,
+    Dreaming,
 }
 pub struct ProviderSink {
     store: Arc<dyn ApplicationStore>,
@@ -167,6 +169,11 @@ impl ProviderSink {
     }
     pub(crate) fn with_document_vision(mut self) -> Self {
         self.detached = Detached::DocumentVision;
+        self
+    }
+
+    pub(crate) fn with_dreaming(mut self) -> Self {
+        self.detached = Detached::Dreaming;
         self
     }
 
@@ -392,6 +399,7 @@ impl ProviderSink {
             }
             ArtifactKind::CompactionSummary => "ProviderCompactionSummary",
             ArtifactKind::SampledText => "ProviderSampledText",
+            ArtifactKind::Dreaming => "DreamingProviderResult",
             ArtifactKind::DocumentVision =>
                 devworks_core::kernel::derivation::DerivedKind::DocumentVisionOutput.as_str(),
         };
@@ -473,7 +481,7 @@ impl ProviderSink {
         call: DecodedToolCall,
         fence: &WriteFence,
     ) -> Result<(), StorageError> {
-        if self.detached != Detached::No {
+        if !matches!(self.detached, Detached::No | Detached::Dreaming) {
             return Err(invalid("detached generation cannot emit tool calls"));
         }
         let tool = self
@@ -1143,6 +1151,36 @@ impl ProviderSink {
             } else {
                 self.result.locked().outcome = Some(outcome);
             }
+            return Ok(());
+        }
+        if self.detached == Detached::Dreaming {
+            if matches!(
+                outcome,
+                AttemptEnd::Completed | AttemptEnd::ToolCallsReady | AttemptEnd::Incomplete
+            ) {
+                let complete_calls = outcome == AttemptEnd::ToolCallsReady;
+                let bodies = std::mem::take(&mut self.content)
+                    .into_values()
+                    .flatten()
+                    .filter(|body| {
+                        matches!(body, ProviderBody::TextDelta { .. })
+                            || (complete_calls
+                                && matches!(body, ProviderBody::ToolCallComplete { .. }))
+                    })
+                    .collect::<Vec<_>>();
+                let bytes =
+                    serde_json::to_vec(&bodies).map_err(|_| invalid("Dreaming provider result"))?;
+                let artifact = self.artifact(
+                    attempt,
+                    &bytes,
+                    "Dreaming round result",
+                    "application/json",
+                    ArtifactKind::Dreaming,
+                    fence,
+                )?;
+                self.result.locked().result_artifact = Some(artifact);
+            }
+            self.result.locked().outcome = Some(outcome);
             return Ok(());
         }
         if self.detached != Detached::No {

@@ -31,6 +31,7 @@ use devworks_core::protocol::OperationState;
 use devworks_core::protocol::ProjectId;
 use devworks_core::protocol::Revision;
 use devworks_core::protocol::RootId;
+use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
 use devworks_core::services::documents::extraction::ExtractedBlock;
@@ -1012,6 +1013,115 @@ impl DocumentRepository for Unmodelled {
         &mut self,
         _: &DocumentCheckpoint,
         _: &[ExtractedBlock],
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+}
+impl DreamingRead for Unmodelled {
+    fn dream_scope(&self, _: &KnowledgeScope) -> Result<DreamScopeState, StorageError> {
+        unmodelled()
+    }
+    fn dream_cutoffs(&self, _: &KnowledgeScope) -> Result<DreamCutoffs, StorageError> {
+        unmodelled()
+    }
+    fn dream_signals(
+        &self,
+        _: &KnowledgeScope,
+        _: DreamStream,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<DreamSignal>, StorageError> {
+        unmodelled()
+    }
+    fn dream_claim_refs(
+        &self,
+        _: &DreamClaimWindow<'_>,
+    ) -> Result<Vec<DreamClaimRef>, StorageError> {
+        unmodelled()
+    }
+    fn dream_instructions(
+        &self,
+        _: &KnowledgeScope,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<DreamInstruction>, StorageError> {
+        unmodelled()
+    }
+    fn dream_run(&self, _: &Id) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_live_run(&self, _: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_runs(
+        &self,
+        _: &KnowledgeScope,
+        _: Option<(i64, &Id)>,
+        _: u16,
+    ) -> Result<Vec<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_action(&self, _: &Id, _: &Id) -> Result<Option<DreamActionRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_reversion(&self, _: &Id, _: &Id) -> Result<Option<Value>, StorageError> {
+        unmodelled()
+    }
+    fn dream_actions(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<DreamActionRow>, StorageError> {
+        unmodelled()
+    }
+}
+impl DreamingRepository for Unmodelled {
+    fn set_dream_policy(
+        &mut self,
+        _: &KnowledgeScope,
+        _: i64,
+        _: &DreamPolicy,
+    ) -> Result<DreamScopeState, StorageError> {
+        unmodelled()
+    }
+    fn add_dream_instruction(
+        &mut self,
+        _: &KnowledgeScope,
+        _: i64,
+        _: &ArtifactRef,
+        _: &ActorId,
+    ) -> Result<DreamInstruction, StorageError> {
+        unmodelled()
+    }
+    fn insert_dream_run(&mut self, _: &DreamRunRow) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn advance_dream_run(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: &DreamProgress,
+    ) -> Result<DreamRunRow, StorageError> {
+        unmodelled()
+    }
+    fn put_dream_action(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &Id,
+        _: &Value,
+    ) -> Result<DreamActionRow, StorageError> {
+        unmodelled()
+    }
+    fn put_dream_reversion(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: &ActorId,
+        _: &Value,
     ) -> Result<(), StorageError> {
         unmodelled()
     }

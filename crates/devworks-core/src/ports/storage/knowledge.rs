@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Where a Knowledge record lives: general (every project sees it) or one project.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KnowledgeScope {
     Workspace,
     Project(ProjectId),
@@ -104,7 +104,7 @@ pub struct StoredEntity {
 }
 
 /// A lesson's stored rule fields (indexed for lesson filters).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredLesson {
     /// `RuleState` wire name as stored (a recurrence-derived transition is applied on read).
     pub rule_state: String,
@@ -182,7 +182,7 @@ pub struct PriorRule {
 }
 
 /// A claim at its current revision.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredClaim {
     pub id: Id,
     pub scope: KnowledgeScope,

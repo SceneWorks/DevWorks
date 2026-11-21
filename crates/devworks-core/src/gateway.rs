@@ -1998,6 +1998,11 @@ impl WriteTransaction for HandlerTx<'_> {
     fn documents(&mut self) -> &mut dyn crate::ports::storage::DocumentRepository {
         self.inner.get_mut().documents()
     }
+    fn dreaming(
+        &mut self,
+    ) -> Result<&mut dyn crate::ports::storage::DreamingRepository, StorageError> {
+        self.inner.get_mut().dreaming()
+    }
     fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
         self.inner.get_mut().help()
     }

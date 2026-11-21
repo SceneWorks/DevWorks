@@ -183,6 +183,7 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
+    pub dreaming: crate::dreaming_screen::DreamingScreen,
     pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: crate::artifacts_screen::ArtifactsScreen,
     pub resources: crate::artifacts_screen::ResourcesScreen,
@@ -402,6 +403,7 @@ screens!(
     Watchers => watchers,
     AddOns => addons,
     Knowledge => knowledge,
+    Dreaming => dreaming,
     Purge => purge,
     Placeholder => placeholder,
     ;
@@ -441,6 +443,7 @@ impl Shell {
             settings,
             help: Default::default(),
             knowledge: KnowledgeScreen::new(),
+            dreaming: Default::default(),
             conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: Default::default(),
             resources: Default::default(),
@@ -1026,6 +1029,9 @@ impl Shell {
         }
         if self.route == Route::Browser {
             self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
+        }
+        if self.route == Route::Dreaming {
+            self.with_screen(ScreenId::Dreaming, |s, cx| s.load(cx, Route::Dreaming));
         }
         if matches!(
             self.route,

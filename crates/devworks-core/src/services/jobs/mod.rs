@@ -617,6 +617,80 @@ impl JobService {
     pub fn config(&self) -> JobConfig {
         self.config
     }
+    /// Install the retained nightly Dreaming schedule once. The saved job is then managed by
+    /// the ordinary JobService, including edits, disabling, deletion and restore holds.
+    pub fn install_nightly_dreaming(
+        &self,
+        store: &dyn crate::ports::storage::ApplicationStore,
+    ) -> Result<(), StorageError> {
+        use crate::ports::storage::{WriteOptions, run_write};
+        use crate::protocol::records::SchemaValue;
+        use crate::protocol::support::DynamicJson;
+        let operation = "dreaming.run";
+        let capability = capability_id(operation);
+        if self.catalog.resolve(&capability) != Some(operation) {
+            return Ok(());
+        }
+        let revision = SchemaRevision(crate::services::dreaming::REVISION);
+        let schema = argument_schema(operation, revision).ok_or(StorageError::ViewUnavailable)?;
+        let schedule = Schedule::Calendar {
+            expression: BoundedText("0 2 * * *".into()),
+            timezone: BoundedText("UTC".into()),
+        };
+        let (plan, timezone) = plan_of(&schedule)
+            .map_err(|_| StorageError::InvalidRecord("invalid native Dreaming schedule".into()))?;
+        let definition = JobDefinition::Native {
+            capability_id: capability,
+            arguments: SchemaValue {
+                schema,
+                value: DynamicJson(json!({
+                    "scope":{"kind":"Workspace"},"expectedSettingsRevision":"1"
+                })),
+            },
+        };
+        run_write(store, WriteOptions::host_state(), move |tx| {
+            let id =
+                Id::new(crate::services::dreaming::NIGHTLY_JOB_ID).expect("native job identity");
+            if tx.jobs().job(&id)?.is_some() {
+                return Ok(());
+            }
+            let now = tx.now_ms();
+            let host = tx.store().host_actor.clone();
+            let epoch = tx.store().restore_epoch;
+            let job = tx.jobs().insert_job(&StoredJob {
+                id,
+                revision: 1,
+                project_id: None,
+                title: "Nightly Dreaming".into(),
+                kind: "Native".into(),
+                schedule: canonical(&schedule),
+                timezone,
+                definition: canonical(&definition),
+                enabled: true,
+                authorized: true,
+                authorized_by: Some(host.clone()),
+                hold: None,
+                activated_epoch: epoch,
+                project_epoch: 0,
+                anchor_at_ms: now,
+                next_at_ms: plan.next_after(now, now),
+                interrupted_run_id: None,
+                created_at_ms: now,
+                updated_at_ms: now,
+                deleted_at_ms: None,
+            })?;
+            event(
+                tx,
+                &host,
+                None,
+                None,
+                (JOB_AGGREGATE, job.id.as_str(), job.revision),
+                "JobCreated",
+                json!({"title":job.title,"kind":job.kind,"enabled":true,"nativeDefault":true}),
+            )?;
+            Ok(())
+        })
+    }
     fn correlation(&self, ctx: &InvocationContext) -> CorrelationId {
         CorrelationId(ctx.invocation_id().clone())
     }

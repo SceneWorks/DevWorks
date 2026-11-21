@@ -8833,3 +8833,6 @@ mod failure_notifications;
 mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
 mod review_capacity_tests;
+
+#[path = "runs/dreaming.rs"]
+mod dreaming;

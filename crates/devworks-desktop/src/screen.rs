@@ -47,6 +47,7 @@ pub enum ScreenId {
     Settings,
     AddOns,
     Knowledge,
+    Dreaming,
     /// The permanent project purge review (a window over every screen).
     Purge,
     /// Routes whose content belongs to a later item: a designed unavailable state.
@@ -75,6 +76,7 @@ impl ScreenId {
             Self::Settings => "settings",
             Self::AddOns => "addons",
             Self::Knowledge => "knowledge",
+            Self::Dreaming => "dreaming",
             Self::Purge => "purge",
             Self::Placeholder => "placeholder",
         }

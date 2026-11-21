@@ -5638,11 +5638,39 @@
         "batchLimit": {
           "$ref": "#/$defs/Limit"
         },
+        "effort": {
+          "$ref": "#/$defs/EffortName",
+          "x-since": 9
+        },
         "enabled": {
           "type": "boolean"
         },
         "instructions": {
           "$ref": "#/$defs/ArtifactRef"
+        },
+        "maxElapsedMs": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 9
+        },
+        "maxMicroUsd": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 9
+        },
+        "maxTokens": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 9
+        },
+        "maxTurns": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 9
+        },
+        "minimumIntervalMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 9
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 9
         },
         "scheduleId": {
           "anyOf": [
@@ -5662,6 +5690,64 @@
       ],
       "type": "object"
     },
+    "DreamRevertConflict": {
+      "additionalProperties": false,
+      "properties": {
+        "actionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "currentRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expectedRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "targetId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "actionId",
+        "targetId",
+        "expectedRevision"
+      ],
+      "type": "object"
+    },
+    "DreamRevertOutcome": {
+      "additionalProperties": false,
+      "properties": {
+        "applied": {
+          "$ref": "#/$defs/List_Id_0_500"
+        },
+        "conflicts": {
+          "$ref": "#/$defs/List_DreamRevertConflict_0_500"
+        },
+        "remaining": {
+          "$ref": "#/$defs/Counter"
+        },
+        "runId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "runId",
+        "applied",
+        "conflicts",
+        "remaining"
+      ],
+      "type": "object"
+    },
+    "DreamRevertResult": {
+      "$ref": "#/$defs/DreamRevertOutcome",
+      "x-since": 9
+    },
     "DreamRun": {
       "additionalProperties": false,
       "properties": {
@@ -5674,6 +5760,10 @@
               "type": "null"
             }
           ]
+        },
+        "detail": {
+          "$ref": "#/$defs/DreamRunDetail",
+          "x-since": 9
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -5709,6 +5799,171 @@
         "proposalIds"
       ],
       "type": "object"
+    },
+    "DreamRunDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "baseInstructionRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "canContinue": {
+          "type": "boolean"
+        },
+        "connectionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "continuedFrom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "costMicroUsd": {
+          "$ref": "#/$defs/Counter"
+        },
+        "endedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initiator": {
+          "$ref": "#/$defs/Id"
+        },
+        "inputTokens": {
+          "$ref": "#/$defs/Counter"
+        },
+        "journalDigest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outputTokens": {
+          "$ref": "#/$defs/Counter"
+        },
+        "projectInstructionRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settingsRevision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "startedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "status": {
+          "$ref": "#/$defs/DreamRunStatus"
+        },
+        "trigger": {
+          "$ref": "#/$defs/DreamRunTrigger"
+        },
+        "usageUncertain": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "status",
+        "trigger",
+        "initiator",
+        "startedAtMs",
+        "settingsRevision",
+        "inputTokens",
+        "outputTokens",
+        "costMicroUsd",
+        "usageUncertain",
+        "canContinue"
+      ],
+      "type": "object"
+    },
+    "DreamRunStatus": {
+      "enum": [
+        "Queued",
+        "Running",
+        "Disabled",
+        "Busy",
+        "TooSoon",
+        "NoSignal",
+        "Blocked",
+        "BudgetExhausted",
+        "Partial",
+        "Failed",
+        "Cancelled",
+        "OutcomeUnknown",
+        "ScheduledFanout",
+        "Completed"
+      ],
+      "type": "string"
+    },
+    "DreamRunTrigger": {
+      "enum": [
+        "Manual",
+        "Scheduled",
+        "Resume"
+      ],
+      "type": "string"
     },
     "DreamSettingsRecord": {
       "additionalProperties": false,
@@ -10332,6 +10587,14 @@
     "List_DocumentDetail_0_500": {
       "items": {
         "$ref": "#/$defs/DocumentDetail"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_DreamRevertConflict_0_500": {
+      "items": {
+        "$ref": "#/$defs/DreamRevertConflict"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -23758,7 +24021,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/KnowledgeWriteReceipt"
+          "$ref": "#/$defs/DreamRevertResult"
         }
       },
       "required": [

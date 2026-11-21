@@ -1317,7 +1317,42 @@
         "state": "OperationState",
         "checkpoint": "?ArtifactRef",
         "report": "?ArtifactRef",
-        "proposal_ids": "Items<Id>"
+        "proposal_ids": "Items<Id>",
+        "detail": "?DreamRunDetail"
+      },
+      "since": {"detail": 9}
+    },
+    "DreamRunStatus": {
+      "kind": "enum",
+      "values": ["Queued", "Running", "Disabled", "Busy", "TooSoon", "NoSignal", "Blocked",
+        "BudgetExhausted", "Partial", "Failed", "Cancelled", "OutcomeUnknown", "ScheduledFanout", "Completed"]
+    },
+    "DreamRunTrigger": {
+      "kind": "enum",
+      "values": ["Manual", "Scheduled", "Resume"]
+    },
+    "DreamRunDetail": {
+      "kind": "record",
+      "fields": {
+        "status": "DreamRunStatus",
+        "trigger": "DreamRunTrigger",
+        "initiator": "ActorId",
+        "started_at_ms": "Counter",
+        "ended_at_ms": "?Counter",
+        "settings_revision": "Revision",
+        "base_instruction_revision": "?Revision",
+        "project_instruction_revision": "?Revision",
+        "model_id": "?Id",
+        "connection_id": "?Id",
+        "input_tokens": "Counter",
+        "output_tokens": "Counter",
+        "cost_micro_usd": "Counter",
+        "usage_uncertain": "bool",
+        "continued_from": "?Id",
+        "can_continue": "bool",
+        "reason": "?Label",
+        "journal_digest": "?Digest",
+        "evidence": "?ArtifactRef"
       }
     },
     "DreamConfig": {
@@ -1326,8 +1361,66 @@
         "enabled": "bool",
         "instructions": "ArtifactRef",
         "schedule_id": "?Id",
-        "batch_limit": "Limit"
+        "batch_limit": "Limit",
+        "model_id": "?Id",
+        "effort": "?EffortName",
+        "minimum_interval_ms": "?Counter",
+        "max_turns": "?PositiveCounter",
+        "max_tokens": "?PositiveCounter",
+        "max_elapsed_ms": "?PositiveCounter",
+        "max_micro_usd": "?Counter"
+      },
+      "since": {"model_id": 9, "effort": 9, "minimum_interval_ms": 9, "max_turns": 9,
+        "max_tokens": 9, "max_elapsed_ms": 9, "max_micro_usd": 9}
+    },
+    "DreamEvidenceKind": {
+      "kind": "enum",
+      "values": ["Knowledge", "Lesson", "Review", "RepositorySource", "Graph", "Work", "PriorAction"]
+    },
+    "DreamEvidenceReference": {
+      "kind": "record",
+      "fields": {
+        "kind": "DreamEvidenceKind",
+        "reference": "Text",
+        "fingerprint": "Digest",
+        "summary": "Content"
       }
+    },
+    "DreamProposalChange": {
+      "kind": "union",
+      "variants": {
+        "Retract": {},
+        "Supersede": {"replacement": "ClaimDraft"},
+        "Merge": {"other": "RevisionedRef"},
+        "SkillDraft": {},
+        "HookDraft": {},
+        "TestDraft": {}
+      }
+    },
+    "DreamRevertOutcome": {
+      "kind": "record",
+      "fields": {
+        "run_id": "Id",
+        "applied": "Rows<Id>",
+        "conflicts": "Rows<DreamRevertConflict>",
+        "remaining": "Counter"
+      }
+    },
+    "DreamRevertConflict": {
+      "kind": "record",
+      "fields": {
+        "action_id": "Id",
+        "target_id": "Id",
+        "expected_revision": "Revision",
+        "current_revision": "?Revision"
+      }
+    },
+    "DreamRevertResult": {
+      "kind": "versioned",
+      "legacy": "KnowledgeWriteReceipt",
+      "current": "DreamRevertOutcome",
+      "revision": 9,
+      "projection": "none"
     },
     "DocumentRecord": {
       "kind": "record",
@@ -8733,8 +8826,10 @@
       "fields": {
         "scope": "DataScope",
         "expected_settings_revision": "Revision",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "cancel_run_id": "?Id"
       },
+      "since": {"cancel_run_id": 9},
       "result": "DreamRun",
       "effect": "Inference",
       "authority": "Scoped",
@@ -8787,13 +8882,15 @@
       "authority": "Scoped",
       "rules": "",
       "queryFields": {
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "page": "?PageRequest"
       },
       "commandFields": {
         "scope": "DataScope",
         "expected_revision": "Revision",
         "content": "ArtifactRef"
-      }
+      },
+      "since": {"page": 9}
     },
     "dreaming.propose": {
       "operation": "dreaming.propose",
@@ -8802,8 +8899,13 @@
         "run_id": "Id",
         "expected_revision": "Revision",
         "claim_ids": "NonEmpty<RevisionedRef>",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "change": "?DreamProposalChange",
+        "evidence": "?NonEmpty<DreamEvidenceReference>",
+        "rationale": "?Content",
+        "prevalence": "?Content"
       },
+      "since": {"change": 9, "evidence": 9, "rationale": 9, "prevalence": 9},
       "result": "ProposalRecord",
       "effect": "Local",
       "authority": "Scoped",
@@ -8815,10 +8917,18 @@
       "fields": {
         "run_id": "Id",
         "expected_revision": "Revision",
-        "proposal_id": "Id",
-        "expected_change_digest": "Digest"
+        "proposal_id": "?Id",
+        "expected_change_digest": "Digest",
+        "all_changes": "?bool"
       },
-      "result": "KnowledgeWriteReceipt",
+      "since": {"all_changes": 9},
+      "fieldSchema": {"all_changes": {"const": true}},
+      "inputAlternatives": [
+        {"members": ["proposal_id"], "until": 9},
+        {"members": ["proposal_id"], "since": 9, "forbid": ["all_changes"]},
+        {"members": ["all_changes"], "since": 9, "forbid": ["proposal_id"]}
+      ],
+      "result": "DreamRevertResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Revert only attributable unchanged effects; intervening user edits require conflict handling, never destructive restore."
@@ -11960,10 +12070,7 @@
     "skills.set_enabled": [
       8
     ],
-    "dreaming.instructions": [
-      1,
-      8
-    ],
+    "dreaming.instructions": [1, 8, 9],
     "skills.discover": [
       1,
       8
@@ -12177,10 +12284,13 @@
       1,
       2
     ],
-    "dreaming.revert": [
-      1,
-      2
-    ],
+    "dreaming.run": [1, 9],
+    "dreaming.runs": [1, 9],
+    "dreaming.report": [1, 9],
+    "dreaming.settings": [1, 9],
+    "dreaming.propose": [1, 9],
+    "dreaming.revert": [1, 2, 9],
+    "dreaming.review": [1, 9],
     "features.get": [
       1,
       2,

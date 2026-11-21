@@ -1062,6 +1062,11 @@ fn fences_hold_with_context(
                 crate::services::documents::indexing::embedding_source_in(tx, run, *generation)?
                     .is_some()
             }
+            AuthorityFence::DreamingSweep {
+                run,
+                generation,
+                request,
+            } => crate::services::dreaming::inference_fence_in(tx, run, *generation, request)?,
             AuthorityFence::QualifiedEmbedding { source_digest } => {
                 let Some(ctx) = ctx else { return Ok(false) };
                 let current =
@@ -1127,6 +1132,7 @@ pub fn authorization_holds(
             AuthorityFence::DocumentIndex { run, generation } => {
                 crate::services::documents::indexing::embedding_fence_read(s, run, *generation)?
             }
+            AuthorityFence::DreamingSweep { .. } => false,
             AuthorityFence::QualifiedEmbedding { .. } => false,
             AuthorityFence::DocumentVision { settings_witness } => {
                 let current = crate::services::documents::vision::policy(s.configuration())?;

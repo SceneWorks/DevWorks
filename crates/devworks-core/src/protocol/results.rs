@@ -371,7 +371,7 @@ pub enum OperationResult {
     #[serde(rename = "dreaming.propose")]
     DreamingPropose { value: ProposalRecord },
     #[serde(rename = "dreaming.revert")]
-    DreamingRevert { value: KnowledgeWriteReceipt },
+    DreamingRevert { value: DreamRevertResult },
     #[serde(rename = "dreaming.review")]
     DreamingReview { value: ProposalRecord },
     #[serde(rename = "documents.import")]
@@ -1678,6 +1678,10 @@ impl Revisioned for OperationResult {
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeChallenge { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingRun { value } => value.retain_revision(revision),
+            Self::DreamingRuns { value } => value.retain_revision(revision),
+            Self::DreamingReport { value } => value.retain_revision(revision),
+            Self::DreamingSettings { value } => value.retain_revision(revision),
             Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
             Self::DocumentsImport { value } => value.retain_revision(revision),
@@ -1888,6 +1892,7 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::DreamingRevert { value } => value.check_revision(revision),
             Self::DocumentsImport { value } => value.check_revision(revision),
             Self::DocumentsList { value } => value.check_revision(revision),
             Self::DocumentsRead { value } => value.check_revision(revision),

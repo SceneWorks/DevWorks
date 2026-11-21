@@ -96,6 +96,7 @@ mod connections;
 mod conventions;
 mod decisions;
 mod diagnostics;
+mod dreaming;
 mod embedding;
 mod evals;
 mod git;

@@ -1401,5 +1401,33 @@ reextract=request('documents.index','Command')
 reextract['schemaRevision']=12
 reextract['body']['reextract']=True
 case('r12-input-documents.index','domain-request.r12',reextract)
+for name in ('run','runs','report','settings','instructions','propose','revert','review'):
+ operation='dreaming.'+name
+ modes=['Query','Command'] if OPS[operation]['mode']=='Hybrid' else [OPS[operation]['mode']]
+ for mode in modes:
+  frame={**request(operation,mode),'schemaRevision':9}
+  if name=='run':frame['body']['cancelRunId']='run-a'
+  if name=='settings' and mode=='Command':
+   frame['body']['config'].update(modelId='model-a',effort='High',minimumIntervalMs='3600000',
+    maxTurns='12',maxTokens='128000',maxElapsedMs='1200000',maxMicroUsd='1000')
+  if name=='instructions' and mode=='Query':frame['body']['page']={'limit':20}
+  if name=='propose':
+   frame['body'].update(change={'kind':'Retract'},rationale='conflicting evidence',prevalence='scope only',
+    evidence=[sample('DreamEvidenceReference')])
+  if name=='revert':
+   del frame['body']['proposalId']
+   frame['body']['allChanges']=True
+  case(f'r9-input-dreaming.{name}-{mode}','domain-request.r9',frame)
+ payload=result(operation,OPS[operation]['result'])
+ if name in ('run','report'):payload['value']['detail']=sample('DreamRunDetail')
+ if name=='runs':
+  payload['value']['items']=[{**sample('DreamRun'),'detail':sample('DreamRunDetail')}]
+ if name=='settings':payload['value']['config']['modelId']='model-a'
+ if name=='revert':payload['value']=sample('DreamRevertOutcome')
+ case(f'r9-result-dreaming.{name}','operation-result.r9',payload)
+mutate('reject-dream-run-resume-and-cancel','r9-input-dreaming.run-Command',['body','resumeRunId'],'run-b',schema=True)
+mutate('reject-dream-revert-both-targets','r9-input-dreaming.revert-Command',['body','proposalId'],'proposal-a')
+mutate('reject-dream-settings-too-many-turns','r9-input-dreaming.settings-Command',['body','config','maxTurns'],'101',schema=True)
+mutate('reject-dream-proposal-without-evidence','r9-input-dreaming.propose-Command',['body','evidence'],DELETE,schema=True)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

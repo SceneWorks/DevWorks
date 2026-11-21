@@ -56,10 +56,12 @@
 //! test data to `knowledge.delete_by_source` and `.delete_selected`, and `import_knowledge` to
 //! `knowledge.import_user_data`. CodeGraph's `acknowledge` is superseded by KNOW-03 (autonomous
 //! decisions never ask to be acknowledged).
+pub(crate) mod dream_actions;
 mod graph;
 pub mod import;
 pub mod model;
 mod writes;
+pub(crate) use writes::{reverse_dream_changes, review_dream_change};
 
 pub use graph::NO_MEMORIES;
 

@@ -262,6 +262,9 @@ impl ApprovalService {
                             return Err(conflict(id));
                         }
                     }
+                    Some("DreamingProposal") => {
+                        crate::services::dreaming::proposals::decide_effect(tx, ctx, &p, true)?;
+                    }
                     Some("FindingRisk") => {
                         let payload: ApprovalContent =
                             serde_json::from_value(p.payload["content"].clone())
@@ -358,6 +361,11 @@ impl ApprovalService {
                             "rationale": i.rationale.0}),
                     )?;
                 }
+            }
+            if !approve
+                && p.operation_kind == crate::services::dreaming::proposals::PROPOSAL_OPERATION
+            {
+                crate::services::dreaming::proposals::decide_effect(tx, ctx, &p, false)?;
             }
             let mut changed = p.clone();
             changed.revision += 1;

@@ -4448,6 +4448,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "cancelRunId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 9
+            },
             "expectedSettingsRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -4529,11 +4533,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "change": {
+              "$ref": "#/$defs/DreamProposalChange",
+              "x-since": 9
+            },
             "claimIds": {
               "$ref": "#/$defs/List_RevisionedRef_1_128"
             },
             "content": {
               "$ref": "#/$defs/ArtifactRef"
+            },
+            "evidence": {
+              "$ref": "#/$defs/List_DreamEvidenceReference_1_128",
+              "x-since": 9
             },
             "expectedRevision": {
               "$ref": "#/$defs/Revision"
@@ -4541,6 +4553,14 @@
             "kind": {
               "const": "dreaming.propose",
               "type": "string"
+            },
+            "prevalence": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 9
+            },
+            "rationale": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 9
             },
             "runId": {
               "$ref": "#/$defs/Id"
@@ -4557,7 +4577,52 @@
         },
         {
           "additionalProperties": false,
+          "oneOf": [
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "allChanges"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "runId",
+                "expectedRevision",
+                "proposalId",
+                "expectedChangeDigest"
+              ],
+              "x-since": 9
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "proposalId"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "kind",
+                "runId",
+                "expectedRevision",
+                "expectedChangeDigest",
+                "allChanges"
+              ],
+              "x-since": 9
+            }
+          ],
           "properties": {
+            "allChanges": {
+              "const": true,
+              "type": "boolean",
+              "x-since": 9
+            },
             "expectedChangeDigest": {
               "$ref": "#/$defs/Digest"
             },
@@ -4579,7 +4644,6 @@
             "kind",
             "runId",
             "expectedRevision",
-            "proposalId",
             "expectedChangeDigest"
           ],
           "type": "object"
@@ -9635,6 +9699,10 @@
               "const": "dreaming.instructions",
               "type": "string"
             },
+            "page": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 9
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             }
@@ -12210,11 +12278,39 @@
         "batchLimit": {
           "$ref": "#/$defs/Limit"
         },
+        "effort": {
+          "$ref": "#/$defs/EffortName",
+          "x-since": 9
+        },
         "enabled": {
           "type": "boolean"
         },
         "instructions": {
           "$ref": "#/$defs/ArtifactRef"
+        },
+        "maxElapsedMs": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 9
+        },
+        "maxMicroUsd": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 9
+        },
+        "maxTokens": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 9
+        },
+        "maxTurns": {
+          "$ref": "#/$defs/PositiveCounter",
+          "x-since": 9
+        },
+        "minimumIntervalMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 9
+        },
+        "modelId": {
+          "$ref": "#/$defs/Id",
+          "x-since": 9
         },
         "scheduleId": {
           "anyOf": [
@@ -12233,6 +12329,132 @@
         "batchLimit"
       ],
       "type": "object"
+    },
+    "DreamEvidenceKind": {
+      "enum": [
+        "Knowledge",
+        "Lesson",
+        "Review",
+        "RepositorySource",
+        "Graph",
+        "Work",
+        "PriorAction"
+      ],
+      "type": "string"
+    },
+    "DreamEvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "fingerprint": {
+          "$ref": "#/$defs/Digest"
+        },
+        "kind": {
+          "$ref": "#/$defs/DreamEvidenceKind"
+        },
+        "reference": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "kind",
+        "reference",
+        "fingerprint",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "DreamProposalChange": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Retract",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Supersede",
+              "type": "string"
+            },
+            "replacement": {
+              "$ref": "#/$defs/ClaimDraft"
+            }
+          },
+          "required": [
+            "kind",
+            "replacement"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Merge",
+              "type": "string"
+            },
+            "other": {
+              "$ref": "#/$defs/RevisionedRef"
+            }
+          },
+          "required": [
+            "kind",
+            "other"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "SkillDraft",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "HookDraft",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "TestDraft",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "EffortName": {
       "enum": [
@@ -13566,6 +13788,14 @@
       },
       "maxItems": 500,
       "minItems": 0,
+      "type": "array"
+    },
+    "List_DreamEvidenceReference_1_128": {
+      "items": {
+        "$ref": "#/$defs/DreamEvidenceReference"
+      },
+      "maxItems": 128,
+      "minItems": 1,
       "type": "array"
     },
     "List_EffortName_0_128": {

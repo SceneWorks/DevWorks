@@ -64,7 +64,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
             'knowledge.query', 'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate',
             'knowledge.tag', 'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
-            'knowledge.import_user_data', 'knowledge.delete_by_source', 'dreaming.revert',
+            'knowledge.import_user_data', 'knowledge.delete_by_source',
+            'dreaming.revert', 'dreaming.run', 'dreaming.runs', 'dreaming.report',
+            'dreaming.settings', 'dreaming.propose',
             'addons.catalog', 'addons.install', 'addons.configure', 'addons.enable',
             'addons.disable', 'addons.update', 'addons.rollback', 'addons.uninstall',
             'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
@@ -130,7 +132,7 @@ class SchemaRevisionRules(unittest.TestCase):
         # lesson at revision 8; full source labels are additive.
         self.assertEqual(carried['knowledge.subgraph'], {2, 3, 8})
         self.assertEqual(carried['knowledge.tag'], {2})
-        self.assertEqual(carried['dreaming.revert'], {2})
+        self.assertEqual(carried['dreaming.revert'], {2, 9})
         self.assertEqual(carried['knowledge.delete_by_source'], {3})
         self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})

@@ -36,8 +36,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub struct ProviderComposition {
     pub http: Arc<dyn StreamingHttp>,
-    pub(crate) systemone_validator:
-        Option<Arc<dyn devworks_core::ports::packages::SchemaValidator>>,
+    pub(crate) schema_validator: Option<Arc<dyn devworks_core::ports::packages::SchemaValidator>>,
     /// Advanced controls require exact host-qualified model/profile metadata. Basic tool/image
     /// flags and efforts are intersected with the CURRENT registered catalog model facts.
     pub capabilities: Vec<Capabilities>,
@@ -58,7 +57,7 @@ impl ProviderComposition {
     pub fn new(http: Arc<dyn StreamingHttp>) -> Self {
         Self {
             http,
-            systemone_validator: None,
+            schema_validator: None,
             capabilities: Vec::new(),
             embedding_spaces: Vec::new(),
             usage_semantics: Default::default(),
@@ -66,10 +65,17 @@ impl ProviderComposition {
         }
     }
     pub fn with_systemone_validator(
+        self,
+        validator: Arc<dyn devworks_core::ports::packages::SchemaValidator>,
+    ) -> Self {
+        self.with_schema_validator(validator)
+    }
+
+    pub fn with_schema_validator(
         mut self,
         validator: Arc<dyn devworks_core::ports::packages::SchemaValidator>,
     ) -> Self {
-        self.systemone_validator = Some(validator);
+        self.schema_validator = Some(validator);
         self
     }
     /// Host-composed repository source used by direct native provider owners. Boot installs
@@ -371,6 +377,10 @@ impl NativeProviders {
         request: &InferenceRequest,
         targets: Option<&[(Id, Vec<String>)]>,
     ) -> Result<(), StorageError> {
+        if matches!(request.purpose, InferencePurpose::Dreaming) {
+            // The Dreaming owner freezes its two instruction revisions in the sweep.
+            return Ok(());
+        }
         if let InferenceInput::Generation { context, .. } = &request.input {
             self.verify_instruction_material(ctx, context, targets)
         } else {
@@ -458,6 +468,27 @@ impl NativeProviders {
         invocation: NativeInvocation,
         cancellation: Option<Cancellation>,
     ) -> Result<ProviderInvocation, StorageError> {
+        self.produce_with_private_dreaming(invocation, cancellation, None)
+            .await
+    }
+
+    pub(crate) async fn produce_dreaming(
+        self: &Arc<Self>,
+        invocation: NativeInvocation,
+        cancellation: Cancellation,
+        lease: devworks_core::services::dreaming::SweepLease,
+    ) -> Result<ProviderInvocation, StorageError> {
+        self.produce_with_private_dreaming(invocation, Some(cancellation), Some(lease))
+            .await
+    }
+
+    async fn produce_with_private_dreaming(
+        self: &Arc<Self>,
+        invocation: NativeInvocation,
+        cancellation: Option<Cancellation>,
+        dream_lease: Option<devworks_core::services::dreaming::SweepLease>,
+    ) -> Result<ProviderInvocation, StorageError> {
+        let dreaming = dream_lease.is_some();
         let NativeInvocation {
             source_fences,
             instruction_targets,
@@ -473,6 +504,33 @@ impl NativeProviders {
             .is_some_and(Cancellation::is_cancelled)
         {
             return Err(StorageError::Cancelled);
+        }
+        if dreaming != matches!(request.purpose, InferencePurpose::Dreaming)
+            || (dreaming && logical.purpose != devworks_core::services::router::Purpose::Enrichment)
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        if let Some(lease) = &dream_lease {
+            let InferenceInput::Generation {
+                session_id, tools, ..
+            } = &request.input
+            else {
+                return Err(StorageError::ScopeDenied);
+            };
+            if !matches!(&request.attribution, Attribution::Service { operation_id, project_id }
+                    if operation_id == &lease.operation().id && project_id.as_ref() == context.project_id())
+                || session_id != context.session_id().unwrap_or(&lease.operation().id.0)
+                || logical.session_id.as_ref() != context.session_id()
+                || request.options.output_schema.is_some()
+                || tools.is_empty()
+                || tools.iter().any(|tool| {
+                    devworks_core::services::dreaming::DreamTools::frozen()
+                        .resolve(tool)
+                        .is_err()
+                })
+            {
+                return Err(StorageError::ScopeDenied);
+            }
         }
         request.validate().map_err(invalid)?;
         if let InferenceInput::Generation {
@@ -491,37 +549,39 @@ impl NativeProviders {
                     .cmp(b.capability_id.as_str())
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
-            let mut external = Vec::new();
-            if tools
-                .iter()
-                .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
-            {
-                external.extend(self.schemas.selected_mcp_tools(&context)?);
-            }
-            if tools.iter().any(|tool| {
-                let id = tool.capability_id.as_str();
-                !id.starts_with("mcp/") && super::schemas::builtin_operation(id).is_none()
-            }) {
-                external.extend(self.schemas.selected_package_tools(&context)?);
-            }
-            if tools.iter().any(|tool| {
-                self.schemas
-                    .builtin_binding(&tool.capability_id, &tool.input_schema)
-                    .is_none()
-                    && !external.iter().any(|selected| {
-                        selected.capability_id == tool.capability_id
-                            && selected.wire_name == tool.wire_name
-                            && selected.input_schema.schema_id == tool.input_schema.schema_id
-                            && selected.input_schema.revision == tool.input_schema.revision
-                            && selected.input_schema.sha256 == tool.input_schema.sha256
-                    })
-            }) {
-                // Only the exact selected MCP and installed package aliases have a durable
-                // dispatcher. A caller cannot qualify a different wire name or schema.
-                return Err(StorageError::unavailable(
-                    Unavailable::UnsupportedRuntime,
-                    "external tool dispatch is unavailable",
-                ));
+            if !dreaming {
+                let mut external = Vec::new();
+                if tools
+                    .iter()
+                    .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
+                {
+                    external.extend(self.schemas.selected_mcp_tools(&context)?);
+                }
+                if tools.iter().any(|tool| {
+                    let id = tool.capability_id.as_str();
+                    !id.starts_with("mcp/") && super::schemas::builtin_operation(id).is_none()
+                }) {
+                    external.extend(self.schemas.selected_package_tools(&context)?);
+                }
+                if tools.iter().any(|tool| {
+                    self.schemas
+                        .builtin_binding(&tool.capability_id, &tool.input_schema)
+                        .is_none()
+                        && !external.iter().any(|selected| {
+                            selected.capability_id == tool.capability_id
+                                && selected.wire_name == tool.wire_name
+                                && selected.input_schema.schema_id == tool.input_schema.schema_id
+                                && selected.input_schema.revision == tool.input_schema.revision
+                                && selected.input_schema.sha256 == tool.input_schema.sha256
+                        })
+                }) {
+                    // Only the exact selected MCP and installed package aliases have a durable
+                    // dispatcher. A caller cannot qualify a different wire name or schema.
+                    return Err(StorageError::unavailable(
+                        Unavailable::UnsupportedRuntime,
+                        "external tool dispatch is unavailable",
+                    ));
+                }
             }
         }
         use devworks_core::services::router::Purpose;
@@ -531,10 +591,11 @@ impl NativeProviders {
             logical.purpose,
             devworks_core::services::router::Purpose::TierClassification
         );
-        let detached = compaction || vision || classification || nested.is_some();
+        let detached = compaction || vision || classification || dreaming || nested.is_some();
         if compaction != (logical.purpose == Purpose::Compaction)
             || vision != (logical.purpose == Purpose::Vision)
             || (detached
+                && !dreaming
                 && !matches!(&request.input, InferenceInput::Generation { tools, .. } if tools.is_empty()))
             || ((compaction || vision) && nested.is_some())
             || (classification
@@ -589,6 +650,7 @@ impl NativeProviders {
             ..
         } = &request.input
             && !vision
+            && !dreaming
         {
             let owner = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
                 read.sessions()
@@ -648,6 +710,7 @@ impl NativeProviders {
         if let InferenceInput::Generation { session_id, .. } = &request.input
             && nested.is_none()
             && !vision
+            && !dreaming
             && !crate::tool_turn::pending_calls(self.store.as_ref(), &context, session_id)?
                 .is_empty()
         {
@@ -692,6 +755,7 @@ impl NativeProviders {
             && !classification
             && nested.is_none()
             && !vision
+            && !dreaming
         {
             // The epoch is host-published provenance, not a guess from a cache miss. Record
             // its reason on the attributed attempt without copying prompt or tool material.
@@ -798,6 +862,8 @@ impl NativeProviders {
             source_fences: source_fences.clone(),
             context_head_fence,
             instruction_targets: instruction_targets.clone(),
+            dream_reserve_input: dreaming.then_some(attempt.input_tokens),
+            dream_lease,
         };
         let sink = LazySink {
             owner: self.clone(),
@@ -1242,7 +1308,10 @@ impl NativeProviders {
                 context_epoch,
                 ..
             } => {
-                let vision = matches!(request.purpose, InferencePurpose::Vision);
+                let vision = matches!(
+                    request.purpose,
+                    InferencePurpose::Vision | InferencePurpose::Dreaming
+                );
                 let session_matches = attempt.session_id.as_ref() == Some(session_id)
                     || (vision
                         && attempt.session_id.is_none()
@@ -1292,11 +1361,16 @@ impl NativeProviders {
             .transpose()
             .map_err(|_| invalid("current OpenRouter policy"))?;
         self.verify_instruction_context(context, request, targets)?;
+        let private_schemas = DreamMaterialSchemas;
         let materials = OwnedMaterials {
             store: self.store.as_ref(),
             artifacts: self.artifacts.as_ref(),
             context,
-            schemas: self.schemas.as_ref(),
+            schemas: if matches!(request.purpose, InferencePurpose::Dreaming) {
+                &private_schemas
+            } else {
+                self.schemas.as_ref()
+            },
         };
         let mut prepared = encode::prepare(
             identity,
@@ -1311,12 +1385,35 @@ impl NativeProviders {
             },
         )
         .map_err(|_| invalid("provider request materialization refused"))?;
-        if matches!(request.purpose, InferencePurpose::Vision) {
+        if matches!(
+            request.purpose,
+            InferencePurpose::Vision | InferencePurpose::Dreaming
+        ) {
             prepared.session_key = None;
         }
         Ok((prepared, connection))
     }
 }
+struct DreamMaterialSchemas;
+impl devworks_core::providers::materialize::SchemaDocuments for DreamMaterialSchemas {
+    fn resolve(
+        &self,
+        _: &InvocationContext,
+        _: &devworks_core::protocol::provider::SchemaRef,
+    ) -> Result<serde_json::Value, devworks_core::providers::ProviderError> {
+        Err(devworks_core::providers::ProviderError::MaterialUnavailable)
+    }
+
+    fn tool(
+        &self,
+        _: &InvocationContext,
+        alias: &ToolSchema,
+    ) -> Result<devworks_core::providers::PreparedTool, devworks_core::providers::ProviderError>
+    {
+        devworks_core::services::dreaming::DreamTools::frozen().resolve(alias)
+    }
+}
+
 type SharedPrepared = Arc<Mutex<Option<PreparedRequest>>>;
 struct LazySource {
     owner: Arc<NativeProviders>,
@@ -1327,6 +1424,8 @@ struct LazySource {
     source_fences: Vec<devworks_core::ports::AuthorityFence>,
     context_head_fence: Option<crate::tool_turn::ContextHeadFence>,
     instruction_targets: Option<InstructionTargets>,
+    dream_lease: Option<devworks_core::services::dreaming::SweepLease>,
+    dream_reserve_input: Option<i64>,
 }
 impl OwnedInferenceSource for LazySource {
     fn start(&mut self, attempt: &StoredInferenceAttempt) -> Result<(), StorageError> {
@@ -1343,6 +1442,11 @@ impl OwnedInferenceSource for LazySource {
             attempt,
             self.instruction_targets.as_deref(),
         )?;
+        if self.dream_reserve_input.is_some_and(|reserved| {
+            u64::try_from(reserved).is_err() || prepared.body.len() as u64 > reserved as u64
+        }) {
+            return Err(invalid("encoded Dreaming input exceeds its reserved frame"));
+        }
         let limits = StreamLimits {
             max_request_bytes: 32 * 1024 * 1024,
             deadline_ms: u64::from(self.request.options.deadline_ms),
@@ -1368,6 +1472,7 @@ impl OwnedInferenceSource for LazySource {
         let context_head_fence = self.context_head_fence.clone();
         let instruction_request = self.request.clone();
         let instruction_targets = self.instruction_targets.clone();
+        let dream_lease = self.dream_lease.clone();
         source = source.with_send_gate(Box::new(move || {
             use devworks_core::providers::materialize::SchemaDocuments;
             owner.verify_instruction_context(
@@ -1376,18 +1481,19 @@ impl OwnedInferenceSource for LazySource {
                 instruction_targets.as_deref(),
             )?;
             for tool in &publication.tools {
-                owner
-                    .schemas
-                    .tool(
-                        &context,
-                        &ToolSchema {
-                            wire_name: tool.wire_name.clone(),
-                            capability_id: tool.capability_id.clone(),
-                            input_schema: tool.input_schema.clone(),
-                        },
-                    )
-                    .map_err(|_| StorageError::ScopeDenied)?;
+                let alias = ToolSchema {
+                    wire_name: tool.wire_name.clone(),
+                    capability_id: tool.capability_id.clone(),
+                    input_schema: tool.input_schema.clone(),
+                };
+                if dream_lease.is_some() {
+                    DreamMaterialSchemas.tool(&context, &alias)
+                } else {
+                    owner.schemas.tool(&context, &alias)
+                }
+                .map_err(|_| StorageError::ScopeDenied)?;
             }
+            let dream_lease = dream_lease.clone();
             let context = context.clone();
             let captured = captured.clone();
             let publication = publication.clone();
@@ -1441,6 +1547,13 @@ impl OwnedInferenceSource for LazySource {
                         )? {
                             return Err(StorageError::ScopeDenied);
                         }
+                    }
+                    if let Some(lease) = dream_lease {
+                        lease.before_send(
+                            tx,
+                            &captured.request_id,
+                            &AttemptId(captured.attempt_id.clone()),
+                        )?;
                     }
                     Ok(())
                 })
@@ -1526,6 +1639,8 @@ impl LazySink {
                     sink.with_compaction()
                 } else if matches!(self.request.purpose, InferencePurpose::Vision) {
                     sink.with_document_vision()
+                } else if matches!(self.request.purpose, InferencePurpose::Dreaming) {
+                    sink.with_dreaming()
                 } else if self.detached {
                     sink.with_sampled_text()
                 } else {

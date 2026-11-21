@@ -72,8 +72,12 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// Migration 71 indexes existing embedding preparation rows and keeps the publication time on
 /// the exact document index version. Both tables retain their existing purge policies, so a
 /// retained document keeps its publication time after its previous owner's events are purged.
+/// Migration 72 adds scoped Dreaming settings, immutable instruction revisions and run and
+/// action records, plus scoped source observations. A project's settings and runs belong to
+/// that project; action evidence follows
+/// its parent run. Workspace/base records remain independent.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "44cab1ac114b4701d2454a0a8498d666f1af4dba3cc8b60acef03b85a6e81365";
+    "309af59c496ad0df6673ebfea1755c0a557404eb9b6f9afeb561459de0bbad77";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

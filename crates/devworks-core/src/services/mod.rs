@@ -15,6 +15,7 @@ pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
 pub mod documents;
+pub mod dreaming;
 pub mod effect;
 pub(crate) mod effect_job;
 pub mod evals;
@@ -387,6 +388,14 @@ impl UseCases {
                 Some(service.clone()),
                 Some(service.clone()),
             );
+        }
+        self
+    }
+
+    /// Registers the one Dreaming service when the native sweep owner is composed.
+    pub fn with_dreaming(mut self, service: Arc<dreaming::DreamingService>) -> Self {
+        for operation in dreaming::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }

@@ -344,6 +344,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn documents(&self) -> &dyn DocumentRead {
         self
     }
+    fn dreaming(&self) -> Result<&dyn DreamingRead, StorageError> {
+        Ok(self)
+    }
     fn help(&self) -> &dyn HelpRead {
         self
     }
@@ -533,6 +536,9 @@ impl WriteTransaction for Unit<'_> {
     }
     fn documents(&mut self) -> &mut dyn DocumentRepository {
         self
+    }
+    fn dreaming(&mut self) -> Result<&mut dyn DreamingRepository, StorageError> {
+        Ok(self)
     }
     fn help(&mut self) -> &mut dyn HelpRepository {
         self

@@ -48,6 +48,7 @@ pub mod decisions_screen;
 pub mod document_extraction;
 pub mod documents_ops;
 pub mod documents_screen;
+pub mod dreaming_screen;
 pub mod embedding_spaces_screen;
 pub mod files;
 pub mod frame;

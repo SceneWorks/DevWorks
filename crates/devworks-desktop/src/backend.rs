@@ -371,6 +371,7 @@ pub enum Slot {
     Settings(crate::settings_ops::SettingsSlot),
     AddOns(crate::addons_ops::AddonsSlot),
     Knowledge(crate::knowledge_ops::KnowledgeSlot),
+    Dreaming(crate::dreaming_screen::DreamingSlot),
     Purge(crate::purge_ops::PurgeSlot),
 }
 impl Slot {
@@ -397,6 +398,7 @@ impl Slot {
             Self::Settings(_) => ScreenId::Settings,
             Self::AddOns(_) => ScreenId::AddOns,
             Self::Knowledge(_) => ScreenId::Knowledge,
+            Self::Dreaming(_) => ScreenId::Dreaming,
             Self::Purge(_) => ScreenId::Purge,
         }
     }

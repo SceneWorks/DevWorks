@@ -926,7 +926,7 @@
   {
     "id": "input-dreaming.revert-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"proposalId\":\"id-a\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"id-a\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -8185,7 +8185,7 @@
   {
     "id": "r2-input-dreaming.revert",
     "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"proposalId\":\"id-a\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"schemaRevision\":2}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"id-a\"},\"schemaRevision\":2}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -14851,6 +14851,160 @@
     "entry": "domain-request.r12",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.index\",\"documentId\":\"id-a\",\"versionId\":\"id-a\",\"expectedRevision\":\"1\",\"reextract\":true},\"schemaRevision\":12}",
     "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.run-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.run\",\"scope\":{\"kind\":\"Workspace\"},\"expectedSettingsRevision\":\"1\",\"cancelRunId\":\"run-a\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.run",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.run\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"state\":\"ObservedComplete\",\"proposalIds\":[],\"detail\":{\"status\":\"Queued\",\"trigger\":\"Manual\",\"initiator\":\"actor-a\",\"startedAtMs\":\"0\",\"settingsRevision\":\"1\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"costMicroUsd\":\"0\",\"usageUncertain\":false,\"canContinue\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.runs-Query",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.runs",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.runs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"state\":\"ObservedComplete\",\"proposalIds\":[],\"detail\":{\"status\":\"Queued\",\"trigger\":\"Manual\",\"initiator\":\"actor-a\",\"startedAtMs\":\"0\",\"settingsRevision\":\"1\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"costMicroUsd\":\"0\",\"usageUncertain\":false,\"canContinue\":false}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.report-Query",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.report\",\"runId\":\"id-a\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.report",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.report\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"state\":\"ObservedComplete\",\"proposalIds\":[],\"detail\":{\"status\":\"Queued\",\"trigger\":\"Manual\",\"initiator\":\"actor-a\",\"startedAtMs\":\"0\",\"settingsRevision\":\"1\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"costMicroUsd\":\"0\",\"usageUncertain\":false,\"canContinue\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.settings-Query",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.settings\",\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.settings-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.settings\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"config\":{\"enabled\":false,\"instructions\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"batchLimit\":20,\"modelId\":\"model-a\",\"effort\":\"High\",\"minimumIntervalMs\":\"3600000\",\"maxTurns\":\"12\",\"maxTokens\":\"128000\",\"maxElapsedMs\":\"1200000\",\"maxMicroUsd\":\"1000\"}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.settings",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.settings\",\"value\":{\"scope\":{\"kind\":\"Workspace\"},\"revision\":\"1\",\"config\":{\"enabled\":false,\"instructions\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"batchLimit\":20,\"modelId\":\"model-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.instructions-Query",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.instructions\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.instructions-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.instructions\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.instructions",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.instructions\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.propose-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.propose\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"claimIds\":[{\"id\":\"id-a\",\"revision\":\"1\"}],\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"change\":{\"kind\":\"Retract\"},\"rationale\":\"conflicting evidence\",\"prevalence\":\"scope only\",\"evidence\":[{\"kind\":\"Knowledge\",\"reference\":\"fixture\",\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\"}]},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.propose",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.propose\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.revert-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"allChanges\":true},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.revert",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.revert\",\"value\":{\"runId\":\"id-a\",\"applied\":[],\"conflicts\":[],\"remaining\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-input-dreaming.review-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.review\",\"proposalId\":\"id-a\",\"expectedRevision\":\"1\",\"decision\":\"Approve\",\"rationale\":\"Fixture content\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-dreaming.review",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"dreaming.review\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dream-run-resume-and-cancel",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.run\",\"scope\":{\"kind\":\"Workspace\"},\"expectedSettingsRevision\":\"1\",\"cancelRunId\":\"run-a\",\"resumeRunId\":\"run-b\"},\"schemaRevision\":9}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dream-revert-both-targets",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"allChanges\":true,\"proposalId\":\"proposal-a\"},\"schemaRevision\":9}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-dream-settings-too-many-turns",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.settings\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"config\":{\"enabled\":false,\"instructions\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"batchLimit\":20,\"modelId\":\"model-a\",\"effort\":\"High\",\"minimumIntervalMs\":\"3600000\",\"maxTurns\":\"101\",\"maxTokens\":\"128000\",\"maxElapsedMs\":\"1200000\",\"maxMicroUsd\":\"1000\"}},\"schemaRevision\":9}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dream-proposal-without-evidence",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.propose\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"claimIds\":[{\"id\":\"id-a\",\"revision\":\"1\"}],\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"change\":{\"kind\":\"Retract\"},\"rationale\":\"conflicting evidence\",\"prevalence\":\"scope only\"},\"schemaRevision\":9}",
+    "typedValid": false,
     "schemaValid": true
   }
 ]

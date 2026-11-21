@@ -168,6 +168,12 @@ pub enum AuthorityFence {
     Principal { actor: ActorId, revision: i64 },
     /// The claimed document index delivery still owns this exact source and lease.
     DocumentIndex { run: Id, generation: i64 },
+    /// The exact Dreaming delivery and logical request still own the running sweep.
+    DreamingSweep {
+        run: Id,
+        generation: i64,
+        request: Id,
+    },
     /// Qualified selection required at native embedding admission and egress.
     QualifiedEmbedding { source_digest: String },
     /// The owner enabled routed document vision under this exact Settings revision.

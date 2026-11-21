@@ -793,6 +793,14 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
         rebuilds_tables: false,
     },
+    Migration {
+        version: 72,
+        minimum_reader: 66,
+        minimum_writer: 72,
+        sql: include_str!("migrations/0072_dreaming.sql"),
+        expected_sha256: "d7789f61ad59560b608db9997711b882456e5e16d3efa9c83cf120a8f9a0645e",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

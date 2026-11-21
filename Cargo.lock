@@ -1352,6 +1352,8 @@ dependencies = [
  "devworks-core",
  "devworks-extension-protocol",
  "devworks-test-support",
+ "getrandom 0.4.3",
+ "hmac",
  "jiff",
  "libc",
  "num-rational",
