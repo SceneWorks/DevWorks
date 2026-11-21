@@ -1473,8 +1473,16 @@ impl SessionRepository for Unit<'_> {
         coordinator: &ActorId,
     ) -> Result<bool, StorageError> {
         let changed = db(self.conn.execute(
-            "UPDATE sessions SET agent_id=?4 WHERE id=?1 AND revision=?2 AND created_by=?3 +             AND agent_id=?3 AND closed_at IS NULL AND root_id IS NULL AND project_id IS NULL +             AND NOT EXISTS (SELECT 1 FROM assignments WHERE session_id=?1)",
-            params![session.as_str(), expected_revision, creator.0.as_str(), coordinator.0.as_str()],
+            "UPDATE sessions SET agent_id=?4
+             WHERE id=?1 AND revision=?2 AND created_by=?3
+             AND agent_id=?3 AND closed_at IS NULL AND root_id IS NULL AND project_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM assignments WHERE session_id=?1)",
+            params![
+                session.as_str(),
+                expected_revision,
+                creator.0.as_str(),
+                coordinator.0.as_str()
+            ],
         ))?;
         Ok(changed == 1)
     }

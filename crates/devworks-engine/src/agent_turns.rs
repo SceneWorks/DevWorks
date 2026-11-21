@@ -1478,15 +1478,30 @@ pub fn route_context_head(
                     pin.revision,
                     reviewer,
                 )),
-                None => Ok((
-                    RouteIntent::Tier {
-                        tier: TierName::High,
-                    },
-                    EffortName::Default,
-                    Vec::new(),
-                    0,
-                    reviewer,
-                )),
+                None => {
+                    let preferred = ctx
+                        .workspace_reply()
+                        .and_then(|scope| scope.preference.clone())
+                        .map(
+                            serde_json::from_value::<
+                                devworks_core::protocol::provider::ConversationRoutePreference,
+                            >,
+                        )
+                        .transpose()
+                        .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+                    let (intent, effort) = preferred.map_or_else(
+                        || {
+                            (
+                                RouteIntent::Tier {
+                                    tier: TierName::High,
+                                },
+                                EffortName::Default,
+                            )
+                        },
+                        |route| (route.intent, route.effort),
+                    );
+                    Ok((intent, effort, Vec::new(), 0, reviewer))
+                }
             }
         })?;
     if tools_required && !required.iter().any(|capability| capability == "tools") {
@@ -1496,15 +1511,17 @@ pub fn route_context_head(
         required.push("vision".into());
     }
     required.sort();
-    let key = sha256_hex(
-        format!(
-            "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
-            session_id.as_str(),
-            head_digest.unwrap_or("initial"),
-            required.join(",")
-        )
-        .as_bytes(),
+    let mut route_identity = format!(
+        "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
+        session_id.as_str(),
+        head_digest.unwrap_or("initial"),
+        required.join(",")
     );
+    if ctx.workspace_reply().is_some() {
+        route_identity.push(':');
+        route_identity.push_str(ctx.invocation_id().as_str());
+    }
+    let key = sha256_hex(route_identity.as_bytes());
     let frame = serde_json::to_vec(&json!({
         "mode": "Command",
         "protocol": devworks_core::protocol::CONTRACT,
@@ -2220,47 +2237,7 @@ pub fn publish_first_context(
     {
         return Err(StorageError::ScopeDenied);
     }
-    let (binding, headroom) =
-        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let pin = read
-                .router()
-                .session_pin(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let connection = read
-                .router()
-                .connection(&route.connection_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let session = read
-                .sessions()
-                .session(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let model = read
-                .router()
-                .route_model(&route.model_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if pin.pin_id != route.pin_id
-                || pin.revision != route.pin_revision.get()
-                || connection.id != pin.connection_id
-                || session.context_epoch != 0
-                || connection.account_revision < 1
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            let endpoint_profile =
-                serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
-                    .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
-            Ok((
-                NativeBinding {
-                    connection_id: pin.connection_id,
-                    account_revision: Revision::new(connection.account_revision)
-                        .map_err(|_| StorageError::ScopeDenied)?,
-                    endpoint_profile,
-                    model_id: pin.model_id,
-                    context_epoch: Counter::new(0).expect("zero epoch"),
-                },
-                output_headroom(model.context_tokens),
-            ))
-        })?;
+    let (binding, headroom) = initial_route_binding(engine, session_id, route)?;
     let mut prompt = initial_context(engine.store().as_ref(), ctx, agent)?;
     let selected_count = engine
         .providers()
@@ -2284,6 +2261,54 @@ pub fn publish_first_context(
     };
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
+}
+
+/// Validate the first durable pin and derive the native binding shared by new conversations.
+pub(crate) fn initial_route_binding(
+    engine: &TurnEngine,
+    session_id: &Id,
+    route: &RouteChoice,
+) -> Result<(NativeBinding, i64), StorageError> {
+    read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let connection = read
+            .router()
+            .connection(&route.connection_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let model = read
+            .router()
+            .route_model(&route.model_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if pin.pin_id != route.pin_id
+            || pin.revision != route.pin_revision.get()
+            || connection.id != pin.connection_id
+            || session.context_epoch != 0
+            || connection.account_revision < 1
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let endpoint_profile =
+            serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
+                .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
+        Ok((
+            NativeBinding {
+                connection_id: pin.connection_id,
+                account_revision: Revision::new(connection.account_revision)
+                    .map_err(|_| StorageError::ScopeDenied)?,
+                endpoint_profile,
+                model_id: pin.model_id,
+                context_epoch: Counter::new(0).expect("zero epoch"),
+            },
+            output_headroom(model.context_tokens),
+        ))
+    })
 }
 
 /// Build an attributed native request from the exact published head and routed pin. The driver
@@ -2338,7 +2363,9 @@ fn plan_request(
     let root_scope = match (ctx.root_id(), ctx.project_id()) {
         (Some(root), Some(project)) => Some((root, project)),
         (None, None)
-            if ctx.principal_kind() == PrincipalKind::Agent && ctx.assignment_id().is_none() =>
+            if ctx.principal_kind() == PrincipalKind::Agent
+                && ctx.assignment_id().is_none()
+                && ctx.workspace_reply().is_some() =>
         {
             None
         }
@@ -2350,7 +2377,14 @@ fn plan_request(
     let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
     let tools = match window {
         Some(window) => {
-            let selected = providers.schemas().selected_agent_tools(ctx)?;
+            let mut selected = providers.schemas().selected_agent_tools(ctx)?;
+            if root_scope.is_none()
+                && let Some(index) = selected.iter().position(|tool| {
+                    tool.capability_id.as_str() == "devworks-query/ui.current_screen"
+                })
+            {
+                selected[..=index].rotate_right(1);
+            }
             tool_window(&selected, window)?.to_vec()
         }
         None => Vec::new(),

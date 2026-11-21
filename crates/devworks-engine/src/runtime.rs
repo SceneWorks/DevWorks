@@ -565,6 +565,7 @@ struct Engine {
     use_cases: UseCases,
     usage: Arc<crate::usage::UsageRuntime>,
     dispatcher: Dispatcher,
+    workspace_replies: Option<Arc<crate::workspace_reply::WorkspaceReplies>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
@@ -615,7 +616,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         power,
         diagnostics: _,
         knowledge: _,
-        application: _,
+        application,
         web: _,
         browser,
         git,
@@ -988,6 +989,15 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let workspace_replies = (config.providers.is_some()
+        && application
+            .sessions
+            .as_ref()
+            .is_some_and(|sessions| sessions.coordinator.is_some()))
+    .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
+    if let Some(worker) = &workspace_replies {
+        consumers.push(worker.consumer());
+    }
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -1339,6 +1349,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         use_cases,
         usage,
         dispatcher,
+        workspace_replies,
         process_tools,
         containers,
         git,
@@ -1446,6 +1457,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         use_cases,
         usage,
         dispatcher,
+        workspace_replies,
         process_tools,
         containers,
         git,
@@ -1670,6 +1682,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     #[cfg(any(test, feature = "test-support"))]
     let polling_marks = (stored.clone(), delivered.clone());
     let turn_commits = stored.clone();
+    let turn = crate::turn_engine::TurnEngine {
+        store: store.clone(),
+        artifacts: artifacts.clone(),
+        providers: providers.clone(),
+        mcp: use_cases.mcp_service(),
+        packages: package_host.clone(),
+        approvals: approvals.clone(),
+        runs: run_supervisor.clone(),
+        instructions: instructions.clone(),
+        indexing: index_supervisor.clone(),
+        admitter: admitter.clone(),
+        commits: turn_commits,
+    };
+    if let Some(worker) = &workspace_replies {
+        worker.bind(turn.clone());
+    }
     let commits = {
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
         let registered = polling_loops.clone();
@@ -2179,19 +2207,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
-    let turn = crate::turn_engine::TurnEngine {
-        store: store.clone(),
-        artifacts: artifacts.clone(),
-        providers: providers.clone(),
-        mcp: use_cases.mcp_service(),
-        packages: package_host.clone(),
-        approvals: approvals.clone(),
-        runs: run_supervisor.clone(),
-        instructions: instructions.clone(),
-        indexing: index_supervisor.clone(),
-        admitter: admitter.clone(),
-        commits: turn_commits,
-    };
     Ok(Runtime {
         store,
         keep_working,

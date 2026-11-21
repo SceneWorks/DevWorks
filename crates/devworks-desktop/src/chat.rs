@@ -76,10 +76,6 @@ pub const ATTACHMENT_CHIP_WIDTH: f32 = 180.0;
 pub const ATTACH_LABEL: &str = "Attach images or files";
 pub const COMPOSER_LABEL: &str = "Message the workspace coordinator";
 pub const SEND_LABEL: &str = "Send message";
-/// The coordinator is not part of this build: say so wherever a reply would be expected.
-pub const NO_COORDINATOR: &str = "The workspace coordinator is not connected in this build \
-    (DW-16). Messages are saved to this conversation, but no model receives them and no reply \
-    will appear.";
 
 #[derive(Clone, Debug)]
 pub enum AttachState {
@@ -803,12 +799,11 @@ fn transcript_state(
         ui,
         &mut chat.scrolls,
         &format!("transcript-{}-{id}", surface.salt()),
-        entries.len() + 1,
+        entries.len() + usize::from(preview.is_some()),
         true,
         |ui, i| {
             ui.set_width(width - 8.0);
             if i == entries.len() {
-                // The honest coordinator status sits after the latest message.
                 if let Some(preview) = preview {
                     egui::Frame::new()
                         .fill(theme::PANEL)
@@ -817,8 +812,6 @@ fn transcript_state(
                             widgets::caption(ui, "Streaming response");
                             ui.label(&preview.text);
                         });
-                } else {
-                    widgets::caption(ui, NO_COORDINATOR);
                 }
                 return;
             }
@@ -842,8 +835,6 @@ fn empty_invitation(ui: &mut Ui, surface: Surface) {
             )
             .color(theme::MUTED),
         );
-        ui.add_space(8.0);
-        widgets::caption(ui, NO_COORDINATOR);
     });
 }
 

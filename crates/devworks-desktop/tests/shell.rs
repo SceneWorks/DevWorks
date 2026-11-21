@@ -7,7 +7,7 @@ use common::*;
 use devworks_core::protocol::provider::{TranscriptBody, UserContent};
 use devworks_core::settings::catalog::{Category, descriptor};
 use devworks_desktop::backend::Backend;
-use devworks_desktop::chat::{ATTACH_LABEL, COMPOSER_LABEL, NO_COORDINATOR, SEND_LABEL};
+use devworks_desktop::chat::{ATTACH_LABEL, COMPOSER_LABEL, SEND_LABEL};
 use devworks_desktop::host::{Engine, StartError};
 use devworks_desktop::notifications::CompletionCard;
 use devworks_desktop::ops;
@@ -325,7 +325,6 @@ fn home_chat_has_current_first_history_second_and_new_chat_in_the_header() {
         "the sidebar is on the right"
     );
     assert!(has_text(&h, "What would you like to work on?"));
-    assert!(has_text(&h, NO_COORDINATOR));
     assert!(has_text(&h, "Needs you") && has_text(&h, "Recently completed"));
 
     // A draft survives tab switches; New Chat works with either tab selected.
@@ -507,6 +506,7 @@ fn current_screen_uses_the_visible_native_workspace_session_and_help_binding() {
             1,
         );
         ops::query_result(runtime.query(ctx, "ui.current_screen", &frame))
+            .map_err(|error| format!("{error:?}"))
     };
     let screen = || {
         let (OperationResult::UiCurrentScreen { value }, _) = query(&ctx).unwrap() else {

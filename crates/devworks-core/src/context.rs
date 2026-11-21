@@ -158,7 +158,15 @@ pub struct InvocationContext {
     human_decision: Option<String>,
     human_project_purge: Option<String>,
     keep_working_project: Option<(ProjectId, i64)>,
+    workspace_reply: Option<WorkspaceReply>,
     reviewed_operation: Option<ReviewedOperation>,
+}
+
+/// A reply claimed from the ordered workspace queue. The invocation ID is its durable operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceReply {
+    pub user_sequence: i64,
+    pub preference: Option<serde_json::Value>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
 /// [`InvocationContext`]. It is created from the store itself, so only code the composition
@@ -299,6 +307,7 @@ impl InvocationContext {
             human_decision: None,
             human_project_purge: None,
             keep_working_project: None,
+            workspace_reply: None,
             reviewed_operation: None,
         }
     }
@@ -340,6 +349,13 @@ impl InvocationContext {
     pub fn with_session(mut self, session_id: Id) -> Self {
         self.session_id = Some(session_id);
         self
+    }
+    pub fn with_workspace_reply(mut self, scope: WorkspaceReply) -> Self {
+        self.workspace_reply = Some(scope);
+        self
+    }
+    pub fn workspace_reply(&self) -> Option<&WorkspaceReply> {
+        self.workspace_reply.as_ref()
     }
     /// Host-resolved project/work/assignment lineage of the invoking agent or surface.
     pub fn with_lineage(
