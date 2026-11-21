@@ -35,9 +35,10 @@ impl StreamingHttp for AutoWire {
             .to_string()
         } else {
             let reply = match model {
-                "low-a-upstream" => "not one of the four tiers",
-                "gpt-6-luna" => "High",
-                _ => "completed turn",
+                // A completed but oversized Low answer must leave the next candidate eligible.
+                "low-a-upstream" => "x".repeat(1025),
+                "gpt-6-luna" => "High".into(),
+                _ => "completed turn".into(),
             };
             let body = json!({
                 "choices":[{"index":0,"delta":{"content":reply},"finish_reason":"stop"}],

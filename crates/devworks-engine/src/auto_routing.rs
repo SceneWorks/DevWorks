@@ -18,7 +18,9 @@ use devworks_core::protocol::{Counter, DomainErrorCode, Id, Protocol, RetryAdvic
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
-use devworks_core::services::artifacts::{host::HostArtifactPublication, version_ref};
+use devworks_core::services::artifacts::{
+    host::HostArtifactPublication, lifecycle::ExactReadRefusal, version_ref,
+};
 use devworks_core::services::prices::CatalogPriceResolver;
 use devworks_core::services::router::auto_routing::Source;
 use devworks_core::services::router::{
@@ -798,10 +800,15 @@ fn low_classification_from_result(
     let Some(output) = result.result_artifact else {
         return Ok(LowResult::Unusable);
     };
-    let (bytes, _) = engine
-        .artifacts()
-        .read_exact(engine.store().as_ref(), ctx, &output, 1024)
-        .map_err(|_| StorageError::ScopeDenied)?;
+    let (bytes, _) =
+        match engine
+            .artifacts()
+            .read_exact(engine.store().as_ref(), ctx, &output, 1024)
+        {
+            Ok(output) => output,
+            Err(ExactReadRefusal::TooLarge { .. }) => return Ok(LowResult::Unusable),
+            Err(error) => return Err(crate::turn_error::artifact_read_fault(error).into()),
+        };
     let tier = std::str::from_utf8(&bytes)
         .ok()
         .and_then(|text| auto_routing::parse_tier(text.trim()));
