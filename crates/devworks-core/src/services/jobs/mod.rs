@@ -122,7 +122,7 @@ pub const MAINTENANCE_OPERATIONS: [&str; 14] = [
     "maintenance.prune_sessions",
     "indexing.reindex",
     "help.generate_capability_docs",
-    "imports.apply",
+    super::imports::SYNC_OPERATION,
     "schemas.index",
 ];
 /// Namespace of a native capability's argument schema (`<namespace>/<operation>`).
@@ -683,6 +683,9 @@ impl JobService {
                 let binding = descriptor
                     .binding(Mode::Command)
                     .ok_or_else(|| invalid("capability"))?;
+                if op == super::imports::SYNC_OPERATION {
+                    super::imports::validate_schedule(tx, ctx, project, &body)?;
+                }
                 (binding.decode)(body, revision).map_err(|_| invalid("arguments"))?;
                 Ok("Native")
             }

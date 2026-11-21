@@ -62,6 +62,7 @@ mod support;
 mod usage;
 mod watchers;
 mod work;
+mod work_imports;
 mod writer;
 
 #[cfg(test)]

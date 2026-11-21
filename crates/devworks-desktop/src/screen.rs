@@ -26,6 +26,7 @@ pub enum ScreenId {
     Usage,
     Graph,
     Databases,
+    Imports,
     Instructions,
     Conventions,
     Artifacts,
@@ -60,6 +61,7 @@ impl ScreenId {
             Self::Usage => "usage",
             Self::Graph => "graph",
             Self::Databases => "databases",
+            Self::Imports => "work-imports",
             Self::Instructions => "instructions",
             Self::Conventions => "conventions",
             Self::Artifacts => "artifacts",
@@ -151,6 +153,8 @@ pub enum Effect {
     OpenPrices(String),
     /// Opens the notification center.
     OpenNotifications,
+    OpenImports,
+    OpenImportedHistory(String, bool),
     /// The navigation's project list reply, read.
     ProjectList(Result<Page<ProjectRecord>, String>),
     /// The repository list reply, read.

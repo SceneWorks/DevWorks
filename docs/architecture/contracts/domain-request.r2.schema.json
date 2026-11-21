@@ -5843,6 +5843,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "approve": {
+              "type": "boolean",
+              "x-since": 2
+            },
             "config": {
               "$ref": "#/$defs/ImportConfig"
             },
@@ -5903,6 +5907,48 @@
             "expectedRevision",
             "sourceSnapshot",
             "previewDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "imports.cancel",
+              "type": "string"
+            },
+            "runId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "runId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "configId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "imports.sync",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "configId",
+            "expectedRevision"
           ],
           "type": "object"
         },
@@ -9815,6 +9861,14 @@
             "kind": {
               "const": "imports.preview",
               "type": "string"
+            },
+            "mode": {
+              "$ref": "#/$defs/ImportIntentMode",
+              "x-since": 2
+            },
+            "updatedSinceMs": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 2
             }
           },
           "required": [
@@ -9832,6 +9886,10 @@
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
+            },
+            "sourceNamespace": {
+              "$ref": "#/$defs/Id",
+              "x-since": 2
             }
           },
           "required": [
@@ -9854,6 +9912,70 @@
           "required": [
             "kind",
             "runId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "imports.settings",
+              "type": "string"
+            },
+            "proposal": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ImportConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sourceNamespace": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "sourceNamespace"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "imports.history",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            },
+            "projectId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "page"
           ],
           "type": "object"
         },
@@ -10473,6 +10595,14 @@
     "ImportConfig": {
       "additionalProperties": false,
       "properties": {
+        "allProjects": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "allowScheduledDelta": {
+          "type": "boolean",
+          "x-since": 2
+        },
         "includeGitLinks": {
           "type": "boolean"
         },
@@ -10497,6 +10627,13 @@
         "includeGitLinks"
       ],
       "type": "object"
+    },
+    "ImportIntentMode": {
+      "enum": [
+        "Full",
+        "Delta"
+      ],
+      "type": "string"
     },
     "IndexRunKind": {
       "enum": [

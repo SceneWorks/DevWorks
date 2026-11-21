@@ -771,6 +771,14 @@ pub enum OperationResult {
     ImportsRuns { value: Page<ImportRun> },
     #[serde(rename = "imports.inspect")]
     ImportsInspect { value: ImportRun },
+    #[serde(rename = "imports.settings")]
+    ImportsSettings { value: ImportSettingsView },
+    #[serde(rename = "imports.history")]
+    ImportsHistory { value: Page<ImportedWorkEvidence> },
+    #[serde(rename = "imports.cancel")]
+    ImportsCancel { value: MutationSummary },
+    #[serde(rename = "imports.sync")]
+    ImportsSync { value: ImportRun },
     #[serde(rename = "maintenance.prune_diagnostics")]
     MaintenancePruneDiagnostics { value: PrunePreview },
     #[serde(rename = "maintenance.prune_index_runs")]
@@ -1178,6 +1186,10 @@ impl OperationResult {
             Self::ImportsApply { .. } => "imports.apply",
             Self::ImportsRuns { .. } => "imports.runs",
             Self::ImportsInspect { .. } => "imports.inspect",
+            Self::ImportsSettings { .. } => "imports.settings",
+            Self::ImportsHistory { .. } => "imports.history",
+            Self::ImportsCancel { .. } => "imports.cancel",
+            Self::ImportsSync { .. } => "imports.sync",
             Self::MaintenancePruneDiagnostics { .. } => "maintenance.prune_diagnostics",
             Self::MaintenancePruneIndexRuns { .. } => "maintenance.prune_index_runs",
             Self::MaintenancePruneMessages { .. } => "maintenance.prune_messages",
@@ -1564,6 +1576,10 @@ impl Check for OperationResult {
             Self::ImportsApply { value } => value.check()?,
             Self::ImportsRuns { value } => value.check()?,
             Self::ImportsInspect { value } => value.check()?,
+            Self::ImportsSettings { value } => value.check()?,
+            Self::ImportsHistory { value } => value.check()?,
+            Self::ImportsCancel { value } => value.check()?,
+            Self::ImportsSync { value } => value.check()?,
             Self::MaintenancePruneDiagnostics { value } => value.check()?,
             Self::MaintenancePruneIndexRuns { value } => value.check()?,
             Self::MaintenancePruneMessages { value } => value.check()?,
@@ -1776,6 +1792,12 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::RepositoriesNodes { value } => value.retain_revision(revision),
+            Self::ImportsPreview { value } => value.retain_revision(revision),
+            Self::ImportsApply { value } => value.retain_revision(revision),
+            Self::ImportsRuns { value } => value.retain_revision(revision),
+            Self::ImportsInspect { value } => value.retain_revision(revision),
+            Self::ImportsSettings { value } => value.retain_revision(revision),
+            Self::ImportsSync { value } => value.retain_revision(revision),
             _ => {}
         }
     }

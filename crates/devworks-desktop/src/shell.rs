@@ -43,6 +43,7 @@ mod settings_secrets;
 pub mod usage;
 mod watchers;
 pub mod work;
+pub(crate) mod work_imports;
 
 /// Native file and folder choosers (rfd); replaced by scripted choices in tests.
 pub trait Dialogs {
@@ -53,6 +54,10 @@ pub trait Dialogs {
     }
     /// One portable convention manifest selected by a human.
     fn pick_convention(&mut self) -> Option<PathBuf> {
+        self.pick_files().into_iter().next()
+    }
+    /// A sealed work export chosen from the registered import folder.
+    fn pick_work_import(&mut self, _root: &std::path::Path) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
     }
     /// A package bundle to install (the first picked file by default).
@@ -80,6 +85,12 @@ impl Dialogs for NativeDialogs {
         rfd::FileDialog::new()
             .set_title("Import a convention manifest")
             .add_filter("Convention manifest", &["json"])
+            .pick_file()
+    }
+    fn pick_work_import(&mut self, root: &std::path::Path) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Choose a CodeGraph work snapshot")
+            .set_directory(root)
             .pick_file()
     }
     fn pick_package(&mut self) -> Option<PathBuf> {
@@ -183,6 +194,7 @@ pub struct Shell {
     pub jobs: jobs::JobsUi,
     /// Features, the board, Issues and Overview of the selected project (DW-12).
     pub work: work::WorkUi,
+    work_imports: work_imports::ImportsUi,
     pub usage: crate::usage_screen::UsageScreen,
     pub graph: crate::graph_screen::GraphScreen,
     pub databases: crate::databases_screen::DatabasesScreen,
@@ -381,6 +393,7 @@ screens!(
     Usage => usage,
     Graph => graph,
     Databases => databases,
+    Imports => work_imports,
     Conventions => conventions,
     Artifacts => artifacts,
     Resources => resources,
@@ -441,6 +454,7 @@ impl Shell {
             placeholder: Default::default(),
             jobs: jobs::JobsUi::default(),
             work: work::WorkUi::default(),
+            work_imports: Default::default(),
             usage: crate::usage_screen::UsageScreen::default(),
             graph: crate::graph_screen::GraphScreen::default(),
             databases: Default::default(),
@@ -644,6 +658,21 @@ impl Shell {
                     });
                 }
                 Effect::OpenNotifications => self.decisions.notifications_open = true,
+                Effect::OpenImportedHistory(id, project) => {
+                    self.with_typed(|screen: &mut work_imports::ImportsUi, cx| {
+                        screen.open_history(cx, &id, project)
+                    });
+                }
+                Effect::OpenImports => {
+                    let root = self
+                        .memory_path
+                        .as_deref()
+                        .and_then(std::path::Path::parent)
+                        .map(|base| base.join("work-imports"));
+                    self.with_typed(|screen: &mut work_imports::ImportsUi, cx| {
+                        screen.open(cx, root)
+                    });
+                }
                 Effect::InvalidateRouting => self.invalidate_routing(),
                 Effect::ProjectList(result) => self.projects_listed(result),
                 Effect::RepositoryList(result) => self.repositories_listed(result),
@@ -1907,6 +1936,7 @@ impl Shell {
             self.announce(text);
         }
         self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.notification_center(cx, ctx));
+        self.with_typed(|screen: &mut work_imports::ImportsUi, cx| screen.window(cx, ctx));
         if self.updates_open {
             let mut open = true;
             egui::Window::new("Updates")

@@ -327,6 +327,7 @@ pub enum Slot {
     Usage(crate::usage_ops::UsageSlot),
     Graph(crate::graph_ops::GraphSlot),
     Databases(crate::databases_ops::DatabasesSlot),
+    Imports(crate::shell::work_imports::WorkImportsSlot),
     Instructions(crate::instructions_ops::InstructionsSlot),
     Conventions(crate::conventions_ops::ConventionsSlot),
     Artifacts(crate::artifacts_screen::ArtifactsSlot),
@@ -353,6 +354,7 @@ impl Slot {
             Self::Usage(_) => ScreenId::Usage,
             Self::Graph(_) => ScreenId::Graph,
             Self::Databases(_) => ScreenId::Databases,
+            Self::Imports(_) => ScreenId::Imports,
             Self::Instructions(_) => ScreenId::Instructions,
             Self::Conventions(_) => ScreenId::Conventions,
             Self::Artifacts(_) => ScreenId::Artifacts,
@@ -444,6 +446,7 @@ pub enum TaskOutput {
     Refreshed,
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
+    WorkImportReport(String),
     SystemOneCompletion(Box<Option<devworks_core::protocol::results::OperationCompletion>>),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),

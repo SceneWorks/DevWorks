@@ -7667,6 +7667,48 @@ pub struct ImportRun {
     pub state: OperationState,
     pub imported_ids: Items<Id>,
     pub report: ArtifactRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub preview_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub source_namespace: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+    pub mode: Option<ImportIntentMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_since_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub processed: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub total: Option<Counter>,
 }
 impl Check for ImportRun {
     fn check(&self) -> Result<(), String> {
@@ -7676,8 +7718,131 @@ impl Check for ImportRun {
         self.state.check()?;
         self.imported_ids.check()?;
         self.report.check()?;
+        self.preview_digest.check()?;
+        self.source_namespace.check()?;
+        self.mode.check()?;
+        self.updated_since_ms.check()?;
+        self.processed.check()?;
+        self.total.check()?;
         super::domain_rules::record(
             "ImportRun",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for ImportRun {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.preview_digest = None;
+        }
+        if revision < 2 {
+            self.source_namespace = None;
+        }
+        if revision < 2 {
+            self.mode = None;
+        }
+        if revision < 2 {
+            self.updated_since_ms = None;
+        }
+        if revision < 2 {
+            self.processed = None;
+        }
+        if revision < 2 {
+            self.total = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ImportIntentMode {
+    Full,
+    Delta,
+}
+impl Check for ImportIntentMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportSettingsView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<Revision>,
+    pub source_namespace: Id,
+    pub approved: bool,
+    pub config: ImportConfig,
+}
+impl Check for ImportSettingsView {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.source_namespace.check()?;
+        self.approved.check()?;
+        self.config.check()?;
+        super::domain_rules::record(
+            "ImportSettingsView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for ImportSettingsView {
+    fn retain_revision(&mut self, revision: u32) {
+        self.config.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedWorkEvidence {
+    pub id: Id,
+    pub source_namespace: Id,
+    pub source_id: Id,
+    pub kind: Label,
+    pub source_created_at_ms: Counter,
+    pub evidence: DynamicJson,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_reference: Option<ImportedCodeReference>,
+}
+impl Check for ImportedWorkEvidence {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.source_namespace.check()?;
+        self.source_id.check()?;
+        self.kind.check()?;
+        self.source_created_at_ms.check()?;
+        self.evidence.check()?;
+        self.current_reference.check()?;
+        super::domain_rules::record(
+            "ImportedWorkEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedCodeReference {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub commit: Label,
+    pub path: RelativePath,
+}
+impl Check for ImportedCodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.commit.check()?;
+        self.path.check()?;
+        super::domain_rules::record(
+            "ImportedCodeReference",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -7692,6 +7857,20 @@ pub struct ImportConfig {
     pub work_ids: Items<Id>,
     pub include_history: bool,
     pub include_git_links: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub all_projects: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub allow_scheduled_delta: Option<bool>,
 }
 impl Check for ImportConfig {
     fn check(&self) -> Result<(), String> {
@@ -7700,11 +7879,24 @@ impl Check for ImportConfig {
         self.work_ids.check()?;
         self.include_history.check()?;
         self.include_git_links.check()?;
+        self.all_projects.check()?;
+        self.allow_scheduled_delta.check()?;
         super::domain_rules::record(
             "ImportConfig",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ImportConfig {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.all_projects = None;
+        }
+        if revision < 2 {
+            self.allow_scheduled_delta = None;
+        }
     }
 }
 
@@ -20118,11 +20310,50 @@ pub enum DomainQuery {
     #[serde(rename = "queue.consumer_status")]
     QueueConsumerStatus { consumer_id: Id },
     #[serde(rename = "imports.preview")]
-    ImportsPreview { config: ImportConfig },
+    ImportsPreview {
+        config: ImportConfig,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+        mode: Option<ImportIntentMode>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 2))]
+        updated_since_ms: Option<Counter>,
+    },
     #[serde(rename = "imports.runs")]
-    ImportsRuns { page: PageRequest },
+    ImportsRuns {
+        page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 2))]
+        source_namespace: Option<Id>,
+    },
     #[serde(rename = "imports.inspect")]
     ImportsInspect { run_id: Id },
+    #[serde(rename = "imports.settings")]
+    ImportsSettings {
+        source_namespace: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposal: Option<ImportConfig>,
+    },
+    #[serde(rename = "imports.history")]
+    ImportsHistory {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        work_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
+        page: PageRequest,
+    },
     #[serde(rename = "mcp_server.status")]
     McpServerStatus {},
     #[serde(rename = "mcp_server.clients")]
@@ -20326,6 +20557,8 @@ impl DomainQuery {
             Self::ImportsPreview { .. } => "imports.preview",
             Self::ImportsRuns { .. } => "imports.runs",
             Self::ImportsInspect { .. } => "imports.inspect",
+            Self::ImportsSettings { .. } => "imports.settings",
+            Self::ImportsHistory { .. } => "imports.history",
             Self::McpServerStatus { .. } => "mcp_server.status",
             Self::McpServerClients { .. } => "mcp_server.clients",
             Self::EvalsResults { .. } => "evals.results",
@@ -21500,14 +21733,40 @@ impl Check for DomainQuery {
             Self::QueueConsumerStatus { consumer_id } => {
                 consumer_id.check()?;
             }
-            Self::ImportsPreview { config } => {
+            Self::ImportsPreview {
+                config,
+                mode,
+                updated_since_ms,
+            } => {
                 config.check()?;
+                mode.check()?;
+                updated_since_ms.check()?;
             }
-            Self::ImportsRuns { page } => {
+            Self::ImportsRuns {
+                page,
+                source_namespace,
+            } => {
                 page.check()?;
+                source_namespace.check()?;
             }
             Self::ImportsInspect { run_id } => {
                 run_id.check()?;
+            }
+            Self::ImportsSettings {
+                source_namespace,
+                proposal,
+            } => {
+                source_namespace.check()?;
+                proposal.check()?;
+            }
+            Self::ImportsHistory {
+                work_id,
+                project_id,
+                page,
+            } => {
+                work_id.check()?;
+                project_id.check()?;
+                page.check()?;
             }
             Self::McpServerStatus {} => {}
             Self::McpServerClients { page } => {
@@ -21979,6 +22238,30 @@ impl Revisioned for DomainQuery {
                 if revision < 3 {
                     *scope = None;
                 }
+            }
+            Self::ImportsPreview {
+                config,
+                mode,
+                updated_since_ms,
+                ..
+            } => {
+                config.retain_revision(revision);
+                if revision < 2 {
+                    *mode = None;
+                }
+                if revision < 2 {
+                    *updated_since_ms = None;
+                }
+            }
+            Self::ImportsRuns {
+                source_namespace, ..
+            } => {
+                if revision < 2 {
+                    *source_namespace = None;
+                }
+            }
+            Self::ImportsSettings { proposal, .. } => {
+                proposal.retain_revision(revision);
             }
             _ => {}
         }
@@ -23793,6 +24076,13 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_revision: Option<Revision>,
         config: ImportConfig,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 2))]
+        approve: Option<bool>,
     },
     #[serde(rename = "imports.apply")]
     ImportsApply {
@@ -23800,6 +24090,16 @@ pub enum DomainCommand {
         expected_revision: Revision,
         source_snapshot: Digest,
         preview_digest: Digest,
+    },
+    #[serde(rename = "imports.cancel")]
+    ImportsCancel {
+        run_id: Id,
+        expected_revision: Revision,
+    },
+    #[serde(rename = "imports.sync")]
+    ImportsSync {
+        config_id: Id,
+        expected_revision: Revision,
     },
     #[serde(rename = "maintenance.prune_diagnostics")]
     MaintenancePruneDiagnostics {
@@ -24118,6 +24418,8 @@ impl DomainCommand {
             Self::QueueReconcile { .. } => "queue.reconcile",
             Self::ImportsConfigure { .. } => "imports.configure",
             Self::ImportsApply { .. } => "imports.apply",
+            Self::ImportsCancel { .. } => "imports.cancel",
+            Self::ImportsSync { .. } => "imports.sync",
             Self::MaintenancePruneDiagnostics { .. } => "maintenance.prune_diagnostics",
             Self::MaintenancePruneIndexRuns { .. } => "maintenance.prune_index_runs",
             Self::MaintenancePruneMessages { .. } => "maintenance.prune_messages",
@@ -25941,10 +26243,12 @@ impl Check for DomainCommand {
                 config_id,
                 expected_revision,
                 config,
+                approve,
             } => {
                 config_id.check()?;
                 expected_revision.check()?;
                 config.check()?;
+                approve.check()?;
             }
             Self::ImportsApply {
                 config_id,
@@ -25956,6 +26260,20 @@ impl Check for DomainCommand {
                 expected_revision.check()?;
                 source_snapshot.check()?;
                 preview_digest.check()?;
+            }
+            Self::ImportsCancel {
+                run_id,
+                expected_revision,
+            } => {
+                run_id.check()?;
+                expected_revision.check()?;
+            }
+            Self::ImportsSync {
+                config_id,
+                expected_revision,
+            } => {
+                config_id.check()?;
+                expected_revision.check()?;
             }
             Self::MaintenancePruneDiagnostics {
                 preview_only,
@@ -26594,6 +26912,14 @@ impl Revisioned for DomainCommand {
                 }
                 if revision < 2 {
                     *output = None;
+                }
+            }
+            Self::ImportsConfigure {
+                config, approve, ..
+            } => {
+                config.retain_revision(revision);
+                if revision < 2 {
+                    *approve = None;
                 }
             }
             Self::TasksPrioritize { placement, .. } => {
@@ -27323,6 +27649,14 @@ pub enum OperationResult {
     ImportsRuns { value: Page<ImportRun> },
     #[serde(rename = "imports.inspect")]
     ImportsInspect { value: ImportRun },
+    #[serde(rename = "imports.settings")]
+    ImportsSettings { value: ImportSettingsView },
+    #[serde(rename = "imports.history")]
+    ImportsHistory { value: Page<ImportedWorkEvidence> },
+    #[serde(rename = "imports.cancel")]
+    ImportsCancel { value: MutationSummary },
+    #[serde(rename = "imports.sync")]
+    ImportsSync { value: ImportRun },
     #[serde(rename = "maintenance.prune_diagnostics")]
     MaintenancePruneDiagnostics { value: PrunePreview },
     #[serde(rename = "maintenance.prune_index_runs")]
@@ -27809,6 +28143,10 @@ impl OperationResult {
             Self::ImportsApply { .. } => "imports.apply",
             Self::ImportsRuns { .. } => "imports.runs",
             Self::ImportsInspect { .. } => "imports.inspect",
+            Self::ImportsSettings { .. } => "imports.settings",
+            Self::ImportsHistory { .. } => "imports.history",
+            Self::ImportsCancel { .. } => "imports.cancel",
+            Self::ImportsSync { .. } => "imports.sync",
             Self::MaintenancePruneDiagnostics { .. } => "maintenance.prune_diagnostics",
             Self::MaintenancePruneIndexRuns { .. } => "maintenance.prune_index_runs",
             Self::MaintenancePruneMessages { .. } => "maintenance.prune_messages",
@@ -28195,6 +28533,10 @@ impl Check for OperationResult {
             Self::ImportsApply { value } => value.check()?,
             Self::ImportsRuns { value } => value.check()?,
             Self::ImportsInspect { value } => value.check()?,
+            Self::ImportsSettings { value } => value.check()?,
+            Self::ImportsHistory { value } => value.check()?,
+            Self::ImportsCancel { value } => value.check()?,
+            Self::ImportsSync { value } => value.check()?,
             Self::MaintenancePruneDiagnostics { value } => value.check()?,
             Self::MaintenancePruneIndexRuns { value } => value.check()?,
             Self::MaintenancePruneMessages { value } => value.check()?,
@@ -28442,6 +28784,12 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::RepositoriesNodes { value } => value.retain_revision(revision),
+            Self::ImportsPreview { value } => value.retain_revision(revision),
+            Self::ImportsApply { value } => value.retain_revision(revision),
+            Self::ImportsRuns { value } => value.retain_revision(revision),
+            Self::ImportsInspect { value } => value.retain_revision(revision),
+            Self::ImportsSettings { value } => value.retain_revision(revision),
+            Self::ImportsSync { value } => value.retain_revision(revision),
             Self::TasksSetFeature { value } => value.retain_revision(revision),
             Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),

@@ -3776,6 +3776,96 @@ impl WatcherRepository for Unmodelled {
         unmodelled()
     }
 }
+impl WorkImportRead for Unmodelled {
+    fn import_config(&self, _: &Id) -> Result<Option<WorkImportConfig>, StorageError> {
+        unmodelled()
+    }
+    fn import_settings(
+        &self,
+        _: &ActorId,
+        _: &Id,
+    ) -> Result<Option<WorkImportConfig>, StorageError> {
+        unmodelled()
+    }
+    fn import_run(&self, _: &Id) -> Result<Option<WorkImportRun>, StorageError> {
+        unmodelled()
+    }
+    fn import_preview(&self, _: &ActorId, _: &str) -> Result<Option<WorkImportRun>, StorageError> {
+        unmodelled()
+    }
+    fn matching_preview(
+        &self,
+        _: &ActorId,
+        _: &Id,
+        _: &str,
+        _: &str,
+    ) -> Result<Option<WorkImportRun>, StorageError> {
+        unmodelled()
+    }
+    fn import_runs(
+        &self,
+        _: &ActorId,
+        _: Option<&Id>,
+        _: Option<i64>,
+        _: u32,
+    ) -> Result<Vec<(i64, WorkImportRun)>, StorageError> {
+        unmodelled()
+    }
+    fn active_import(&self, _: &Id) -> Result<Option<WorkImportRun>, StorageError> {
+        unmodelled()
+    }
+    fn latest_import(
+        &self,
+        _: &ActorId,
+        _: &Id,
+        _: &str,
+        _: Option<i64>,
+    ) -> Result<Option<WorkImportRun>, StorageError> {
+        unmodelled()
+    }
+    fn import_retry_keys(
+        &self,
+        _: &ActorId,
+        _: &Id,
+        _: &str,
+        _: i64,
+    ) -> Result<Vec<(String, Id)>, StorageError> {
+        unmodelled()
+    }
+    fn import_mapping(
+        &self,
+        _: &Id,
+        _: &str,
+        _: &Id,
+    ) -> Result<Option<WorkImportMapping>, StorageError> {
+        unmodelled()
+    }
+}
+impl WorkImportRepository for Unmodelled {
+    fn put_import_config(
+        &mut self,
+        _: &WorkImportConfig,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_import_run(&mut self, _: &WorkImportRun, _: Option<i64>) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_import_mapping(&mut self, _: &WorkImportMapping) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_import_retry(
+        &mut self,
+        _: &WorkImportRun,
+        _: &ProjectId,
+        _: &str,
+        _: &Id,
+        _: Option<&str>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+}
 impl WorkRead for Unmodelled {
     fn allocation_replay(&self, _: &str) -> Result<Option<StoredAllocationReplay>, StorageError> {
         unmodelled()

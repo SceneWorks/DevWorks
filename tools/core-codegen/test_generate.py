@@ -96,7 +96,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'settings.read_effective', 'settings.validate', 'settings.save_revision',
             'settings.explain_source', 'dreaming.instructions', 'skills.discover', 'skills.read',
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
-            'roles.history', 'roles.rollback', 'sessions.transcript'})
+            'roles.history', 'roles.rollback', 'sessions.transcript',
+            'imports.preview', 'imports.configure', 'imports.apply', 'imports.runs', 'imports.inspect',
+            'imports.settings', 'imports.sync'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):

@@ -5671,6 +5671,48 @@
           "additionalProperties": false,
           "properties": {
             "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "imports.cancel",
+              "type": "string"
+            },
+            "runId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "runId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "configId": {
+              "$ref": "#/$defs/Id"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "imports.sync",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "configId",
+            "expectedRevision"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
               "anyOf": [
                 {
                   "$ref": "#/$defs/Revision"
@@ -9416,6 +9458,70 @@
           "required": [
             "kind",
             "runId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "imports.settings",
+              "type": "string"
+            },
+            "proposal": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ImportConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sourceNamespace": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "sourceNamespace"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "imports.history",
+              "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest"
+            },
+            "projectId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "page"
           ],
           "type": "object"
         },

@@ -134,6 +134,8 @@
     "usage_origins": "project_id=?1",
     "work_dependencies": "work_id IN(SELECT id FROM ownedWork) OR prerequisite_id IN(SELECT id FROM ownedWork)",
     "work_details": "project_id=?1",
+    "work_import_mappings": "project_id=?1",
+    "work_import_retry": "project_id=?1",
     "work_items": "project_id=?1",
     "work_queues": "project_id=?1",
     "work_repositories": "work_id IN(SELECT id FROM ownedWork)",

@@ -3766,6 +3766,49 @@
       "pattern": "^[A-Za-z0-9_-]+$",
       "type": "string"
     },
+    "ImportConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allProjects": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "allowScheduledDelta": {
+          "type": "boolean",
+          "x-since": 2
+        },
+        "includeGitLinks": {
+          "type": "boolean"
+        },
+        "includeHistory": {
+          "type": "boolean"
+        },
+        "projectIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "source": {
+          "$ref": "#/$defs/RegisteredPath"
+        },
+        "workIds": {
+          "$ref": "#/$defs/List_Id_0_128"
+        }
+      },
+      "required": [
+        "source",
+        "projectIds",
+        "workIds",
+        "includeHistory",
+        "includeGitLinks"
+      ],
+      "type": "object"
+    },
+    "ImportIntentMode": {
+      "enum": [
+        "Full",
+        "Delta"
+      ],
+      "type": "string"
+    },
     "ImportRun": {
       "additionalProperties": false,
       "properties": {
@@ -3775,17 +3818,41 @@
         "importedIds": {
           "$ref": "#/$defs/List_Id_0_128"
         },
+        "mode": {
+          "$ref": "#/$defs/ImportIntentMode",
+          "x-since": 2
+        },
+        "previewDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 2
+        },
+        "processed": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
         "report": {
           "$ref": "#/$defs/ArtifactRef"
         },
         "revision": {
           "$ref": "#/$defs/Revision"
         },
+        "sourceNamespace": {
+          "$ref": "#/$defs/Id",
+          "x-since": 2
+        },
         "sourceSnapshot": {
           "$ref": "#/$defs/Digest"
         },
         "state": {
           "$ref": "#/$defs/OperationState"
+        },
+        "total": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
+        },
+        "updatedSinceMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 2
         }
       },
       "required": [
@@ -3795,6 +3862,112 @@
         "state",
         "importedIds",
         "report"
+      ],
+      "type": "object"
+    },
+    "ImportSettingsView": {
+      "additionalProperties": false,
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "config": {
+          "$ref": "#/$defs/ImportConfig"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceNamespace": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sourceNamespace",
+        "approved",
+        "config"
+      ],
+      "type": "object"
+    },
+    "ImportedCodeReference": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "path": {
+          "$ref": "#/$defs/RelativePath"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "commit",
+        "path"
+      ],
+      "type": "object"
+    },
+    "ImportedWorkEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "currentReference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImportedCodeReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/BoundedUntrustedJson"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "sourceCreatedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "sourceId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceNamespace": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "id",
+        "sourceNamespace",
+        "sourceId",
+        "kind",
+        "sourceCreatedAtMs",
+        "evidence"
       ],
       "type": "object"
     },
@@ -5595,6 +5768,14 @@
     "List_ImportRun_0_500": {
       "items": {
         "$ref": "#/$defs/ImportRun"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_ImportedWorkEvidence_0_500": {
+      "items": {
+        "$ref": "#/$defs/ImportedWorkEvidence"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -8783,7 +8964,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpClientAccess_0_500"
+          "$ref": "#/$defs/List_ImportedWorkEvidence_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -8803,6 +8984,32 @@
       "type": "object"
     },
     "Page51": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_McpClientAccess_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "Page52": {
       "additionalProperties": false,
       "properties": {
         "checkpoint": {
@@ -8833,7 +9040,7 @@
       ],
       "type": "object"
     },
-    "Page52": {
+    "Page53": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -17708,6 +17915,74 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
+          "const": "imports.settings",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/ImportSettingsView"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "imports.history",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Page50"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "imports.cancel",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/MutationSummary"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "imports.sync",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/ImportRun"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
           "const": "maintenance.prune_diagnostics",
           "type": "string"
         },
@@ -17831,7 +18106,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page50"
+          "$ref": "#/$defs/Page51"
         }
       },
       "required": [
@@ -18069,7 +18344,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page51"
+          "$ref": "#/$defs/Page52"
         }
       },
       "required": [
@@ -18392,7 +18667,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page52"
+          "$ref": "#/$defs/Page53"
         }
       },
       "required": [

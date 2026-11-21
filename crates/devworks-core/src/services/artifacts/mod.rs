@@ -1755,7 +1755,7 @@ impl ArtifactService {
                     .iter()
                     .any(StoredVersion::live);
                 if !remaining {
-                    self.retire(tx, &mut artifact)?;
+                    Self::retire(tx, &mut artifact)?;
                 }
                 tx.artifacts().update_artifact(&artifact)?;
                 let pending = release_blob(tx, &version.blob_digest)?;
@@ -1806,7 +1806,7 @@ impl ArtifactService {
                 }
                 artifact.current_version_id = None;
                 artifact.revision += 1;
-                self.retire(tx, &mut artifact)?;
+                Self::retire(tx, &mut artifact)?;
                 tx.artifacts().update_artifact(&artifact)?;
                 let mut pending = Vec::new();
                 for d in &digests {
@@ -1942,7 +1942,6 @@ impl ArtifactService {
 
     /// Marks an artifact deleted and removes its (authorized) shares.
     fn retire(
-        &self,
         tx: &mut dyn WriteTransaction,
         artifact: &mut StoredArtifact,
     ) -> Result<(), StorageError> {

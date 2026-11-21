@@ -335,6 +335,10 @@ impl ReadSnapshot for Snapshot<'_> {
     fn watchers(&self) -> &dyn WatcherRead {
         self
     }
+
+    fn work_imports(&self) -> Result<&dyn WorkImportRead, StorageError> {
+        Ok(self)
+    }
     fn conventions(&self) -> &dyn ConventionRead {
         self
     }
@@ -521,6 +525,10 @@ impl WriteTransaction for Unit<'_> {
     }
     fn watchers(&mut self) -> &mut dyn WatcherRepository {
         self
+    }
+
+    fn work_imports(&mut self) -> Result<&mut dyn WorkImportRepository, StorageError> {
+        Ok(self)
     }
     fn conventions(&mut self) -> &mut dyn ConventionRepository {
         self

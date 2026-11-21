@@ -33,6 +33,24 @@
     ]
   },
   {
+    "id": "work-imports",
+    "title": "Import selected CodeGraph work and history",
+    "file": "topics/work-imports.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "imports.preview",
+      "imports.configure",
+      "imports.apply",
+      "imports.runs",
+      "imports.inspect",
+      "imports.settings",
+      "imports.history",
+      "imports.cancel",
+      "imports.sync"
+    ]
+  },
+  {
     "id": "projects",
     "title": "Projects, archives, and deletion",
     "file": "topics/projects.md",
