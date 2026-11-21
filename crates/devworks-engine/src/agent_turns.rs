@@ -531,6 +531,7 @@ async fn run_native_loop(
                         agent.assignment_id.0.as_str().to_owned(),
                         material,
                         cancellation,
+                        None,
                     )
                     .await?;
                 }
@@ -665,7 +666,7 @@ async fn run_native_loop(
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        wait_for_running_mcp_calls(engine, ctx, session_id, cancellation).await?;
+        wait_for_running_tool_results(engine, ctx, session_id, cancellation, None).await?;
         let (prepared_head, prepared_binding, route, windows) = {
             let (engine, ctx, session, head, is_reviewer) = (
                 engine.clone(),
@@ -1019,44 +1020,54 @@ pub(crate) fn prepare_generation_context(
     Ok((head, binding, route, windows))
 }
 
-/// An external MCP tool answers within its own call deadline, so the next provider request
-/// waits for it and carries the result instead of only the accepted receipt. A call that needs
-/// input or whose outcome is unknown does not hold the agent.
-pub(crate) async fn wait_for_running_mcp_calls(
+/// MCP and SystemOne calls have their own deadlines. Wait for their results before refreshing
+/// the provider context. Calls that need input or reconciliation release the turn.
+pub(crate) async fn wait_for_running_tool_results(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
     cancellation: &Cancellation,
+    capacity: Option<&mut crate::dispatch::EffectCapacity<'_>>,
 ) -> Result<(), StorageError> {
-    loop {
+    let running = || {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
         let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
-        let running = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             for operation_id in linked.iter().filter_map(|call| call.operation_id.as_ref()) {
                 let operation = read
                     .operations()
                     .operation(operation_id)?
                     .ok_or(StorageError::ScopeDenied)?;
-                if operation.capability == "mcp.tool"
-                    && matches!(
-                        operation.state,
-                        OperationState::IntentRecorded
-                            | OperationState::Preflighted
-                            | OperationState::Dispatching
-                            | OperationState::RetryPending
-                    )
-                {
+                if matches!(
+                    operation.capability.as_str(),
+                    "mcp.tool" | devworks_core::services::router::decisions::OPERATION
+                ) && matches!(
+                    operation.state,
+                    OperationState::IntentRecorded
+                        | OperationState::Preflighted
+                        | OperationState::Dispatching
+                        | OperationState::RetryPending
+                ) {
                     return Ok(true);
                 }
             }
             Ok(false)
-        })?;
-        if !running {
-            return Ok(());
+        })
+    };
+    if !running()? {
+        return Ok(());
+    }
+    let wait = async {
+        while running()? {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        Ok(())
+    };
+    match capacity {
+        Some(capacity) => capacity.while_waiting(cancellation, wait).await?,
+        None => wait.await,
     }
 }
 
