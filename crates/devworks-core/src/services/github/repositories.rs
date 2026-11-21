@@ -78,27 +78,38 @@ pub(super) fn prepare(
             &[row.id.as_str(), owner, &limit_key],
             row.permission_revision,
         );
-        let next = bind.resume(&input.page)?;
-        let page = service
-            .client
-            .observe_account_repositories(
-                &*service.store,
-                next.as_deref(),
-                None,
-                limit,
-                service.clock.now_ms().get(),
-            )
-            .map_err(api_fault)?;
-        let mut repositories = RepositoryIdentity::decode_page(&page).map_err(api_fault)?;
-        if repositories.len() > usize::from(limit) {
-            return Err(api_fault(Fault::InvalidResponse));
+        let mut next = bind.resume(&input.page)?;
+        let mut repositories = Vec::new();
+        let mut next_page = None;
+        let max_scans = if owner.is_empty() { 1 } else { 5 };
+        for _ in 0..max_scans {
+            let page = service
+                .client
+                .observe_account_repositories(
+                    &*service.store,
+                    next.as_deref(),
+                    None,
+                    limit,
+                    service.clock.now_ms().get(),
+                )
+                .map_err(api_fault)?;
+            let mut batch = RepositoryIdentity::decode_page(&page).map_err(api_fault)?;
+            if batch.len() > usize::from(limit) {
+                return Err(api_fault(Fault::InvalidResponse));
+            }
+            batch.retain(|repo| {
+                owner.is_empty()
+                    || repo.owner_kind == "Organization"
+                        && repo.repository.owner.eq_ignore_ascii_case(owner)
+            });
+            repositories.extend(batch);
+            next_page = page.next_page;
+            if !repositories.is_empty() || next_page.is_none() {
+                break;
+            }
+            next = next_page.clone();
         }
-        repositories.retain(|repo| {
-            owner.is_empty()
-                || repo.owner_kind == "Organization"
-                    && repo.repository.owner.eq_ignore_ascii_case(owner)
-        });
-        let next_cursor = page.next_page.map(|page| bind.cursor(&page));
+        let next_cursor = next_page.map(|page| bind.cursor(&page));
         if next_cursor
             .as_ref()
             .is_some_and(|cursor| cursor.0.len() > 4096)

@@ -398,7 +398,7 @@ impl GitHubService {
         uri.query_pairs_mut()
             .append_pair("state", "all")
             .append_pair("sort", "created")
-            .append_pair("direction", "asc")
+            .append_pair("direction", "desc")
             .append_pair("per_page", "100")
             .append_pair("since", &since.to_string());
         let endpoint = Endpoint::new(
@@ -407,7 +407,7 @@ impl GitHubService {
         )?;
         let now = self.clock.now_ms().get();
         let mut next = None;
-        for _ in 0..3 {
+        for _ in 0..20 {
             let token = self
                 .client
                 .token_for_account(&*self.store, &target.account)?;

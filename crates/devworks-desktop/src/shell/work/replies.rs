@@ -505,14 +505,16 @@ impl WorkCtl<'_, '_> {
                 {
                     self.work.message =
                         Some((Tone::Accent, "GitHub issue publication queued.".into()));
+                    self.inspect(&issue_id);
                 } else {
                     match ops::command_result(c) {
                         Ok(OperationResult::IssuesPublish {
                             value: GithubIssueLinkResult::Current(link),
                         }) => {
-                            self.work.github_links.insert(issue_id, link);
+                            self.work.github_links.insert(issue_id.clone(), link);
                             self.work.message =
                                 Some((Tone::Good, "Published issue to GitHub.".into()));
+                            self.inspect(&issue_id);
                             self.load_work();
                         }
                         Err(e) => self.work_failure("Publishing issue to GitHub", e),
@@ -529,8 +531,9 @@ impl WorkCtl<'_, '_> {
                         value: GithubIssueLinkResult::Current(link),
                     }) => {
                         self.work.github_link_number_drafts.remove(&issue_id);
-                        self.work.github_links.insert(issue_id, link);
+                        self.work.github_links.insert(issue_id.clone(), link);
                         self.work.message = Some((Tone::Good, "Linked GitHub issue.".into()));
+                        self.inspect(&issue_id);
                         self.load_work();
                     }
                     Err(e) => self.work_failure("Linking GitHub issue", e),

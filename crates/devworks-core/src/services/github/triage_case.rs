@@ -313,7 +313,71 @@ pub fn settle_classification(
         // The admitted source stays in triage during its independent verification operations.
         // Storing a route is not trusted verification.
     }
-    tx.github().put_github_issue(&intake, Some(expected))
+    tx.github().put_github_issue(&intake, Some(expected))?;
+    if let Some(local_repo) = input.registrations.first() {
+        refresh_intake_state(tx, local_repo, &key)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn refresh_intake_state(
+    tx: &mut dyn WriteTransaction,
+    local_repo: &Id,
+    key: &GithubIssueKey,
+) -> Result<(), StorageError> {
+    let scope = super::issue_poll::scope(local_repo);
+    let Some(mut intake) = tx.github().github_issue(key, &scope)? else {
+        return Ok(());
+    };
+    if intake.state == "Resolved" {
+        return Ok(());
+    }
+    let mut links = Vec::new();
+    let mut after = None;
+    loop {
+        let page = tx
+            .github()
+            .github_work_links(key, None, after.as_ref(), 128)?;
+        let more = page.len() == 128;
+        after = page.last().map(|row| row.work_id.clone());
+        links.extend(page);
+        if !more {
+            break;
+        }
+    }
+    let mut any_working = false;
+    let mut any_awaiting = false;
+    for link in &links {
+        if let Some(case) = tx.github().github_triage_case(key, &link.project_id)? {
+            match case.state.as_str() {
+                "NeedsProof" => return Ok(()),
+                "Working" | "Verified" => any_working = true,
+                "AwaitingDecision" => any_awaiting = true,
+                _ => {}
+            }
+        }
+    }
+    let next_state = if links.is_empty()
+        && tx
+            .github()
+            .github_observation(&intake.observation_id, &scope)?
+            .is_some_and(|obs| obs.payload["state"] == "closed")
+    {
+        "Closed"
+    } else if any_working {
+        "Working"
+    } else if any_awaiting {
+        "AwaitingDecision"
+    } else {
+        return Ok(());
+    };
+    if intake.state != next_state {
+        let expected = intake.revision;
+        intake.revision += 1;
+        intake.state = next_state.into();
+        tx.github().put_github_issue(&intake, Some(expected))?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -371,6 +435,11 @@ fn begin_case(
                 Revision::new(1).expect("positive policy revision"),
             );
             let status = workflow::default_status(tx, &destination.project_id)?.id;
+            let report_body = if input.report.trim().is_empty() {
+                format!("Source report: {}", input.url)
+            } else {
+                format!("Source report: {}\n\n{}", input.url, input.report.trim())
+            };
             let result = service
                 .create_issue(
                     tx,
@@ -378,7 +447,7 @@ fn begin_case(
                     &crate::operations::issues::CreateInput {
                         project_id: destination.project_id.clone(),
                         title: label(&input.title, "GitHub issue"),
-                        description: content(&format!("Source report: {}", input.url)),
+                        description: content(&report_body),
                         repository_ids: BoundedList(vec![destination.repository_id.clone()]),
                         status_id: status,
                         feature_id: None,

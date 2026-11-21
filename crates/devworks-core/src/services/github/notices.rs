@@ -321,7 +321,8 @@ fn reconcile_remote_closure(
                         adjudication_ref,
                         created_at_ms: tx.now_ms(),
                     };
-                    tx.github().retire_github_work_link(&retirement)
+                    tx.github().retire_github_work_link(&retirement)?;
+                    super::triage_case::refresh_intake_state(tx, &local_repo, &retirement.key)
                 },
             )
             .map_err(|e| match e {
@@ -350,6 +351,7 @@ pub fn deliver(tx: &mut dyn WriteTransaction, event: &EventRecord) -> Result<(),
             };
             let roots = issue_roots(tx, key.clone())?;
             let url = field(&event.payload, "url")?;
+            record_inbound_clarification_if_needed(tx, &local, &key, event, &roots, url)?;
             escalate_inbound_conflict_if_needed(tx, &local, &key, event, &roots, url)?;
             (roots, url, format!("GitHub issue #{number} changed"))
         }
@@ -433,6 +435,133 @@ pub fn deliver(tx: &mut dyn WriteTransaction, event: &EventRecord) -> Result<(),
             },
         )
         .map_err(|failure| failure.into_storage())?;
+    }
+    Ok(())
+}
+
+fn record_inbound_clarification_if_needed(
+    tx: &mut dyn WriteTransaction,
+    local: &Id,
+    key: &GithubIssueKey,
+    event: &EventRecord,
+    roots: &[RootId],
+    url: &str,
+) -> Result<(), StorageError> {
+    if roots.is_empty() {
+        return Ok(());
+    }
+    let scope = GithubScope {
+        project_id: None,
+        repositories: vec![local.clone()],
+    };
+    let note_text = if let Some(comment_str) = event.payload["commentObservationId"].as_str() {
+        let comment_id = Id::new(comment_str.to_owned()).map_err(|_| invalid())?;
+        let Some(obs) = tx.github().github_observation(&comment_id, &scope)? else {
+            return Ok(());
+        };
+        let body = obs.payload["body"].as_str().unwrap_or("").trim();
+        if body.is_empty() || body.contains("<!-- devworks-resolution:") {
+            return Ok(());
+        }
+        let author = obs.payload["author"].as_str().unwrap_or("github");
+        format!("GitHub issue comment by @{author} ({}):\n\n{body}", obs.url)
+    } else {
+        let (Some(prev_str), Some(curr_str)) = (
+            event.payload["previousObservationId"].as_str(),
+            event.payload["observationId"].as_str(),
+        ) else {
+            return Ok(());
+        };
+        let prev_id = Id::new(prev_str.to_owned()).map_err(|_| invalid())?;
+        let curr_id = Id::new(curr_str.to_owned()).map_err(|_| invalid())?;
+        let (Some(prev), Some(curr)) = (
+            tx.github().github_observation(&prev_id, &scope)?,
+            tx.github().github_observation(&curr_id, &scope)?,
+        ) else {
+            return Ok(());
+        };
+        if curr.payload["state"] != "open" || prev.payload["state"] != "open" {
+            return Ok(());
+        }
+        let title_changed = prev.payload["title"] != curr.payload["title"];
+        let prev_body = prev.payload["body"].as_str().unwrap_or("");
+        let curr_body = curr.payload["body"].as_str().unwrap_or("");
+        let body_rewritten = !prev_body.is_empty() && !curr_body.starts_with(prev_body);
+        let scope_label_added = curr.payload["labels"]
+            .as_array()
+            .is_some_and(|curr_labels| {
+                let prev_labels = prev.payload["labels"].as_array();
+                curr_labels.iter().filter_map(Value::as_str).any(|label| {
+                    let lower = label.to_ascii_lowercase();
+                    (lower.contains("feature")
+                        || lower.contains("enhancement")
+                        || lower.contains("breaking")
+                        || lower.contains("scope"))
+                        && !prev_labels
+                            .is_some_and(|p| p.iter().any(|old| old.as_str() == Some(label)))
+                })
+            });
+        if title_changed || body_rewritten || scope_label_added {
+            return Ok(());
+        }
+        let appended = curr_body
+            .strip_prefix(prev_body)
+            .map(str::trim)
+            .unwrap_or("");
+        if appended.is_empty() {
+            return Ok(());
+        }
+        format!(
+            "Clarifying update appended on GitHub issue #{} ({url}):\n\n{appended}",
+            key.number
+        )
+    };
+
+    let host = tx.store().host_actor.clone();
+    for root in roots {
+        let Some(mut work) = tx.work().work(&root.0)? else {
+            continue;
+        };
+        if !tx
+            .projects()
+            .project(&work.project_id)?
+            .is_some_and(|project| project.lifecycle == "Active")
+            || !tx.projects().members(&work.project_id)?.contains(local)
+        {
+            continue;
+        }
+        // Preserve work.revision while container reproduction is in flight for NeedsProof cases.
+        if tx
+            .github()
+            .github_triage_case(key, &work.project_id)?
+            .is_some_and(|case| case.state == "NeedsProof")
+        {
+            continue;
+        }
+        let comment_id = Id::new(format!(
+            "gh-ev-{}",
+            &sha256_hex(format!("{}:{}", event.id.0.as_str(), work.id.as_str()).as_bytes())[..24]
+        ))
+        .expect("bounded GitHub inbound comment ID");
+        let mut brief = crate::kernel::work_brief::WorkBrief::of(&work)?;
+        if brief.comments.len() >= 1024 || brief.comments.iter().any(|c| c.item.id == comment_id) {
+            continue;
+        }
+        brief.comments.push(crate::kernel::work_brief::Noted {
+            item: crate::protocol::records::WorkComment {
+                id: comment_id,
+                content: crate::services::kernel::content(&note_text),
+                evidence: BoundedList(Vec::new()),
+            },
+            actor: host.clone(),
+            at_ms: tx.now_ms(),
+        });
+        work.brief = brief.value();
+        work.updated_by = Some(host.clone());
+        work.updated_at_ms = tx.now_ms();
+        let expected = work.revision;
+        work.revision += 1;
+        tx.work().update_work(&work, expected)?;
     }
     Ok(())
 }

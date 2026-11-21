@@ -575,6 +575,9 @@ impl SettingsScreen {
             input.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::Role::TextInput, true, "GitHub organization filter")
             });
+            if input.changed() {
+                self.github_repos_next_cursor = None;
+            }
             let can_discover = !self.github_repos_loading
                 && self
                     .github_account

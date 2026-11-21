@@ -474,6 +474,7 @@ pub fn settle(
     case.evidence =
         Some(serde_json::json!({"verificationOperationId":operation.id,"reproduction":witness}));
     tx.github().put_github_triage_case(&case, Some(expected))?;
+    super::triage_case::refresh_intake_state(tx, &job.repository_id, &job.issue)?;
     Ok(())
 }
 

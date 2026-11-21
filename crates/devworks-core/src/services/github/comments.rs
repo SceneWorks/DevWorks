@@ -198,10 +198,26 @@ impl GitHubService {
             let pacing = page.as_ref().map_or(now, |page| page.control.poll_after_ms);
             match (observations, page) {
                 (Ok(observations), Ok(page)) => {
+                    let issue_scope = issue_poll::scope(&target.binding.repository_id);
+                    let issue_baseline_ms = tx
+                        .github()
+                        .github_issue(&issue, &issue_scope)?
+                        .and_then(|intake| {
+                            tx.github()
+                                .github_observation(&intake.observation_id, &issue_scope)
+                                .transpose()
+                        })
+                        .transpose()?
+                        .and_then(|obs| obs.source_updated_at_ms);
                     for mut observation in observations {
                         observation.id = tx.new_id(IdKind::Event);
                         let stored = tx.github().append_github_observation(&observation)?;
-                        if stored.id != observation.id || !row.bootstrap_complete {
+                        let post_baseline_comment = issue_baseline_ms
+                            .zip(stored.source_updated_at_ms)
+                            .is_some_and(|(base, cmt)| cmt > base);
+                        if stored.id != observation.id
+                            || (!row.bootstrap_complete && !post_baseline_comment)
+                        {
                             continue;
                         }
                         let event = EventId(tx.new_id(IdKind::Event));
@@ -235,13 +251,16 @@ impl GitHubService {
                         )?;
                     }
                     row.next_page = page.next_page;
-                    if !continuing {
+                    if !continuing && row.next_page.is_none() {
                         if page.status == 200 || page.control.etag.is_some() {
                             row.etag = page.control.etag;
                         }
                         if page.status == 200 || page.control.last_modified.is_some() {
                             row.last_modified = page.control.last_modified;
                         }
+                    } else {
+                        row.etag = None;
+                        row.last_modified = None;
                     }
                     row.bootstrap_complete |= row.next_page.is_none();
                     row.next_poll_at_ms = pacing;

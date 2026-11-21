@@ -283,6 +283,23 @@ pub(super) fn poll_status(
     ))
 }
 
+pub(super) fn status_scope_revision(
+    github: &dyn crate::ports::storage::GithubRead,
+    remote: &crate::ports::storage::StoredGithubRepository,
+) -> Result<i64, StorageError> {
+    let mut keys = vec!["issues".to_owned(), super::pulls::ENDPOINT.to_owned()];
+    if let Some(branch) = &remote.default_branch {
+        keys.push(references::endpoint_key(branch));
+    }
+    let mut rev = remote.revision;
+    for key in keys {
+        if let Some(poll) = github.github_poll_cursor(&remote.id, &key)? {
+            rev = rev.max(poll.revision);
+        }
+    }
+    Ok(rev.max(github.github_intake_clock()?.revision))
+}
+
 fn resolution_state(
     snapshot: &dyn ReadSnapshot,
     scope: &GithubScope,

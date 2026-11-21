@@ -92,6 +92,23 @@ fn account_state(state: &str) -> ItemState {
     }
 }
 
+fn projected_account(
+    configuration: &dyn crate::ports::storage::ConfigurationRead,
+    row: Option<StoredGithubAccount>,
+) -> Result<Option<StoredGithubAccount>, StorageError> {
+    let mut row = row;
+    if let Some(account) = row.as_mut()
+        && account.state == "Connected"
+        && !credentials::matches_revision(configuration, account.credential_revision)?
+    {
+        account.state = "ReauthorizationRequired".into();
+        account.granted_scopes.clear();
+        account.granted_scopes_reported = false;
+        account.last_error = Some("The workspace GitHub credential changed".into());
+    }
+    Ok(row)
+}
+
 fn account_result(row: Option<&StoredGithubAccount>) -> OperationResult {
     let state = row.map_or(ItemState::Disabled, |r| account_state(&r.state));
     OperationResult::GithubAccount {
@@ -182,21 +199,8 @@ impl QueryHandler for GitHubService {
                 let row = snapshot
                     .github()
                     .github_account()
+                    .and_then(|row| projected_account(snapshot.configuration(), row))
                     .map_err(|e| fault(e.into()))?;
-                let mut row = row;
-                if let Some(account) = row.as_mut()
-                    && account.state == "Connected"
-                    && !credentials::matches_revision(
-                        snapshot.configuration(),
-                        account.credential_revision,
-                    )
-                    .map_err(|error| fault(error.into()))?
-                {
-                    account.state = "ReauthorizationRequired".into();
-                    account.granted_scopes.clear();
-                    account.granted_scopes_reported = false;
-                    account.last_error = Some("The workspace GitHub credential changed".into());
-                }
                 (
                     account_result(row.as_ref()),
                     row.as_ref().map_or(1, |row| row.revision),
@@ -413,10 +417,11 @@ impl CommandHandler for GitHubService {
             return decided(tx, Err(refusal(DomainErrorCode::NotFound).into()));
         }
         if matches!(input.action, AccountAction::Inspect) {
+            let projected = projected_account(tx.configuration(), current)?;
             return decided(
                 tx,
                 Ok(DomainDecision::NoChange {
-                    result: account_result(current.as_ref()),
+                    result: account_result(projected.as_ref()),
                 }),
             );
         }
@@ -435,7 +440,10 @@ impl CommandHandler for GitHubService {
         });
         match input.action {
             AccountAction::BeginSignIn => {
-                if row.state != "Disconnected" && row.state != "ReauthorizationRequired" {
+                let effective =
+                    projected_account(tx.configuration(), Some(row.clone()))?.expect("Some row");
+                if effective.state != "Disconnected" && effective.state != "ReauthorizationRequired"
+                {
                     return decided(tx, Err(refusal(DomainErrorCode::Conflict).into()));
                 }
                 row.state = "Pending".into();

@@ -89,7 +89,10 @@ pub(super) fn admit(
     }
     let canonical = &checked.target.repository.id;
     let cursor = tx.github().github_poll_cursor(canonical, "issues")?;
-    if cursor.as_ref().map_or(1, |row| row.revision) != input.expected_cursor_revision.get() {
+    let issues_rev = cursor.as_ref().map_or(1, |row| row.revision);
+    let status_rev = super::reads::status_scope_revision(tx.github(), &checked.target.repository)?;
+    let expected = input.expected_cursor_revision.get();
+    if expected != issues_rev && expected != status_rev {
         return Err(refused(DomainErrorCode::Conflict).into());
     }
     let operation = OperationId(tx.new_id(IdKind::Operation));

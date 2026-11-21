@@ -2004,6 +2004,41 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
         case_51.state, "AwaitingDecision",
         "setup failure before proof marker must never auto-verify"
     );
+    let intake_50 = read(store.as_ref(), |s| {
+        s.github().github_issue(
+            &GithubIssueKey {
+                repository_id: binding.github_repository_id.clone(),
+                number: 50,
+            },
+            &GithubScope {
+                project_id: None,
+                repositories: vec![repo.clone()],
+            },
+        )
+    })
+    .unwrap();
+    assert_eq!(intake_50.state, "Working");
+    let intake_51 = read(store.as_ref(), |s| {
+        s.github().github_issue(
+            &GithubIssueKey {
+                repository_id: binding.github_repository_id.clone(),
+                number: 51,
+            },
+            &GithubScope {
+                project_id: None,
+                repositories: vec![repo.clone()],
+            },
+        )
+    })
+    .unwrap();
+    assert_eq!(intake_51.state, "AwaitingDecision");
+    let triaged_work_51 = read(store.as_ref(), |s| s.work().work(&case_51.work_id.0)).unwrap();
+    let brief_51 = devworks_core::kernel::work_brief::WorkBrief::of(&triaged_work_51).unwrap();
+    assert!(
+        brief_51.description.contains("panicked"),
+        "triaged issue description should retain source report body: {}",
+        brief_51.description
+    );
 
     // Advance 600s to admit #52 as FeatureRequest -> AwaitingDecision + notification, never auto-starting!
     h.advance(600_000);
@@ -2463,6 +2498,20 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
             .unwrap(),
         CommandReply::Recorded { receipt, .. } if matches!(receipt.decision, DomainDecision::Applied { .. })
     ));
+    let started_adopted = read(store.as_ref(), |s| s.work().work(&id("work-started"))).unwrap();
+    assert_eq!(
+        started_adopted.title,
+        "Rewrite entire subsystem as new feature"
+    );
+    let adopted_brief = devworks_core::kernel::work_brief::WorkBrief::of(&started_adopted).unwrap();
+    assert!(adopted_brief.description.contains("Completely replacing"));
+    assert!(
+        adopted_brief
+            .comments
+            .iter()
+            .any(|c| c.item.content.0.contains("Work work-started")),
+        "approving github.issue_update must retain prior local specification in comments"
+    );
     assert!(script.0.lock().unwrap().is_empty());
 }
 

@@ -116,15 +116,147 @@ impl GitHubService {
         operation: &OperationRecord,
         reconcile: bool,
     ) -> EffectOutcome {
-        match self.run_resolution_effect(operation, reconcile) {
-            Ok(evidence) => EffectOutcome::Completed(evidence),
-            Err(Fault::Rejected(401 | 403 | 404 | 422) | Fault::CredentialsRequired)
-                if !reconcile =>
-            {
-                EffectOutcome::Failed("GitHub refused the verified resolution update".into())
+        let Ok(job) = serde_json::from_value::<ResolutionEffect>(operation.payload.clone()) else {
+            return EffectOutcome::Failed("GitHub resolution payload is invalid".into());
+        };
+        if reconcile {
+            return match self.reconcile_resolution_effect(operation, &job) {
+                Ok(evidence) => EffectOutcome::Completed(evidence),
+                Err(_) => EffectOutcome::Unknown(
+                    "GitHub resolution awaits attributable observation".into(),
+                ),
+            };
+        }
+        let target = match read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+            let Some(target) = issue_poll::target(snapshot, &job.registration_id)? else {
+                return Ok(None);
+            };
+            if !job.matches(&target) {
+                return Ok(None);
             }
-            Err(Fault::Unavailable | Fault::InvalidResponse) if !reconcile => {
-                EffectOutcome::Failed("GitHub resolution needs current scope or evidence".into())
+            Ok(Some(target))
+        }) {
+            Ok(Some(target)) => target,
+            Ok(None) => {
+                self.cancel_companion_close(operation, &job);
+                return EffectOutcome::Failed(
+                    "GitHub resolution scope or credentials changed".into(),
+                );
+            }
+            Err(_) => {
+                return EffectOutcome::NotApplied(
+                    "GitHub resolution storage temporarily unavailable".into(),
+                );
+            }
+        };
+        let now = self.clock.now_ms().get();
+        let issue = match self.observe_issue(&target, job.issue_number, now) {
+            Ok(issue) => issue,
+            Err(Fault::Rejected(401 | 403 | 404 | 422) | Fault::CredentialsRequired) => {
+                self.cancel_companion_close(operation, &job);
+                return EffectOutcome::Failed(
+                    "GitHub refused the verified resolution update".into(),
+                );
+            }
+            Err(Fault::InvalidResponse) => {
+                self.cancel_companion_close(operation, &job);
+                return EffectOutcome::Failed("GitHub resolution observed invalid issue".into());
+            }
+            Err(_) => {
+                return EffectOutcome::NotApplied(
+                    "GitHub resolution deferred by transient transport error".into(),
+                );
+            }
+        };
+        if issue.payload["remoteIssueId"].as_str() != Some(&job.remote_issue_id) {
+            self.cancel_companion_close(operation, &job);
+            return EffectOutcome::Failed("GitHub issue identity changed".into());
+        }
+        let close = operation.capability == CLOSE;
+        if close && issue.payload["state"] == "closed" {
+            return EffectOutcome::Completed(json!({"observedClosed":true,"url":issue.url}));
+        }
+        // A text/label/author change or an unexpected comment is retained by polling. A newer
+        // source needs a fresh explicit adjudication before the publisher changes GitHub.
+        if !same_issue(&job.original, &issue.payload, close) {
+            self.cancel_companion_close(operation, &job);
+            return EffectOutcome::Failed(
+                "GitHub resolution needs current scope or evidence".into(),
+            );
+        }
+        let expected = target.clone();
+        let request = job.clone();
+        let operation_id = operation.id.clone();
+        let permitted = match run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+            issue_poll::ensure_target(tx, &expected)?;
+            resolution_permitted(tx, &request, &operation_id, close)
+        }) {
+            Ok(permitted) => permitted,
+            Err(_) => {
+                return EffectOutcome::NotApplied(
+                    "GitHub resolution permission check deferred".into(),
+                );
+            }
+        };
+        if !permitted || self.is_stopped() {
+            if !permitted {
+                self.cancel_companion_close(operation, &job);
+                return EffectOutcome::Failed(
+                    "GitHub resolution obligation changed before dispatch".into(),
+                );
+            }
+            return EffectOutcome::NotApplied("GitHub resolution stopped before mutation".into());
+        }
+        let token = match self.client.token_for_account(&*self.store, &target.account) {
+            Ok(token) => token,
+            Err(_) => {
+                self.cancel_companion_close(operation, &job);
+                return EffectOutcome::Failed("GitHub credentials are unavailable".into());
+            }
+        };
+        let mutation = if close {
+            self.client.graphql_mutation(
+                token,
+                "mutation CloseIssue($input:CloseIssueInput!){closeIssue(input:$input){clientMutationId issue{id closed}}}",
+                json!({"issueId":job.remote_issue_id, "clientMutationId":job.marker}),
+            )
+        } else {
+            self.client.graphql_mutation(
+                token,
+                "mutation AddComment($input:AddCommentInput!){addComment(input:$input){clientMutationId subject{id} commentEdge{node{id url}}}}",
+                json!({"subjectId":job.remote_issue_id, "body":job.body, "clientMutationId":job.marker}),
+            )
+        };
+        match mutation {
+            Ok(result) if close => {
+                let result = &result["data"]["closeIssue"];
+                if result["clientMutationId"].as_str() == Some(&job.marker)
+                    && result["issue"]["id"].as_str() == Some(&job.remote_issue_id)
+                    && result["issue"]["closed"] == true
+                {
+                    EffectOutcome::Completed(json!({"observedClosed":true,"url":issue.url}))
+                } else {
+                    EffectOutcome::Unknown(
+                        "GitHub resolution awaits attributable observation".into(),
+                    )
+                }
+            }
+            Ok(result) => {
+                let result = &result["data"]["addComment"];
+                if result["clientMutationId"].as_str() == Some(&job.marker)
+                    && result["subject"]["id"].as_str() == Some(&job.remote_issue_id)
+                    && let Some(comment) = result["commentEdge"]["node"]["id"].as_str()
+                {
+                    EffectOutcome::Completed(json!({"commentId":comment,"issueUrl":issue.url}))
+                } else {
+                    EffectOutcome::Unknown(
+                        "GitHub resolution awaits attributable observation".into(),
+                    )
+                }
+            }
+            Err(Fault::Rejected(401 | 403 | 404 | 422) | Fault::CredentialsRequired) => {
+                self.cancel_companion_close(operation, &job);
+                EffectOutcome::Failed("GitHub refused the verified resolution update".into())
             }
             Err(_) => {
                 EffectOutcome::Unknown("GitHub resolution awaits attributable observation".into())
@@ -132,13 +264,22 @@ impl GitHubService {
         }
     }
 
-    fn run_resolution_effect(
+    fn cancel_companion_close(&self, operation: &OperationRecord, job: &ResolutionEffect) {
+        if operation.capability != COMMENT {
+            return;
+        }
+        let resolution_id = job.resolution_id.clone();
+        let comment_id = operation.id.clone();
+        let _ = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            cancel_close_if_unqueued(tx, &resolution_id, &comment_id)
+        });
+    }
+
+    fn reconcile_resolution_effect(
         &self,
         operation: &OperationRecord,
-        reconcile: bool,
+        job: &ResolutionEffect,
     ) -> Result<Value, Fault> {
-        let job: ResolutionEffect = serde_json::from_value(operation.payload.clone())
-            .map_err(|_| Fault::InvalidResponse)?;
         let target = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let Some(target) = issue_poll::target(snapshot, &job.registration_id)? else {
                 return Ok(None);
@@ -155,67 +296,14 @@ impl GitHubService {
         if issue.payload["remoteIssueId"].as_str() != Some(&job.remote_issue_id) {
             return Err(Fault::InvalidResponse);
         }
-        let close = operation.capability == CLOSE;
-        if close && issue.payload["state"] == "closed" {
-            return Ok(json!({"observedClosed":true,"url":issue.url}));
-        }
-        if reconcile {
-            return if close {
-                Err(Fault::Ambiguous)
+        if operation.capability == CLOSE {
+            return if issue.payload["state"] == "closed" {
+                Ok(json!({"observedClosed":true,"url":issue.url}))
             } else {
-                self.find_resolution_comment(&target, &job, now)
+                Err(Fault::Ambiguous)
             };
         }
-        // A text/label/author change or an unexpected comment is retained by polling. A newer
-        // source needs a fresh explicit adjudication before the publisher changes GitHub.
-        if !same_issue(&job.original, &issue.payload, close) {
-            return Err(Fault::InvalidResponse);
-        }
-        let expected = target.clone();
-        let request = job.clone();
-        let operation_id = operation.id.clone();
-        let permitted = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
-            issue_poll::ensure_target(tx, &expected)?;
-            resolution_permitted(tx, &request, &operation_id, close)
-        })
-        .map_err(|_| Fault::Unavailable)?;
-        if !permitted || self.is_stopped() {
-            return Err(Fault::CredentialsRequired);
-        }
-        let token = self
-            .client
-            .token_for_account(&*self.store, &target.account)?;
-        let result = if close {
-            self.client.graphql_mutation(
-                token,
-                "mutation CloseIssue($input:CloseIssueInput!){closeIssue(input:$input){clientMutationId issue{id closed}}}",
-                json!({"issueId":job.remote_issue_id, "clientMutationId":job.marker}),
-            )?
-        } else {
-            self.client.graphql_mutation(
-                token,
-                "mutation AddComment($input:AddCommentInput!){addComment(input:$input){clientMutationId subject{id} commentEdge{node{id url}}}}",
-                json!({"subjectId":job.remote_issue_id, "body":job.body, "clientMutationId":job.marker}),
-            )?
-        };
-        if close {
-            let result = &result["data"]["closeIssue"];
-            if result["clientMutationId"].as_str() == Some(&job.marker)
-                && result["issue"]["id"].as_str() == Some(&job.remote_issue_id)
-                && result["issue"]["closed"] == true
-            {
-                return Ok(json!({"observedClosed":true,"url":issue.url}));
-            }
-        } else {
-            let result = &result["data"]["addComment"];
-            if result["clientMutationId"].as_str() == Some(&job.marker)
-                && result["subject"]["id"].as_str() == Some(&job.remote_issue_id)
-                && let Some(comment) = result["commentEdge"]["node"]["id"].as_str()
-            {
-                return Ok(json!({"commentId":comment,"issueUrl":issue.url}));
-            }
-        }
-        Err(Fault::Ambiguous)
+        self.find_resolution_comment(&target, job, now)
     }
 
     fn find_resolution_comment(
@@ -234,7 +322,7 @@ impl GitHubService {
             Some(&format!("/repositories/{}/{suffix}", target.numeric_id)),
         )?;
         let mut next = None;
-        for _ in 0..3 {
+        for _ in 0..25 {
             let token = self
                 .client
                 .token_for_account(&*self.store, &target.account)?;
@@ -276,13 +364,39 @@ impl GitHubService {
     }
 }
 
+fn cancel_close_if_unqueued(
+    tx: &mut dyn WriteTransaction,
+    resolution_id: &Id,
+    comment_operation_id: &OperationId,
+) -> Result<(), StorageError> {
+    let Some(binding) = tx.github().github_resolution(resolution_id)? else {
+        return Ok(());
+    };
+    if binding.comment_operation_id != *comment_operation_id {
+        return Ok(());
+    }
+    if let Some(close_op) = tx.operations().operation(&binding.close_operation_id)?
+        && close_op.state == OperationState::IntentRecorded
+    {
+        tx.operations().transition(
+            &binding.close_operation_id,
+            close_op.revision,
+            None,
+            OperationState::CancelledBeforeDispatch,
+            Some(json!({"reason": "companion comment operation failed before completion"})),
+        )?;
+    }
+    Ok(())
+}
+
 /// Settles a completed GitHub journaled effect: once `github.resolution.comment` reaches
-/// `ObservedComplete`, queues the companion `github.resolution.close` operation idempotently.
+/// `ObservedComplete`, queues the companion `github.resolution.close` operation idempotently;
+/// once `github.resolution.close` reaches `ObservedComplete`, marks intake `"Resolved"`.
 pub fn settle_effect(
     tx: &mut dyn WriteTransaction,
     operation: &OperationRecord,
 ) -> Result<(), StorageError> {
-    if operation.capability != COMMENT || operation.state != OperationState::ObservedComplete {
+    if operation.capability != COMMENT && operation.capability != CLOSE {
         return Ok(());
     }
     let job: ResolutionEffect =
@@ -290,7 +404,32 @@ pub fn settle_effect(
     let Some(binding) = tx.github().github_resolution(&job.resolution_id)? else {
         return Ok(());
     };
+    if operation.capability == CLOSE {
+        if binding.close_operation_id == operation.id
+            && operation.state == OperationState::ObservedComplete
+        {
+            let scope = issue_poll::scope(&job.registration_id);
+            if let Some(mut intake) = tx.github().github_issue(&binding.key, &scope)?
+                && intake.state != "Resolved"
+            {
+                let expected = intake.revision;
+                intake.revision += 1;
+                intake.state = "Resolved".into();
+                tx.github().put_github_issue(&intake, Some(expected))?;
+            }
+        }
+        return Ok(());
+    }
     if binding.comment_operation_id != operation.id || binding.state != "Sealed" {
+        return Ok(());
+    }
+    if matches!(
+        operation.state,
+        OperationState::Failed | OperationState::CancelledBeforeDispatch
+    ) {
+        return cancel_close_if_unqueued(tx, &binding.id, &operation.id);
+    }
+    if operation.state != OperationState::ObservedComplete {
         return Ok(());
     }
     let Some(close_op) = tx.operations().operation(&binding.close_operation_id)? else {
@@ -399,6 +538,14 @@ fn admit(
         for row in &page {
             if row.completion_digest == completion_digest {
                 return Ok(());
+            }
+            if let Some(comment_op) = tx.operations().operation(&row.comment_operation_id)?
+                && matches!(
+                    comment_op.state,
+                    OperationState::Failed | OperationState::CancelledBeforeDispatch
+                )
+            {
+                cancel_close_if_unqueued(tx, &row.id, &row.comment_operation_id)?;
             }
             for op in [&row.comment_operation_id, &row.close_operation_id] {
                 if tx

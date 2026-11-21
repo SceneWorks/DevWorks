@@ -342,13 +342,16 @@ impl GitHubService {
                         publish_observation(tx, &selected, observation, row.bootstrap_complete)?;
                     }
                     row.next_page = page.next_page;
-                    if !continuing {
+                    if !continuing && row.next_page.is_none() {
                         if page.status == 200 || page.control.etag.is_some() {
                             row.etag = page.control.etag;
                         }
                         if page.status == 200 || page.control.last_modified.is_some() {
                             row.last_modified = page.control.last_modified;
                         }
+                    } else {
+                        row.etag = None;
+                        row.last_modified = None;
                     }
                     row.bootstrap_complete |= row.next_page.is_none();
                     row.next_poll_at_ms = pacing;

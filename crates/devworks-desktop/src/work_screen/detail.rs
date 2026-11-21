@@ -1433,14 +1433,35 @@ fn github_issue_controls(
     egui::CollapsingHeader::new("GitHub issue")
         .id_salt(("work-github-issue", w.id.as_str()))
         .show(ui, |ui| {
-            if let Some(linked) = work.github_links.get(w.id.as_str()) {
+            let mut is_linked = false;
+            if let Some(tracked) = &w.github_issue {
+                is_linked = true;
+                ui.horizontal_wrapped(|ui| {
+                    let label = widgets::github_link_label(&tracked.url.0).unwrap_or_else(|| {
+                        format!("GitHub issue #{}", tracked.remote_issue_number.0)
+                    });
+                    ui.hyperlink_to(label, &tracked.url.0);
+                    widgets::chip(
+                        ui,
+                        format!(
+                            "remote: {} · intake: {:?}",
+                            tracked.remote_state.0, tracked.intake_state
+                        ),
+                        widgets::Tone::Neutral,
+                    );
+                });
+            } else if let Some(linked) = work.github_links.get(w.id.as_str()) {
+                is_linked = true;
                 let label = widgets::github_link_label(&linked.url.0)
                     .unwrap_or_else(|| format!("GitHub issue #{}", linked.remote_issue_number.0));
                 ui.hyperlink_to(label, &linked.url.0);
             }
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(enabled, egui::Button::new("Publish to GitHub"))
+                    .add_enabled(
+                        enabled && !is_linked,
+                        egui::Button::new("Publish to GitHub"),
+                    )
                     .clicked()
                 {
                     actions.push(Action::PublishGithubIssue {

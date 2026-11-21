@@ -7,8 +7,8 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{
-    ApplicationStore, Cancellation, OperationRecord, StorageError, WriteOptions, WriteTransaction,
-    run_write,
+    ApplicationStore, Cancellation, OperationRecord, ProcessFilter, ProcessPhase, ReadOptions,
+    StorageError, WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use devworks_core::protocol::{Counter, Id, OperationState, Revision};
 use devworks_core::services::effect::{EffectOutcome, JournaledEffect};
@@ -25,9 +25,15 @@ const LIMIT: usize = 64 * 1024 * 1024;
 const RUNNER: &str = r#"mkdir -p /verification/source
 tar -xf - -C /verification/source
 cd /verification/source
-printf '%s\n' "$1" >&2
+marker="$1"
 shift
-exec "$@" >&2"#;
+set +e
+"$@" >/verification/.dw-proof.log 2>&1
+rc=$?
+set -e
+printf '%s\n' "$marker" >&2
+tail -c 14336 /verification/.dw-proof.log >&2
+exit "$rc""#;
 
 pub struct Verifier {
     service: Arc<GitHubService>,
@@ -186,7 +192,13 @@ impl Verifier {
                     evidence_digest: sha256_hex(stderr.as_bytes()),
                 }))
             }
-            Err(HelperFault::Cancelled | HelperFault::TimedOut | HelperFault::Uncertain(_)) => {
+            Err(HelperFault::TimedOut) => {
+                // Bounded verification timeout means reproduction could not complete within the
+                // isolated budget: reap the named proof container and settle for manual review.
+                self.reap(&ctx, host, &name, &operation.id.0);
+                Ok(None)
+            }
+            Err(HelperFault::Cancelled | HelperFault::Uncertain(_)) => {
                 // Remove only this application's named proof container, which is created with
                 // the exact operation label. A random host container can never match both.
                 self.reap(&ctx, host, &name, &operation.id.0);
@@ -267,19 +279,83 @@ impl JournaledEffect for Verifier {
         }
     }
     fn observe(&self, operation: &OperationRecord) -> EffectOutcome {
-        operation
-            .latest_attempt()
-            .and_then(|attempt| {
-                attempt
-                    .observations
-                    .iter()
-                    .rev()
-                    .find_map(|entry| entry.get("verificationResult"))
-            })
-            .map_or_else(
-                || EffectOutcome::Unknown("No sealed GitHub verification result".into()),
-                |entry| EffectOutcome::Completed(entry.clone()),
-            )
+        if let Some(entry) = operation.latest_attempt().and_then(|attempt| {
+            attempt
+                .observations
+                .iter()
+                .rev()
+                .find_map(|entry| entry.get("verificationResult"))
+        }) {
+            return EffectOutcome::Completed(entry.clone());
+        }
+        // If the host crashed or interrupted mid-verification before recording verificationResult,
+        // check whether any owned process is still active; once reaped/gone, reap any leftover
+        // proof container and settle with witness: null so the case transitions to AwaitingDecision.
+        let Some(attempt_no) = operation.latest_attempt().map(|row| row.attempt_no) else {
+            return EffectOutcome::NotApplied("GitHub verification attempt was not started".into());
+        };
+        let op_id = operation.id.clone();
+        let active = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+            let procs = snapshot.resources().processes(
+                &ProcessFilter::Operation(op_id.clone()),
+                None,
+                10,
+            )?;
+            Ok(procs.iter().any(|row| {
+                matches!(
+                    row.phase,
+                    ProcessPhase::Launching | ProcessPhase::Running | ProcessPhase::Stopping
+                )
+            }))
+        });
+        match active {
+            Ok(true) => {
+                return EffectOutcome::Unknown("GitHub verification process still active".into());
+            }
+            Err(_) => {
+                return EffectOutcome::Unknown(
+                    "GitHub verification process state unavailable".into(),
+                );
+            }
+            Ok(false) => {}
+        }
+        if let Ok(job) = verification::job(operation)
+            && let Ok(ctx) = context(&*self.store, operation, &job)
+        {
+            let probe = HelperLimits {
+                deadline: Duration::from_secs(5),
+                max_stdout: 4096,
+            };
+            let inspect = docker_spec(
+                "docker",
+                &[
+                    "context",
+                    "inspect",
+                    "--format",
+                    "{{.Endpoints.docker.Host}}",
+                ],
+                None,
+            );
+            if let Ok(data) = self.helpers.run(&ctx, inspect, probe, &|| false)
+                && let Ok(raw) = std::str::from_utf8(&data)
+                && let Some(host) = Some(raw.trim()).filter(|h| local_socket(h))
+            {
+                let name = format!(
+                    "devworks-proof-{}",
+                    &sha256_hex(operation.id.0.as_str().as_bytes())[..32]
+                );
+                self.reap(&ctx, host, &name, &operation.id.0);
+            }
+        }
+        let proof = json!({"witness": null});
+        let durable = proof.clone();
+        match run_write(&*self.store, WriteOptions::observed(), move |tx| {
+            tx.operations()
+                .observe(&op_id, attempt_no, json!({"verificationResult": durable}))
+        }) {
+            Ok(()) => EffectOutcome::Completed(proof),
+            Err(_) => EffectOutcome::Unknown("GitHub verification recovery not committed".into()),
+        }
     }
 }
 
