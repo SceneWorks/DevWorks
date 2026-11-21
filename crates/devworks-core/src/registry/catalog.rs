@@ -74,7 +74,7 @@ pub(super) const FAMILIES: [&str; 50] = [
     "watch",
 ];
 
-pub(super) static CATALOG: [OperationDescriptor; 384] = [
+pub(super) static CATALOG: [OperationDescriptor; 387] = [
     OperationDescriptor {
         name: "projects.list",
         family: "projects",
@@ -9993,6 +9993,84 @@ pub(super) static CATALOG: [OperationDescriptor; 384] = [
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
+        name: "maintenance.inspect",
+        family: "maintenance",
+        owner: "MaintenanceService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "maintenance.inspect",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "maintenance::InspectInput",
+            decode: decode_maintenance_inspect_query,
+            input_schema: schema_of::<ops::maintenance::InspectInput>,
+        }],
+        result_type: "PruneInspection",
+        result_schema: schema_of::<PruneInspection>,
+        completion: false,
+        revisions: &[SchemaRevision(1)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::AssignmentDenied,
+    },
+    OperationDescriptor {
+        name: "maintenance.scheduled_prune",
+        family: "maintenance",
+        owner: "MaintenanceService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "maintenance.scheduled_prune",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::HostMaintenance,
+            effect: EffectClass::Journaled,
+            input_type: "maintenance::ScheduledPruneInput",
+            decode: decode_maintenance_scheduled_prune_command,
+            input_schema: schema_of::<ops::maintenance::ScheduledPruneInput>,
+        }],
+        result_type: "PruneInspection",
+        result_schema: schema_of::<PruneInspection>,
+        completion: true,
+        revisions: &[SchemaRevision(1)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::AssignmentDenied,
+    },
+    OperationDescriptor {
+        name: "maintenance.cancel",
+        family: "maintenance",
+        owner: "MaintenanceService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "maintenance.cancel",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::HumanMaintenance,
+            effect: EffectClass::Local,
+            input_type: "maintenance::CancelInput",
+            decode: decode_maintenance_cancel_command,
+            input_schema: schema_of::<ops::maintenance::CancelInput>,
+        }],
+        result_type: "PruneInspection",
+        result_schema: schema_of::<PruneInspection>,
+        completion: true,
+        revisions: &[SchemaRevision(1)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::AssignmentDenied,
+    },
+    OperationDescriptor {
         name: "repository_docs.generate",
         family: "repository_docs",
         owner: "DocumentationService",
@@ -10655,17 +10733,20 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
         "maintenance.prune_index_runs" => Some(370),
         "maintenance.prune_messages" => Some(371),
         "maintenance.prune_sessions" => Some(372),
-        "repository_docs.generate" => Some(373),
-        "mcp_server.status" => Some(374),
-        "mcp_server.configure" => Some(375),
-        "mcp_server.clients" => Some(376),
-        "mcp_server.set_client_access" => Some(377),
-        "evals.grade" => Some(378),
-        "evals.results" => Some(379),
-        "watch.create" => Some(380),
-        "watch.list" => Some(381),
-        "watch.inspect" => Some(382),
-        "watch.cancel" => Some(383),
+        "maintenance.inspect" => Some(373),
+        "maintenance.scheduled_prune" => Some(374),
+        "maintenance.cancel" => Some(375),
+        "repository_docs.generate" => Some(376),
+        "mcp_server.status" => Some(377),
+        "mcp_server.configure" => Some(378),
+        "mcp_server.clients" => Some(379),
+        "mcp_server.set_client_access" => Some(380),
+        "evals.grade" => Some(381),
+        "evals.results" => Some(382),
+        "watch.create" => Some(383),
+        "watch.list" => Some(384),
+        "watch.inspect" => Some(385),
+        "watch.cancel" => Some(386),
         _ => None,
     }
 }
@@ -14650,6 +14731,42 @@ fn decode_maintenance_prune_sessions_command(
         revision,
         v,
         |i| OperationInput::Maintenance(ops::maintenance::Input::PruneSessions(i)),
+    )
+}
+fn decode_maintenance_inspect_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::maintenance::InspectInput>(
+        "maintenance.inspect",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Maintenance(ops::maintenance::Input::Inspect(i)),
+    )
+}
+fn decode_maintenance_scheduled_prune_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::maintenance::ScheduledPruneInput>(
+        "maintenance.scheduled_prune",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Maintenance(ops::maintenance::Input::ScheduledPrune(i)),
+    )
+}
+fn decode_maintenance_cancel_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::maintenance::CancelInput>(
+        "maintenance.cancel",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Maintenance(ops::maintenance::Input::Cancel(i)),
     )
 }
 fn decode_repository_docs_generate_command(

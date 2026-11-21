@@ -121,6 +121,61 @@ impl Revisioned for PruneSessionsInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `maintenance.inspect` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InspectInput {
+    pub preview_id: Id,
+}
+impl Check for InspectInput {
+    fn check(&self) -> Result<(), String> {
+        self.preview_id.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for InspectInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `maintenance.scheduled_prune` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScheduledPruneInput {
+    pub target: PruneKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<Limit>,
+    pub max_items: Limit,
+}
+impl Check for ScheduledPruneInput {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.retention_days.check()?;
+        self.max_items.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ScheduledPruneInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `maintenance.cancel` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelInput {
+    pub preview_id: Id,
+    pub expected_revision: Revision,
+}
+impl Check for CancelInput {
+    fn check(&self) -> Result<(), String> {
+        self.preview_id.check()?;
+        self.expected_revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for CancelInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `maintenance` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -132,6 +187,12 @@ pub enum Input {
     PruneMessages(PruneMessagesInput),
     /// `maintenance.prune_sessions` (Command).
     PruneSessions(PruneSessionsInput),
+    /// `maintenance.inspect` (Query).
+    Inspect(InspectInput),
+    /// `maintenance.scheduled_prune` (Command).
+    ScheduledPrune(ScheduledPruneInput),
+    /// `maintenance.cancel` (Command).
+    Cancel(CancelInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -140,6 +201,9 @@ impl Input {
             Self::PruneIndexRuns(_) => "maintenance.prune_index_runs",
             Self::PruneMessages(_) => "maintenance.prune_messages",
             Self::PruneSessions(_) => "maintenance.prune_sessions",
+            Self::Inspect(_) => "maintenance.inspect",
+            Self::ScheduledPrune(_) => "maintenance.scheduled_prune",
+            Self::Cancel(_) => "maintenance.cancel",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -148,6 +212,9 @@ impl Input {
             Self::PruneIndexRuns(_) => Mode::Command,
             Self::PruneMessages(_) => Mode::Command,
             Self::PruneSessions(_) => Mode::Command,
+            Self::Inspect(_) => Mode::Query,
+            Self::ScheduledPrune(_) => Mode::Command,
+            Self::Cancel(_) => Mode::Command,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -157,6 +224,9 @@ impl Input {
             Self::PruneIndexRuns(i) => serde_json::to_value(i),
             Self::PruneMessages(i) => serde_json::to_value(i),
             Self::PruneSessions(i) => serde_json::to_value(i),
+            Self::Inspect(i) => serde_json::to_value(i),
+            Self::ScheduledPrune(i) => serde_json::to_value(i),
+            Self::Cancel(i) => serde_json::to_value(i),
         }
     }
 }

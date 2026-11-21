@@ -85,6 +85,7 @@ pub(super) fn cancel_accepted(
         crate::services::schemas::scheduled::cancel_accepted(tx, run)?;
     }
     crate::services::imports::cancel_scheduled(tx, run)?;
+    crate::services::maintenance::cancel_scheduled(tx, run)?;
     Ok(())
 }
 

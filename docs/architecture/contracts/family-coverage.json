@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "3512f35dc63ec31124b34652f1f9f3a32a5daad66418c7be3b791b6cc257141b",
+  "catalogSha256": "9a5b1169e463e4631d23eedba89958d15b48d585ed8d57b8a8f2a75144f097a5",
   "familyCount": 50,
-  "operationCount": 384,
-  "concreteInputCandidates": 384,
+  "operationCount": 387,
+  "concreteInputCandidates": 387,
   "domainInputsPending": 0,
   "families": [
     {
@@ -19853,6 +19853,144 @@
           "authority": "HostMaintenance",
           "effect": "Journaled",
           "semanticRules": "Only kind=Sessions. Mutation requires unexpired exact preview/revisions; live references/authored history/unknown effects held. Preview is durably identified. Never delete retained imported documents or authored artifacts under storage pressure.",
+          "familyRules": "Exact preview/revisions and retention/reference holds; no pressure-driven deletion of retained documents or authored history.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "maintenance.inspect",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "maintenance.inspect",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "maintenance.inspect"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "maintenance.inspect"
+          },
+          "resultValueType": "PruneInspection",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "HostMaintenance",
+          "effect": "Local",
+          "semanticRules": "Only the preview owner may inspect its workspace retention request.",
+          "familyRules": "Exact preview/revisions and retention/reference holds; no pressure-driven deletion of retained documents or authored history.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "maintenance.scheduled_prune",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "maintenance.scheduled_prune",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "maintenance.scheduled_prune"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "HostMaintenance",
+              "effect": "Journaled"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "maintenance.scheduled_prune"
+          },
+          "resultValueType": "PruneInspection",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            }
+          ],
+          "authority": "HostMaintenance",
+          "effect": "Journaled",
+          "semanticRules": "Requires one current authorized workspace Jobs firing. An omitted age uses the diagnostics settings or the default 30 days for the other targets. Replays use the exact preview and operation of the saved firing.",
+          "familyRules": "Exact preview/revisions and retention/reference holds; no pressure-driven deletion of retained documents or authored history.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "maintenance.cancel",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "maintenance.cancel",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "maintenance.cancel"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "HumanMaintenance",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "maintenance.cancel"
+          },
+          "resultValueType": "PruneInspection",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            }
+          ],
+          "authority": "HumanMaintenance",
+          "effect": "Local",
+          "semanticRules": "The exact workspace preview owner can cancel before deletion commits. Return any already committed outcome.",
           "familyRules": "Exact preview/revisions and retention/reference holds; no pressure-driven deletion of retained documents or authored history.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

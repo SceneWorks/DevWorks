@@ -98,6 +98,7 @@ mod indexing;
 mod instructions;
 mod jobs;
 mod knowledge;
+mod maintenance;
 mod packages;
 mod projects;
 mod record_kinds;
@@ -128,6 +129,7 @@ pub use indexing::*;
 pub use instructions::*;
 pub use jobs::*;
 pub use knowledge::*;
+pub use maintenance::*;
 pub use packages::*;
 pub use projects::*;
 pub use record_kinds::ProjectRecordKind;
@@ -814,6 +816,9 @@ pub trait WriteTransaction {
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
+    fn retention(&mut self) -> Result<&mut dyn RetentionRepository, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
     fn work_imports(&mut self) -> Result<&mut dyn WorkImportRepository, StorageError> {
         Err(StorageError::ViewUnavailable)
     }
@@ -880,6 +885,9 @@ pub trait ReadSnapshot {
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
+    fn retention(&self) -> Result<&dyn RetentionRead, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
     fn work_imports(&self) -> Result<&dyn WorkImportRead, StorageError> {
         Err(StorageError::ViewUnavailable)
     }

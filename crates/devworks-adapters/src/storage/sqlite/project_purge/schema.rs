@@ -62,7 +62,7 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// routing source linked to its owning session. The linked input artifact follows the ordinary
 /// project artifact ownership and the operation journal follows its existing scope.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "67e62aede03b6abbe7bc9bb394482ebc638530c72bee9aa9a5f89c5bd48c4aad";
+    "06f2680798ed31313328e4544a178a09e54b98347e75cda7512e48e5f8035c9d";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

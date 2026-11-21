@@ -258,6 +258,7 @@
     ],
     "settingsSections": [],
     "relatedCapabilityIds": [
+      "maintenance.scheduled_prune",
       "jobs.list",
       "jobs.create",
       "jobs.edit",
@@ -662,6 +663,12 @@
       "settings-Storage"
     ],
     "relatedCapabilityIds": [
+      "maintenance.inspect",
+      "maintenance.prune_diagnostics",
+      "maintenance.prune_index_runs",
+      "maintenance.prune_messages",
+      "maintenance.prune_sessions",
+      "maintenance.cancel",
       "settings.read_effective",
       "settings.validate",
       "settings.save_revision",

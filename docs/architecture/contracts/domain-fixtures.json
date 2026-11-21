@@ -2156,6 +2156,27 @@
     "schemaValid": true
   },
   {
+    "id": "input-maintenance.inspect-Query",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"maintenance.inspect\",\"previewId\":\"id-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-maintenance.cancel-Command",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.cancel\",\"previewId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-maintenance.scheduled_prune-Command",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.scheduled_prune\",\"target\":\"Diagnostics\",\"maxItems\":20}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-repository_docs.generate-Command",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"repository_docs.generate\",\"repositoryId\":\"id-a\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedRevision\":\"1\",\"outputRootId\":\"id-a\",\"topics\":[\"fixture\"]}}",
@@ -4419,21 +4440,42 @@
   {
     "id": "result-maintenance.prune_index_runs",
     "entry": "operation-result",
-    "raw": "{\"kind\":\"maintenance.prune_index_runs\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
+    "raw": "{\"kind\":\"maintenance.prune_index_runs\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"IndexRuns\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-maintenance.prune_messages",
     "entry": "operation-result",
-    "raw": "{\"kind\":\"maintenance.prune_messages\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
+    "raw": "{\"kind\":\"maintenance.prune_messages\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Messages\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-maintenance.prune_sessions",
     "entry": "operation-result",
-    "raw": "{\"kind\":\"maintenance.prune_sessions\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
+    "raw": "{\"kind\":\"maintenance.prune_sessions\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Sessions\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-maintenance.inspect",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"maintenance.inspect\",\"value\":{\"preview\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"},\"requestedCutoffMs\":\"0\",\"effectiveCutoffMs\":\"0\",\"capturedAtMs\":\"0\",\"maxItems\":20,\"held\":[],\"moreCandidates\":false,\"moreHeld\":false,\"phase\":\"Previewed\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-maintenance.cancel",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"maintenance.cancel\",\"value\":{\"preview\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"},\"requestedCutoffMs\":\"0\",\"effectiveCutoffMs\":\"0\",\"capturedAtMs\":\"0\",\"maxItems\":20,\"held\":[],\"moreCandidates\":false,\"moreHeld\":false,\"phase\":\"Previewed\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-maintenance.scheduled_prune",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"maintenance.scheduled_prune\",\"value\":{\"preview\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"},\"requestedCutoffMs\":\"0\",\"effectiveCutoffMs\":\"0\",\"capturedAtMs\":\"0\",\"maxItems\":20,\"held\":[],\"moreCandidates\":false,\"moreHeld\":false,\"phase\":\"Previewed\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -5639,6 +5681,41 @@
     "entry": "domain-request",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.prune_messages\",\"previewOnly\":false,\"olderThanMs\":\"0\",\"maxItems\":20}}",
     "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-prune-preview-with-confirmation-id",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.prune_messages\",\"previewOnly\":true,\"olderThanMs\":\"0\",\"maxItems\":20,\"previewId\":\"reviewed\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-prune-result-for-another-kind",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"maintenance.prune_messages\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Sessions\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-diagnostics-job-with-explicit-age",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.scheduled_prune\",\"target\":\"Diagnostics\",\"maxItems\":20,\"retentionDays\":30}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-retention-inspection-as-command",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"maintenance.inspect\",\"previewId\":\"id-a\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "confirm-exact-operational-retention-preview",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.prune_messages\",\"previewOnly\":false,\"olderThanMs\":\"0\",\"maxItems\":20,\"previewId\":\"reviewed\",\"expectedRevision\":\"1\"}}",
+    "typedValid": true,
     "schemaValid": true
   },
   {
@@ -9653,42 +9730,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1379",
+    "id": "r3-preview-source-13-1390",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1379",
+    "id": "r3-delete-source-13-1390",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1381",
+    "id": "r3-preview-source-15-1392",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1381",
+    "id": "r3-delete-source-15-1392",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1383",
+    "id": "r3-preview-source-256-1394",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1383",
+    "id": "r3-delete-source-256-1394",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

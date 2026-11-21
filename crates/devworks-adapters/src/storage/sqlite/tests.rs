@@ -106,6 +106,7 @@ mod indexing;
 mod instructions;
 mod jobs;
 mod knowledge;
+mod maintenance;
 mod mcp;
 mod operations;
 mod packages;

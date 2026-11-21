@@ -46,6 +46,10 @@ impl Screen for SettingsScreen {
         }
     }
     fn apply(&mut self, cx: &mut Cx, slot: SettingsSlot, reply: Reply) {
+        if crate::settings_screen::retention::is_slot(&slot) {
+            self.retention.apply(cx, slot, reply);
+            return;
+        }
         if let Some((slot, reply)) =
             (SettingsCtl { settings: self, cx }).apply_settings(slot, reply)
         {
@@ -99,9 +103,11 @@ impl Screen for SettingsScreen {
         let ctx = ui.ctx().clone();
         ctl.poll_connections(&ctx);
         ctl.poll_mcp(&ctx);
+        self.retention.window(cx, &ctx);
     }
     fn restore_in_flight(&mut self, slot: &SettingsSlot, u: &Unresolved) {
         match slot {
+            SettingsSlot::RetentionApply(id) => self.retention.restore(id),
             SettingsSlot::Configure(n) => {
                 let p = &mut self.connections;
                 p.sequence = p.sequence.max(*n);
@@ -298,6 +304,7 @@ impl SettingsCtl<'_, '_> {
                     self.effects.push(Effect::OpenNotifications);
                 }
                 SettingsAction::OpenImports => self.effects.push(Effect::OpenImports),
+                SettingsAction::OpenRetention => self.settings.retention.open(),
                 SettingsAction::OpenConnections => self.load_connections(),
                 SettingsAction::OpenHelp(topic) => self.effects.push(Effect::OpenHelp(topic)),
                 SettingsAction::Connection(a) => self.connection_action(a),
