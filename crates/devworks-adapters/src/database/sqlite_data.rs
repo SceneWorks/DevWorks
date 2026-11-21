@@ -268,6 +268,18 @@ fn execute(
                 mode: request.mode,
                 ddl: statement.schema_change,
             };
+            if let Some(destination) = &statement.created_relation {
+                let allowed = match destination.as_slice() {
+                    [table] => audit.table_allowed(&table.value),
+                    [schema, table] if schema.value.eq_ignore_ascii_case("main") => {
+                        audit.table_allowed(&table.value)
+                    }
+                    _ => false,
+                };
+                if !allowed {
+                    return Err(refused(FailureKind::PermissionDenied));
+                }
+            }
             conn.authorizer(Some(move |context: AuthContext<'_>| {
                 audit.authorize(context)
             }))
@@ -452,14 +464,25 @@ impl Audit {
     fn access(&self, ctx: AuthContext<'_>) -> Result<(), DataFailure> {
         let internal_catalog = |name: &str| matches!(name, "sqlite_master" | "sqlite_schema");
         let allowed = match ctx.action {
+            // ALTER checks the temporary schema as well as main, even on a new handle.
+            AuthAction::Read {
+                table_name: "sqlite_temp_master",
+                ..
+            }
+            | AuthAction::Update {
+                table_name: "sqlite_temp_master",
+                ..
+            } if self.ddl && ctx.database_name == Some("temp") => true,
             _ if ctx.database_name.is_some_and(|db| db != "main") => false,
             AuthAction::Select | AuthAction::Recursive => true,
             AuthAction::Function { function_name } => {
                 safe_builtin(&function_name.to_ascii_lowercase())
+                    || matches!(function_name, "like" | "glob")
                     || (self.ddl
                         && matches!(
                             function_name,
-                            "sqlite_rename_column"
+                            "printf"
+                                | "sqlite_rename_column"
                                 | "sqlite_rename_table"
                                 | "sqlite_rename_test"
                                 | "sqlite_rename_quotefix"
