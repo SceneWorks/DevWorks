@@ -156,6 +156,7 @@ pub(super) fn send_workspace(
 fn a_workspace_reply_offers_and_finishes_every_selected_tool_window() {
     use devworks_adapters::mcp::NativeMcpClients;
     use devworks_core::ports::mcp::{RemoteCatalog, RemoteTool};
+    use std::collections::HashSet;
 
     let _native_case = native_runtime_case();
     let f = Fx::new();
@@ -186,6 +187,7 @@ fn a_workspace_reply_offers_and_finishes_every_selected_tool_window() {
     runtime().block_on(async {
         let app = boot(ports).await.unwrap();
         let catalog = app.mcp_service().unwrap().clone();
+        let mut selected = HashSet::new();
         for server in 0..3 {
             let frame = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":8,
                 "requestKey":format!("workspace-tool-server-{server}"),
@@ -197,7 +199,7 @@ fn a_workspace_reply_offers_and_finishes_every_selected_tool_window() {
             ).unwrap());
             let server = id(configured["id"].as_str().unwrap());
             let catalog = catalog.clone();
-            f.tx(move |_, tx| {
+            let ids = f.tx(move |_, tx| {
                 let configured = catalog.publish_remote_catalog(
                     tx,
                     &ConfigScope::Workspace,
@@ -218,8 +220,12 @@ fn a_workspace_reply_offers_and_finishes_every_selected_tool_window() {
                     },
                 )?;
                 assert_eq!(configured.selected_tool_ids.0.len(), 90);
-                Ok(())
+                Ok(configured.selected_tool_ids.0)
             });
+            selected.extend(ids.iter().map(|id| {
+                let digest = id.as_str().strip_prefix("mcp-").unwrap();
+                format!("mcp_{}", &digest[..60])
+            }));
         }
         let session = open_home(&f, &app);
         send_workspace(&f, &app, &session, "windowed-home", "Check the selected tools", "watch-model");
@@ -232,13 +238,15 @@ fn a_workspace_reply_offers_and_finishes_every_selected_tool_window() {
             let aliases = |request: &Value| {
                 request["tools"].as_array().unwrap().iter().map(|tool| {
                     tool["function"]["name"].as_str().unwrap().to_owned()
-                }).collect::<std::collections::HashSet<_>>()
+                }).collect::<HashSet<_>>()
             };
             let first_tools = aliases(first);
             let second_tools = aliases(second);
             assert_eq!(first_tools.len(), 256);
             assert!(first_tools.is_disjoint(&second_tools));
-            assert_eq!(first_tools.union(&second_tools).filter(|name| name.starts_with("mcp_")).count(), 270);
+            assert_eq!(selected.len(), 270);
+            assert!(!selected.is_disjoint(&second_tools));
+            assert!(selected.iter().all(|name| first_tools.contains(name) || second_tools.contains(name)));
             assert!(first.to_string().contains("successive windows"));
             assert!(second.to_string().contains("Check the selected tools"));
         }
