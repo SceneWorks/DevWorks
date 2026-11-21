@@ -32,6 +32,7 @@ pub enum Family {
 /// persisted (see [`crate::backend::Slot`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum WorkSlot {
+    KeepWorking(String),
     /// Every feature of a project (all pages, read in order).
     WorkFeatures(String),
     /// The complete authoritative workflow, fenced by load generation.

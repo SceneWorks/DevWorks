@@ -157,6 +157,7 @@ pub struct InvocationContext {
     /// Bound only by the trusted host's dedicated human interaction path, never wire data.
     human_decision: Option<String>,
     human_project_purge: Option<String>,
+    keep_working_project: Option<(ProjectId, i64)>,
     reviewed_operation: Option<ReviewedOperation>,
 }
 /// The host's trusted ingress for one store: the only public way to create an
@@ -217,6 +218,32 @@ impl HostIngress {
         Some(bound)
     }
 
+    /// Binds an explicitly enabled native project scheduler to its own invocation namespace
+    /// and to the archive epoch the person enabled. The regular gateway still checks authority.
+    pub fn keep_working_context(
+        &self,
+        context: &InvocationContext,
+        project: ProjectId,
+        archive_epoch: i64,
+        namespace: Id,
+    ) -> Option<InvocationContext> {
+        if context.store_id != self.store_id
+            || context.principal_kind != PrincipalKind::Human
+            || context.session_id.is_some()
+            || context.root_id.is_some()
+            || context.project_id.as_ref().is_some_and(|id| *id != project)
+        {
+            return None;
+        }
+        let mut bound = context
+            .clone()
+            .with_lineage(Some(project.clone()), None, None);
+        bound.ingress_namespace = namespace.clone();
+        bound.invocation_id = namespace;
+        bound.keep_working_project = Some((project, archive_epoch));
+        Some(bound)
+    }
+
     /// Binds an invocation the host has authenticated (see [`InvocationContext`]).
     pub fn context(
         &self,
@@ -271,6 +298,7 @@ impl InvocationContext {
             worktree: None,
             human_decision: None,
             human_project_purge: None,
+            keep_working_project: None,
             reviewed_operation: None,
         }
     }
@@ -389,6 +417,11 @@ impl InvocationContext {
     }
     pub fn project_id(&self) -> Option<&ProjectId> {
         self.project_id.as_ref()
+    }
+    pub(crate) fn keep_working_project(&self) -> Option<(&ProjectId, i64)> {
+        self.keep_working_project
+            .as_ref()
+            .map(|(id, epoch)| (id, *epoch))
     }
     pub fn root_id(&self) -> Option<&RootId> {
         self.root_id.as_ref()

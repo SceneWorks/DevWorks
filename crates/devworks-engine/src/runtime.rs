@@ -484,6 +484,7 @@ impl Collector {
 /// Dropping it stops delivery and collection (as [`Runtime::shutdown`] does, without waiting).
 pub struct Runtime {
     store: Arc<dyn ApplicationStore>,
+    keep_working: Arc<crate::keep_working::KeepWorking>,
     artifacts: Arc<ArtifactService>,
     control: Arc<ControlService>,
     knowledge: Arc<devworks_core::services::knowledge::KnowledgeService>,
@@ -1435,6 +1436,11 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
 ///
 /// Must be awaited on a Tokio runtime with timers; the tasks it starts run there.
 pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
+    let workspace_coordinator = composition
+        .application
+        .sessions
+        .as_ref()
+        .and_then(|sessions| sessions.coordinator.clone());
     // The one construction of the core services; everything below receives the finished set.
     let core = CoreServices::build(CorePorts {
         store: &composition.store,
@@ -1520,6 +1526,24 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         core.web.clone(),
         core.connections.clone(),
     );
+    if let Some(coordinator) = workspace_coordinator {
+        let info = store.info();
+        let host = devworks_core::context::HostIngress::new(store.as_ref()).context(
+            info.host_actor,
+            devworks_core::context::PrincipalKind::Host,
+            admitter.ids.next_id(devworks_core::ports::IdKind::Command),
+            Id::new("workspace-coordinator").expect("fixed ingress"),
+            devworks_core::protocol::Counter::new(info.restore_epoch)
+                .map_err(|_| failed(BootError::Composition(StorageError::ScopeDenied)))?,
+            devworks_core::protocol::Revision::new(1).expect("positive revision"),
+        );
+        crate::store::write(&store, WriteOptions::recovery(), move |tx| {
+            devworks_core::services::agents::bind_workspace_coordinator(tx, &host, &coordinator)
+        })
+        .await
+        .map_err(BootError::Composition)
+        .map_err(failed)?;
+    }
     if let Some(service) = &schemas {
         // Namespace/reference-only cleanup precedes password intake and command exposure.
         match service.reconcile_credential_orphans() {
@@ -1758,6 +1782,20 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         None,
         Arc::new(
             Loop::new("run supervision", |_| run_supervisor.clone().run(every))
+                .on_stop(move || stop.stop()),
+        ),
+    );
+    let keep_working = Arc::new(crate::keep_working::KeepWorking::new(
+        store.clone(),
+        admitter.ids.clone(),
+        admitter.clone(),
+    ));
+    let (project_work, stop) = (keep_working.clone(), keep_working.clone());
+    workers.start(
+        StopAt::Schedule,
+        None,
+        Arc::new(
+            Loop::new("project keep-working", |_| project_work.clone().run(every))
                 .on_stop(move || stop.stop()),
         ),
     );
@@ -2194,6 +2232,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     };
     Ok(Runtime {
         store,
+        keep_working,
         artifacts,
         control,
         knowledge,
@@ -2943,6 +2982,28 @@ impl Runtime {
     /// granted in between). Trusted native confirmation ingress stays closed otherwise.
     pub fn control_quiet_since(&self, received: ControlEpoch) -> bool {
         received.quiet_through(&self.desktop_control_epoch())
+    }
+
+    pub fn keep_working_status(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+    ) -> Option<crate::KeepWorkingStatus> {
+        self.keep_working.status(project)
+    }
+
+    /// Only an explicit native click can arm automatic allocation. All resulting commands
+    /// still run under the human's current authority through the ordinary gateway.
+    pub fn set_keep_working(
+        &self,
+        context: &InvocationContext,
+        project: &devworks_core::protocol::ProjectId,
+        enabled: bool,
+        received: ControlEpoch,
+    ) -> Result<crate::KeepWorkingStatus, StorageError> {
+        if !self.control_quiet_since(received) {
+            return Err(StorageError::ScopeDenied);
+        }
+        self.keep_working.set(context, project, enabled)
     }
 
     pub fn approvals(&self) -> &Arc<ApprovalService> {

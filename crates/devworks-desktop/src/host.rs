@@ -69,6 +69,8 @@ use tokio::sync::{oneshot, watch};
 pub const HOST_ACTOR: &str = "devworks-host";
 /// The local user, registered as the human principal at every boot.
 pub const USER_ACTOR: &str = "local-user";
+/// The durable rootless agent for native Home conversations.
+const WORKSPACE_COORDINATOR: &str = "devworks-workspace-coordinator";
 /// Retry-key namespace of the desktop UI surface.
 pub const UI_INGRESS: &str = "desktop-ui";
 /// Lifetime of an upload ticket minted for an attachment (it is spent at once).
@@ -332,8 +334,6 @@ async fn compose(
         .http
         .clone()
         .unwrap_or_else(|| Arc::new(devworks_adapters::http::NativeHttp::new()));
-    // The Home coordinator agent is bound by the Home chat item (DW-16); until it exists a
-    // human's Home session is conducted by its creator, and no reply is ever fabricated.
     // Unified Knowledge retrieval is lexical until an embedding route exists (vector search is
     // never reported as run). The engine builds every core service from these ports.
     let application = ApplicationComposition {
@@ -355,7 +355,11 @@ async fn compose(
         router: Some(RouterPorts {
             directory: config.connections.clone(),
         }),
-        sessions: Some(SessionPorts::default()),
+        sessions: Some(SessionPorts {
+            coordinator: Some(ActorId(
+                Id::new(WORKSPACE_COORDINATOR).expect("fixed actor ID"),
+            )),
+        }),
         history: true,
         mcp: true,
     };
@@ -964,6 +968,24 @@ pub struct DesktopBackend {
     host: Arc<Host>,
 }
 impl Backend for DesktopBackend {
+    fn keep_working_status(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+    ) -> Option<devworks_engine::KeepWorkingStatus> {
+        self.host.runtime.keep_working_status(project)
+    }
+    fn set_keep_working(
+        &self,
+        project: &devworks_core::protocol::ProjectId,
+        enabled: bool,
+        received: ControlEpoch,
+    ) -> Result<(), String> {
+        self.host
+            .runtime
+            .set_keep_working(&self.host.ctx, project, enabled, received)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
     fn read_coordinator_notice(
         &self,
         reference: &devworks_core::protocol::provider::ArtifactRef,

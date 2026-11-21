@@ -223,6 +223,8 @@ pub mod help;
 pub mod indexing;
 mod instruction_guard;
 pub mod jobs;
+mod keep_working;
+pub use keep_working::KeepWorkingStatus;
 pub mod knowledge;
 pub mod mcp;
 pub mod mcp_sampling;
