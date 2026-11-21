@@ -531,6 +531,7 @@ async fn run_native_loop(
                         agent.assignment_id.0.as_str().to_owned(),
                         material,
                         cancellation,
+                        None,
                     )
                     .await?;
                 }
@@ -665,7 +666,7 @@ async fn run_native_loop(
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        wait_for_running_tool_results(engine, ctx, session_id, cancellation).await?;
+        wait_for_running_tool_results(engine, ctx, session_id, cancellation, None).await?;
         let (prepared_head, prepared_binding, route, windows) = {
             let (engine, ctx, session, head, is_reviewer) = (
                 engine.clone(),
@@ -1026,13 +1027,14 @@ pub(crate) async fn wait_for_running_tool_results(
     ctx: &InvocationContext,
     session_id: &Id,
     cancellation: &Cancellation,
+    capacity: Option<&mut crate::dispatch::EffectCapacity<'_>>,
 ) -> Result<(), StorageError> {
-    loop {
+    let running = || {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
         let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
-        let running = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             for operation_id in linked.iter().filter_map(|call| call.operation_id.as_ref()) {
                 let operation = read
                     .operations()
@@ -1052,11 +1054,20 @@ pub(crate) async fn wait_for_running_tool_results(
                 }
             }
             Ok(false)
-        })?;
-        if !running {
-            return Ok(());
+        })
+    };
+    if !running()? {
+        return Ok(());
+    }
+    let wait = async {
+        while running()? {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        Ok(())
+    };
+    match capacity {
+        Some(capacity) => capacity.while_waiting(cancellation, wait).await?,
+        None => wait.await,
     }
 }
 

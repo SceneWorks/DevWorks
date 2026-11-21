@@ -196,7 +196,9 @@ fn home_waits_for_an_explicit_systemone_tool_result() {
     let f = fixture();
     let wire = Arc::new(DecisionWire::new("decision-a"));
     runtime().block_on(async {
-        let app = boot(systemone_ports(&f, wire.clone())).await.unwrap();
+        let mut ports = systemone_ports(&f, wire.clone());
+        ports.config.dispatcher.max_in_flight = 1;
+        let app = boot(ports).await.unwrap();
         let session = send_decision(&f, &app);
         within("SystemOne receives the request", wire.sent.notified()).await;
         let operation = linked_decision(&f, &session).await.operation_id.unwrap();

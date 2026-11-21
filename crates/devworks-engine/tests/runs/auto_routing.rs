@@ -227,7 +227,9 @@ fn systemone_checks_later_candidates_before_direct_low_and_reuses_the_chosen_tie
     seed_systemone(&f);
     let wire = Arc::new(AutoWire::default());
     runtime().block_on(async {
-        let app = boot(auto_ports(&f, wire.clone(), true)).await.unwrap();
+        let mut ports = auto_ports(&f, wire.clone(), true);
+        ports.config.dispatcher.max_in_flight = 1;
+        let app = boot(ports).await.unwrap();
         let first = open_home(&f, &app);
         send_auto(
             &f,
