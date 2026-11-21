@@ -137,14 +137,25 @@ fn migration_26_is_checksummed_and_closes_unaware_writers_without_rebuilding() {
     assert!(!migration.rebuilds_tables);
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(25)).unwrap());
-    let s = seeded_with(&h, &through(26));
-    insert(&s, claim(&s, "claim", "issue", false)).unwrap();
-    drop(s);
+    // Insert using the v26 writer shape. The current repo expects later claim columns.
+    drop(seeded_with(&h, &through(26)));
+    h.raw()
+        .execute(
+            "INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,
+         ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,
+         root_control_revision,queue_revision,created_at)
+         VALUES('claim','project','issue','issue','task','project','host','ingress','claim',
+                1,?1,'Active',1,1,1,1,?2)",
+            rusqlite::params![T0 + 60_000, T0],
+        )
+        .unwrap();
     let legacy = SqliteStore::open_with(h.config(), &through(25)).unwrap();
     assert!(matches!(legacy.info().access, AccessMode::ReadOnly { .. }));
     drop(legacy);
     let s = h.store();
-    assert_eq!(get(&s, "claim").work_id, id("issue"));
+    let migrated = get(&s, "claim");
+    assert_eq!(migrated.work_id, id("issue"));
+    assert!(!migrated.automatic);
     assert!(s.integrity_check().unwrap().problems.is_empty());
 }
 

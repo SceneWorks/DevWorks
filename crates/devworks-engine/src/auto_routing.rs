@@ -58,9 +58,10 @@ pub(crate) fn unpinned_selection(
     }
     let existing = read.router().auto_route(session)?.is_some();
     let managed_auto = if ctx.root_id().is_some() {
-        let descriptor =
-            devworks_core::settings::catalog::descriptor(auto_routing::MANAGED_AUTO_KEY)
-                .expect("known routing setting");
+        let descriptor = devworks_core::settings::catalog::descriptor(
+            devworks_core::settings::catalog::MANAGED_AUTO_KEY,
+        )
+        .expect("known routing setting");
         let layers = devworks_core::settings::model::current_chain(
             read.configuration(),
             &ConfigScope::Workspace,

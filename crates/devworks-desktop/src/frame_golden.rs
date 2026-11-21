@@ -453,10 +453,9 @@ fn typed_frames_match_the_recorded_wire_bytes() {
     );
 }
 
-/// The schema revisions the desktop sent as hard-coded numbers are the newest ones the
-/// operation registry lists now, so reading them from the registry keeps every request as it was.
+/// The desktop selects the current revisions for each of these operation bindings.
 #[test]
-fn the_registry_lists_the_revisions_the_desktop_used_to_hard_code() {
+fn the_registry_lists_the_wire_revisions_the_desktop_expects() {
     use crate::frame::latest_revision;
     for (operation, revision) in [
         ("mcp.servers", 8),
@@ -477,8 +476,8 @@ fn the_registry_lists_the_revisions_the_desktop_used_to_hard_code() {
         ("web.search", 2),
         ("workspace.logs", 2),
         ("indexing.status", 2),
-        ("jobs.list", 2),
-        ("jobs.inspect", 2),
+        ("jobs.list", 3),
+        ("jobs.inspect", 3),
         ("agents.history", 7),
         ("agents.receive", 7),
         ("agents.ack", 7),

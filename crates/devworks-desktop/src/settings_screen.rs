@@ -437,7 +437,7 @@ impl SettingsScreen {
                 if key == "containers.preferredRuntime" {
                     self.container_status_ui(ui, actions);
                 }
-                if key == devworks_core::services::router::auto_routing::MANAGED_AUTO_KEY {
+                if key == devworks_core::settings::catalog::MANAGED_AUTO_KEY {
                     use devworks_core::services::router::auto_routing::{RUBRIC, RUBRIC_VERSION};
                     egui::CollapsingHeader::new(format!(
                         "DevWorks Auto rubric (version {RUBRIC_VERSION})"
