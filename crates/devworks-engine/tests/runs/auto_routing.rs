@@ -45,10 +45,12 @@ impl StreamingHttp for AutoWire {
             });
             format!("data: {body}\n\ndata: [DONE]\n\n")
         };
+        let rejects_model = model == "decision-a-upstream"
+            && value.to_string().contains("model-specific rejection");
         self.requests.lock().unwrap().push(value);
         Ok(Box::new(AgentStream {
             head: ResponseHead {
-                status: 200,
+                status: if rejects_model { 422 } else { 200 },
                 headers: vec![(
                     "content-type".into(),
                     if systemone {
@@ -294,6 +296,36 @@ fn systemone_checks_later_candidates_before_direct_low_and_reuses_the_chosen_tie
         }
         assert_eq!(read(&*f.store, |r| r.router().tier_cursor("Low")), 0);
         assert_eq!(read(&*f.store, |r| r.router().auto_low_cursor()), 1);
+
+        let start = json!({"mode":"Command","protocol":PROTOCOL,"requestKey":"rejected-model-home",
+            "body":{"kind":"sessions.start","scope":{"kind":"Workspace"},"title":"Rejection"}});
+        let third = applied(
+            &app.command(
+                &f.user,
+                "sessions.start",
+                &serde_json::to_vec(&start).unwrap(),
+            )
+            .unwrap(),
+        );
+        let third = id(third["id"].as_str().unwrap());
+        send_auto(
+            &f,
+            &app,
+            &third,
+            "rejected-candidate",
+            "Test a model-specific rejection",
+        );
+        wait_for_replies(&f, 5).await;
+        assert_eq!(assignment(&f, &third).model_id, id("decision-b"));
+        assert_eq!(read(&*f.store, |r| r.router().auto_low_cursor()), 1);
+        assert_eq!(
+            request_models(&wire.requests.lock().unwrap()[10..]),
+            [
+                "decision-a-upstream",
+                "decision-b-upstream",
+                "fixture-model",
+            ]
+        );
         app.shutdown().await;
     });
 }
@@ -342,6 +374,15 @@ fn a_saved_automatic_tier_handles_capability_failover_and_explicit_restoration()
             applied(&app.command(&f.user, "router.pin", &serde_json::to_vec(&raw).unwrap()).unwrap())
         };
         assert_eq!(manual("auto-manual-override", json!({"kind":"Model","modelId":"low-a"}))["modelId"], "low-a");
+        let stale = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":3,"requestKey":"stale-automatic-route",
+            "body":{"kind":"router.route","sessionId":session,"expectedContextEpoch":"0",
+            "expectedPinRevision":previous.revision.to_string(),"requiredCapabilities":[],
+            "intent":{"kind":"DevWorksAuto"},"effort":"Default"}});
+        let stale = app.command(&f.user, "router.route", &serde_json::to_vec(&stale).unwrap()).unwrap();
+        assert!(matches!(stale, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { fault }
+                if fault.code == DomainErrorCode::SourceChanged)));
+        assert_eq!(read(&*f.store, |r| r.router().session_pin(&session)).unwrap().model_id, id("low-a"));
         let restored = manual("auto-restored", json!({"kind":"DevWorksAuto"}));
         assert_ne!(restored["modelId"], "low-a");
         assert_eq!(assignment(&f, &session).request_id, saved.request_id);
@@ -456,6 +497,184 @@ fn a_delegated_worker_classifies_its_own_first_assignment_with_project_attributi
                 assert!(!input.contains("root-g"));
             }
         }
+        app.shutdown().await;
+    });
+}
+
+struct StopDuringOpen {
+    inner: AutoWire,
+    hold_model: &'static str,
+    entered: tokio::sync::Notify,
+}
+
+impl StreamingHttp for StopDuringOpen {
+    fn open(
+        &self,
+        request: &HttpRequest,
+        limits: &StreamLimits,
+        cancel: &Cancellation,
+    ) -> Result<Box<dyn HttpStream>, TransportError> {
+        use devworks_core::ports::provider_http::{SendPhase, TransportFailure};
+
+        let value: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+        if value["model"] == self.hold_model {
+            self.entered.notify_one();
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            while !cancel.is_cancelled() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            return Err(TransportError {
+                phase: SendPhase::NotSent,
+                kind: if cancel.is_cancelled() {
+                    TransportFailure::Cancelled
+                } else {
+                    TransportFailure::Deadline
+                },
+            });
+        }
+        self.inner.open(request, limits, cancel)
+    }
+}
+
+#[test]
+fn cancellation_before_and_after_the_tier_commit_never_sends_a_stale_generation() {
+    let _native_case = native_runtime_case();
+    for (hold_model, commits_tier) in [("low-b-upstream", false), ("fixture-model", true)] {
+        let f = Fx::new();
+        seed_auto(&f, false);
+        let wire = Arc::new(StopDuringOpen {
+            inner: AutoWire::default(),
+            hold_model,
+            entered: tokio::sync::Notify::new(),
+        });
+        runtime().block_on(async {
+            let app = boot(workspace_ports(&f, wire.clone())).await.unwrap();
+            let session = open_home(&f, &app);
+            let frame = send_auto(
+                &f,
+                &app,
+                &session,
+                "cancel-auto",
+                "Use the initial tier once",
+            );
+            within(
+                "classifier or generation reached stoppable transport",
+                wire.entered.notified(),
+            )
+            .await;
+            let state =
+                |session: &Id| read(&*f.store, |read| read.router().auto_route(session)).unwrap();
+            let before = state(&session);
+            assert_eq!(before.decision.is_some(), commits_tier);
+            app.shutdown().await;
+            let wire_after = Arc::new(AutoWire::default());
+            let app = boot(auto_ports(&f, wire_after, false)).await.unwrap();
+            assert!(replayed(
+                &app.command(&f.user, "sessions.append_message", &frame)
+                    .unwrap()
+            ));
+            let after = state(&session);
+            assert_eq!(before.source, after.source);
+            assert_eq!(before.decision, after.decision);
+            assert!(
+                wire.inner
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|request| request["model"] != "fixture-model")
+            );
+            app.shutdown().await;
+        });
+    }
+}
+
+#[test]
+fn the_tier_survives_an_unavailable_generation_pool_and_reopen_without_reclassifying() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_auto(&f, false);
+    let set_enabled = |enabled| {
+        f.tx(move |_, tx| {
+            for name in ["watch-model", "same-tier-backup"] {
+                let mut model = tx.router().route_model(&id(name))?.unwrap();
+                model.enabled = enabled;
+                tx.router().put_route_model(&model, Some(model.revision))?;
+            }
+            Ok(())
+        })
+    };
+    set_enabled(false);
+    let wire = Arc::new(AutoWire::default());
+    runtime().block_on(async {
+        let app = boot(auto_ports(&f, wire.clone(), false)).await.unwrap();
+        let session = open_home(&f, &app);
+        send_auto(
+            &f,
+            &app,
+            &session,
+            "auto-selected-pool-unavailable",
+            "Preserve this tier",
+        );
+        within("a saved tier with an unavailable generation pool", async {
+            loop {
+                let settled = read(&*f.store, |r| {
+                    r.operations().operations_for_capability(
+                        devworks_core::services::sessions::workspace_reply::CAPABILITY,
+                        &[OperationState::ObservedComplete],
+                        None,
+                        10,
+                    )
+                });
+                if let Some(op) = settled.first() {
+                    assert!(
+                        op.latest_attempt()
+                            .unwrap()
+                            .observations
+                            .iter()
+                            .any(|note| note["replySettlement"]["kind"]
+                                == "WorkspaceReplyUnavailable"),
+                        "{op:?}"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        let prior = assignment(&f, &session);
+        assert!(read(&*f.store, |r| r.router().session_pin(&session)).is_none());
+        assert_eq!(wire.requests.lock().unwrap().len(), 2);
+        app.shutdown().await;
+        set_enabled(true);
+
+        let app = boot(auto_ports(&f, wire.clone(), false)).await.unwrap();
+        let frame = send_auto(
+            &f,
+            &app,
+            &session,
+            "resume-chosen-tier",
+            "Continue with the stored tier",
+        );
+        within("generation on the previously chosen tier", async {
+            loop {
+                let entries = read(&*f.store, |r| r.sessions().entries(&session, 0, 30));
+                if entries.iter().any(|entry| {
+                    entry.kind == "AssistantAttempt"
+                        && entry.body["visibleText"] == "completed turn"
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(replayed(
+            &app.command(&f.user, "sessions.append_message", &frame)
+                .unwrap()
+        ));
+        assert_eq!(assignment(&f, &session).request_id, prior.request_id);
+        assert_eq!(wire.requests.lock().unwrap().len(), 3);
         app.shutdown().await;
     });
 }

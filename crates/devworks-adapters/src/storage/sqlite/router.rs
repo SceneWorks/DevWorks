@@ -440,10 +440,11 @@ impl RouterRepository for Unit<'_> {
         &mut self,
         session: &Id,
         operation: &OperationId,
+        previous: Option<&OperationId>,
     ) -> Result<(), StorageError> {
         if db(self.conn.execute(
-            "UPDATE router_auto_sessions SET systemone_operation=?2 WHERE session_id=?1 AND systemone_operation IS NULL AND low_plan_json IS NULL AND decision_json IS NULL",
-            params![session.as_str(), operation.0.as_str()],
+            "UPDATE router_auto_sessions SET systemone_operation=?2 WHERE session_id=?1 AND systemone_operation IS ?3 AND low_plan_json IS NULL AND decision_json IS NULL",
+            params![session.as_str(), operation.0.as_str(), previous.map(|id| id.0.as_str())],
         ))? != 1 {
             return Err(StorageError::ScopeDenied);
         }
@@ -454,10 +455,11 @@ impl RouterRepository for Unit<'_> {
         &mut self,
         session: &Id,
         plan: &serde_json::Value,
+        previous: Option<&serde_json::Value>,
     ) -> Result<StoredAutoRoute, StorageError> {
         let inserted = db(self.conn.execute(
-            "UPDATE router_auto_sessions SET low_plan_json=?2 WHERE session_id=?1 AND low_plan_json IS NULL AND decision_json IS NULL",
-            params![session.as_str(), plan.to_string()],
+            "UPDATE router_auto_sessions SET low_plan_json=?2 WHERE session_id=?1 AND low_plan_json IS ?3 AND decision_json IS NULL",
+            params![session.as_str(), plan.to_string(), previous.map(ToString::to_string)],
         ))?;
         if inserted != 0 {
             db(self.conn.execute(

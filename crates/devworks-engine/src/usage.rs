@@ -317,7 +317,11 @@ impl UsageRuntime {
                             AttemptSelection::NativeGeneration { route, .. } => *route,
                             other => other,
                         };
-                        if matches!(route, AttemptSelection::Conversation { .. }) {
+                        if matches!(
+                            route,
+                            AttemptSelection::Conversation { .. }
+                                | AttemptSelection::TierClassifier { .. }
+                        ) {
                             request.selection = AttemptSelection::NativeGeneration {
                                 route: Box::new(route),
                                 requested_effort: effort.requested.map(|x| x.as_str().into()),

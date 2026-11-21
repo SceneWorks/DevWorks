@@ -61,6 +61,13 @@ pub struct RouteInput {
     pub intent: RouteIntent,
     pub effort: EffortName,
     pub required_capabilities: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub expected_pin_revision: Option<Counter>,
 }
 impl Check for RouteInput {
     fn check(&self) -> Result<(), String> {
@@ -69,11 +76,15 @@ impl Check for RouteInput {
         self.intent.check()?;
         self.effort.check()?;
         self.required_capabilities.check()?;
+        self.expected_pin_revision.check()?;
         Ok(())
     }
 }
 impl Revisioned for RouteInput {
     fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.expected_pin_revision = None;
+        }
         self.intent.retain_revision(revision);
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {

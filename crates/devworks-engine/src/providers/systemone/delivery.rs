@@ -425,7 +425,9 @@ impl SystemOne {
                         400 | 422 => "Decision endpoint rejected the request input",
                         _ => "Decision endpoint refused the request",
                     };
-                    if !matches!(status, 401 | 402 | 403 | 408 | 429 | 500..=599) {
+                    if !matches!(status, 401 | 402 | 403 | 408 | 429 | 500..=599)
+                        && !(intent.automatic_tier && matches!(status, 400 | 422))
+                    {
                         break;
                     }
                 }
@@ -581,13 +583,7 @@ struct CompletedDecision {
 }
 
 fn candidate_request(operation: &OperationRecord, model: &Id) -> Result<Id, StorageError> {
-    Id::new(format!(
-        "systemone-{}",
-        devworks_core::fingerprint::sha256_hex(
-            format!("{}\n{}", operation.id.0.as_str(), model.as_str()).as_bytes()
-        )
-    ))
-    .map_err(|_| StorageError::ScopeDenied)
+    devworks_core::services::router::decisions::candidate_request_id(&operation.id, model)
 }
 
 fn count(value: i64) -> Counter {

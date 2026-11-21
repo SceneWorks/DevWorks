@@ -923,7 +923,7 @@ fn first_auto_input(
     ctx: &InvocationContext,
     intent: &ReplyIntent,
 ) -> Result<(String, ProviderContext), StorageError> {
-    let entry = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+    let (entry, role) = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let session = session_for_reply(read, intent)?;
         if intent.user_sequence > session.last_durable_sequence() {
             return Err(StorageError::ScopeDenied);
@@ -939,7 +939,13 @@ fn first_auto_input(
             }
             for entry in entries {
                 if entry.kind == "UserMessage" {
-                    return Ok(entry);
+                    let role = devworks_core::settings::service::role_instructions(
+                        read.configuration(),
+                        AgentRole::WorkspaceCoordinator,
+                        None,
+                    )
+                    .map_err(|_| StorageError::ScopeDenied)?;
+                    return Ok((entry, role));
                 }
                 after = entry.sequence;
             }
@@ -950,7 +956,13 @@ fn first_auto_input(
         .map_err(|error| StorageError::InvalidRecord(format!("automatic route input: {error}")))?;
     let mut context = ProviderContext {
         version: 1,
-        instructions: Vec::new(),
+        instructions: (!role.text.is_empty())
+            .then_some(TextBlock {
+                text: role.text,
+                cache: None,
+            })
+            .into_iter()
+            .collect(),
         instruction_stamps: Vec::new(),
         skill_stamp: None,
         messages: Vec::new(),

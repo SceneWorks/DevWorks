@@ -2826,6 +2826,7 @@ impl RouterRepository for Unmodelled {
         &mut self,
         _: &Id,
         _: &OperationId,
+        _: Option<&OperationId>,
     ) -> Result<(), StorageError> {
         unmodelled()
     }
@@ -2833,6 +2834,7 @@ impl RouterRepository for Unmodelled {
         &mut self,
         _: &Id,
         _: &serde_json::Value,
+        _: Option<&serde_json::Value>,
     ) -> Result<StoredAutoRoute, StorageError> {
         unmodelled()
     }

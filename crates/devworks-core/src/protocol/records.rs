@@ -5070,11 +5070,8 @@ impl Revisioned for JobDefinition {
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
-        match self {
-            Self::Inference { route, .. } => {
-                route.check_revision(revision)?;
-            }
-            _ => {}
+        if let Self::Inference { route, .. } = self {
+            route.check_revision(revision)?;
         }
         Ok(())
     }

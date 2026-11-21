@@ -56,8 +56,13 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// foreign key to instruction_revisions and one to knowledge_claims, and no other table changes.
 /// Migration 63 adds file scan progress to watchers. The watcher retains its existing project
 /// and session ownership. The new column adds no reference to another row.
+/// Migration 64 adds one decision policy column on the globally owned model and a workspace
+/// cursor. Migration 65 adds an automatic-claim flag and replaces an allocation uniqueness index
+/// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
+/// routing source linked to its owning session. The linked input artifact follows the ordinary
+/// project artifact ownership and the operation journal follows its existing scope.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "a6bd0b588f47b675472fa142791b0a8b8b2f716658547c3bc834dad8ab71e02e";
+    "691f53b108da78ec5daf3c131a13229a29f46fcf72df2ec467dbe9bf55310180";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

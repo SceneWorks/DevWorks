@@ -1887,6 +1887,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::JobsList { value } => value.check_revision(revision),
             Self::JobsCreate { value } => value.check_revision(revision),
             Self::JobsEdit { value } => value.check_revision(revision),
             Self::JobsEnable { value } => value.check_revision(revision),

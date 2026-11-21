@@ -288,12 +288,14 @@ pub trait RouterRepository: RouterRead + super::EmbeddingRepository {
         &mut self,
         session: &Id,
         operation: &OperationId,
+        previous: Option<&OperationId>,
     ) -> Result<(), StorageError>;
     /// Commits the ordered Low pass and advances its independent cursor once.
     fn save_auto_low_plan(
         &mut self,
         session: &Id,
         plan: &serde_json::Value,
+        previous: Option<&serde_json::Value>,
     ) -> Result<StoredAutoRoute, StorageError>;
     /// Commits a successful decision once. A later pin change cannot replace it.
     fn finish_auto_route(

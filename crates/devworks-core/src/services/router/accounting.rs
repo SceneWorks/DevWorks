@@ -60,6 +60,12 @@ pub enum AttemptSelection {
         required_capabilities: Vec<String>,
         pin: Option<PinFence>,
     },
+    /// A pinless Low attempt qualifies the precise catalog and billing identities it saved.
+    TierClassifier {
+        model_revision: i64,
+        account_revision: i64,
+        required_capabilities: Vec<String>,
+    },
     /// Exact discovered embedding model and explicitly qualified native host space; no pin.
     Embedding {
         embedding_space_id: Id,
@@ -80,6 +86,17 @@ pub enum AttemptSelection {
 }
 
 impl AttemptSelection {
+    pub fn classifier_binding(&self) -> Option<(i64, i64)> {
+        match self.route() {
+            Self::TierClassifier {
+                model_revision,
+                account_revision,
+                ..
+            } => Some((*model_revision, *account_revision)),
+            _ => None,
+        }
+    }
+
     fn route(&self) -> &Self {
         match self {
             Self::NativeGeneration { route, .. } => route,
@@ -212,6 +229,35 @@ impl InferenceRouter {
                     ));
                 }
             }
+            AttemptSelection::TierClassifier {
+                model_revision,
+                account_revision,
+                required_capabilities,
+            } => {
+                let model = tx.router().route_model(&query.catalog_model_id)?;
+                let connection = tx.router().connection(&query.connection_id)?;
+                if !model.is_some_and(|model| model.revision == *model_revision)
+                    || !connection
+                        .is_some_and(|connection| connection.account_revision == *account_revision)
+                {
+                    return Ok(Some(
+                        "Low classifier model or billing account changed".into(),
+                    ));
+                }
+                return self.attempt_route_current(
+                    tx,
+                    session,
+                    &AttemptSelection::Conversation {
+                        intent: RouteIntent::Tier {
+                            tier: TierName::Low,
+                        },
+                        effort: EffortName::Default,
+                        required_capabilities: required_capabilities.clone(),
+                        pin: None,
+                    },
+                    query,
+                );
+            }
             AttemptSelection::Embedding {
                 dimensions,
                 upstream_model_id,
@@ -329,16 +375,10 @@ impl InferenceRouter {
                 "decision inference requires its current native decision route".into(),
             ));
         }
-        if route.purpose == "TierClassification"
-            && !matches!(
+        if (route.purpose == "TierClassification")
+            != matches!(
                 request.selection.route(),
-                AttemptSelection::Conversation {
-                    intent: RouteIntent::Tier {
-                        tier: TierName::Low
-                    },
-                    pin: None,
-                    ..
-                }
+                AttemptSelection::TierClassifier { .. }
             )
         {
             return Ok(Admission::SourceChanged(

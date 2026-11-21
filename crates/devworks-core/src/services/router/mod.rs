@@ -771,6 +771,7 @@ impl InferenceRouter {
         current: Option<StoredPin>,
         intent: &RouteIntent,
         need: &Need,
+        legacy_auto: bool,
     ) -> Result<Resolution, Failure> {
         let now = tx.now_ms();
         let key = intent_key(intent);
@@ -799,7 +800,15 @@ impl InferenceRouter {
             .as_ref()
             .filter(|_| same_intent)
             .map(|p| (&p.model_id, &p.connection_id));
-        let pool = f.assess_pool(&effective, &connections, need, preferred);
+        let mut pool = f.assess_pool(&effective, &connections, need, preferred);
+        if legacy_auto && matches!(intent, RouteIntent::OpenRouterAuto {}) {
+            pool.extend(f.assess_pool(
+                &RouteIntent::OpenRouterAutoBeta {},
+                &connections,
+                need,
+                preferred,
+            ));
+        }
         let pinned_assessment = current
             .as_ref()
             .filter(|_| same_intent)
@@ -978,6 +987,7 @@ impl InferenceRouter {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &ops::RouteInput,
+        revision: u32,
     ) -> Result<DomainDecision, Failure> {
         let session = Self::session_for(tx, ctx, &i.session_id, Some(&i.expected_context_epoch))?;
         let need = Need::parse(
@@ -986,8 +996,27 @@ impl InferenceRouter {
         )
         .map_err(|_| invalid(CAPABILITY))?;
         let current = tx.router().session_pin(&session.id)?;
+        if let Some(expected) = &i.expected_pin_revision
+            && current.as_ref().map_or(0, |pin| pin.revision) != expected.get()
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::SourceChanged,
+                "native_pin_changed",
+                Some(session.id),
+            )
+            .retry(RetryAdvice::RefreshAndNewRequest)
+            .into());
+        }
         Ok(
-            match self.resolve(tx, &session, ctx.principal(), current, &i.intent, &need)? {
+            match self.resolve(
+                tx,
+                &session,
+                ctx.principal(),
+                current,
+                &i.intent,
+                &need,
+                revision < 3,
+            )? {
                 Resolution::Kept(p) => DomainDecision::NoChange {
                     result: OperationResult::RouterRoute {
                         value: choice_of(&p)?,
@@ -1007,6 +1036,7 @@ impl InferenceRouter {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         i: &ops::PinInput,
+        revision: u32,
     ) -> Result<DomainDecision, Failure> {
         let session = Self::session_for(tx, ctx, &i.session_id, None)?;
         let Some(current) = tx.router().session_pin(&session.id)? else {
@@ -1035,6 +1065,7 @@ impl InferenceRouter {
                 Some(current),
                 &i.intent,
                 &need,
+                revision < 3,
             )? {
                 Resolution::Kept(p) => DomainDecision::NoChange {
                     result: OperationResult::RouterPin {
@@ -1250,8 +1281,8 @@ impl InferenceRouter {
         intent: &RouteIntent,
         effort: &EffortName,
         capabilities: &[&str],
-        session_id: Option<&Id>,
-        pin: Option<&StoredPin>,
+        (session_id, pin): (Option<&Id>, Option<&StoredPin>),
+        legacy_auto: bool,
     ) -> Result<RouteAvailability, Failure> {
         let now = self.clock.now_ms().get();
         let need = Need::parse(&wire(effort), capabilities.iter().copied())
@@ -1277,6 +1308,14 @@ impl InferenceRouter {
             });
         };
         let mut pool = f.assess_pool(&effective, &connections, &need, None);
+        if legacy_auto && matches!(intent, RouteIntent::OpenRouterAuto {}) {
+            pool.extend(f.assess_pool(
+                &RouteIntent::OpenRouterAutoBeta {},
+                &connections,
+                &need,
+                None,
+            ));
+        }
         let mut eligible: Vec<Id> = pool
             .iter()
             .filter(|a| a.eligible())
@@ -1326,6 +1365,7 @@ impl InferenceRouter {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         i: &ops::AvailabilityInput,
+        revision: u32,
     ) -> Result<OperationResult, Failure> {
         let pin = match &i.session_id {
             Some(id) => {
@@ -1345,8 +1385,8 @@ impl InferenceRouter {
             &i.intent,
             &i.effort,
             &caps,
-            i.session_id.as_ref(),
-            pin.as_ref(),
+            (i.session_id.as_ref(), pin.as_ref()),
+            revision < 3,
         )
         .map(|value| OperationResult::RouterAvailability { value })
     }
@@ -1564,7 +1604,9 @@ impl QueryHandler for InferenceRouter {
         };
         let answered = match input {
             ops::Input::Catalog(i) => self.catalog(snapshot, ctx, i, query.schema_revision().0),
-            ops::Input::Availability(i) => self.availability(snapshot, ctx, i),
+            ops::Input::Availability(i) => {
+                self.availability(snapshot, ctx, i, query.schema_revision().0)
+            }
             ops::Input::RequestStatus(i) => self.request_status(snapshot, ctx, i),
             ops::Input::DecisionModels(i) => {
                 self.decision_models(snapshot, ctx, i, query.schema_revision().0)
@@ -1591,8 +1633,12 @@ impl CommandHandler for InferenceRouter {
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let outcome = match command.input() {
-            OperationInput::Router(ops::Input::Route(i)) => self.route(tx, ctx, i),
-            OperationInput::Router(ops::Input::Pin(i)) => self.pin(tx, ctx, i),
+            OperationInput::Router(ops::Input::Route(i)) => {
+                self.route(tx, ctx, i, command.schema_revision().0)
+            }
+            OperationInput::Router(ops::Input::Pin(i)) => {
+                self.pin(tx, ctx, i, command.schema_revision().0)
+            }
             _ => {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())
             }

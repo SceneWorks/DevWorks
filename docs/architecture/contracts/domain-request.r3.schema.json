@@ -5809,6 +5809,10 @@
             "expectedContextEpoch": {
               "$ref": "#/$defs/Counter"
             },
+            "expectedPinRevision": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
+            },
             "intent": {
               "$ref": "#/$defs/RouteIntent"
             },

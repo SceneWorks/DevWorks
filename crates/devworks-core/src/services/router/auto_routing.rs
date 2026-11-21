@@ -48,6 +48,8 @@ pub struct Source {
     pub origin: String,
     pub rubric_version: u32,
     pub authority_digest: String,
+    pub criteria: Vec<(String, String)>,
+    pub classifier_instructions: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,6 +72,7 @@ pub struct LowCandidate {
     pub endpoint: String,
     pub model_revision: i64,
     pub account_revision: i64,
+    pub ordinal: u8,
 }
 
 pub fn effective_intent(
@@ -103,18 +106,26 @@ impl InferenceRouter {
         tx: &mut dyn WriteTransaction,
         session: &Id,
         capabilities: &[String],
+        extend: bool,
+        elapsed_cooldowns: &[Id],
     ) -> Result<Result<Vec<LowCandidate>, super::RouteBlocked>, StorageError> {
         let record = tx
             .router()
             .auto_route(session)?
             .ok_or(StorageError::ScopeDenied)?;
-        let decode = |value| {
+        let decode = |value| -> Result<Vec<LowCandidate>, StorageError> {
             serde_json::from_value(value).map_err(|error| {
                 StorageError::InvalidRecord(format!("Low classifier plan: {error}"))
             })
         };
-        if let Some(plan) = record.low_plan {
-            return Ok(Ok(decode(plan)?));
+        let prior: Vec<LowCandidate> = record
+            .low_plan
+            .clone()
+            .map(decode)
+            .transpose()?
+            .unwrap_or_default();
+        if !extend && !prior.is_empty() {
+            return Ok(Ok(prior));
         }
         if record.decision.is_some() {
             return Ok(Ok(Vec::new()));
@@ -163,6 +174,18 @@ impl InferenceRouter {
                 .router()
                 .connection(connection_id)?
                 .ok_or(StorageError::ScopeDenied)?;
+            let mut previously_selected = prior
+                .iter()
+                .filter(|candidate| candidate.model_id == model.id);
+            let count = previously_selected.clone().count();
+            let same = previously_selected.any(|candidate| {
+                candidate.connection_id == connection.id
+                    && candidate.model_revision == model.revision
+                    && candidate.account_revision == connection.account_revision
+            });
+            if count >= 2 || (same && !elapsed_cooldowns.contains(&model.id)) {
+                continue;
+            }
             candidates.push(LowCandidate {
                 model_id: model.id.clone(),
                 connection_id: connection.id,
@@ -170,9 +193,24 @@ impl InferenceRouter {
                 endpoint: model.endpoint_profile.clone(),
                 model_revision: model.revision,
                 account_revision: connection.account_revision,
+                ordinal: count as u8,
             });
         }
         if candidates.is_empty() {
+            if !prior.is_empty() {
+                let cooling = pool
+                    .iter()
+                    .filter(|candidate| elapsed_cooldowns.contains(&candidate.model_id))
+                    .filter_map(|candidate| candidate.only_cooling_until())
+                    .min();
+                return Ok(match cooling {
+                    Some(until) => Err(super::RouteBlocked {
+                        unavailable: select::Unavailable::Cooling(until),
+                        codes: vec!["Cooling"],
+                    }),
+                    None => Ok(Vec::new()),
+                });
+            }
             let mut codes = select::block_codes(&pool);
             if codes.is_empty() {
                 codes.push("ClassifierOutputLimitUnsupported");
@@ -185,12 +223,15 @@ impl InferenceRouter {
         let cursor = tx.router().auto_low_cursor()?;
         let first = cursor.rem_euclid(candidates.len() as i64) as usize;
         candidates.rotate_left(first);
-        let encoded = serde_json::to_value(candidates)
+        let previous_len = prior.len();
+        let extended = prior.into_iter().chain(candidates).collect::<Vec<_>>();
+        let encoded = serde_json::to_value(extended)
             .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
-        let saved = tx.router().save_auto_low_plan(session, &encoded)?;
-        Ok(Ok(decode(
-            saved.low_plan.ok_or(StorageError::ScopeDenied)?,
-        )?))
+        let saved = tx
+            .router()
+            .save_auto_low_plan(session, &encoded, record.low_plan.as_ref())?;
+        let plan = decode(saved.low_plan.ok_or(StorageError::ScopeDenied)?)?;
+        Ok(Ok(plan.into_iter().skip(previous_len).collect()))
     }
 }
 
@@ -209,6 +250,8 @@ pub fn current_authority(
         .principal(ctx.principal())?
         .ok_or(StorageError::ScopeDenied)?;
     if ctx.principal_kind() != PrincipalKind::Agent
+        || &tx.store().store_id != ctx.store_id()
+        || tx.store().restore_epoch != ctx.restore_epoch().get()
         || principal.kind != PrincipalKind::Agent
         || !principal.active
         || principal.role.is_none()

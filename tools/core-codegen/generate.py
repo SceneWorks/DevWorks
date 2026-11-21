@@ -681,7 +681,7 @@ def gen_results(ops):
             '    fn check_revision(&self, revision: u32) -> Result<(), String> {',
             '        match self {',
             *[f'            Self::{pascal(n)} {{ .. }} if revision < {DOMAIN_OPS[n]["introducedRevision"]} => Err("operation result predates its introduction".into()),' for n, _ in results if DOMAIN_OPS.get(n, {}).get('introducedRevision', 1) > 1],
-            *[f'            Self::{pascal(n)} {{ value }} => value.check_revision(revision),' for n, t in results if TYPES.get(t, {}).get('kind') == 'versioned' or t == 'GraphPage' or t in variant_types(TYPES)],
+            *[f'            Self::{pascal(n)} {{ value }} => value.check_revision(revision),' for n, t in results if TYPES.get(t, {}).get('kind') == 'versioned' or t == 'GraphPage' or tokens(t) & variant_types(TYPES)],
             '            _ => Ok(()),', '        }', '    }', '}', '',
             '/// Generic recorded decision. Outcome variants cannot mint human authority or turn an external',
             '/// uncertainty into success.',

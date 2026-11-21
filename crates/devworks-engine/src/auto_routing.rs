@@ -1,5 +1,6 @@
 //! Native first-generation routing uses the assigned source for both classifier transports.
 use crate::providers::driver::NativeInvocation;
+use crate::providers::sink::ProviderResult;
 use crate::turn_engine::TurnEngine;
 use crate::turn_error::TurnError;
 use devworks_core::context::InvocationContext;
@@ -135,6 +136,16 @@ pub(crate) async fn assign(
         }
         Ok(context)
     })?;
+    let saved_role = std::mem::take(&mut material.instructions)
+        .into_iter()
+        .map(|block| block.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let owner_context = if saved_role.is_empty() {
+        owner_context
+    } else {
+        format!("{owner_context}\nAssigned role instructions:\n{saved_role}")
+    };
     let rubric = RUBRIC
         .iter()
         .map(|(tier, description)| format!("{tier}: {description}"))
@@ -212,7 +223,7 @@ pub(crate) async fn assign(
         );
         let plan = crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
             auto_routing::current_authority(tx, &ctx)?;
-            router.auto_low_candidates(tx, &session, &required)
+            router.auto_low_candidates(tx, &session, &required, false, &[])
         })
         .await?;
         match plan {
@@ -230,20 +241,77 @@ pub(crate) async fn assign(
             },
         }
     };
-    for candidate in candidates {
-        check_cancel(cancel)?;
-        if let Some(classification) = classify_low(
-            engine,
-            ctx,
-            &source,
-            &candidate,
-            &required,
-            !media.is_empty(),
-            cancel,
-        )
-        .await?
-        {
-            return commit_assignment(engine, ctx, &source, classification, cancel);
+    let mut next = Some(candidates);
+    let mut cooling = std::collections::HashMap::<Id, i64>::new();
+    loop {
+        let candidates = match next.take() {
+            Some(candidates) => candidates,
+            None => {
+                let now = engine.clock.now_ms().get();
+                let elapsed = cooling
+                    .iter()
+                    .filter(|(_, until)| **until <= now)
+                    .map(|(model, _)| model.clone())
+                    .collect::<Vec<_>>();
+                let (ctx, session, required, router) = (
+                    ctx.clone(),
+                    session.clone(),
+                    required.clone(),
+                    router.clone(),
+                );
+                let plan =
+                    crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
+                        auto_routing::current_authority(tx, &ctx)?;
+                        router.auto_low_candidates(tx, &session, &required, true, &elapsed)
+                    })
+                    .await?;
+                match plan {
+                    Ok(plan) if !plan.is_empty() => plan,
+                    other => {
+                        let from_router =
+                            other.err().and_then(|blocked| match blocked.unavailable {
+                                devworks_core::services::router::select::Unavailable::Cooling(
+                                    until,
+                                ) => Some(until),
+                                _ => None,
+                            });
+                        let earliest = from_router
+                            .into_iter()
+                            .chain(cooling.values().copied().filter(|until| *until > now))
+                            .min();
+                        if let Some(until) = earliest {
+                            wait_until(engine, until, cancel).await?;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            }
+        };
+        for candidate in candidates {
+            check_cancel(cancel)?;
+            if candidate.ordinal != 0 {
+                cooling.remove(&candidate.model_id);
+            }
+            match classify_low(
+                engine,
+                ctx,
+                &source,
+                &candidate,
+                &required,
+                !media.is_empty(),
+                cancel,
+            )
+            .await?
+            {
+                LowResult::Assigned(classification) => {
+                    return commit_assignment(engine, ctx, &source, classification, cancel);
+                }
+                LowResult::Cooling(until) if candidate.ordinal == 0 => {
+                    cooling.insert(candidate.model_id, until);
+                }
+                _ => {}
+            }
         }
     }
     if read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
@@ -351,6 +419,11 @@ fn capture_source(
                 origin,
                 rubric_version: RUBRIC_VERSION,
                 authority_digest: policy_digest,
+                criteria: RUBRIC
+                    .iter()
+                    .map(|(name, description)| (name.to_string(), description.to_string()))
+                    .collect(),
+                classifier_instructions: CLASSIFIER_INSTRUCTIONS.into(),
             };
             tx.router()
                 .begin_auto_route(&session, &serde_json::to_value(&source).map_err(invalid)?)?;
@@ -404,13 +477,14 @@ async fn classify_systemone(
         questions: BoundedList(vec![NamedQuestion {
             name: BoundedText("tier".into()),
             question: DecisionQuestion::Choice {
-                instructions: BoundedText(CLASSIFIER_INSTRUCTIONS.into()),
+                instructions: BoundedText(source.classifier_instructions.clone()),
                 criteria: BoundedList(
-                    RUBRIC
+                    source
+                        .criteria
                         .iter()
                         .map(|(name, description)| DecisionCriterion {
-                            name: BoundedText((*name).into()),
-                            description: Some(BoundedText((*description).into())),
+                            name: BoundedText(name.clone()),
+                            description: Some(BoundedText(description.clone())),
                         })
                         .collect(),
                 ),
@@ -554,6 +628,12 @@ fn commit_assignment(
     check_cancel(cancel)
 }
 
+enum LowResult {
+    Assigned(Assignment),
+    Cooling(i64),
+    Unusable,
+}
+
 async fn classify_low(
     engine: &TurnEngine,
     ctx: &InvocationContext,
@@ -562,27 +642,25 @@ async fn classify_low(
     required: &[String],
     has_images: bool,
     cancel: &Cancellation,
-) -> Result<Option<Assignment>, TurnError> {
+) -> Result<LowResult, TurnError> {
     let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
-    let request_id = Id::new(format!(
-        "auto-low-{}",
-        sha256_hex(
-            format!(
-                "{}\n{}\n{}",
-                session.as_str(),
-                source.material.sha256.as_str(),
-                candidate.model_id.as_str(),
-            )
-            .as_bytes()
+    let identity = sha256_hex(
+        format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            session.as_str(),
+            source.material.sha256.as_str(),
+            candidate.model_id.as_str(),
+            candidate.connection_id.as_str(),
+            candidate.model_revision,
+            candidate.account_revision,
+            candidate.ordinal,
         )
-    ))
-    .map_err(invalid)?;
-    let recorded = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-        Ok(read.router().route_request(&request_id)?.is_some())
-    })?;
-    let result = if recorded {
-        providers.recorded_result(&request_id, &request_id)?
+        .as_bytes(),
+    );
+    let (request_id, recorded) = recover_low_attempt(engine, &identity)?;
+    let result = if let Some(result) = recorded {
+        result
     } else {
         let Some(invocation) = low_invocation(
             engine,
@@ -594,11 +672,32 @@ async fn classify_low(
             &request_id,
         )?
         else {
-            return Ok(None);
+            return Ok(LowResult::Unusable);
         };
-        let produced = providers
+        let produced = match providers
             .produce_cancellable(invocation, Some(cancel.clone()))
-            .await?;
+            .await
+        {
+            Ok(produced) => produced,
+            Err(StorageError::Cancelled) => return Err(StorageError::Cancelled.into()),
+            Err(error) => match recover_low_attempt(engine, &identity)? {
+                (_, Some(result)) => {
+                    return low_classification_from_result(
+                        engine, ctx, source, candidate, request_id, result,
+                    );
+                }
+                _ if !matches!(error, StorageError::CommitUnknown | StorageError::Busy) => {
+                    // A source that failed before the durable transport boundary is safe to skip.
+                    let ctx = ctx.clone();
+                    crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
+                        auto_routing::current_authority(tx, &ctx).map(|_| ())
+                    })
+                    .await?;
+                    return Ok(LowResult::Unusable);
+                }
+                _ => return Err(error.into()),
+            },
+        };
         match produced.accounting {
             DriveOutcome::Refused(Admission::Blocked(block)) => {
                 return Err(failure(
@@ -612,22 +711,92 @@ async fn classify_low(
                     RetryAdvice::AfterBlockerClears,
                 ));
             }
-            DriveOutcome::Refused(_) => return Ok(None),
+            DriveOutcome::Refused(_) => return Ok(LowResult::Unusable),
             DriveOutcome::CancelledBeforeDispatch => return Err(StorageError::Cancelled.into()),
             _ => produced.result,
         }
     };
-    if result.outcome == Some(AttemptEnd::UnknownTail) || (recorded && result.outcome.is_none()) {
+    low_classification_from_result(engine, ctx, source, candidate, request_id, result)
+}
+
+/// A logical receipt may precede admission. Only an attempt that could have dispatched
+/// can prevent retrying this exact source, and only a settled provider result is replayed.
+fn recover_low_attempt(
+    engine: &TurnEngine,
+    identity: &str,
+) -> Result<(Id, Option<ProviderResult>), TurnError> {
+    let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
+    for ordinal in 0..16 {
+        let request = Id::new(format!("auto-low-{identity}-{ordinal}")).map_err(invalid)?;
+        let state = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+            let Some(route) = read.router().route_request(&request)? else {
+                return Ok(None);
+            };
+            let operation = read
+                .operations()
+                .operation(&route.operation_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            for last in operation.attempts.iter().rev() {
+                if let Some(attempt) = read.usage().inference_attempt(&last.id.0)? {
+                    let balance = read
+                        .usage()
+                        .attempt_balance(&attempt.attempt_id)?
+                        .map(|balance| {
+                            devworks_core::services::usage::accounting::summary(&balance)
+                        })
+                        .transpose()?;
+                    return Ok(Some((
+                        attempt.state,
+                        balance.and_then(|summary| summary.outcome),
+                    )));
+                }
+            }
+            Ok(None)
+        })?;
+        match state {
+            None => return Ok((request, None)),
+            Some((AttemptState::CancelledBeforeDispatch, _)) => continue,
+            Some((state, outcome)) => {
+                let mut result = providers.recorded_result(&request, &request)?;
+                if result.outcome.is_none()
+                    && state == AttemptState::Settled
+                    && outcome.as_deref() == Some("Failed")
+                {
+                    // Encoding or another known pre-transport failure can settle Usage
+                    // without a materialized provider sink.
+                    result.outcome = Some(AttemptEnd::Failed);
+                }
+                return Ok((request, Some(result)));
+            }
+        }
+    }
+    Err(failure(
+        "The Low classifier reached its safe admission retry limit.".into(),
+        RetryAdvice::Never,
+    ))
+}
+
+fn low_classification_from_result(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    source: &Source,
+    candidate: &LowCandidate,
+    request_id: Id,
+    result: ProviderResult,
+) -> Result<LowResult, TurnError> {
+    if result.outcome == Some(AttemptEnd::UnknownTail) || result.outcome.is_none() {
         return Err(failure(
             "The Low classifier outcome is unknown.".into(),
             RetryAdvice::AfterBlockerClears,
         ));
     }
     if result.outcome != Some(AttemptEnd::Completed) {
-        return Ok(None);
+        return Ok(result
+            .retry_at_ms
+            .map_or(LowResult::Unusable, LowResult::Cooling));
     }
     let Some(output) = result.result_artifact else {
-        return Ok(None);
+        return Ok(LowResult::Unusable);
     };
     let (bytes, _) = engine
         .artifacts()
@@ -636,14 +805,14 @@ async fn classify_low(
     let tier = std::str::from_utf8(&bytes)
         .ok()
         .and_then(|text| auto_routing::parse_tier(text.trim()));
-    Ok(tier.map(|tier| {
-        assignment(
+    Ok(tier.map_or(LowResult::Unusable, |tier| {
+        LowResult::Assigned(assignment(
             source,
             tier,
             ClassifierKind::Low,
             candidate.model_id.clone(),
             request_id,
-        )
+        ))
     }))
 }
 
@@ -768,13 +937,10 @@ fn low_invocation(
                 cache_write_possible: false,
                 cache_write_ttl_ms: None,
             },
-            selection: AttemptSelection::Conversation {
-                intent: RouteIntent::Tier {
-                    tier: TierName::Low,
-                },
-                effort: EffortName::Default,
+            selection: AttemptSelection::TierClassifier {
+                model_revision: candidate.model_revision,
+                account_revision: candidate.account_revision,
                 required_capabilities: required.to_vec(),
-                pin: None,
             },
             input_tokens: source.material.byte_length.get(),
             output_headroom: OUTPUT_TOKENS,
@@ -841,8 +1007,8 @@ pub(crate) fn cooldown(
                 intent,
                 effort,
                 &capabilities,
-                Some(session),
-                pin.as_ref(),
+                (Some(session), pin.as_ref()),
+                false,
             )
             .map(|route| route.retry_at_ms.map(|time| time.get()))
             .map_err(|failure| failure.into_storage())

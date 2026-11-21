@@ -10275,7 +10275,11 @@
         "expected_context_epoch": "Counter",
         "intent": "RouteIntent",
         "effort": "EffortName",
-        "required_capabilities": "Items<Label>"
+        "required_capabilities": "Items<Label>",
+        "expected_pin_revision": "?Counter"
+      },
+      "since": {
+        "expected_pin_revision": 3
       },
       "result": "RouteChoice",
       "effect": "Journaled",

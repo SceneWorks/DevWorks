@@ -4588,11 +4588,7 @@ impl Check for DesktopInput {
 }
 
 impl Revisioned for DesktopInput {
-    fn retain_revision(&mut self, revision: u32) {
-        match self {
-            _ => {}
-        }
-    }
+    fn retain_revision(&mut self, _: u32) {}
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::Target { .. } if revision < 3 => {
@@ -5072,11 +5068,8 @@ impl Revisioned for JobDefinition {
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
-        match self {
-            Self::Inference { route, .. } => {
-                route.check_revision(revision)?;
-            }
-            _ => {}
+        if let Self::Inference { route, .. } = self {
+            route.check_revision(revision)?;
         }
         Ok(())
     }
@@ -5549,11 +5542,7 @@ impl Check for RouteIntent {
 }
 
 impl Revisioned for RouteIntent {
-    fn retain_revision(&mut self, revision: u32) {
-        match self {
-            _ => {}
-        }
-    }
+    fn retain_revision(&mut self, _: u32) {}
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::DevWorksAuto { .. } if revision < 3 => {
@@ -23459,6 +23448,13 @@ pub enum DomainCommand {
         intent: RouteIntent,
         effort: EffortName,
         required_capabilities: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        expected_pin_revision: Option<Counter>,
     },
     #[serde(rename = "router.pin")]
     RouterPin {
@@ -25643,12 +25639,14 @@ impl Check for DomainCommand {
                 intent,
                 effort,
                 required_capabilities,
+                expected_pin_revision,
             } => {
                 session_id.check()?;
                 expected_context_epoch.check()?;
                 intent.check()?;
                 effort.check()?;
                 required_capabilities.check()?;
+                expected_pin_revision.check()?;
             }
             Self::RouterPin {
                 session_id,
@@ -26492,8 +26490,15 @@ impl Revisioned for DomainCommand {
                     *repository_id = None;
                 }
             }
-            Self::RouterRoute { intent, .. } => {
+            Self::RouterRoute {
+                intent,
+                expected_pin_revision,
+                ..
+            } => {
                 intent.retain_revision(revision);
+                if revision < 3 {
+                    *expected_pin_revision = None;
+                }
             }
             Self::RouterPin { intent, .. } => {
                 intent.retain_revision(revision);
@@ -28565,6 +28570,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsImport { value } => value.check_revision(revision),
             Self::ConventionsMove { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::JobsList { value } => value.check_revision(revision),
             Self::JobsCreate { value } => value.check_revision(revision),
             Self::JobsEdit { value } => value.check_revision(revision),
             Self::JobsEnable { value } => value.check_revision(revision),

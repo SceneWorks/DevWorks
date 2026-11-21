@@ -1506,6 +1506,32 @@ pub fn route_context_head(
     tools_required: bool,
     needs_images: bool,
 ) -> Result<RouteChoice, TurnError> {
+    for _ in 0..3 {
+        let result = route_observed_head(
+            engine,
+            ctx,
+            session_id,
+            context_epoch,
+            head_digest,
+            tools_required,
+            needs_images,
+        );
+        if !matches!(result, Err(TurnError::RouteChanged)) {
+            return result;
+        }
+    }
+    Err(TurnError::RouteChanged)
+}
+
+fn route_observed_head(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    context_epoch: i64,
+    head_digest: Option<&str>,
+    tools_required: bool,
+    needs_images: bool,
+) -> Result<RouteChoice, TurnError> {
     let (intent, effort, mut required, pin_revision, reviewer) =
         read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             let session = read
@@ -1585,6 +1611,7 @@ pub fn route_context_head(
             "kind": "router.route",
             "sessionId": session_id,
             "expectedContextEpoch": context_epoch.to_string(),
+            "expectedPinRevision": pin_revision.to_string(),
             "intent": intent,
             "effort": effort,
             "requiredCapabilities": required,
@@ -1630,6 +1657,14 @@ pub fn route_context_head(
                 result: OperationResult::RouterRoute { value },
             } => Ok(value),
             DomainDecision::Refused { fault } => {
+                if fault.code == devworks_core::protocol::DomainErrorCode::SourceChanged
+                    && fault
+                        .target_kind
+                        .as_ref()
+                        .is_some_and(|label| label.0 == "native_pin_changed")
+                {
+                    return Err(TurnError::RouteChanged);
+                }
                 let auto = matches!(intent, RouteIntent::DevWorksAuto {});
                 if auto
                     && fault.code == devworks_core::protocol::DomainErrorCode::CapacityWait
@@ -1663,24 +1698,18 @@ pub fn route_context_head(
             RetryAdvice::ResolveReceipt,
         )),
     }?;
-    Ok(read_snapshot(
-        engine.store().as_ref(),
-        &ReadOptions::default(),
-        |read| {
-            let pin = read
-                .router()
-                .session_pin(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if pin.pin_id != choice.pin_id
-                || pin.revision != choice.pin_revision.get()
-                || pin.model_id != choice.model_id
-                || pin.connection_id != choice.connection_id
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            Ok(choice)
-        },
-    )?)
+    read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        Ok((pin.pin_id == choice.pin_id
+            && pin.revision == choice.pin_revision.get()
+            && pin.model_id == choice.model_id
+            && pin.connection_id == choice.connection_id)
+            .then_some(choice))
+    })?
+    .ok_or(TurnError::RouteChanged)
 }
 
 fn context_has_images(context: &ProviderContext) -> bool {

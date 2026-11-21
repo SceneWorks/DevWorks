@@ -582,10 +582,25 @@ impl NativeProviders {
             return Err(StorageError::ScopeDenied);
         }
 
-        logical.args_digest = devworks_core::fingerprint::canonical_digest(
-            &serde_json::to_value(&request).map_err(|_| invalid("provider request JSON"))?,
-        )
-        .map_err(|_| invalid("provider request canonical JSON"))?;
+        let mut logical_input =
+            serde_json::to_value(&request).map_err(|_| invalid("provider request JSON"))?;
+        if classification {
+            // The classifier's logical input is the sealed material and chosen candidate.
+            // Control and policy generations are current admission fences on each attempt.
+            let fields = logical_input
+                .as_object_mut()
+                .ok_or_else(|| invalid("classifier request JSON"))?;
+            for field in [
+                "authorityRevision",
+                "controlGeneration",
+                "instructionRevision",
+                "cancellationRevision",
+            ] {
+                fields.remove(field);
+            }
+        }
+        logical.args_digest = devworks_core::fingerprint::canonical_digest(&logical_input)
+            .map_err(|_| invalid("provider request canonical JSON"))?;
         if request.request_id != logical.request_id || request.request_id != attempt.request_id {
             return Err(StorageError::ScopeDenied);
         }
@@ -1328,6 +1343,17 @@ impl OwnedInferenceSource for LazySource {
                         .ok_or(StorageError::ScopeDenied)?;
                     // The request's exact external aliases were requalified above. Check
                     // current connection and source fences in the final writer transaction.
+                    let bound = devworks_core::services::usage::accounting::snapshot(&captured)?;
+                    if let Some((model_revision, account_revision)) =
+                        bound.selection.classifier_binding()
+                        && (connection.account_revision != account_revision
+                            || !tx
+                                .router()
+                                .route_model(&captured.catalog_model_id)?
+                                .is_some_and(|model| model.revision == model_revision))
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
                     if connection.revision != expected_revision
                         || connection.account_revision
                             != publication.identity.binding.account_revision.get()

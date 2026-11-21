@@ -39,6 +39,10 @@ pub struct DecisionIntent {
     pub principal_kind: String,
     pub authority_fences: Vec<AuthorityFence>,
     pub context: Value,
+    #[serde(default)]
+    pub automatic_tier: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reused_allocation: Option<Allocation>,
 }
 
 impl DecisionIntent {
@@ -52,6 +56,8 @@ struct DecisionSource {
     schema_revision: i64,
     args_digest: String,
     fences: Vec<AuthorityFence>,
+    automatic_tier: bool,
+    reused_allocation: Option<Allocation>,
 }
 
 pub struct DecisionService {
@@ -146,6 +152,8 @@ impl DecisionService {
             principal_kind: ctx.principal_kind().as_str().into(),
             authority_fences: source.fences,
             context: crate::services::approvals::save_source_context(ctx),
+            automatic_tier: source.automatic_tier,
+            reused_allocation: source.reused_allocation,
         };
         tx.operations().record_intent(NewOperation {
             id: operation_id.clone(),
@@ -201,11 +209,20 @@ impl DecisionService {
             .router()
             .auto_route(session)?
             .ok_or(StorageError::ScopeDenied)?;
-        if record.systemone_operation.is_some()
-            || record.low_plan.is_some()
-            || record.decision.is_some()
-        {
+        if record.low_plan.is_some() || record.decision.is_some() {
             return Ok(record.systemone_operation);
+        }
+        let previous = record.systemone_operation;
+        let mut reused_allocation = None;
+        if let Some(operation) = &previous {
+            let current = tx
+                .operations()
+                .operation(operation)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if !auto_retry_without_send(tx, &current)? {
+                return Ok(previous);
+            }
+            reused_allocation = prior_allocation(&current)?;
         }
         let fences = super::auto_routing::current_authority(tx, ctx)?;
         let args_digest = crate::fingerprint::canonical_digest(
@@ -219,6 +236,8 @@ impl DecisionService {
                 schema_revision: 4,
                 args_digest,
                 fences,
+                automatic_tier: true,
+                reused_allocation,
             },
             input,
         );
@@ -228,10 +247,15 @@ impl DecisionService {
                 ..
             }) => {
                 tx.router()
-                    .bind_auto_decision_operation(session, &operation)?;
+                    .bind_auto_decision_operation(session, &operation, previous.as_ref())?;
                 Ok(Some(operation))
             }
-            Err(Failure::Refused(refusal)) if refusal.target_kind == "decision_pool_empty" => {
+            Err(Failure::Refused(refusal))
+                if matches!(
+                    refusal.target_kind,
+                    "decision_pool_empty" | "decision_input"
+                ) =>
+            {
                 Ok(None)
             }
             Err(other) => Err(other.into_storage()),
@@ -283,7 +307,9 @@ impl DecisionService {
                 candidates.push(candidate.clone());
             }
         }
-        if let Some(prior) = prior_allocation(&current)? {
+        if let Some(prior) =
+            prior_allocation(&current)?.or_else(|| intent.reused_allocation.clone())
+        {
             if prior.input_digest != input_digest {
                 return Err(StorageError::ScopeDenied);
             }
@@ -340,7 +366,7 @@ impl DecisionService {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Allocation {
     input_digest: String,
     candidates: Vec<Candidate>,
@@ -354,6 +380,65 @@ fn prior_allocation(operation: &OperationRecord) -> Result<Option<Allocation>, S
         .find_map(|note| note.get("decisionAllocation"))
         .map(|value| serde_json::from_value(value.clone()).map_err(invalid_record))
         .transpose()
+}
+
+/// The exact logical request identity for one candidate in one SystemOne pass.
+pub fn candidate_request_id(operation: &OperationId, model: &Id) -> Result<Id, StorageError> {
+    Id::new(format!(
+        "systemone-{}",
+        crate::fingerprint::sha256_hex(
+            format!("{}\n{}", operation.0.as_str(), model.as_str()).as_bytes(),
+        )
+    ))
+    .map_err(|_| StorageError::ScopeDenied)
+}
+
+fn auto_retry_without_send(
+    tx: &mut dyn WriteTransaction,
+    operation: &OperationRecord,
+) -> Result<bool, StorageError> {
+    use crate::ports::storage::AttemptState;
+    if operation.state == OperationState::CancelledBeforeDispatch {
+        return Ok(true);
+    }
+    if operation.state != OperationState::Failed
+        || !operation.latest_attempt().is_some_and(|attempt| {
+            attempt.observations.iter().any(|note| {
+                note.pointer("/effect/cause")
+                    .and_then(Value::as_str)
+                    .is_some_and(|cause| {
+                        matches!(
+                            cause,
+                            "Feature budget refused the decision request"
+                                | "SystemOne decision cancelled before dispatch"
+                                | "Decision was cancelled before dispatch"
+                        )
+                    })
+            })
+        })
+    {
+        return Ok(false);
+    }
+    let saved: DecisionIntent =
+        serde_json::from_value(operation.payload.clone()).map_err(invalid_record)?;
+    for candidate in &saved.candidates {
+        let request = candidate_request_id(&operation.id, &candidate.model_id)?;
+        let Some(route) = tx.router().route_request(&request)? else {
+            continue;
+        };
+        let native = tx
+            .operations()
+            .operation(&route.operation_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        for journal in &native.attempts {
+            if let Some(attempt) = tx.usage().inference_attempt(&journal.id.0)?
+                && attempt.state != AttemptState::CancelledBeforeDispatch
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn candidate(model: StoredDecisionModel) -> Candidate {
@@ -442,6 +527,8 @@ impl CommandHandler for DecisionService {
             schema_revision: i64::from(command.schema_revision().0),
             args_digest: command.fingerprint().as_str().to_owned(),
             fences: command.authorization().fences().to_vec(),
+            automatic_tier: false,
+            reused_allocation: None,
         };
         match self.enqueue(tx, ctx, source, input) {
             Ok(result) => Ok(result),

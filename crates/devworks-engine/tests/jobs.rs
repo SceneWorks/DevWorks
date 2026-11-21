@@ -746,10 +746,34 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
     ));
     let job = value(app.command_at("jobs.create", body, 3));
     assert_eq!(job["definition"]["route"]["kind"], "DevWorksAuto");
-    assert_eq!(
-        app.job(&id(job["id"].as_str().unwrap())).definition["route"]["kind"],
-        "DevWorksAuto"
-    );
+    let saved = app.job(&id(job["id"].as_str().unwrap()));
+    let definition: Value = serde_json::from_str(&saved.definition).unwrap();
+    assert_eq!(definition["route"]["kind"], "DevWorksAuto");
+    for schema_revision in [1, 2, 3] {
+        let query = json!({"mode":"Query","protocol":PROTOCOL,"queryId":"auto-job-inspect",
+            "schemaRevision":schema_revision, "body":{"kind":"jobs.inspect","jobId":job["id"]}});
+        let reply = app
+            .runtime
+            .query(
+                &app.user(),
+                "jobs.inspect",
+                &serde_json::to_vec(&query).unwrap(),
+            )
+            .unwrap();
+        if schema_revision < 3 {
+            assert!(
+                matches!(reply, DomainQueryReply::Rejected { fault, .. }
+                if fault.code == DomainErrorCode::UnsupportedCapability),
+                "{reply:?}"
+            );
+        } else {
+            assert_eq!(
+                serde_json::to_value(reply).unwrap()["result"]["value"]["job"]["definition"]["route"]
+                    ["kind"],
+                "DevWorksAuto"
+            );
+        }
+    }
     let run = value(app.command(
         "jobs.run_now",
         json!({"jobId": job["id"], "expectedRevision": "1"}),

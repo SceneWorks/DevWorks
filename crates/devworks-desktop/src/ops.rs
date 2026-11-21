@@ -1036,6 +1036,7 @@ pub fn router_route(
         Some(In::Router(router::Input::Route(router::RouteInput {
             session_id: frame::id(session)?,
             expected_context_epoch: frame::number(context_epoch)?,
+            expected_pin_revision: Some(frame::number(0)?),
             intent: intent.clone(),
             effort: effort.clone(),
             required_capabilities: BoundedList(Vec::new()),
