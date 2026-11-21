@@ -798,16 +798,22 @@ impl DreamingRepository for Unit<'_> {
         }
         if let Some(parent) = &row.continued_from {
             let previous = run(self.conn, parent)?.ok_or_else(|| not_found(parent))?;
-            let already_continued: bool = db(self.conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM dreaming_runs WHERE continued_from=?1 AND operation_id IS NOT NULL)",
-                [parent.as_str()], |row| row.get(0),
-            ))?;
+            let expected_cutoffs = DreamCutoffs {
+                sweep_started_at_ms: previous.sweep_started_at_ms(),
+                base_instruction_revision: instruction_tip(self.conn, &KnowledgeScope::Workspace)?,
+                project_instruction_revision: if row.scope.project().is_some() {
+                    instruction_tip(self.conn, &row.scope)?
+                } else {
+                    0
+                },
+                ..previous.cutoffs.clone()
+            };
             if row.trigger != DreamTrigger::Resume
                 || row.scope != previous.scope
                 || !previous.phase.resumable()
-                || previous.cutoffs != row.cutoffs
+                || expected_cutoffs != row.cutoffs
                 || previous.checkpoint.is_none()
-                || already_continued
+                || self.dream_continuation_used(parent)?
             {
                 return Err(invalid(
                     "Dreaming continuation no longer owns its frozen scope",

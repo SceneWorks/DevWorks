@@ -60,6 +60,8 @@ impl DreamPolicy {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DreamCutoffs {
+    #[serde(default)]
+    pub sweep_started_at_ms: i64,
     pub knowledge: i64,
     pub reviews: i64,
     pub sources: i64,
@@ -298,6 +300,16 @@ pub struct DreamTrailRow {
     pub position: DreamTrailPosition,
     pub item_id: Option<String>,
     pub content: Value,
+}
+
+impl DreamRunRow {
+    pub fn sweep_started_at_ms(&self) -> i64 {
+        if self.cutoffs.sweep_started_at_ms > 0 {
+            self.cutoffs.sweep_started_at_ms
+        } else {
+            self.started_at_ms
+        }
+    }
 }
 
 pub trait DreamingRead {

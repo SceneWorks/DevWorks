@@ -254,6 +254,7 @@ impl NativeDreaming {
     pub(super) fn recorded_round(
         &self,
         ctx: &InvocationContext,
+        run: &DreamRunRow,
         request: &Id,
     ) -> Result<Option<RoundObservation>, StorageError> {
         let saved = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
@@ -277,11 +278,41 @@ impl NativeDreaming {
                 .inference_attempt(&journal.id.0)?
                 .ok_or(StorageError::ScopeDenied)?;
             if attempt.request_id != *request
-                || attempt.actor_id != *ctx.principal()
                 || attempt.role != "Dreaming"
                 || accounting::snapshot(&attempt)?.admission_key != *request
             {
                 return Err(StorageError::ScopeDenied);
+            }
+            if attempt.actor_id != *ctx.principal() {
+                let mut parent = run.continued_from.clone();
+                let mut authorized = false;
+                let dreams = read.dreaming()?;
+                while let Some(id) = parent {
+                    let row = dreams
+                        .dream_run(&id)?
+                        .filter(|row| row.scope == run.scope)
+                        .ok_or(StorageError::ScopeDenied)?;
+                    if row.initiator == attempt.actor_id
+                        && row
+                            .checkpoint
+                            .as_ref()
+                            .and_then(|checkpoint| checkpoint.request.as_ref())
+                            .is_some_and(|original| {
+                                original.logical_id == *request
+                                    && original
+                                        .attempt_id
+                                        .as_ref()
+                                        .is_some_and(|id| id.0 == attempt.attempt_id)
+                            })
+                    {
+                        authorized = true;
+                        break;
+                    }
+                    parent = row.continued_from;
+                }
+                if !authorized {
+                    return Err(StorageError::ScopeDenied);
+                }
             }
             let balance = read
                 .usage()

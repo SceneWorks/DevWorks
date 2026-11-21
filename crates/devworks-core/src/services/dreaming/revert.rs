@@ -231,8 +231,8 @@ enum Component {
 fn causal_conflict<'a>(
     actions: impl Iterator<Item = &'a Intent>,
     mut current_revision: impl FnMut(&Id) -> Result<Option<i64>, StorageError>,
+    current: &mut BTreeMap<String, i64>,
 ) -> Result<Option<DreamRevertConflict>, Failure> {
-    let mut current = BTreeMap::new();
     // At each step the older action's output must be the exact input consumed by the next
     // action in this component. The current head alone cannot prove there was no intervening edit.
     let mut required_older_output = BTreeMap::new();
@@ -273,13 +273,18 @@ fn reverse_component<'a>(
     run: &DreamRunRow,
     actions: impl Iterator<Item = &'a Intent> + Clone,
 ) -> Result<Component, Failure> {
-    if let Some(conflict) = causal_conflict(actions.clone(), |target| {
-        Ok(tx
-            .knowledge()
-            .knowledge_claim(target)?
-            .filter(|claim| claim.scope == run.scope && claim.lifecycle != "Deleted")
-            .map(|claim| claim.revision))
-    })? {
+    let mut current = BTreeMap::new();
+    if let Some(conflict) = causal_conflict(
+        actions.clone(),
+        |target| {
+            Ok(tx
+                .knowledge()
+                .knowledge_claim(target)?
+                .filter(|claim| claim.scope == run.scope && claim.lifecycle != "Deleted")
+                .map(|claim| claim.revision))
+        },
+        &mut current,
+    )? {
         return Ok(Component::Conflict(conflict));
     }
     let point = tx.savepoint()?;
@@ -383,14 +388,14 @@ mod tests {
     #[test]
     fn revert_rejects_intervening_human_edit_between_two_dream_actions() {
         let separated = [edit("dream-second", 3, 4), edit("dream-first", 1, 2)];
-        let conflict = causal_conflict(separated.iter(), |_| Ok(Some(4)))
+        let conflict = causal_conflict(separated.iter(), |_| Ok(Some(4)), &mut BTreeMap::new())
             .unwrap()
             .unwrap();
         assert_eq!(conflict.action_id.as_str(), "dream-first");
         assert_eq!(conflict.expected_revision.get(), 2);
         let contiguous = [edit("dream-second", 2, 3), edit("dream-first", 1, 2)];
         assert!(
-            causal_conflict(contiguous.iter(), |_| Ok(Some(3)))
+            causal_conflict(contiguous.iter(), |_| Ok(Some(3)), &mut BTreeMap::new())
                 .unwrap()
                 .is_none()
         );

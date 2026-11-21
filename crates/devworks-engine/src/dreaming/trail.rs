@@ -47,7 +47,7 @@ pub(super) fn read(
     };
     let mut rows = match tx.dreaming()?.dream_trail(&DreamTrailQuery {
         scope: &run.scope,
-        through_ms: run.started_at_ms,
+        through_ms: run.sweep_started_at_ms(),
         knowledge_through: run.cutoffs.knowledge,
         reviews_through: run.cutoffs.reviews,
         since_ms,
@@ -110,7 +110,7 @@ pub(super) fn read(
             if id.is_some()
                 && expected.is_some()
                 && position.kind != "revision"
-                && position.at_ms <= run.started_at_ms
+                && position.at_ms <= run.sweep_started_at_ms()
             {
                 proofs.push(json!({"kind":position.kind,"id":position.id,"fingerprint":hash}));
             }

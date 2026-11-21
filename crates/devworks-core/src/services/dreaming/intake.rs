@@ -221,6 +221,18 @@ impl DreamingService {
         };
         let operation_id =
             (phase == DreamPhase::Queued).then(|| OperationId(tx.new_id(IdKind::Operation)));
+        let frozen = parent.as_ref().map_or_else(
+            || DreamCutoffs {
+                sweep_started_at_ms: now,
+                ..cutoffs.clone()
+            },
+            |parent| DreamCutoffs {
+                sweep_started_at_ms: parent.sweep_started_at_ms(),
+                base_instruction_revision: cutoffs.base_instruction_revision,
+                project_instruction_revision: cutoffs.project_instruction_revision,
+                ..parent.cutoffs.clone()
+            },
+        );
         let mut row = DreamRunRow {
             id: tx.new_id(IdKind::JobRun),
             scope,
@@ -233,9 +245,7 @@ impl DreamingService {
             phase,
             settings_revision: state.revision,
             policy: state.policy,
-            cutoffs: parent
-                .as_ref()
-                .map_or(cutoffs, |parent| parent.cutoffs.clone()),
+            cutoffs: frozen,
             started_at_ms: now,
             ended_at_ms: phase.ended().then_some(now),
             checkpoint: parent

@@ -143,7 +143,7 @@ impl NativeDreaming {
                             .items
                             .0
                             .into_iter()
-                            .filter(|record| record.since_ms.get() <= run.started_at_ms)
+                            .filter(|record| record.since_ms.get() <= run.sweep_started_at_ms())
                         {
                             let challenges = record.challenges.0.into_iter().map(|challenge| json!({
                                 "id":challenge.id, "revision":record.entry.revision, "state":challenge.state,
@@ -162,7 +162,7 @@ impl NativeDreaming {
                                 && record
                                     .created_at_ms
                                     .as_ref()
-                                    .is_some_and(|at| at.get() <= run.started_at_ms)
+                                    .is_some_and(|at| at.get() <= run.sweep_started_at_ms())
                         }) {
                             selected.push(json!({"kind":"DreamingProposal","id":record.id,"revision":record.revision,
                                 "entry_id":record.target_id,"entry_revision":record.target_revision,

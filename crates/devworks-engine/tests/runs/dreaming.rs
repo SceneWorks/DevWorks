@@ -195,6 +195,9 @@ impl StreamingHttp for TrailWire {
         let raw = request.body.as_deref().unwrap();
         let body: Value = serde_json::from_slice(raw).unwrap();
         let round = self.0.fetch_add(1, Ordering::SeqCst);
+        if round > 0 {
+            assert!(String::from_utf8_lossy(raw).contains("Use the revised sweep instruction."));
+        }
         let tools = body["tools"].as_array().unwrap();
         if round > 0 {
             let messages = body["messages"].as_array().unwrap();
@@ -289,11 +292,32 @@ fn scheduled_and_manual_resume_keep_scoped_receipts_and_get_fresh_budgets() {
         let first = settled(&fx, &scope, 1).await;
         assert_eq!(first.phase, DreamPhase::BudgetExhausted, "{first:?}");
         assert_eq!(first.report.as_ref().unwrap()["inputTokens"], "20");
+        let artifacts = app.artifacts().clone();
+        let staged = artifacts.stage_host_bytes(fx.store.as_ref(), b"Use the revised sweep instruction.",
+            json!({"fixture":"dreaming continuation instruction"})).unwrap().unwrap();
+        let new_text = write(fx.store.as_ref(), {
+            let artifacts = artifacts.clone();
+            let staged = staged.clone();
+            move |tx| {
+                let version = artifacts.commit_host_bytes(tx, &staged, "Revised Dreaming instruction",
+                    "text/plain", json!({"fixture":"dreaming continuation instruction"}))?;
+                Ok(devworks_core::services::artifacts::version_ref(&version))
+            }
+        }).unwrap();
+        artifacts.settle_host_bytes(fx.store.as_ref(), &staged, true);
+        let save = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+            "body":{"kind":"dreaming.instructions","scope":{"kind":"Workspace"},"expectedRevision":"1",
+                    "content":new_text}});
+        applied(&app.command(&fx.user, "dreaming.instructions", save.to_string().as_bytes()).unwrap());
+        fx.h.clock.advance(1000);
         let job = read(&*fx.store, |r| r.jobs().job(&id("dream-projects"))).unwrap();
         let nightly = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":1,"requestKey":fx.key(),
             "body":{"kind":"jobs.run_now","jobId":job.id,"expectedRevision":job.revision.to_string()}});
         applied(&app.command(&fx.user, "jobs.run_now", nightly.to_string().as_bytes()).unwrap());
         let second = settled(&fx, &scope, 2).await;
+        assert_eq!(second.cutoffs.base_instruction_revision, 2);
+        assert_eq!(second.sweep_started_at_ms(), first.started_at_ms);
+        assert!(second.started_at_ms > first.started_at_ms);
         assert_eq!(second.continued_from.as_ref(), Some(&first.id));
         assert_eq!(second.phase, DreamPhase::BudgetExhausted, "{second:?}");
         assert_eq!(second.report.as_ref().unwrap()["inputTokens"], "20");
@@ -312,6 +336,11 @@ fn scheduled_and_manual_resume_keep_scoped_receipts_and_get_fresh_budgets() {
         assert_eq!(second_actions.len(), 1);
         assert_eq!(second_actions[0].action["tool"], "dream_read_prior");
         assert!(receipts(&third).is_empty());
+        let stale = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+            "body":{"kind":"dreaming.run","scope":{"kind":"Project","projectId":"project-a"},
+                "expectedSettingsRevision":"2","resumeRunId":first.id}});
+        let stale = app.command(&fx.user, "dreaming.run", stale.to_string().as_bytes()).unwrap();
+        assert!(serde_json::to_value(stale).unwrap().to_string().contains("dreaming_resume_consumed"));
         assert_eq!(wire.0.load(Ordering::SeqCst), 3);
         app.shutdown().await;
     });
@@ -319,6 +348,7 @@ fn scheduled_and_manual_resume_keep_scoped_receipts_and_get_fresh_budgets() {
 
 async fn settled(fx: &Fx, scope: &KnowledgeScope, attempts: usize) -> DreamRunRow {
     within("native Dreaming settlement", async {
+        let start = std::time::Instant::now();
         loop {
             let rows = read(&*fx.store, |r| r.dreaming()?.dream_runs(scope, None, 10));
             if rows.len() >= attempts && rows.iter().all(|row| row.phase.ended()) {
@@ -331,6 +361,30 @@ async fn settled(fx: &Fx, scope: &KnowledgeScope, attempts: usize) -> DreamRunRo
                     })
                     .expect("each scoped continuation has a terminal leaf");
                 break tip.clone();
+            }
+            if start.elapsed() > Duration::from_secs(8) {
+                let journals = rows
+                    .iter()
+                    .map(|row| {
+                        let operation = row
+                            .operation_id
+                            .as_ref()
+                            .and_then(|id| read(&*fx.store, |r| r.operations().operation(id)));
+                        let queue = read(&*fx.store, |r| r.queue().entry(&row.id));
+                        (
+                            row.id.clone(),
+                            row.phase,
+                            row.continued_from.clone(),
+                            row.checkpoint
+                                .as_ref()
+                                .and_then(|cp| cp.request.as_ref())
+                                .map(|request| request.stage.clone()),
+                            operation.map(|op| (op.state, op.attempts.len())),
+                            queue.map(|q| (q.state, q.cancel_requested)),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                panic!("wanted {attempts} terminal attempts, observed {journals:?}");
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -367,6 +421,20 @@ impl StreamingHttp for ActionWire {
                 assert_eq!(receipt["result"]["changed"], true, "{receipt}");
             }
         }
+        let new_claim = (round == 2).then(|| {
+            let messages = body["messages"].as_array().unwrap();
+            messages
+                .iter()
+                .rev()
+                .filter(|row| row["role"] == "tool")
+                .map(|row| serde_json::from_str::<Value>(row["content"].as_str().unwrap()).unwrap())
+                .find_map(|row| {
+                    row["result"]["receipt"]["claimIds"][0]
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .expect("the first direct write returned an exact claim")
+        });
         let target = self.target.lock().unwrap();
         let (claim, entity) = target.as_ref().unwrap();
         let (delta, stop) = match round {
@@ -410,7 +478,9 @@ impl StreamingHttp for ActionWire {
                     json!({"tool_calls":[
                         {"index":0,"id":"propose-retract","type":"function","function":{"name":"dream_propose","arguments":qualified}},
                         {"index":1,"id":"propose-duplicate","type":"function","function":{"name":"dream_propose","arguments":second}},
-                        {"index":2,"id":"propose-nonrule-hook","type":"function","function":{"name":"dream_propose","arguments":primary.to_string()}}
+                        {"index":2,"id":"propose-nonrule-hook","type":"function","function":{"name":"dream_propose","arguments":primary.to_string()}},
+                        {"index":3,"id":"read-created","type":"function","function":{"name":"dream_read",
+                            "arguments":json!({"id":new_claim.unwrap(),"detail":"full"}).to_string()}}
                     ]}),
                     "tool_calls",
                 )
@@ -505,6 +575,9 @@ fn direct_consolidation_records_exact_citation_and_human_revert_keeps_the_audit(
             "native tool receipts: {:?}", actions.iter().map(|row| (
                 &row.action["tool"], &row.action["result"]["error"]
             )).collect::<Vec<_>>());
+        assert!(actions.iter().any(|action| action.action["tool"] == "dream_read"
+            && action.action["arguments"]["id"] != seed["claimIds"][0]
+            && action.action["result"]["proofs"][0]["revision"] == 1));
         let staged = actions.iter().filter(|row| row.action["tool"] == "dream_propose"
             && row.action["result"]["proposalId"].is_string()).collect::<Vec<_>>();
         assert_eq!(staged.len(), 2);
@@ -844,6 +917,7 @@ fn source_proof_requires_the_final_native_page_of_the_selected_capture() {
         std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
         "dreaming-source-test",
     );
+    std::fs::create_dir_all(checkout.path()).unwrap();
     let parent = checkout.path().canonicalize().unwrap();
     let repo = parent.join("source-proof");
     std::fs::create_dir_all(&repo).unwrap();
@@ -880,6 +954,7 @@ fn source_proof_requires_the_final_native_page_of_the_selected_capture() {
         script: Mutex::new(SourceScript::default()),
     });
     let mut ports = dream_ports(&fx, wire.clone());
+    ports.process_host = Arc::new(devworks_adapters::process::NativeProcessHost);
     ports.indexing = Some(devworks_engine::IndexComposition {
         parser: Arc::new(TreeSitterParser::new()),
         source: Arc::new(NativeSourceTree::new()),

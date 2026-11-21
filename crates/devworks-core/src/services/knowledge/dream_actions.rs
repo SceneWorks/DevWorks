@@ -479,7 +479,7 @@ pub(crate) fn work_proof_observed_at(
     };
     let exact = tx.dreaming()?.dream_trail(&DreamTrailQuery {
         scope: &run.scope,
-        through_ms: run.started_at_ms,
+        through_ms: run.sweep_started_at_ms(),
         knowledge_through: run.cutoffs.knowledge,
         reviews_through: run.cutoffs.reviews,
         since_ms: None,

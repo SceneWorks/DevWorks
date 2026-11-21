@@ -574,9 +574,9 @@ fn read_knowledge(
             .as_str()
             .filter(|_| tool == "dream_lessons"),
         delivered_since_ms: row
-            .started_at_ms
+            .sweep_started_at_ms()
             .saturating_sub(selection["since_days"].as_i64().unwrap_or(30) * 86_400_000),
-        captured_at_ms: row.started_at_ms,
+        captured_at_ms: row.sweep_started_at_ms(),
         limit: limit + 1,
     })?;
     let more = refs.len() > usize::from(limit);

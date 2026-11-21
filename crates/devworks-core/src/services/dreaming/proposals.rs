@@ -259,19 +259,7 @@ fn stage(
         let decision_at = prior
             .decided_at_ms
             .ok_or_else(|| invalid("dreaming_decision_time"))?;
-        let new = proposal
-            .proofs
-            .iter()
-            .zip(evidence_times)
-            .any(|(proof, at)| {
-                at > decision_at
-                    && !old.proofs.iter().any(|previous| {
-                        proof["kind"] == previous["kind"]
-                            && proof["id"] == previous["id"]
-                            && proof["fingerprint"] == previous["fingerprint"]
-                    })
-            });
-        if !new {
+        if !has_fresh_evidence(&proposal.proofs, evidence_times, &old.proofs, decision_at) {
             return Ok((prior, true));
         }
     }
@@ -312,6 +300,22 @@ fn stage(
         &stored.summary,
     )?;
     Ok((stored, false))
+}
+
+fn has_fresh_evidence(
+    proofs: &[Value],
+    observed_at: Vec<i64>,
+    prior: &[Value],
+    rejected_at: i64,
+) -> bool {
+    proofs.iter().zip(observed_at).any(|(proof, at)| {
+        at > rejected_at
+            && !prior.iter().any(|previous| {
+                proof["kind"] == previous["kind"]
+                    && proof["id"] == previous["id"]
+                    && proof["fingerprint"] == previous["fingerprint"]
+            })
+    })
 }
 
 pub(crate) fn decide_effect(
@@ -571,4 +575,20 @@ fn render(row: &StoredApproval) -> Result<ProposalRecord, Failure> {
             .transpose()
             .map_err(|_| invalid("dreaming_proposal_artifact"))?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejection_requires_new_evidence_observed_after_the_decision() {
+        let prior = [json!({"kind":"entry","id":"target","fingerprint":"original"})];
+        assert!(!has_fresh_evidence(&prior, vec![102], &prior, 100));
+        let older = [json!({"kind":"review","id":"previously-uncited","fingerprint":"old"})];
+        assert!(!has_fresh_evidence(&older, vec![99], &prior, 100));
+        assert!(!has_fresh_evidence(&older, vec![100], &prior, 100));
+        let fresh = [json!({"kind":"review","id":"new-review","fingerprint":"new"})];
+        assert!(has_fresh_evidence(&fresh, vec![101], &prior, 100));
+    }
 }
