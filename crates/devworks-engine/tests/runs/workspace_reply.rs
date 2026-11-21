@@ -153,6 +153,100 @@ pub(super) fn send_workspace(
 }
 
 #[test]
+fn a_workspace_reply_offers_and_finishes_every_selected_tool_window() {
+    use devworks_adapters::mcp::NativeMcpClients;
+    use devworks_core::ports::mcp::{RemoteCatalog, RemoteTool};
+
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    f.tx(|_, tx| {
+        let mut model = tx.router().route_model(&id("watch-model"))?.unwrap();
+        model.context_tokens = Some(128_000);
+        tx.router().put_route_model(&model, Some(model.revision))
+    });
+    let wire = Arc::new(WorkspaceWire::answers_only());
+    let mut ports = workspace_ports(&f, wire.clone());
+    ports.application.mcp = true;
+    ports.config.mcp = Some(devworks_engine::runtime::McpComposition {
+        validator: Arc::new(devworks_adapters::packages::JsonSchemaValidator),
+        factory: Arc::new(|supervisor, handle| {
+            Arc::new(NativeMcpClients::new(
+                supervisor,
+                Default::default(),
+                Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+                "workspace-tool-windows".into(),
+                Arc::new(NativeFilesystem::new()),
+                ProtectedRoots::new(vec![], vec![], None),
+                vec![],
+                handle,
+            ))
+        }),
+    });
+    runtime().block_on(async {
+        let app = boot(ports).await.unwrap();
+        let catalog = app.mcp_service().unwrap().clone();
+        for server in 0..3 {
+            let frame = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":8,
+                "requestKey":format!("workspace-tool-server-{server}"),
+                "body":{"kind":"mcp.configure","scope":{"kind":"Workspace"},
+                    "name":format!("Fixture server {server}"),
+                    "transport":{"kind":"Http","endpoint":format!("http://127.0.0.1:{}/mcp", 31_000 + server)}}});
+            let configured = applied(&app.command(
+                &f.user, "mcp.configure", frame.to_string().as_bytes(),
+            ).unwrap());
+            let server = id(configured["id"].as_str().unwrap());
+            let catalog = catalog.clone();
+            f.tx(move |_, tx| {
+                let configured = catalog.publish_remote_catalog(
+                    tx,
+                    &ConfigScope::Workspace,
+                    &server,
+                    &Revision::new(1).unwrap(),
+                    RemoteCatalog {
+                        tools: (0..90).map(|n| RemoteTool {
+                            name: format!("fixture_{n}"),
+                            description: "Read a fixture".into(),
+                            input_schema: json!({"type":"object","properties":{}}),
+                            output_schema: None,
+                            read_only_hint: true,
+                            title: None,
+                            destructive_hint: None,
+                        }).collect(),
+                        resources: vec![],
+                        prompts: vec![],
+                    },
+                )?;
+                assert_eq!(configured.selected_tool_ids.0.len(), 90);
+                Ok(())
+            });
+        }
+        let session = open_home(&f, &app);
+        send_workspace(&f, &app, &session, "windowed-home", "Check the selected tools", "watch-model");
+        wait_for_replies(&f, 1).await;
+        {
+            let requests = wire.requests.lock().unwrap();
+            let [first, second] = requests.as_slice() else {
+                panic!("expected two tool windows, found {}", requests.len());
+            };
+            let aliases = |request: &Value| {
+                request["tools"].as_array().unwrap().iter().map(|tool| {
+                    tool["function"]["name"].as_str().unwrap().to_owned()
+                }).collect::<std::collections::HashSet<_>>()
+            };
+            let first_tools = aliases(first);
+            let second_tools = aliases(second);
+            assert_eq!(first_tools.len(), 256);
+            assert!(first_tools.is_disjoint(&second_tools));
+            assert_eq!(first_tools.union(&second_tools).filter(|name| name.starts_with("mcp_")).count(), 270);
+            assert!(first.to_string().contains("successive windows"));
+            assert!(second.to_string().contains("Check the selected tools"));
+        }
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn a_workspace_reply_reuses_the_session_after_an_explicit_model_change() {
     let _native_case = native_runtime_case();
     let f = Fx::new();

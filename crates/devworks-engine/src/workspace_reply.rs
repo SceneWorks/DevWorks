@@ -1,4 +1,5 @@
 //! Native workspace chat consumes one saved message at a time, shared by Home and its sidebar.
+use crate::agent_turns::ToolWindowSweep;
 use crate::dispatch::{
     Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
     RetryPolicy,
@@ -194,6 +195,7 @@ struct PreparedReply {
     request_id: Id,
     head: ArtifactRef,
     compaction_source: Option<ArtifactRef>,
+    sweep: ToolWindowSweep,
 }
 
 fn prepared_reply(attempt: &AttemptRecord) -> Result<Option<PreparedReply>, StorageError> {
@@ -208,6 +210,15 @@ fn prepared_reply(attempt: &AttemptRecord) -> Result<Option<PreparedReply>, Stor
                 head: serde_json::from_value(value["head"].clone()).map_err(invalid)?,
                 compaction_source: serde_json::from_value(value["compactionSource"].clone())
                     .map_err(invalid)?,
+                sweep: value
+                    .get("toolWindowSweep")
+                    .cloned()
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(invalid)?
+                    .map(ToolWindowSweep::restore)
+                    .transpose()?
+                    .unwrap_or_default(),
             })
         })
         .transpose()
@@ -404,10 +415,12 @@ async fn settle_from_evidence(
                     return Ok(unknown());
                 }
             }
-            Ok(EffectResult::Completed(completed(
-                &intent,
-                &recorded.provider,
-            )))
+            let mut sweep = prepared.sweep;
+            Ok(if sweep.complete_window() {
+                EffectResult::Completed(completed(&intent, &recorded.provider))
+            } else {
+                EffectResult::NotApplied("Resume with the next workspace tool window.".into())
+            })
         }
         Some(AttemptEnd::ToolCallsReady) if previous_boot || recorded.published.is_some() => Ok(
             EffectResult::NotApplied("Resume the recorded workspace tool turn.".into()),
@@ -440,12 +453,12 @@ async fn run(
         Ok(ctx) => ctx,
         Err(error) => return EffectResult::Failed(error.to_string()),
     };
-    if let Err(outcome) =
-        resume_recorded_turn(engine, &ctx, &intent, &operation, attempt_no, stopping).await
-    {
-        return outcome;
-    }
-    let (mut route, mut binding, mut head) = match prepare(engine, &ctx, &intent, stopping).await {
+    let mut sweep =
+        match resume_recorded_turn(engine, &ctx, &intent, &operation, attempt_no, stopping).await {
+            Ok(sweep) => sweep,
+            Err(outcome) => return outcome,
+        };
+    let mut generation = match prepare(engine, &ctx, &intent, stopping).await {
         Ok(value) => value,
         Err(error) => {
             if stopping.is_cancelled() {
@@ -461,20 +474,15 @@ async fn run(
         match compact_workspace(
             engine,
             &ctx,
-            &route,
-            &binding,
-            &head,
+            &generation,
             (&operation.id, attempt_no),
+            sweep,
             stopping,
         )
         .await
         {
             Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent, stopping).await {
-                Ok((next_route, next_binding, next_head)) => {
-                    route = next_route;
-                    binding = next_binding;
-                    head = next_head;
-                }
+                Ok(next) => generation = next,
                 Err(error) => {
                     return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
                 }
@@ -485,8 +493,14 @@ async fn run(
             }
             Err(error) => return EffectResult::Unknown(error.to_string()),
         }
+        let window = sweep.window(generation.windows);
         let request = match crate::agent_turns::plan_generation_window(
-            engine, &ctx, &route, &binding, &head, 0,
+            engine,
+            &ctx,
+            &generation.route,
+            &generation.binding,
+            &generation.head,
+            window,
         ) {
             Ok(request) => request,
             Err(error) => {
@@ -495,8 +509,9 @@ async fn run(
         };
         let prepared = PreparedReply {
             request_id: request.logical.request_id.clone(),
-            head: head.clone(),
+            head: generation.head.clone(),
             compaction_source: None,
+            sweep,
         };
         if let Err(error) = save_prepared(engine, &operation.id, attempt_no, &prepared).await {
             return EffectResult::Unknown(error.to_string());
@@ -511,13 +526,15 @@ async fn run(
         };
         match progress.provider.result.outcome {
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
-                return settled(
-                    engine,
-                    &operation.id,
-                    attempt_no,
-                    completed(&intent, &progress.provider.result),
-                )
-                .await;
+                if sweep.complete_window() {
+                    return settled(
+                        engine,
+                        &operation.id,
+                        attempt_no,
+                        completed(&intent, &progress.provider.result),
+                    )
+                    .await;
+                }
             }
             Some(AttemptEnd::ToolCallsReady) => {
                 if progress.continuation.is_none()
@@ -534,17 +551,7 @@ async fn run(
                 {
                     return EffectResult::Unknown(error.to_string());
                 }
-                match prepare(engine, &ctx, &intent, stopping).await {
-                    Ok((next_route, next_binding, next_head)) => {
-                        route = next_route;
-                        binding = next_binding;
-                        head = next_head;
-                    }
-                    Err(error) => {
-                        return settled(engine, &operation.id, attempt_no, unavailable(error))
-                            .await;
-                    }
-                }
+                sweep.after_tools();
             }
             Some(AttemptEnd::UnknownTail) | Some(AttemptEnd::Completed) => {
                 return EffectResult::Unknown("Workspace provider outcome is unresolved.".into());
@@ -566,6 +573,12 @@ async fn run(
                     unavailable(provider_fault(&progress.provider.result)),
                 )
                 .await;
+            }
+        }
+        match prepare(engine, &ctx, &intent, stopping).await {
+            Ok(next) => generation = next,
+            Err(error) => {
+                return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
             }
         }
     }
@@ -594,7 +607,7 @@ async fn resume_recorded_turn(
     operation: &OperationRecord,
     attempt_no: i64,
     stopping: &Cancellation,
-) -> Result<(), EffectResult> {
+) -> Result<ToolWindowSweep, EffectResult> {
     let unknown = |error: StorageError| EffectResult::Unknown(error.to_string());
     let mut previous = None;
     for attempt in operation.attempts.iter().rev().skip(1) {
@@ -604,13 +617,14 @@ async fn resume_recorded_turn(
         }
     }
     let Some(prepared) = previous else {
-        return Ok(());
+        return Ok(ToolWindowSweep::default());
     };
+    let mut sweep = prepared.sweep;
     let Some(recorded) = recorded_reply(engine, &operation.id, intent, &prepared)
         .await
         .map_err(unknown)?
     else {
-        return Ok(());
+        return Ok(sweep);
     };
     save_prepared(engine, &operation.id, attempt_no, &prepared)
         .await
@@ -630,7 +644,7 @@ async fn resume_recorded_turn(
                 .map_err(|error| EffectResult::Unknown(error.to_string()))?
                 .map_err(|error| EffectResult::Unknown(format!("{error:?}")))?;
             }
-            Ok(())
+            Ok(sweep)
         }
         Some(AttemptEnd::ToolCallsReady) => {
             if recorded.published.is_none() {
@@ -646,7 +660,8 @@ async fn resume_recorded_turn(
                 .await
                 .map_err(unknown)?;
             }
-            Ok(())
+            sweep.after_tools();
+            Ok(sweep)
         }
         Some(AttemptEnd::Completed) => {
             if recorded.published.is_none() {
@@ -666,6 +681,9 @@ async fn resume_recorded_turn(
                         "The settled workspace reply lacks a continuation.".into(),
                     ));
                 }
+            }
+            if !sweep.complete_window() {
+                return Ok(sweep);
             }
             Err(settled(
                 engine,
@@ -692,7 +710,7 @@ async fn save_prepared(
         operation,
         attempt_no,
         json!({"requestId": prepared.request_id, "head": prepared.head,
-            "compactionSource": prepared.compaction_source}),
+            "compactionSource": prepared.compaction_source, "toolWindowSweep": prepared.sweep.checkpoint()}),
     )
     .await
 }
@@ -708,21 +726,21 @@ enum CompactionStep {
 async fn compact_workspace(
     engine: &TurnEngine,
     ctx: &InvocationContext,
-    route: &RouteChoice,
-    binding: &NativeBinding,
-    head: &ArtifactRef,
+    generation: &WorkspaceGeneration,
     operation: (&OperationId, i64),
+    mut sweep: ToolWindowSweep,
     cancellation: &Cancellation,
 ) -> Result<CompactionStep, StorageError> {
+    let window = sweep.window(generation.windows);
     let (worker, context, route, binding, head) = (
         engine.clone(),
         ctx.clone(),
-        route.clone(),
-        binding.clone(),
-        head.clone(),
+        generation.route.clone(),
+        generation.binding.clone(),
+        generation.head.clone(),
     );
     let prepared = match tokio::task::spawn_blocking(move || {
-        if crate::agent_turns::compaction_due(&worker, &context, &route, &head, 0)? {
+        if crate::agent_turns::compaction_due(&worker, &context, &route, &head, window)? {
             crate::agent_turns::prepare_compaction(&worker, &context, &route, &binding, &head)
                 .map(Some)
         } else {
@@ -745,6 +763,7 @@ async fn compact_workspace(
         request_id: request.logical.request_id.clone(),
         head: input.clone(),
         compaction_source: Some(source.artifact.clone()),
+        sweep,
     };
     save_prepared(engine, operation.0, operation.1, &prepared).await?;
     let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
@@ -889,12 +908,19 @@ async fn observe(
     .await
 }
 
+struct WorkspaceGeneration {
+    route: RouteChoice,
+    binding: NativeBinding,
+    head: ArtifactRef,
+    windows: usize,
+}
+
 async fn prepare(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     intent: &ReplyIntent,
     cancel: &Cancellation,
-) -> Result<(RouteChoice, NativeBinding, ArtifactRef), String> {
+) -> Result<WorkspaceGeneration, String> {
     if crate::auto_routing::needs_assignment(engine, ctx).map_err(|e| e.to_string())? {
         let (origin, material) =
             first_auto_input(engine, ctx, intent).map_err(|e| e.to_string())?;
@@ -983,7 +1009,7 @@ fn prepare_prompt(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     intent: &ReplyIntent,
-) -> Result<(RouteChoice, NativeBinding, ArtifactRef), crate::turn_error::TurnError> {
+) -> Result<WorkspaceGeneration, crate::turn_error::TurnError> {
     let session = &intent.session_id;
     let recovered = engine.recover_native_context_head(ctx, session)?;
     if let Some((head, binding, _)) = recovered {
@@ -992,10 +1018,15 @@ fn prepare_prompt(
             &ReadOptions::default(),
             |snapshot| input_prefix(snapshot, intent, intent.user_sequence - 1).map(|_| ()),
         )?;
-        let (head, binding, route, _) = crate::agent_turns::prepare_generation_context(
+        let (head, binding, route, windows) = crate::agent_turns::prepare_generation_context(
             engine, ctx, session, head, binding, false,
         )?;
-        return Ok((route, binding, head));
+        return Ok(WorkspaceGeneration {
+            route,
+            binding,
+            head,
+            windows,
+        });
     }
     let (inputs, role) = read_snapshot(
         engine.store().as_ref(),
@@ -1017,29 +1048,36 @@ fn prepare_prompt(
         }),
         _ => false,
     });
-    let tools = !engine
+    let tool_count = engine
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas()
         .selected_agent_tools(ctx)?
-        .is_empty();
+        .len();
+    let windows = crate::agent_turns::tool_window_count(tool_count);
     let route = crate::agent_turns::route_context_head(
         engine,
         ctx,
         session,
         intent.context_epoch,
         None,
-        tools,
+        tool_count > 0,
         images,
     )?;
     let (binding, headroom) = crate::agent_turns::initial_route_binding(engine, session, &route)?;
-    let instructions = (!role.text.is_empty())
+    let mut instructions: Vec<_> = (!role.text.is_empty())
         .then_some(TextBlock {
             text: role.text,
             cache: None,
         })
         .into_iter()
         .collect();
+    if windows > 1 {
+        instructions.push(TextBlock {
+            text: crate::agent_turns::TOOL_WINDOW_NOTICE.into(),
+            cache: None,
+        });
+    }
     let mut context = ProviderContext {
         version: 1,
         instructions,
@@ -1072,7 +1110,12 @@ fn prepare_prompt(
         session,
         &initial,
     )?;
-    Ok((route, binding, head))
+    Ok(WorkspaceGeneration {
+        route,
+        binding,
+        head,
+        windows,
+    })
 }
 
 fn session_for_reply(

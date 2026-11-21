@@ -490,8 +490,7 @@ async fn run_native_loop(
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     ensure_membership_context(engine, ctx, agent)?;
     let mut recovered = engine.recover_native_context_head(ctx, session_id)?;
-    let mut window = 0;
-    let mut completed_windows = 0;
+    let mut sweep = ToolWindowSweep::default();
     // The digest of the last context this turn compacted to.
     let mut compacted: Option<String> = None;
     // Consecutive stale-head refusals of one request against one context version.
@@ -681,7 +680,7 @@ async fn run_native_loop(
         };
         head = prepared_head;
         binding = prepared_binding;
-        window %= windows;
+        let window = sweep.window(windows);
         if !is_plan_reviewer(agent) {
             acknowledge_native_instructions(engine, ctx, agent).await?;
         }
@@ -778,8 +777,7 @@ async fn run_native_loop(
         }
         match progress.provider.result.outcome {
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
-                completed_windows += 1;
-                if completed_windows >= windows {
+                if sweep.complete_window() {
                     if wait_for_linked_effects(
                         engine,
                         ctx,
@@ -791,18 +789,16 @@ async fn run_native_loop(
                     {
                         // A review may have found a gap that needs the coordinator's disposition
                         // before the same durable effect can dispatch.
-                        completed_windows = 0;
+                        sweep.restart();
                         recovered = engine.recover_native_context_head(ctx, session_id)?;
                         continue;
                     }
                     return Ok(());
                 }
-                window = (window + 1) % windows;
                 recovered = engine.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) if progress.continuation.is_some() => {
-                completed_windows = 0;
-                window = (window + 1) % windows;
+                sweep.after_tools();
                 recovered = engine.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) => {
@@ -1232,8 +1228,77 @@ fn tool_window<T>(all: &[T], index: usize) -> Result<&[T], StorageError> {
     Ok(&all[start..all.len().min(start.saturating_add(MAX_ALIASES_PER_TURN))])
 }
 
-fn tool_window_count(total: usize) -> usize {
+pub(crate) fn tool_window_count(total: usize) -> usize {
     total.div_ceil(MAX_ALIASES_PER_TURN).max(1)
+}
+
+/// Rotate through the selected tools until each window completes without a tool call.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolWindowSweep {
+    window: usize,
+    completed: usize,
+    total: usize,
+}
+
+impl Default for ToolWindowSweep {
+    fn default() -> Self {
+        Self {
+            window: 0,
+            completed: 0,
+            total: 1,
+        }
+    }
+}
+
+impl ToolWindowSweep {
+    pub(crate) fn checkpoint(self) -> (usize, usize, usize) {
+        (self.window, self.completed, self.total)
+    }
+
+    pub(crate) fn restore(checkpoint: (usize, usize, usize)) -> Result<Self, StorageError> {
+        let (window, completed, total) = checkpoint;
+        if window >= total || completed >= total {
+            return Err(StorageError::InvalidRecord(
+                "invalid tool window checkpoint".into(),
+            ));
+        }
+        Ok(Self {
+            window,
+            completed,
+            total,
+        })
+    }
+
+    pub(crate) fn window(&mut self, total: usize) -> usize {
+        if self.total != total {
+            self.total = total;
+            self.window %= total;
+            self.restart();
+        }
+        self.window
+    }
+
+    pub(crate) fn restart(&mut self) {
+        self.completed = 0;
+    }
+
+    fn advance(&mut self) {
+        self.window = (self.window + 1) % self.total;
+    }
+
+    pub(crate) fn complete_window(&mut self) -> bool {
+        self.completed += 1;
+        if self.completed >= self.total {
+            return true;
+        }
+        self.advance();
+        false
+    }
+
+    pub(crate) fn after_tools(&mut self) {
+        self.restart();
+        self.advance();
+    }
 }
 
 fn offered_tools(
