@@ -30,6 +30,26 @@ pub struct RegisteredSchemas {
     artifacts: Arc<ArtifactService>,
 }
 
+fn package_wire_name(
+    inspection: &Inspection,
+    contribution: &devworks_core::ports::packages::InspectedContribution,
+) -> String {
+    let name = contribution.id.split_once('/').map_or("", |(_, name)| name);
+    let name: String = name
+        .chars()
+        .take(28)
+        .map(|c| if c == '.' { '_' } else { c })
+        .collect();
+    let identity = sha256_hex(
+        format!(
+            "{}:{}:{}",
+            contribution.id, inspection.manifest_digest, contribution.contract_digest
+        )
+        .as_bytes(),
+    );
+    format!("pkg_{name}_{}", &identity[..24])
+}
+
 fn mode_namespace(mode: Mode) -> &'static str {
     match mode {
         Mode::Query => "devworks-query",
@@ -275,7 +295,7 @@ impl RegisteredSchemas {
         })?;
         let mut tools = Vec::new();
         for (package, enabled) in choices {
-            let (inspection, _) = match self.package_inspection(ctx, &package) {
+            let (inspection, _) = match self.package_metadata(ctx, &package) {
                 Ok(installed) => installed,
                 Err(ProviderError::MaterialUnavailable | ProviderError::Unsupported(_)) => continue,
                 Err(error) => {
@@ -315,16 +335,9 @@ impl RegisteredSchemas {
                     })?;
                 let capability_id = QualifiedId::try_from(c.id.clone())
                     .map_err(|error| StorageError::InvalidRecord(error.into()))?;
-                let name = c.id.split_once('/').map_or("", |(_, name)| name);
-                let name: String = name
-                    .chars()
-                    .take(28)
-                    .map(|c| if c == '.' { '_' } else { c })
-                    .collect();
-                let digest = sha256_hex(c.id.as_bytes());
                 tools.push(ToolSchema {
                     capability_id,
-                    wire_name: format!("pkg_{name}_{}", &digest[..24]),
+                    wire_name: package_wire_name(&inspection, c),
                     input_schema,
                 });
             }
@@ -433,7 +446,7 @@ impl RegisteredSchemas {
         }
         Ok(None)
     }
-    fn package_inspection(
+    fn package_metadata(
         &self,
         ctx: &InvocationContext,
         package: &str,
@@ -508,10 +521,6 @@ impl RegisteredSchemas {
                 return Err(ProviderError::MaterialUnavailable);
             }
         }
-        service
-            .files()
-            .verify(package, &inspection.manifest_digest, &inspection.files)
-            .map_err(|_| ProviderError::MaterialUnavailable)?;
         Ok((inspection, revision))
     }
     fn package_document(
@@ -525,21 +534,51 @@ impl RegisteredSchemas {
             .split('/')
             .next()
             .ok_or(ProviderError::MaterialUnavailable)?;
-        let (inspection, revision) = self.package_inspection(ctx, package)?;
+        let (inspection, revision) = self.package_metadata(ctx, package)?;
+        let value = self.package_schema(&inspection, reference)?;
+        self.package_version_current(ctx, &inspection, revision)?;
+        Ok(value)
+    }
+
+    fn package_schema(
+        &self,
+        inspection: &Inspection,
+        reference: &SchemaRef,
+    ) -> Result<Value, ProviderError> {
+        let value =
+            serde_json::to_value(reference).map_err(|_| ProviderError::MaterialUnavailable)?;
         let asset = inspection
             .schema_assets
             .iter()
-            .find(|a| serde_json::to_value(reference).ok().as_ref() == Some(&a.reference))
+            .find(|asset| asset.reference == value)
             .ok_or(ProviderError::MaterialUnavailable)?;
-        let bytes = self.file(&inspection, &asset.path, 8 * 1024 * 1024)?;
-        let value =
-            serde_json::from_slice(&bytes).map_err(|_| ProviderError::MaterialUnavailable)?;
-        let again = self.package_inspection(ctx, package)?;
-        if again.1 != revision || again.0.manifest_digest != inspection.manifest_digest {
-            return Err(ProviderError::MaterialUnavailable);
-        }
-        Ok(value)
+        let bytes = self.file(inspection, &asset.path, 8 * 1024 * 1024)?;
+        serde_json::from_slice(&bytes).map_err(|_| ProviderError::MaterialUnavailable)
     }
+
+    fn package_version_current(
+        &self,
+        ctx: &InvocationContext,
+        inspection: &Inspection,
+        revision: i64,
+    ) -> Result<(), ProviderError> {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            package_context(read, ctx)?;
+            let current = read.packages().package(&inspection.package_id)?;
+            if read.packages().registry_revision()? != revision
+                || !current.is_some_and(|package| {
+                    package.installed
+                        && package.enabled
+                        && package.active_digest.as_deref() == Some(&inspection.manifest_digest)
+                })
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            Ok(())
+        })
+        .map_err(|_| ProviderError::MaterialUnavailable)
+    }
+
     fn file(&self, i: &Inspection, path: &str, max: u64) -> Result<Vec<u8>, ProviderError> {
         let expected = i
             .files
@@ -633,6 +672,11 @@ fn package_context(
         ),
         Verdict::Allow
     ) {
+        return Err(StorageError::ScopeDenied);
+    }
+    if ctx.principal_kind() == devworks_core::context::PrincipalKind::Agent
+        && effective.profile != Some(policy::AccessProfile::Full)
+    {
         return Err(StorageError::ScopeDenied);
     }
     Ok(effective)
@@ -729,7 +773,7 @@ impl SchemaDocuments for RegisteredSchemas {
                     .split('/')
                     .next()
                     .ok_or(ProviderError::MaterialUnavailable)?;
-                let (inspection, revision) = self.package_inspection(ctx, package)?;
+                let (inspection, revision) = self.package_metadata(ctx, package)?;
                 let contribution = inspection
                     .contributions
                     .iter()
@@ -746,13 +790,16 @@ impl SchemaDocuments for RegisteredSchemas {
                 {
                     return Err(ProviderError::MaterialUnavailable);
                 }
-                let schema = self.package_document(ctx, &alias.input_schema)?;
+                if alias.wire_name.starts_with("pkg_")
+                    && alias.wire_name != package_wire_name(&inspection, contribution)
+                {
+                    return Err(ProviderError::MaterialUnavailable);
+                }
+                let schema = self.package_schema(&inspection, &alias.input_schema)?;
                 let help = self.file(&inspection, &inspection.help_file, 1024 * 1024)?;
                 let description =
                     String::from_utf8(help).map_err(|_| ProviderError::MaterialUnavailable)?;
-                if self.package_inspection(ctx, package)?.1 != revision {
-                    return Err(ProviderError::MaterialUnavailable);
-                }
+                self.package_version_current(ctx, &inspection, revision)?;
                 (schema, Some(description))
             }
         };

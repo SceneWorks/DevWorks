@@ -724,6 +724,19 @@ pub(crate) fn resolved_turn(
     })
 }
 
+fn native_wire_name(native: &Value) -> Result<&str, StorageError> {
+    native
+        .get("name")
+        .or_else(|| {
+            native
+                .get("function")
+                .and_then(|function| function.get("name"))
+        })
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty() && name.len() <= 128)
+        .ok_or_else(|| invalid("recorded native tool alias missing"))
+}
+
 /// Append one settled provider exchange to the exact immutable request context that produced it.
 /// The assistant's text, opaque native items and calls retain their transcript order, while
 /// results use call ordinal. Encoders then preserve each endpoint's required native structure.
@@ -927,12 +940,7 @@ fn continuation_context_at_epoch(
                     .map_err(artifact_read_fault)?
                     .0;
                 let native: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
-                let wire_name = native
-                    .get("name")
-                    .or_else(|| native.get("function").and_then(|v| v.get("name")))
-                    .and_then(Value::as_str)
-                    .filter(|name| !name.is_empty() && name.len() <= 128)
-                    .ok_or_else(|| invalid("recorded native tool alias missing"))?;
+                let wire_name = native_wire_name(&native)?;
                 assistant.push(ContentBlock::ToolCall {
                     call_id: tool_call.call.native_call_id,
                     wire_name: wire_name.into(),
@@ -1966,7 +1974,13 @@ pub(crate) fn dispatch_step(
         // The dispatch marker commits first: once the operation is runnable, a cancellation can
         // no longer record the call cancelled before dispatch.
         mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
-        match crate::package_tools::queue(store, schemas, ctx, session_id, &call) {
+        let bytes = artifacts
+            .read_exact(store, ctx, &call.native_item, 1024 * 1024)
+            .map_err(artifact_read_fault)?
+            .0;
+        let native: Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+        let wire_name = native_wire_name(&native)?;
+        match crate::package_tools::queue_bound(store, schemas, ctx, session_id, &call, wire_name) {
             Ok(operation_id) => accepted(
                 serde_json::to_vec(&json!({"operationId": operation_id})).map_err(invalid)?,
                 operation_id,

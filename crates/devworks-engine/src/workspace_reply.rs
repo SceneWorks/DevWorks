@@ -236,7 +236,7 @@ async fn recorded_reply(
     );
     tokio::task::spawn_blocking(move || {
         let engine = engine_for_read;
-        let route = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let admitted = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
             let session = session_for_reply(read, &intent)?;
             let route = read.router().route_request(&prepared.request_id)?;
             if route
@@ -245,9 +245,16 @@ async fn recorded_reply(
             {
                 return Err(StorageError::ScopeDenied);
             }
-            Ok(route)
+            let Some(route) = route else {
+                return Ok(false);
+            };
+            let journal = read
+                .operations()
+                .operation(&route.operation_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            Ok(!journal.attempts.is_empty())
         })?;
-        if route.is_none() {
+        if !admitted {
             return Ok(None);
         }
         let provider = engine
@@ -457,7 +464,7 @@ async fn run(
         )
         .await
         {
-            Ok(true) => match prepare(engine, &ctx, &intent).await {
+            Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent).await {
                 Ok((next_route, next_binding, next_head)) => {
                     route = next_route;
                     binding = next_binding;
@@ -467,7 +474,10 @@ async fn run(
                     return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
                 }
             },
-            Ok(false) => {}
+            Ok(CompactionStep::NotNeeded) => {}
+            Ok(CompactionStep::Unavailable(detail)) => {
+                return settled(engine, &operation.id, attempt_no, unavailable(detail)).await;
+            }
             Err(error) => return EffectResult::Unknown(error.to_string()),
         }
         let request = match crate::agent_turns::plan_generation_window(
@@ -682,6 +692,12 @@ async fn save_prepared(
     .await
 }
 
+enum CompactionStep {
+    NotNeeded,
+    Published,
+    Unavailable(String),
+}
+
 /// Use the same routed threshold and compaction producer as a managed agent. Recording the
 /// exact immutable request before admission allows a restart to reuse its settled summary.
 async fn compact_workspace(
@@ -692,7 +708,7 @@ async fn compact_workspace(
     head: &ArtifactRef,
     operation: (&OperationId, i64),
     cancellation: &Cancellation,
-) -> Result<bool, StorageError> {
+) -> Result<CompactionStep, StorageError> {
     let (worker, context, route, binding, head) = (
         engine.clone(),
         ctx.clone(),
@@ -700,7 +716,7 @@ async fn compact_workspace(
         binding.clone(),
         head.clone(),
     );
-    let prepared = tokio::task::spawn_blocking(move || {
+    let prepared = match tokio::task::spawn_blocking(move || {
         if crate::agent_turns::compaction_due(&worker, &context, &route, &head, 0)? {
             crate::agent_turns::prepare_compaction(&worker, &context, &route, &binding, &head)
                 .map(Some)
@@ -709,9 +725,13 @@ async fn compact_workspace(
         }
     })
     .await
-    .map_err(invalid)??;
+    .map_err(invalid)?
+    {
+        Ok(prepared) => prepared,
+        Err(error) => return Ok(CompactionStep::Unavailable(error.to_string())),
+    };
     let Some((source, request)) = prepared else {
-        return Ok(false);
+        return Ok(CompactionStep::NotNeeded);
     };
     let InferenceInput::Generation { context: input, .. } = &request.request.input else {
         return Err(StorageError::ScopeDenied);
@@ -723,16 +743,33 @@ async fn compact_workspace(
     };
     save_prepared(engine, operation.0, operation.1, &prepared).await?;
     let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
-    let result = providers
+    let produced = providers
         .produce_cancellable(request, Some(cancellation.clone()))
-        .await?
-        .result;
+        .await?;
+    match produced.accounting {
+        DriveOutcome::Refused(reason) => {
+            return Ok(CompactionStep::Unavailable(format!("{reason:?}")));
+        }
+        DriveOutcome::CancelledBeforeDispatch => {
+            return Ok(CompactionStep::Unavailable(
+                "Compaction cancelled before dispatch.".into(),
+            ));
+        }
+        _ => {}
+    }
+    let result = produced.result;
+    if matches!(
+        result.outcome,
+        Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete)
+    ) {
+        return Ok(CompactionStep::Unavailable(provider_fault(&result).into()));
+    }
     let (worker, context, source) = (engine.clone(), ctx.clone(), source.artifact);
     tokio::task::spawn_blocking(move || finish_compaction(&worker, &context, &source, result))
         .await
         .map_err(invalid)?
         .map_err(|error| invalid(format!("{error:?}")))?;
-    Ok(true)
+    Ok(CompactionStep::Published)
 }
 
 fn finish_compaction(

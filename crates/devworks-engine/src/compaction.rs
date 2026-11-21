@@ -130,13 +130,42 @@ pub(crate) fn publish_compacted(
 ) -> Result<ArtifactRef, StorageError> {
     let previous_epoch = binding.context_epoch.get();
     let (next, omitted) = omitted_native(&source.context, binding)?;
-    let outstanding = outstanding_calls(store, ctx, session_id, &source.context)?;
+    let mut outstanding = outstanding_calls(store, ctx, session_id, &source.context)?;
+    let (observed, updates) = if ctx.workspace_reply().is_some() {
+        workspace_updates(store, session_id, source.observed_sequence)?
+    } else {
+        (source.observed_sequence, Vec::new())
+    };
+    if !updates.is_empty() {
+        let linked = crate::tool_turn::linked_operations(store, ctx, session_id)?;
+        for update in &updates {
+            if let TranscriptBody::OperationUpdate { operation_id, .. } = update {
+                let call = linked
+                    .iter()
+                    .find(|call| call.operation_id.as_ref() == Some(operation_id))
+                    .ok_or(StorageError::ScopeDenied)?;
+                outstanding.insert(call.native_call_id.clone());
+            }
+        }
+    }
     let mut compacted = compacted_context(
         &source.context,
         next.context_epoch.get(),
         summary,
         &outstanding,
     );
+    // A late operation update is outside the paid summary's exact source. Keep its original
+    // call and response, then attach the original update to that response before advancing.
+    for body in updates {
+        crate::tool_turn::append_context_fact(
+            &mut compacted,
+            store,
+            artifacts,
+            ctx,
+            session_id,
+            body,
+        )?;
+    }
     if let Some(reply) = ctx.workspace_reply()
         && reply.user_sequence > 1
     {
@@ -175,7 +204,7 @@ pub(crate) fn publish_compacted(
         crate::context_epoch::EpochChange {
             previous_epoch,
             binding: next,
-            observed_sequence: source.observed_sequence,
+            observed_sequence: observed,
             source: source.artifact,
             reason: ContextChangeReason::Compaction,
             context,
@@ -183,6 +212,56 @@ pub(crate) fn publish_compacted(
             adoption: None,
         },
     )
+}
+
+fn workspace_updates(
+    store: &dyn ApplicationStore,
+    session_id: &Id,
+    observed: Option<i64>,
+) -> Result<(Option<i64>, Vec<TranscriptBody>), StorageError> {
+    let observed = observed.ok_or(StorageError::ScopeDenied)?;
+    read_snapshot(store, &ReadOptions::default(), |read| {
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let mut position = observed;
+        let mut updates = Vec::new();
+        while position < session.last_durable_sequence() {
+            if position - observed >= 10_000 {
+                return Err(StorageError::InvalidRecord(
+                    "compaction update scan bound".into(),
+                ));
+            }
+            let page = read.sessions().entries(session_id, position, 500)?;
+            if page.is_empty() {
+                return Err(StorageError::ScopeDenied);
+            }
+            for entry in page {
+                if entry.sequence != position + 1 || entry.context_epoch != session.context_epoch {
+                    return Err(StorageError::ScopeDenied);
+                }
+                position = entry.sequence;
+                match entry.kind.as_str() {
+                    "UserMessage" | "HostNotice" => {}
+                    "OperationUpdate" => {
+                        let body: TranscriptBody = serde_json::from_value(entry.body)
+                            .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+                        if !matches!(body, TranscriptBody::OperationUpdate { .. })
+                            || updates.len() == 128
+                        {
+                            return Err(StorageError::InvalidRecord(
+                                "invalid compaction operation update".into(),
+                            ));
+                        }
+                        updates.push(body);
+                    }
+                    _ => return Err(StorageError::ScopeDenied),
+                }
+            }
+        }
+        Ok((Some(position), updates))
+    })
 }
 
 /// The next epoch's binding and the opaque provider blocks of `context` that cannot cross into
