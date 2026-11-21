@@ -331,13 +331,21 @@ fn a_pinned_conversation_shows_its_pin_and_changes_through_router_pin() {
     );
     // The pin survives a restart and is what the composer shows.
     h.state_mut().on_exit();
+    assert_eq!(
+        devworks_desktop::memory::Memory::load(&root.memory())
+            .selected_session
+            .as_deref(),
+        Some(session.as_str()),
+    );
     drop(h);
     drop(backend);
     drop(engine);
     let engine = start_connected(&root);
     let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
-    settle(&mut h);
-    assert_eq!(h.state().chat.selected.as_deref(), Some(session.as_str()));
+    step_until(&mut h, "the saved conversation reopens", |s| {
+        s.chat.selected.as_deref() == Some(session.as_str())
+    });
+    wait_for_visible_pin(&mut h, &session);
     assert_eq!(combo_text(&h, ROUTE_LABEL), "Tier Low");
     assert!(has_text(&h, "Pinned: claude-haiku-5-5 · Medium"));
 }
