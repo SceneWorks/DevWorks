@@ -87,10 +87,10 @@ fn completion_promotes_only_the_frozen_window_and_atomically_retires_the_checkpo
     let h = Harness::new();
     let s = h.store();
     let first_cutoff = DreamCutoffs {
+        sweep_started_at_ms: T0,
         knowledge: 4,
         reviews: 9,
         sources: 6,
-        base_instruction_revision: 1,
         ..Default::default()
     };
     let first = run("first", first_cutoff.clone());
