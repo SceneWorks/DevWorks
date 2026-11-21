@@ -14796,5 +14796,61 @@
     "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"RemoveIndex\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":10}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.import",
+    "entry": "domain-request.r13",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.import\",\"scope\":{\"kind\":\"Workspace\"},\"source\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"title\":\"fixture\"},\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.list",
+    "entry": "domain-request.r13",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.read",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Read\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100,\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.share",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Share\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.move",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Move\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.disable_retrieval",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DisableRetrieval\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r13-input-documents.remove_index",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"RemoveIndex\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":13}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r12-input-documents.index",
+    "entry": "domain-request.r12",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.index\",\"documentId\":\"id-a\",\"versionId\":\"id-a\",\"expectedRevision\":\"1\",\"reextract\":true},\"schemaRevision\":12}",
+    "typedValid": true,
+    "schemaValid": true
   }
 ]
