@@ -6,6 +6,11 @@ impl WorkCtl<'_, '_> {
     pub(super) fn apply_work(&mut self, slot: WorkSlot, reply: Reply) -> Option<(WorkSlot, Reply)> {
         let (slot, reply) = self.apply_workflow(slot, reply)?;
         match (slot, reply) {
+            (WorkSlot::KeepWorking(project), Reply::Task(result)) => {
+                if self.selected_project.as_deref() == Some(project.as_str()) {
+                    self.work.message = result.err().map(|error| (Tone::Attention, error));
+                }
+            }
             (WorkSlot::WorkMessagesHistory(project), Reply::Query(reply)) => {
                 if self.work.messages.project.as_deref() != Some(project.as_str()) {
                     return None;

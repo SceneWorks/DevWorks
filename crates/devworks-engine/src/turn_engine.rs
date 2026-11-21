@@ -4,6 +4,7 @@
 use crate::indexing::IndexSupervisor;
 use crate::package_host::PackageHost;
 use crate::providers::driver::NativeProviders;
+use crate::providers::sink::ProviderResult;
 use crate::runs::RunSupervisor;
 use crate::runtime::{
     Admitter, NativeTurnProgress, PendingCall, ReceiveStart, ReceiveWait, ToolDispatch,
@@ -15,9 +16,11 @@ use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, WriteOptions};
 use devworks_core::ports::storage::{StorageError, Unavailable};
 use devworks_core::protocol::Id;
+use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::services::approvals::ApprovalService;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::mcp::McpClientService;
+use devworks_core::services::usage::accounting::AttemptEnd;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -26,8 +29,12 @@ use tokio::sync::watch;
 #[derive(Clone)]
 pub struct TurnEngine {
     pub(crate) store: Arc<dyn ApplicationStore>,
+    pub(crate) clock: Arc<dyn devworks_core::ports::Clock>,
     pub(crate) artifacts: Arc<ArtifactService>,
     pub(crate) providers: Option<Arc<NativeProviders>>,
+    pub(crate) inference_router: Option<Arc<devworks_core::services::router::InferenceRouter>>,
+    pub(crate) auto_decisions:
+        Option<Arc<devworks_core::services::router::decisions::DecisionService>>,
     pub(crate) mcp: Option<Arc<McpClientService>>,
     pub(crate) packages: Option<Arc<PackageHost>>,
     pub(crate) approvals: Arc<ApprovalService>,
@@ -128,68 +135,86 @@ impl TurnEngine {
         let provider = providers
             .produce_cancellable(invocation, cancellation)
             .await?;
-        let mut tool_dispatches = Vec::new();
-        let mut continuation = None;
-        if matches!(
-            provider.result.outcome,
-            Some(
-                devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady
-                    | devworks_core::services::usage::accounting::AttemptEnd::Completed
+        let (tool_dispatches, continuation) = self
+            .continue_recorded_turn(
+                &ctx,
+                &session_id,
+                &previous,
+                &provider.result,
+                tool_cancellation.as_ref(),
+                true,
             )
-        ) {
-            let has_tools = provider.result.outcome
-                == Some(devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady);
-            let attempt_id = provider.result.attempt_id.as_ref().ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
-            })?;
-            let binding = provider.result.binding.as_ref().ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks native binding".into())
-            })?;
-            let after_sequence = provider.result.turn_start_sequence.ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks durable start position".into())
-            })?;
-            if has_tools {
-                let pass = self.dispatch_pending_pass(
-                    &ctx,
-                    &session_id,
-                    tool_cancellation.as_ref(),
-                    true,
-                )?;
-                tool_dispatches = self.settle_pending(pass).await;
-            }
-            let unanswered =
-                !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
-                    .is_empty();
-            if !unanswered {
-                let material = crate::tool_turn::continuation_context(
-                    self.store.as_ref(),
-                    &self.artifacts,
-                    &ctx,
-                    crate::tool_turn::TurnSource {
-                        session_id: &session_id,
-                        attempt_id,
-                        after_sequence,
-                        has_tools,
-                    },
-                    binding,
-                    &previous,
-                )?;
-                continuation = Some(crate::tool_turn::publish_continuation(
-                    self.store.as_ref(),
-                    &self.artifacts,
-                    &ctx,
-                    &session_id,
-                    attempt_id,
-                    binding,
-                    material,
-                )?);
-            }
-        }
+            .await?;
         Ok(NativeTurnProgress {
             provider,
             tool_dispatches,
             continuation,
         })
+    }
+
+    /// Publish or recover a settled turn from its exact recorded source. Observation can
+    /// finish publication without dispatching the tools from that result.
+    pub(crate) async fn continue_recorded_turn(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        previous: &ArtifactRef,
+        result: &ProviderResult,
+        cancellation: Option<&Cancellation>,
+        dispatch_tools: bool,
+    ) -> Result<(Vec<ToolDispatch>, Option<ArtifactRef>), StorageError> {
+        if !matches!(
+            result.outcome,
+            Some(AttemptEnd::ToolCallsReady | AttemptEnd::Completed)
+        ) {
+            return Ok((Vec::new(), None));
+        }
+        if result.source_context.as_ref() != Some(previous) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let has_tools = result.outcome == Some(AttemptEnd::ToolCallsReady);
+        let attempt_id = result.attempt_id.as_ref().ok_or_else(|| {
+            StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
+        })?;
+        let binding = result
+            .binding
+            .as_ref()
+            .ok_or_else(|| StorageError::InvalidRecord("tool turn lacks native binding".into()))?;
+        let after_sequence = result.turn_start_sequence.ok_or_else(|| {
+            StorageError::InvalidRecord("tool turn lacks durable start position".into())
+        })?;
+        let mut dispatches = Vec::new();
+        if has_tools && dispatch_tools {
+            dispatches = self
+                .dispatch_pending_async(ctx, session_id, cancellation)
+                .await?;
+        }
+        if !crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?.is_empty() {
+            return Ok((dispatches, None));
+        }
+        let material = crate::tool_turn::continuation_context(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            crate::tool_turn::TurnSource {
+                session_id,
+                attempt_id,
+                after_sequence,
+                has_tools,
+            },
+            binding,
+            previous,
+        )?;
+        let continuation = crate::tool_turn::publish_continuation(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            attempt_id,
+            binding,
+            material,
+        )?;
+        Ok((dispatches, Some(continuation)))
     }
 
     /// Resume one durable provider call through the shared gateway, recording its single
@@ -289,10 +314,30 @@ impl TurnEngine {
             .collect())
     }
 
+    /// Run synchronous tool handlers off the host executor, then await any parked receives.
+    pub(crate) async fn dispatch_pending_async(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        cancellation: Option<&Cancellation>,
+    ) -> Result<Vec<ToolDispatch>, StorageError> {
+        let worker = self.clone();
+        let (ctx, session_id, cancellation) =
+            (ctx.clone(), session_id.clone(), cancellation.cloned());
+        let pass = tokio::task::spawn_blocking(move || {
+            worker.dispatch_pending_pass(&ctx, &session_id, cancellation.as_ref(), true)
+        })
+        .await
+        .map_err(|error| {
+            StorageError::unavailable(Unavailable::Io, format!("tool dispatch worker: {error}"))
+        })??;
+        Ok(self.settle_pending(pass).await)
+    }
+
     /// The synchronous part of dispatching a session's pending calls on a bounded worker set.
     /// With `defer_receive`, an `agents.receive` that has nothing to read yet comes back parked,
     /// holding no thread; [`Self::settle_pending`] awaits it.
-    pub(crate) fn dispatch_pending_pass(
+    fn dispatch_pending_pass(
         &self,
         ctx: &InvocationContext,
         session_id: &Id,
@@ -364,7 +409,7 @@ impl TurnEngine {
 
     /// The asynchronous part: awaits every parked receive together, without a thread each, and
     /// returns every call's dispatch in the order the calls were listed.
-    pub(crate) async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
+    async fn settle_pending(&self, passes: Vec<PendingCall>) -> Vec<ToolDispatch> {
         let mut waiting: Vec<
             std::pin::Pin<Box<dyn std::future::Future<Output = ToolDispatch> + Send + '_>>,
         > = Vec::new();

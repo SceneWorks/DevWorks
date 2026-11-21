@@ -90,6 +90,7 @@ fn claim(s: &SqliteStore, name: &str, work_id: &str, feature: bool) -> StoredAll
         } else {
             PROJECT_QUEUE.into()
         },
+        automatic: false,
         owner_id: s.info().host_actor,
         session_id: None,
         ingress_namespace: id("ingress"),
@@ -136,15 +137,83 @@ fn migration_26_is_checksummed_and_closes_unaware_writers_without_rebuilding() {
     assert!(!migration.rebuilds_tables);
     let h = Harness::new();
     drop(SqliteStore::open_with(h.config(), &through(25)).unwrap());
-    let s = seeded_with(&h, &through(26));
-    insert(&s, claim(&s, "claim", "issue", false)).unwrap();
-    drop(s);
+    // Insert using the v26 writer shape. The current repo expects later claim columns.
+    drop(seeded_with(&h, &through(26)));
+    h.raw()
+        .execute(
+            "INSERT INTO allocation_claims(id,project_id,root_id,work_id,kind,queue_key,owner_id,
+         ingress_namespace,invocation_id,fence,expires_at,state,revision,work_revision,
+         root_control_revision,queue_revision,created_at)
+         VALUES('claim','project','issue','issue','task','project','host','ingress','claim',
+                1,?1,'Active',1,1,1,1,?2)",
+            rusqlite::params![T0 + 60_000, T0],
+        )
+        .unwrap();
     let legacy = SqliteStore::open_with(h.config(), &through(25)).unwrap();
     assert!(matches!(legacy.info().access, AccessMode::ReadOnly { .. }));
     drop(legacy);
     let s = h.store();
-    assert_eq!(get(&s, "claim").work_id, id("issue"));
+    let migrated = get(&s, "claim");
+    assert_eq!(migrated.work_id, id("issue"));
+    assert!(!migrated.automatic);
     assert!(s.integrity_check().unwrap().problems.is_empty());
+}
+
+#[test]
+fn parallel_migrations_preserve_keep_working_claims_and_systemone_rotation() {
+    let keep_working_branch = Harness::new();
+    let mut legacy = through(63);
+    legacy.push(crate::storage::sqlite::Migration {
+        version: 64,
+        minimum_writer: 64,
+        ..MIGRATIONS[64]
+    });
+    let s = seeded_with(&keep_working_branch, &legacy);
+    let mut automatic = claim(&s, "automatic", "issue", false);
+    automatic.automatic = true;
+    insert(&s, automatic).unwrap();
+    drop(s);
+    let s = keep_working_branch.store();
+    assert!(get(&s, "automatic").automatic);
+    assert!(s.integrity_check().unwrap().problems.is_empty());
+    drop(s);
+    let conn = keep_working_branch.raw();
+    let entries = super::super::migrations::ledger(&conn).unwrap();
+    assert_eq!(entries[63].checksum, MIGRATIONS[63].checksum());
+    assert_eq!(entries[64].checksum, MIGRATIONS[64].checksum());
+    assert_eq!(
+        conn.query_row("SELECT count(*) FROM router_decision_pool", [], |row| row
+            .get::<_, i64>(
+            0
+        ))
+        .unwrap(),
+        1
+    );
+
+    let systemone_branch = Harness::new();
+    drop(seeded_with(&systemone_branch, &through(64)));
+    let conn = systemone_branch.raw();
+    conn.execute(
+        "UPDATE router_decision_pool SET last_model_id='known-model' WHERE singleton=1",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let s = systemone_branch.store();
+    assert!(s.integrity_check().unwrap().problems.is_empty());
+    let mut automatic = claim(&s, "new-automatic", "issue", false);
+    automatic.automatic = true;
+    insert(&s, automatic).unwrap();
+    drop(s);
+    let conn = systemone_branch.raw();
+    let last: String = conn
+        .query_row(
+            "SELECT last_model_id FROM router_decision_pool WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(last, "known-model");
 }
 
 #[test]

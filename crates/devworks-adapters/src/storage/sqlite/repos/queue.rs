@@ -262,6 +262,24 @@ pub(super) fn progress(
     })
 }
 
+pub(super) fn partition_head(
+    conn: &Connection,
+    consumer: &str,
+    partition: &str,
+) -> Result<Option<QueueEntry>, StorageError> {
+    db(stmt(
+        conn,
+        &format!(
+            "SELECT {QUEUE_COLUMNS} FROM queue_entries WHERE consumer=?1 AND partition_key=?2
+         AND state NOT IN {SETTLED} ORDER BY event_seq LIMIT 1"
+        ),
+    )?
+    .query_row(params![consumer, partition], queue_row)
+    .optional())?
+    .map(queue_of)
+    .transpose()
+}
+
 pub(super) fn checkpoint(
     conn: &Connection,
     consumer: &str,

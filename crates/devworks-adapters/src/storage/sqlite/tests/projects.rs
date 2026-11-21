@@ -2983,6 +2983,44 @@ fn purge_candidate_reader_hashes_full_scoped_rows_without_copying_keys_or_other_
 }
 
 #[test]
+fn purge_candidates_include_only_the_projects_auto_route_classification() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    h.raw().execute_batch(
+        "INSERT INTO conversations VALUES('owned-conversation',NULL,0),('home-conversation',NULL,0);
+         INSERT INTO sessions(id,conversation_id,agent_id,root_id,context_epoch,revision,project_id,created_at)
+         VALUES ('owned-session','owned-conversation','purge-human',NULL,0,1,'purge-a',0),
+                ('home-session','home-conversation','purge-human',NULL,0,1,NULL,0);
+         INSERT INTO router_auto_sessions(session_id, source_json)
+         VALUES ('owned-session','{}'),('home-session','{}');",
+    ).unwrap();
+    let candidates = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_candidates(&project("purge-a"))
+    })
+    .unwrap()
+    .unwrap();
+    let routing_rows = candidates
+        .rows
+        .iter()
+        .filter(|row| {
+            matches!(
+                row.table,
+                ProjectRecordKind::RouterAutoSessions
+                    | ProjectRecordKind::RouterAutoLowCursor
+                    | ProjectRecordKind::RouterDecisionPool
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(routing_rows.len(), 1);
+    assert_eq!(routing_rows[0].table, ProjectRecordKind::RouterAutoSessions);
+    assert_eq!(
+        routing_rows[0].key_digest,
+        devworks_core::fingerprint::sha256_hex(br#"["owned-session"]"#)
+    );
+}
+
+#[test]
 fn clean_shutdown_records_planner_statistics_that_purge_planning_accepts() {
     let h = Harness::new();
     let store = h.store();

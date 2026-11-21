@@ -9,8 +9,8 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 const COLUMNS: &str = "id,project_id,root_id,work_id,kind,queue_key,owner_id,session_id,\
     ingress_namespace,invocation_id,state,parent_feature_id,execution_id,\
     fence,expires_at,revision,work_revision,root_control_revision,\
-    queue_revision,created_at,feature_task_set_revision";
-type Raw = (Vec<Option<String>>, [i64; 7], Option<i64>);
+    queue_revision,created_at,feature_task_set_revision,automatic";
+type Raw = (Vec<Option<String>>, [i64; 7], Option<i64>, bool);
 fn row(row: &Row<'_>) -> rusqlite::Result<Raw> {
     Ok((
         (0..13)
@@ -26,10 +26,11 @@ fn row(row: &Row<'_>) -> rusqlite::Result<Raw> {
             row.get(19)?,
         ],
         row.get(20)?,
+        row.get(21)?,
     ))
 }
 fn claim(
-    (text, num, feature_task_set_revision): Raw,
+    (text, num, feature_task_set_revision, automatic): Raw,
 ) -> Result<StoredAllocationClaim, StorageError> {
     let mut text = text.into_iter();
     let mut next = || text.next().flatten();
@@ -44,6 +45,7 @@ fn claim(
         work_id: id_of(need(next())?)?,
         kind: need(next())?,
         queue_key: need(next())?,
+        automatic,
         owner_id: ActorId(id_of(need(next())?)?),
         session_id: next().map(id_of).transpose()?,
         ingress_namespace: id_of(need(next())?)?,
@@ -237,12 +239,13 @@ fn duplicate(
         .query_row(
             "SELECT id FROM allocation_claims WHERE id<>?1 AND ((state IN ('Active',\
             'Transferred','Yielding') AND work_id=?2) OR (?4 AND project_id=?3 AND \
-            queue_key='project' AND state IN ('Transferred','Yielding'))) LIMIT 1",
+            queue_key='project' AND automatic=?5 AND state IN ('Transferred','Yielding'))) LIMIT 1",
             params![
                 exclude.map_or("", Id::as_str),
                 c.work_id.as_str(),
                 c.project_id.0.as_str(),
-                execution_slot
+                execution_slot,
+                c.automatic
             ],
             |row| row.get(0),
         )
@@ -296,8 +299,8 @@ pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(
         queue_key,owner_id,session_id,ingress_namespace,invocation_id,fence,\
         expires_at,state,revision,work_revision,parent_feature_id,\
         root_control_revision,queue_revision,feature_task_set_revision,\
-        created_at,execution_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,\
-        ?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+        created_at,execution_id,automatic) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,\
+        ?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
         params![
             c.id.as_str(),
             c.project_id.0.as_str(),
@@ -319,7 +322,8 @@ pub(super) fn insert(unit: &mut Unit<'_>, c: &StoredAllocationClaim) -> Result<(
             c.queue_revision,
             c.feature_task_set_revision,
             c.created_at_ms,
-            c.execution_id.as_ref().map(Id::as_str)
+            c.execution_id.as_ref().map(Id::as_str),
+            c.automatic
         ],
     ))?;
     Ok(())
@@ -352,6 +356,7 @@ pub(super) fn update(
         || c.kind != old.kind
         || c.root_id != old.root_id
         || c.queue_key != old.queue_key
+        || c.automatic != old.automatic
         || c.ingress_namespace != old.ingress_namespace
         || c.invocation_id != old.invocation_id
         || c.created_at_ms != old.created_at_ms

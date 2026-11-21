@@ -795,6 +795,12 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             }
         }
         "router.decide" => {
+            let exact = v.get("modelId").is_some() && v.get("expectedModelRevision").is_some();
+            let pooled = v.get("modelId").is_none() && v.get("expectedModelRevision").is_none();
+            require(
+                (exact && v.get("usePool").is_none()) || (pooled && v["usePool"] == true),
+                "select an exact decision model and revision or the decision pool",
+            )?;
             let a = v["questions"].as_array().unwrap();
             let mut seen = std::collections::HashSet::new();
             for q in a {

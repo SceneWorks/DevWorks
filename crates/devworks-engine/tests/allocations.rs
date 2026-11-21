@@ -798,6 +798,132 @@ fn an_additional_reservation_cannot_start_until_the_running_root_quiesces() {
 }
 
 #[test]
+fn automatic_project_claim_uses_priority_and_start_requires_that_exact_claim_and_archive_epoch() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    let recovering = f.issue("recovering", 1);
+    applied(f.command(
+        "tasks.move",
+        json!({"taskId":recovering, "expectedRevision":"1",
+            "statusId":"project-in-progress","expectedWorkflowRevision":"1"}),
+    ));
+    let fresh = f.issue("fresh", 100);
+    let other_project = ProjectId(id("different-project"));
+    let project = ProjectId(id("project"));
+    let ingress = devworks_core::context::HostIngress::new(f.store.as_ref());
+    let context = ingress
+        .keep_working_context(&f.user, project.clone(), 0, id("automatic"))
+        .unwrap();
+    let foreign = ingress
+        .keep_working_context(&f.user, project.clone(), 0, id("foreign"))
+        .unwrap();
+    let different = ingress
+        .keep_working_context(&f.user, other_project, 0, id("different"))
+        .unwrap();
+    let select = |ctx: &InvocationContext| {
+        let mut frame = f.frame("next_work.claim_project_queue", json!({
+            "projectId":"project","expectedQueueRevision":f.queue(None).to_string(),"leaseMs":"1000"
+        }));
+        frame["schemaRevision"] = json!(3);
+        f.send(ctx, "next_work.claim_project_queue", &frame)
+    };
+    refused(select(&different));
+    let selected = outcome(select(&context));
+    assert_eq!(selected["claim"]["workId"], json!(fresh));
+    let start = |ctx: &InvocationContext, root: &Id| {
+        let (control, revision) = read(&*f.store, |s| {
+            Ok((
+                control_of(s.runs(), &RootId(root.clone()))?,
+                s.work().work(root)?.unwrap().revision,
+            ))
+        });
+        f.send(ctx, "runs.start", &f.frame("runs.start", json!({
+            "rootId":root,"expectedWorkRevision":revision.to_string(),"expectedControlRevision":control.revision.to_string()
+        })))
+    };
+    refused(start(&foreign, &fresh));
+    applied(f.command(
+        "tasks.dependency_links",
+        json!({"taskId":fresh,"expectedRevision":"1","replacement":{"edges":[
+            {"predecessor":recovering,"successor":fresh}
+        ]}}),
+    ));
+    let blocked_start = start(&context, &fresh);
+    assert!(
+        matches!(blocked_start, CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Refused { fault }
+            if fault.code == devworks_core::protocol::DomainErrorCode::LeaseLost))
+    );
+    let reselected = outcome(select(&context));
+    assert_eq!(reselected["claim"]["workId"], json!(recovering));
+    let archive_project = project.clone();
+    write(&*f.store, move |tx| {
+        let mut record = tx.projects().project(&archive_project)?.unwrap();
+        let expected = record.revision;
+        record.archive_epoch += 1;
+        record.revision += 1;
+        tx.projects().update_project(&record, expected)
+    })
+    .unwrap();
+    refused(start(&context, &recovering));
+    assert!(
+        read(&*f.store, |s| s
+            .runs()
+            .live_activation(&RootId(recovering.clone())))
+        .is_none()
+    );
+}
+
+#[test]
+fn an_automatic_reservation_leaves_an_independent_manual_execution_slot() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    let a = f.issue("automatic", 3);
+    let b = f.issue("manual", 2);
+    let c = f.issue("still-ready", 1);
+    let context = devworks_core::context::HostIngress::new(f.store.as_ref())
+        .keep_working_context(&f.user, ProjectId(id("project")), 0, id("automatic"))
+        .unwrap();
+    let automatic = |operation, body| {
+        let mut frame = f.frame(operation, body);
+        if operation == "next_work.claim_project_queue" {
+            frame["schemaRevision"] = json!(3);
+        }
+        f.send(&context, operation, &frame)
+    };
+    let project_queue = |another| {
+        json!({"projectId":"project","expectedQueueRevision":f.queue(None).to_string(),
+            "leaseMs":"30000","another":another})
+    };
+    let start = |root: &Id| {
+        let control = read(&*f.store, |s| control_of(s.runs(), &RootId(root.clone())));
+        json!({"rootId":root,"expectedWorkRevision":"1","expectedControlRevision":control.revision.to_string()})
+    };
+
+    let selected = outcome(automatic(
+        "next_work.claim_project_queue",
+        project_queue(false),
+    ));
+    assert_eq!(selected["claim"]["workId"], json!(a));
+    applied(automatic("runs.start", start(&a)));
+    let selected = outcome(f.next3(json!({})));
+    assert_eq!(selected["claim"]["workId"], json!(b));
+    f.start(&b);
+    let selected = outcome(automatic(
+        "next_work.claim_project_queue",
+        project_queue(true),
+    ));
+    assert_eq!(selected["claim"]["workId"], json!(c));
+    refused(automatic("runs.start", start(&c)));
+    read(&*f.store, |s| {
+        assert!(s.runs().live_activation(&RootId(a))?.is_some());
+        assert!(s.runs().live_activation(&RootId(b))?.is_some());
+        assert!(s.runs().live_activation(&RootId(c))?.is_none());
+        Ok(())
+    });
+}
+
+#[test]
 fn recovery_precedes_fresh_priority_and_returns_previous_owner_handoff_and_native_activity() {
     let f = Fx::new();
     let recovering = f.issue("recovering", 1);

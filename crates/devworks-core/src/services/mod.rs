@@ -29,6 +29,7 @@ pub mod jobs;
 pub mod kernel;
 pub mod knowledge;
 pub mod mcp;
+pub mod navigation;
 pub mod notifications;
 pub mod packages;
 pub mod power;
@@ -298,6 +299,12 @@ impl UseCases {
     /// The same qualified routing owner used by native attempt admission.
     pub fn inference_router(&self) -> Option<Arc<router::InferenceRouter>> {
         self.inference_router.clone()
+    }
+
+    /// Installs decision writes only when the native host installed their owned consumer.
+    pub fn with_systemone(mut self, service: Arc<router::decisions::DecisionService>) -> Self {
+        self.register(router::decisions::OPERATION, None, Some(service));
+        self
     }
 
     /// Canonical usage reports share the native gateway and its authority fences.

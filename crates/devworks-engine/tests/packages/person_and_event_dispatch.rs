@@ -113,6 +113,272 @@ fn a_person_runs_a_package_tool_through_the_gateway_and_reads_its_result() {
     assert!(done.failure.is_none());
 }
 
+#[derive(Default)]
+struct CoordinatorModel {
+    requests: Mutex<Vec<Value>>,
+    replacement_ready: (Mutex<bool>, std::sync::Condvar),
+}
+
+impl devworks_core::ports::provider_http::StreamingHttp for CoordinatorModel {
+    fn open(
+        &self,
+        request: &devworks_core::ports::http::HttpRequest,
+        _: &devworks_core::ports::provider_http::StreamLimits,
+        _: &Cancellation,
+    ) -> Result<
+        Box<dyn devworks_core::ports::provider_http::HttpStream>,
+        devworks_core::ports::provider_http::TransportError,
+    > {
+        let request: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
+        let index = {
+            let mut requests = self.requests.lock().unwrap();
+            let index = requests.len();
+            requests.push(request.clone());
+            index
+        };
+        if index == 3 {
+            let (replacement, signal) = &self.replacement_ready;
+            let (_guard, wait) = signal
+                .wait_timeout_while(replacement.lock().unwrap(), PATIENCE, |ready| !*ready)
+                .unwrap();
+            assert!(!wait.timed_out(), "package update did not reach cutover");
+        }
+        let body = if matches!(index, 0 | 3) {
+            let alias = package_alias(&request)
+                .expect("selected package tool in the native provider request");
+            let call = format!("native-package-call-{index}");
+            let finish = json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":call,
+                "type":"function","function":{"name":alias,"arguments":"{\"text\":\"selected package\"}"}}]},"finish_reason":"tool_calls"}]});
+            format!("data: {finish}\n\ndata: [DONE]\n\n").into_bytes()
+        } else {
+            MODEL_WIRE.as_bytes().to_vec()
+        };
+        Ok(Box::new(ModelStream {
+            head: devworks_core::ports::provider_http::ResponseHead {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+            },
+            body: Some(body),
+        }))
+    }
+}
+
+fn package_alias(request: &Value) -> Option<&str> {
+    request["tools"]
+        .as_array()?
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .find(|name| name.starts_with("pkg_echo_"))
+}
+
+fn set_package_policy(a: &App, selected: bool, profile: &'static str) {
+    use devworks_core::settings::catalog::TOOL_OVERRIDES_KEY;
+    write(&*a.store, move |tx| {
+        let scope = ConfigScope::Workspace;
+        let current = model::current_layer(tx.configuration(), &scope)?;
+        let key = descriptor(TOOL_OVERRIDES_KEY).unwrap();
+        let assignment = serde_json::from_value(json!({"key": key.key,
+            "value": {"schema": key.schema_ref(), "value": {"agent-pack/echo": selected}}}))
+        .unwrap();
+        let profile_key = descriptor("safety.accessProfile").unwrap();
+        let profile = serde_json::from_value(json!({"key": profile_key.key,
+            "value": {"schema": profile_key.schema_ref(), "value": profile}}))
+        .unwrap();
+        let plan = model::plan(&current, &[assignment, profile]);
+        let body = model::body(
+            &plan,
+            &ActorId(id("user-a")),
+            tx.now_ms(),
+            json!({"kind":"test"}),
+        );
+        tx.configuration().append_revision(
+            &scope,
+            model::NAMESPACE,
+            current.revision,
+            model::BODY_SCHEMA_VERSION,
+            body,
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn the_native_coordinator_offers_and_dispatches_only_selected_package_tools() {
+    let _s = serial();
+    let mut a = App::unbooted(Harness::new(), None, None);
+    seed_model(&a.store);
+    a.model = Some(Arc::new(ScriptedModel::default()));
+    let wire = Arc::new(CoordinatorModel::default());
+    let mut composition = a.composition();
+    composition.use_cases.register(
+        "help.generate_capability_docs",
+        None,
+        Some(Arc::new(UnusedHelpGeneration)),
+    );
+    let owner = ActorId(id("workspace-coordinator"));
+    composition.application.sessions = Some(devworks_engine::SessionPorts {
+        coordinator: Some(owner.clone()),
+    });
+    composition.config.providers =
+        Some(devworks_engine::providers::driver::ProviderComposition::new(wire.clone()));
+    a.app = Some(a.rt.block_on(boot(composition)).unwrap());
+
+    let mut spec = Spec::new("agent-pack", "1.0.0");
+    spec.contributions = vec!["echo", "unselected"];
+    package(a.install(&a.user, &spec));
+    a.ready("agent-pack");
+    set_package_policy(&a, true, "full");
+    let session = match applied(a.domain(
+        &a.user,
+        "sessions.start",
+        json!({
+            "kind":"sessions.start","scope":{"kind":"Workspace"},"title":"Native tool selection"
+        }),
+    )) {
+        OperationResult::SessionsStart { value } => value.id,
+        other => panic!("expected an ordinary workspace session, got {other:?}"),
+    };
+    let send = |key: &str, text: &str| {
+        let revision = read(&*a.store, |r| r.sessions().session(&session))
+            .unwrap()
+            .revision;
+        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":3,"requestKey":key,"sessionId":session,
+            "expectedSessionRevision":revision.to_string(),"content":[{"kind":"Text","text":text}],
+            "replyRoute":{"intent":{"kind":"Model","modelId":"model"},"effort":"Default"}});
+        applied(
+            a.app()
+                .command(
+                    &a.user,
+                    "sessions.append_message",
+                    frame.to_string().as_bytes(),
+                )
+                .unwrap(),
+        );
+    };
+    send("package-coordinator-first", "Use the selected package tool");
+    settled(&a, devworks_engine::package_tools::CONSUMER, 1);
+    settled(
+        &a,
+        devworks_core::services::sessions::workspace_reply::CONSUMER,
+        1,
+    );
+    let operation = read(&*a.store, |r| {
+        r.operations().operations_for_capability(
+            "package.invoke",
+            &[OperationState::ObservedComplete],
+            None,
+            10,
+        )
+    })
+    .pop()
+    .expect("durable package tool operation");
+    assert_eq!(operation.payload["contributionId"], "agent-pack/echo");
+    assert_eq!(operation.payload["principal"], json!(owner));
+    assert_eq!(operation.payload["sessionId"], json!(session));
+
+    set_package_policy(&a, false, "full");
+    send(
+        "package-coordinator-disabled",
+        "The package tool is now disabled",
+    );
+    settled(
+        &a,
+        devworks_core::services::sessions::workspace_reply::CONSUMER,
+        2,
+    );
+    let transcript = read(&*a.store, |r| r.sessions().entries(&session, 0, 40));
+    assert_eq!(
+        transcript
+            .iter()
+            .filter(|entry| entry.kind == "ToolResponseRecorded")
+            .count(),
+        1
+    );
+    assert!(
+        transcript.iter().any(|entry| {
+            entry.kind == "OperationUpdate" && entry.body["operationId"] == json!(operation.id)
+        }),
+        "the settled invocation appends its own update after the initial tool receipt"
+    );
+    {
+        let requests = wire.requests.lock().unwrap();
+        let [first, continuation, disabled] = requests.as_slice() else {
+            panic!(
+                "expected one tool call and two final requests, got {}",
+                requests.len()
+            );
+        };
+        assert_eq!(package_alias(first), package_alias(continuation));
+        assert!(!first.to_string().contains("pkg_unselected_"));
+        assert!(
+            package_alias(disabled).is_none(),
+            "the disabled tool must disappear on the next request"
+        );
+    }
+    assert_eq!(
+        queue_status(&a, devworks_engine::package_tools::CONSUMER).completed,
+        1
+    );
+
+    // A compatible update can keep the same input schema and change the executable. The
+    // streaming model saw the old implementation's alias and cannot dispatch the new one.
+    set_package_policy(&a, true, "full");
+    send(
+        "package-coordinator-old-version",
+        "Use the currently offered tool",
+    );
+    let until = Instant::now() + PATIENCE;
+    while wire.requests.lock().unwrap().len() < 4 {
+        assert!(
+            Instant::now() < until,
+            "provider did not capture the old alias"
+        );
+        super::event_intents::drive(&a, Duration::from_millis(25));
+    }
+    spec.version = "1.1.0".into();
+    let changed = package(a.update_from(&a.user, &a.user, &spec));
+    assert_eq!(availability(&changed), "Ready");
+    a.ready("agent-pack");
+    *wire.replacement_ready.0.lock().unwrap() = true;
+    wire.replacement_ready.1.notify_all();
+    settled(
+        &a,
+        devworks_core::services::sessions::workspace_reply::CONSUMER,
+        3,
+    );
+    let transcript = read(&*a.store, |r| r.sessions().entries(&session, 0, 40));
+    assert!(
+        transcript
+            .iter()
+            .any(|entry| entry.kind == "ToolResponseRecorded"
+                && entry.body["outcome"]["code"] == "package_tool_unavailable")
+    );
+    {
+        let requests = wire.requests.lock().unwrap();
+        assert_eq!(package_alias(&requests[0]), package_alias(&requests[3]));
+        assert!(package_alias(&requests[4]).is_some());
+        assert_ne!(package_alias(&requests[3]), package_alias(&requests[4]));
+    }
+
+    // Project Scope never offers this unsandboxed native tool despite the explicit selection.
+    set_package_policy(&a, true, "projectScope");
+    send(
+        "package-coordinator-project-scope",
+        "Respect the scoped execution profile",
+    );
+    settled(
+        &a,
+        devworks_core::services::sessions::workspace_reply::CONSUMER,
+        4,
+    );
+    assert!(package_alias(wire.requests.lock().unwrap().last().unwrap()).is_none());
+    assert_eq!(
+        queue_status(&a, devworks_engine::package_tools::CONSUMER).completed,
+        1
+    );
+}
+
 #[test]
 fn an_agent_cannot_start_a_person_invocation_nor_read_one() {
     let _s = serial();

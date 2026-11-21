@@ -514,6 +514,15 @@ pub fn registered_tool_visibility(
         }
         (_, None) => None,
     };
+    if op == "ui.current_screen"
+        && (role != Some(AgentRole::WorkspaceCoordinator)
+            || ctx.session_id().is_none()
+            || ctx.project_id().is_some()
+            || ctx.root_id().is_some()
+            || ctx.assignment_id().is_some())
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     // A task or feature assignment never grants project administration. Rootless agents retain
     // their existing project policy and approval path; humans retain direct authority above.
     if agent

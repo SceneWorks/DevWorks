@@ -61,8 +61,8 @@ use devworks_core::locks::LockExt;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
-    ApplicationStore, AttemptBinding, DeliveryFilter, DeliveryKey, EventRecord, OperationRecord,
-    QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
+    ApplicationStore, AttemptBinding, Cancellation, DeliveryFilter, DeliveryKey, EventRecord,
+    OperationRecord, QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
     WriteTransaction, cancellation_applies, possibly_dispatched,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState};
@@ -165,9 +165,26 @@ pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait EffectExecutor: Send + Sync {
     /// Performs the effect of a `Dispatching` operation once.
     fn execute(&self, operation: OperationRecord) -> EffectFuture;
+    fn observes_delivery_cancellation(&self) -> bool {
+        false
+    }
+    /// Effects that own cancellable I/O can act on the delivery's durable cancellation.
+    fn execute_cancellable(
+        &self,
+        operation: OperationRecord,
+        _cancel: Cancellation,
+    ) -> EffectFuture {
+        self.execute(operation)
+    }
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
+    /// An operation with an established outcome can return to delivery without operator input.
+    /// Consumers opt in only when their observation establishes an exact safe continuation.
+    fn resumes_after_observation(&self) -> bool {
+        false
+    }
+
     /// Resolves once `operation` may be dispatched, for example once the effect it is ordered
     /// behind has settled. Until then the dispatcher keeps the delivery's claim (renewing its
     /// lease) but releases its worker permit, so waiting work never takes capacity from other
@@ -968,8 +985,9 @@ impl Dispatcher {
     /// Observes operations whose outcome is unknown behind held deliveries, using each
     /// consumer's executor, and records what the target shows (`ObservedComplete`, `Failed`,
     /// `RetryPending` when it shows the effect did not happen). It never re-executes an effect
-    /// and never redelivers: an explicit `queue.reconcile` decides that. Returns the number of
-    /// operations whose outcome was established.
+    /// and never redelivers it directly. Consumers that can prove safe continuation may
+    /// requeue an established outcome. Other consumers wait for explicit `queue.reconcile`.
+    /// Returns the number of operations whose outcome was established.
     pub async fn observe_unknown(&self) -> Result<usize, StorageError> {
         let mut resolved = 0;
         for consumer in &self.inner.consumers {
@@ -986,26 +1004,26 @@ impl Dispatcher {
             let mut after: Option<DeliveryKey> = None;
             loop {
                 let (f, from) = (filter.clone(), after.clone());
-                let (held, next): (Vec<OperationRecord>, Option<DeliveryKey>) =
-                    store::read(&self.inner.store, move |r| {
-                        let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
-                        let mut ops = Vec::new();
-                        for e in page.entries {
-                            if e.state != QueueState::Reconciling {
-                                continue;
-                            }
-                            if let Some(op) = &e.operation_id
-                                && let Some(rec) = r.operations().operation(op)?
-                                && rec.state == OperationState::OutcomeUnknown
-                            {
-                                ops.push(rec);
-                            }
+                let (held, next) = store::read(&self.inner.store, move |r| {
+                    let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
+                    let mut ops = Vec::new();
+                    for e in page.entries {
+                        if e.state != QueueState::Reconciling {
+                            continue;
                         }
-                        Ok((ops, page.next))
-                    })
-                    .await?;
-                for op in held {
+                        if let Some(op) = &e.operation_id
+                            && let Some(rec) = r.operations().operation(op)?
+                            && rec.state == OperationState::OutcomeUnknown
+                        {
+                            ops.push((e.id, e.revision, rec));
+                        }
+                    }
+                    Ok((ops, page.next))
+                })
+                .await?;
+                for (delivery, delivery_revision, op) in held {
                     let observed = executor.observe(op.clone()).await;
+                    let auto_resume = executor.resumes_after_observation();
                     let established =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
                             let Some(current) = tx.operations().operation(&op.id)? else {
@@ -1026,6 +1044,14 @@ impl Dispatcher {
                                         to,
                                         Some(json!({"reconciliation": note})),
                                     )?;
+                                    if auto_resume
+                                        && tx.queue().entry(&delivery)?.is_some_and(|entry| {
+                                            entry.state == QueueState::Reconciling
+                                                && entry.revision == delivery_revision
+                                        })
+                                    {
+                                        tx.queue().requeue(&delivery, 0)?;
+                                    }
                                     Ok(true)
                                 }
                                 None => {
@@ -1053,6 +1079,7 @@ impl Dispatcher {
         }
         if resolved > 0 {
             self.notify_status();
+            self.wakeup().wake();
         }
         Ok(resolved)
     }
@@ -1333,24 +1360,37 @@ impl Dispatcher {
         };
 
         // The effect runs outside any transaction; the lease is renewed while it runs.
-        let mut effect = executor.execute(operation.clone());
+        let cancellation = Cancellation::new();
+        let mut effect = executor.execute_cancellable(operation.clone(), cancellation.clone());
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
         let fence = claimed
             .fence()
             .ok_or_else(|| invalid("claimed entry without fence"))?;
         let result = loop {
-            match tokio::time::timeout(every, &mut effect).await {
-                Ok(r) => break r,
-                Err(_) => {
+            let check = async {
+                if executor.observes_delivery_cancellation() {
+                    let _ = first(self.inner.changed.notified(), tokio::time::sleep(every)).await;
+                } else {
+                    tokio::time::sleep(every).await;
+                }
+            };
+            match first(&mut effect, check).await {
+                Either::Left(result) => break result,
+                Either::Right(_) => {
                     let (id, f) = (claimed.id.clone(), fence.clone());
                     // A lost lease does not stop recording the outcome: the attempt fence still
                     // binds the operation, and the delivery is then reconciled, not replayed.
-                    let _ =
+                    let epoch = claimed.cancellation_epoch;
+                    let cancelled =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
-                            tx.queue().renew(&id, &f, lease)
+                            let entry = tx.queue().renew(&id, &f, lease)?;
+                            Ok(entry.cancel_requested || entry.cancellation_epoch != epoch)
                         })
                         .await;
+                    if matches!(cancelled, Ok(true)) || self.inner.stopping.load(Ordering::SeqCst) {
+                        cancellation.cancel();
+                    }
                 }
             }
         };

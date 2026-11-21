@@ -120,6 +120,218 @@ async fn runtime_on(
     Arc::new(boot(composed).await.unwrap())
 }
 
+#[test]
+fn workspace_conversation_compacts_before_reply_at_the_routed_threshold() {
+    exercise_workspace_compaction(false);
+}
+
+#[test]
+fn workspace_compaction_refused_before_transport_leaves_the_conversation_available() {
+    exercise_workspace_compaction(true);
+}
+
+fn exercise_workspace_compaction(refuse_once: bool) {
+    use super::workspace_reply::{open_home, send_workspace, wait_for_replies, workspace_ports};
+    use devworks_core::context::{HostIngress, WorkspaceReply};
+    use devworks_core::protocol::Counter;
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let set_model_window = |size| {
+        f.tx(move |_, tx| {
+            let mut model = tx.router().route_model(&id("watch-model"))?.unwrap();
+            let previous = model.revision;
+            model.context_tokens = Some(size);
+            model.revision += 1;
+            tx.router().put_route_model(&model, Some(previous))
+        })
+    };
+    set_model_window(1_000_000);
+    let wire = Arc::new(CompactionWire::default());
+    wire.answers
+        .lock()
+        .unwrap()
+        .extend([long_answer(), "Reply after summary".into()]);
+    runtime().block_on(async {
+        let mut ports = workspace_ports(&f, wire.clone());
+        if refuse_once {
+            let files = FaultFiles::over(Arc::new(NativeArtifactFiles::new(
+                f.h.root.clone(),
+                f.h.root.with_extension("cache"),
+            )));
+            let store = Arc::downgrade(&f.store);
+            let reject = AtomicBool::new(true);
+            files.before(FileOp::Publish, move |call| {
+                let Some(store) = store.upgrade() else {
+                    return Ok(());
+                };
+                let Some(staging) = call
+                    .name
+                    .strip_suffix(".part")
+                    .and_then(|id| Id::new(id).ok())
+                else {
+                    return Ok(());
+                };
+                let staged = read(&*store, |r| r.operations().operation(&OperationId(staging)));
+                if staged
+                    .is_some_and(|op| op.payload["source"]["kind"] == "ProviderCompactionInput")
+                    && reject.swap(false, Ordering::SeqCst)
+                {
+                    write(&*store, |tx| {
+                        let now = tx.now_ms();
+                        tx.router()
+                            .record_cooldown(&StoredCooldown {
+                                model_id: id("watch-model"),
+                                until_ms: now + 60_000,
+                                reason: "RateLimited".into(),
+                                observed_at_ms: now,
+                            })
+                            .map(|_| ())
+                    })
+                    .unwrap();
+                }
+                Ok(())
+            });
+            ports.artifacts = ArtifactComposition::new(
+                files,
+                Arc::new(HostArtifactSources::new(f.h.clock(), f.h.ids.clone())),
+                Arc::new(NativeFilesystem::new()),
+            );
+        }
+        let app = boot(ports).await.unwrap();
+        let session = open_home(&f, &app);
+        send_workspace(
+            &f,
+            &app,
+            &session,
+            "home-before-compaction",
+            "Keep the original brief",
+            "watch-model",
+        );
+        wait_for_replies(&f, 1).await;
+        let session_record = read(&*f.store, |r| r.sessions().session(&session)).unwrap();
+        let info = f.store.info();
+        let ctx = HostIngress::new(&*f.store)
+            .context(
+                session_record.agent_id.clone(),
+                PrincipalKind::Agent,
+                id("measure-home-compaction"),
+                id("workspace-compaction-test"),
+                Counter::new(info.restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session.clone())
+            .with_workspace_reply(WorkspaceReply {
+                user_sequence: session_record.last_durable_sequence(),
+                preference: None,
+            });
+        let engine = app.turn_engine();
+        let (head, _, _) = engine
+            .recover_native_context_head(&ctx, &session)
+            .unwrap()
+            .unwrap();
+        let measured =
+            devworks_engine::agent_turns::context_tokens(engine, &ctx, &head, 0).unwrap();
+        let saved = read(&*f.store, |r| r.sessions().entries(&session, 0, 30));
+        let response_bytes = saved
+            .iter()
+            .find_map(|entry| {
+                entry.body["visibleText"]
+                    .as_str()
+                    .filter(|text| text.starts_with(LONG_ANSWER))
+                    .map(str::len)
+            })
+            .expect("the long response was durably recorded");
+        // Choose a window whose 80% boundary falls between the measured context and
+        // its fixed prefix. The set of composed tool definitions can grow independently.
+        set_model_window((measured - response_bytes as i64 / 8) * 100 / 80);
+
+        send_workspace(
+            &f,
+            &app,
+            &session,
+            "home-after-compaction",
+            "Continue the same conversation",
+            "watch-model",
+        );
+        if refuse_once {
+            within(
+                "a known compaction refusal settles without opening a transport",
+                async {
+                    loop {
+                        let status = app.workspace_reply_status(&f.user, &session).unwrap();
+                        if status == Some(devworks_engine::WorkspaceReplyStatus::Unavailable) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                },
+            )
+            .await;
+            assert_eq!(wire.bodies.lock().unwrap().len(), 1);
+            f.tx(|_, tx| tx.router().clear_cooldown(&id("watch-model")).map(|_| ()));
+            send_workspace(
+                &f,
+                &app,
+                &session,
+                "home-retry-compaction",
+                "Continue the same conversation",
+                "watch-model",
+            );
+            // The earlier known refusal stays visible in its own completed operation.
+            within(
+                "the next workspace reply settles after availability returns",
+                async {
+                    loop {
+                        let status = read(&*f.store, |r| {
+                            r.queue().status(
+                                devworks_core::services::sessions::workspace_reply::CONSUMER,
+                            )
+                        });
+                        if status.completed == 3 {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                },
+            )
+            .await;
+        } else {
+            wait_for_replies(&f, 2).await;
+        }
+        {
+            let requests = wire.bodies.lock().unwrap();
+            let [initial, compaction, reply] = requests.as_slice() else {
+                panic!(
+                    "expected one compaction between two replies, got {}",
+                    requests.len()
+                );
+            };
+            assert!(
+                initial.contains("Keep the original brief")
+                    && !initial.contains(COMPACTION_REQUEST)
+            );
+            assert!(compaction.contains(COMPACTION_REQUEST) && compaction.contains(LONG_ANSWER));
+            assert!(reply.contains(SUMMARY) && !reply.contains(LONG_ANSWER));
+            assert!(reply.contains("Continue the same conversation"));
+            assert!(requests.iter().all(|r| r.contains("fixture-model")));
+        }
+        let entries = read(&*f.store, |r| r.sessions().entries(&session, 0, 30));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.kind == "ContextEpochChanged" && e.body["reason"] == "Compaction")
+        );
+        assert!(entries.iter().any(|e| {
+            e.kind == "AssistantAttempt"
+                && e.body["visibleText"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with(LONG_ANSWER))
+        }));
+        app.shutdown().await;
+    });
+}
+
 /// Sets the pinned fixture model's context window.
 fn set_context_window(fx: &Fx, tokens: i64) {
     fx.tx(move |_, tx| {

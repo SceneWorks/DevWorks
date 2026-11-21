@@ -941,9 +941,12 @@ fn native_context_help_returns_to_the_same_conversation_and_unsent_draft() {
     );
     let conversation = h.state().chat.selected.clone();
     press(&mut h, "Help for current screen");
-    step_until(&mut h, "published contextual Help passage", |shell| {
-        shell.help.read.is_some()
-    });
+    step_until_progressing(
+        &mut h,
+        "published contextual Help passage",
+        || root.write_progress(),
+        |shell| shell.help.read.is_some(),
+    );
     settle(&mut h);
     assert_eq!(selected(&h).0, "chat");
     press(&mut h, "Back to previous screen");
