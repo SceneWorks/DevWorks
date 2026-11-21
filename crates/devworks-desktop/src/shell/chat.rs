@@ -689,8 +689,7 @@ impl ChatCtl<'_, '_> {
         if self.chat.route_selection_locked(&key) {
             self.chat.notice = Some((
                 Tone::Attention,
-                "The conversation's first route is still being saved; choose again once it \
-                 is pinned."
+                "A message or route change is still being saved. Choose again once it is confirmed."
                     .into(),
             ));
             return;

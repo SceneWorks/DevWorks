@@ -143,6 +143,21 @@ fn wait_for_pin(
     });
 }
 
+fn wait_for_visible_pin(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+    session: &str,
+) {
+    step_until(h, "the visible route reflects the stored pin", |s| {
+        s.chat
+            .routing
+            .status
+            .get(session)
+            .and_then(|status| status.availability.as_ref())
+            .is_some_and(|availability| availability.pin.is_some())
+    });
+    settle(h);
+}
+
 fn workspace_reply_routes(root: &Root, session: &str) -> Vec<serde_json::Value> {
     let db = rusqlite::Connection::open(root.0.join("workspace.sqlite")).unwrap();
     db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
@@ -284,15 +299,7 @@ fn a_pinned_conversation_shows_its_pin_and_changes_through_router_pin() {
     assert_eq!(pin_of(&*backend, &session).unwrap().0, "opus");
     click_nav(&mut h, "Artifacts");
     click_nav(&mut h, "Chat");
-    step_until(&mut h, "the pin is shown", |s| {
-        s.chat
-            .routing
-            .status
-            .get(&session)
-            .and_then(|st| st.availability.as_ref())
-            .is_some_and(|a| a.pin.is_some())
-    });
-    settle(&mut h);
+    wait_for_visible_pin(&mut h, &session);
     assert!(
         has_text(&h, "Pinned: claude-opus-5-5 · Provider default"),
         "{:?}",
@@ -643,7 +650,7 @@ fn the_selection_cannot_change_while_the_native_message_carrying_it_is_saved() {
     assert_eq!(pin_of(&*real, &session).unwrap().0, "opus");
     click_nav(&mut h, "Artifacts");
     click_nav(&mut h, "Chat");
-    // The editor now reads the durable pin before submitting an explicit change.
+    wait_for_visible_pin(&mut h, &session);
     choose(&mut h, ROUTE_LABEL, "Sonnet");
     assert_eq!(pin_of(&*real, &session).unwrap().0, "sonnet");
 }
