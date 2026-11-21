@@ -36,9 +36,19 @@ fn boot_help_with_metadata(
     files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
     schemas: Option<devworks_engine::schemas::SchemaComposition>,
 ) -> HelpApp {
+    boot_help_with_database(rt, h, files, schemas, None)
+}
+fn boot_help_with_database(
+    rt: &tokio::runtime::Runtime,
+    h: &Harness,
+    files: Arc<dyn devworks_core::ports::files::ArtifactFiles>,
+    schemas: Option<devworks_engine::schemas::SchemaComposition>,
+    database: Option<devworks_engine::schemas::DatabaseComposition>,
+) -> HelpApp {
     let store = h.open();
     let mut config = RuntimeConfig::new(id("help-job-dispatcher"));
     config.schemas = schemas;
+    config.database = database;
     config.scheduler_interval = Duration::from_secs(3600);
     config.collect_interval = Duration::from_secs(3600);
     config.housekeeping_interval = Duration::from_secs(3600);

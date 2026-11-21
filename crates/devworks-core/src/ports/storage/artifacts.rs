@@ -116,6 +116,19 @@ impl ArtifactScope {
     }
 }
 
+/// A database cell can only be reopened within the original authority and the same rules.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseArtifactAccess {
+    pub connection: Id,
+    pub revision: i64,
+    pub configuration: i64,
+    pub global_policy: i64,
+    pub source_policy: i64,
+    pub scope_policy: i64,
+    pub restore_epoch: i64,
+}
+
 /// How long an artifact is kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArtifactRetention {
@@ -351,6 +364,12 @@ pub trait ArtifactRead {
         project: Option<&ProjectId>,
         worktree: Option<(&Id, i64)>,
         restore_epoch: i64,
+    ) -> Result<bool, StorageError>;
+    fn database_artifact_available(
+        &self,
+        access: &DatabaseArtifactAccess,
+        owner: &ActorId,
+        project: Option<&ProjectId>,
     ) -> Result<bool, StorageError>;
     /// Links of every version of `artifact`.
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError>;

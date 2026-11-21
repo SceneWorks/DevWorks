@@ -408,3 +408,153 @@ fn cancelling_ready_schema_child_clears_only_its_activity_and_allows_next_run() 
     assert_eq!(app.settle(&rt, &scheduler, &job).status, "Cancelled");
     rt.block_on(app.runtime.shutdown());
 }
+
+#[test]
+#[cfg(unix)]
+fn separately_permitted_database_effect_runs_through_native_gateway_and_operation_journal() {
+    use devworks_core::protocol::results::DomainQueryReply;
+    let _case = crate::common::native_runtime_case();
+    let h = Harness::new();
+    drop(h.open());
+    seed(&h);
+    let outside = Harness::new();
+    std::fs::create_dir_all(&outside.root).unwrap();
+    let path = outside.root.join("db-target.sqlite");
+    let target = rusqlite::Connection::open(&path).unwrap();
+    target
+        .execute_batch(
+            "CREATE TABLE contacts (id INTEGER PRIMARY KEY, label TEXT, payload BLOB);
+         INSERT INTO contacts VALUES(1,'VISIBLE_DATABASE_ROW',X'0102');",
+        )
+        .unwrap();
+    let rt = runtime();
+    let app = boot_help_with_database(
+        &rt,
+        &h,
+        Arc::new(NativeArtifactFiles::new(
+            h.root.clone(),
+            h.root.with_extension("cache"),
+        )),
+        Some(devworks_engine::schemas::SchemaComposition {
+            reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
+            secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+        }),
+        Some(devworks_engine::schemas::DatabaseComposition {
+            adapter: Arc::new(devworks_adapters::database::NativeDataAdapter::new(vec![
+                h.root.clone(),
+            ])),
+            filesystem: Arc::new(NativeFilesystem::new()),
+        }),
+    );
+    let available = |name, exposure, writes| {
+        value(app.command("schemas.configure", json!({"scope":{"kind":"Workspace"},
+            "config":{"name":name,"engine":"Sqlite","endpoint":path,"catalogs":[],"schemas":[],
+                "includePatterns":[],"excludePatterns":[],"writesEnabled":writes,
+                "enabled":true,"projectAccess":[],"workspaceExposed":false,"exposureMode":exposure,
+                "authentication":"File"}
+        }),5))
+    };
+    let enabled = available("Enabled connection", "ReadWrite", true);
+    let disabled = available("Metadata only", "SchemaOnly", false);
+    let read_data = |connection: &Value, text: &str| {
+        let bytes = serde_json::to_vec(&json!({
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"database-read",
+            "body":{"kind":"database.read","connectionId":connection["id"],
+                "expectedConnectionRevision":connection["revision"],"statement":text,
+                "parameters":[],"rowLimit":100,"timeoutMs":"30000","includeSchemaDigest":true}
+        }))
+        .unwrap();
+        app.runtime
+            .query(&app.user(), "database.read", &bytes)
+            .unwrap()
+    };
+    assert!(matches!(
+        read_data(&disabled, "SELECT id FROM contacts"),
+        DomainQueryReply::Rejected { .. }
+    ));
+    let reply = read_data(&enabled, "SELECT id,label,payload FROM contacts");
+    let DomainQueryReply::Result {
+        result: OperationResult::DatabaseRead { value: answer },
+        ..
+    } = reply
+    else {
+        panic!("authorized native database read: {reply:?}");
+    };
+    assert_eq!(answer.rows.0.len(), 1);
+    assert!(answer.schema_digest.is_some());
+    let artifact = match &answer.rows.0[0].cells.0[2] {
+        devworks_core::protocol::records::DbScalar::Bytes { value } => value.clone(),
+        _ => panic!("expected a scoped native artifact"),
+    };
+    let read_artifact = || {
+        app.runtime
+            .artifacts()
+            .read_exact(app.store.as_ref(), &app.user(), &artifact, 100)
+    };
+    assert_eq!(read_artifact().unwrap().0, [1, 2]);
+
+    let saved = value(app.command(
+        "database.edit_sensitive_column_rules",
+        json!({
+            "expectedRevision":"1","edit":{"kind":"Upsert","rule":{
+                "id":"deny-database-payload","table":"contacts","column":"payload","allow":false
+            }}
+        }),
+        1,
+    ));
+    assert_eq!(saved["revision"], "2");
+    assert!(read_artifact().is_err());
+    assert!(matches!(
+        read_data(&enabled, "SELECT payload AS alias FROM contacts"),
+        DomainQueryReply::Rejected { .. }
+    ));
+
+    let response = app.command(
+        "database.execute_write",
+        json!({
+            "connectionId":enabled["id"],"expectedConnectionRevision":enabled["revision"],
+            "statement":"INSERT INTO contacts(id,label) VALUES(2,'PRIVATE_WRITE_MATERIAL')",
+            "parameters":[],"timeoutMs":"5000"
+        }),
+        2,
+    );
+    let CommandReply::Recorded { receipt, .. } = response else {
+        panic!("{response:?}")
+    };
+    let DomainDecision::Accepted { operation_id } = receipt.decision else {
+        panic!("{:?}", receipt.decision)
+    };
+    rt.block_on(app.runtime.dispatcher().run_until_idle())
+        .unwrap();
+    let journal = read(app.store.as_ref(), |read| {
+        read.operations().operation(&operation_id)
+    })
+    .unwrap();
+    assert_eq!(
+        journal.state,
+        OperationState::ObservedComplete,
+        "{:?}",
+        journal.latest_attempt()
+    );
+    assert!(
+        !journal
+            .payload
+            .to_string()
+            .contains("PRIVATE_WRITE_MATERIAL")
+    );
+    assert!(
+        journal
+            .latest_attempt()
+            .unwrap()
+            .observations
+            .iter()
+            .any(|entry| entry["completed"] == true)
+    );
+    let observed: i64 = target
+        .query_row("SELECT count(*) FROM contacts WHERE id=2", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(observed, 1);
+    assert!(rt.block_on(app.runtime.shutdown()).reconciliation.is_ok());
+}

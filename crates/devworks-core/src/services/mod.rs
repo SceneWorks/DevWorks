@@ -12,6 +12,7 @@ pub mod browser;
 pub mod containers;
 pub mod conventions;
 pub mod cursor;
+pub mod database;
 pub mod desktop;
 pub mod diagnostics;
 pub mod effect;
@@ -477,6 +478,27 @@ impl UseCases {
             "schemas.configure",
         ] {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Native reads and durable mutations share the selected operation gateway.
+    pub fn with_database(mut self, service: Arc<database::DataExecutor>) -> Self {
+        for query in [
+            "database.read",
+            "database.sensitive_columns",
+            "database.mysql_readonly_query",
+        ] {
+            self.register(query, Some(service.clone()), None);
+        }
+        for command in [
+            "database.execute_write",
+            "database.apply_migration",
+            "database.direct_schema_change",
+            "database.configure_sensitive_columns",
+            "database.edit_sensitive_column_rules",
+        ] {
+            self.register(command, None, Some(service.clone()));
         }
         self
     }

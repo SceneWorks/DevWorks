@@ -1418,6 +1418,52 @@
         "cells": "Items<DbScalar>"
       }
     },
+    "DatabaseLegacyRows": {
+      "kind": "record",
+      "fields": {
+        "rows": "Rows<DynamicJson>",
+        "row_count": "Counter"
+      }
+    },
+    "DatabaseSensitiveColumnRule": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "catalog": "?Label",
+        "schema": "?Label",
+        "table": "?Label",
+        "column": "Label",
+        "allow": "bool",
+        "reason": "?Content"
+      }
+    },
+    "DatabaseSensitiveRuleSet": {
+      "kind": "record",
+      "fields": {
+        "connection_id": "?Id",
+        "revision": "Revision",
+        "rules": "Rows<DatabaseSensitiveColumnRule>"
+      }
+    },
+    "DatabaseSensitiveRuleEdit": {
+      "kind": "union",
+      "variants": {
+        "Upsert": {
+          "rule": "DatabaseSensitiveColumnRule"
+        },
+        "Delete": {
+          "id": "Id"
+        }
+      }
+    },
+    "DatabaseMigrationSource": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "commit": "GitOid",
+        "path": "RelativePath"
+      }
+    },
     "DbReadResult": {
       "kind": "record",
       "fields": {
@@ -1425,8 +1471,10 @@
         "rows": "Rows<DbRow>",
         "truncated": "bool",
         "next_cursor": "?Cursor",
-        "source_revision": "?Revision"
-      }
+        "source_revision": "?Revision",
+        "schema_digest": "?Digest"
+      },
+      "since": {"schema_digest": 2}
     },
     "DbWriteResult": {
       "kind": "record",
@@ -8496,22 +8544,26 @@
       "operation": "database.read",
       "mode": "Query",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "statement": "Content",
         "parameters": "Items<DbParameter>",
         "row_limit": "Limit",
-        "timeout_ms": "PositiveCounter"
+        "timeout_ms": "PositiveCounter",
+        "include_schema_digest": "?bool"
       },
       "result": "DbReadResult",
       "effect": "ExternalRead",
       "authority": "Scoped",
-      "rules": "Parse/check effective read-only operation through qualified adapter; no arbitrary SQL function side effects, sensitive-column policy before materialization. Results not structural graph persistence."
+      "rules": "Parse/check effective read-only operation through qualified adapter; no arbitrary SQL function side effects, sensitive-column policy before materialization. Results not structural graph persistence.",
+      "since": {"scope": 2, "include_schema_digest": 2}
     },
     "database.execute_write": {
       "operation": "database.execute_write",
       "mode": "Command",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "statement": "Content",
@@ -8522,38 +8574,46 @@
       "result": "DbWriteResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement."
+      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement.",
+      "since": {"scope": 2}
     },
     "database.direct_schema_change": {
       "operation": "database.direct_schema_change",
       "mode": "Command",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "statement": "Content",
         "parameters": "Items<DbParameter>",
         "proposal_id": "?Id",
-        "timeout_ms": "PositiveCounter"
+        "timeout_ms": "PositiveCounter",
+        "expected_schema_digest": "?Digest",
+        "fallback_reason": "?Content"
       },
       "result": "DbWriteResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement."
+      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement.",
+      "since": {"scope": 2, "expected_schema_digest": 2, "fallback_reason": 2}
     },
     "database.apply_migration": {
       "operation": "database.apply_migration",
       "mode": "Command",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "migration": "ArtifactRef",
         "expected_schema_digest": "Digest",
-        "proposal_id": "?Id"
+        "proposal_id": "?Id",
+        "source": "?DatabaseMigrationSource"
       },
       "result": "DbWriteResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Versioned immutable migration; exact target authority independent of artifact read. Unknown application status reconciled through migration evidence."
+      "rules": "Versioned immutable migration; exact target authority independent of artifact read. Unknown application status reconciled through migration evidence.",
+      "since": {"scope": 2, "source": 2}
     },
     "database.configure_sensitive_columns": {
       "operation": "database.configure_sensitive_columns",
@@ -8567,6 +8627,44 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
+    },
+    "database.mysql_readonly_query": {
+      "operation": "database.mysql_readonly_query",
+      "mode": "Query",
+      "fields": {
+        "scope": "?DataScope",
+        "source": "Text",
+        "sql": "Content",
+        "limit": "?SignedCounter"
+      },
+      "result": "DatabaseLegacyRows",
+      "effect": "ExternalRead",
+      "authority": "Scoped",
+      "rules": "Explicitly exposed read-only MySQL source selected by ID, display name, or unique logical endpoint identity. One bounded statement, 100 rows by default, a 500-row ceiling, and the shared data policy and native read boundary."
+    },
+    "database.sensitive_columns": {
+      "operation": "database.sensitive_columns",
+      "mode": "Query",
+      "fields": {
+        "connection_id": "?Id"
+      },
+      "result": "DatabaseSensitiveRuleSet",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "The workspace administrator lists default or source-owned sensitivity definitions."
+    },
+    "database.edit_sensitive_column_rules": {
+      "operation": "database.edit_sensitive_column_rules",
+      "mode": "Command",
+      "fields": {
+        "connection_id": "?Id",
+        "expected_revision": "Revision",
+        "edit": "DatabaseSensitiveRuleEdit"
+      },
+      "result": "DatabaseSensitiveRuleSet",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "The workspace administrator makes a compare-and-set rule upsert or delete within the selected scope."
     },
     "knowledge.search": {
       "operation": "knowledge.search",
@@ -12890,6 +12988,22 @@
       1,
       5
     ],
+    "database.read": [
+      1,
+      2
+    ],
+    "database.apply_migration": [
+      1,
+      2
+    ],
+    "database.direct_schema_change": [
+      1,
+      2
+    ],
+    "database.execute_write": [
+      1,
+      2
+    ],
     "database.configure_sensitive_columns": [
       1,
       5
@@ -13150,6 +13264,9 @@
     "database.apply_migration": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "database.direct_schema_change": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "database.configure_sensitive_columns": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "database.mysql_readonly_query": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "database.sensitive_columns": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "database.edit_sensitive_column_rules": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "knowledge.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "knowledge.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "knowledge.record": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

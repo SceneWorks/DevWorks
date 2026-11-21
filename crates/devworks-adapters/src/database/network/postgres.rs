@@ -1,3 +1,4 @@
+pub(super) mod data;
 use super::catalog::{Catalog, Query, profile, qualified_release};
 use super::*;
 use futures_util::TryStreamExt;
@@ -37,16 +38,15 @@ fn classify(error: tokio_postgres::Error) -> MetadataFailure {
         _ => MetadataFailure::Unavailable,
     }
 }
-async fn session(
-    c: Collector,
+async fn open(
     target: &Target,
+    credentials: WireCredentials<'_>,
     database: &str,
-    discovery: bool,
+    application: &str,
 ) -> Result<
     (
-        Collector,
-        Vec<String>,
-        devworks_core::protocol::records::SchemaAdapterProfile,
+        Client,
+        impl Future<Output = Result<(), tokio_postgres::Error>> + Send + use<>,
     ),
     MetadataFailure,
 > {
@@ -56,14 +56,8 @@ async fn session(
         .port(target.port)
         .dbname(database)
         .user(&target.username)
-        .password(
-            c.request
-                .password
-                .as_ref()
-                .ok_or(MetadataFailure::CredentialsRequired)?
-                .expose(),
-        )
-        .application_name("DevWorks metadata")
+        .password(credentials.password()?)
+        .application_name(application)
         .connect_timeout(Duration::from_secs(10))
         .options(
             "-c default_transaction_read_only=on -c statement_timeout=30000 -c \
@@ -78,7 +72,7 @@ async fn session(
     if matches!(target.tls, SchemaTlsMode::VerifyCa) {
         tls.danger_accept_invalid_hostnames(true);
     }
-    if let Some(pem) = &c.request.ca_certificate {
+    if let Some(pem) = credentials.ca {
         use rustls::pki_types::{CertificateDer, pem::PemObject};
         let mut count = 0;
         for root in CertificateDer::pem_slice_iter(pem) {
@@ -97,7 +91,29 @@ async fn session(
         tls.build()
             .map_err(|_| MetadataFailure::UnsupportedProfile)?,
     );
-    let (client, connection) = config.connect(tls).await.map_err(classify)?;
+    config.connect(tls).await.map_err(classify)
+}
+
+async fn session(
+    c: Collector,
+    target: &Target,
+    database: &str,
+    discovery: bool,
+) -> Result<
+    (
+        Collector,
+        Vec<String>,
+        devworks_core::protocol::records::SchemaAdapterProfile,
+    ),
+    MetadataFailure,
+> {
+    let (client, connection) = open(
+        target,
+        WireCredentials::metadata(&c.request),
+        database,
+        "DevWorks metadata",
+    )
+    .await?;
     let work = read_catalog(c, target, database, discovery, &client);
     tokio::pin!(connection);
     tokio::select! {

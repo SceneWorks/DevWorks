@@ -581,6 +581,83 @@ impl QueryHandler for GitService {
 }
 
 impl GitService {
+    /// Verify versioned migration material through the selected repository/worktree.
+    pub(crate) fn migration_file(
+        &self,
+        ctx: &InvocationContext,
+        source: &crate::protocol::records::DatabaseMigrationSource,
+        stop: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Vec<u8>, Failure> {
+        use crate::protocol::Check;
+        source.check().map_err(|_| {
+            refuse(
+                DomainErrorCode::InvalidArgument,
+                "migration_source",
+                &source.repository_id,
+            )
+        })?;
+        let id = &source.repository_id;
+        let tree = ctx
+            .worktree()
+            .filter(|tree| tree.repository_id() == id)
+            .map(|tree| tree.id());
+        let read_target = |snapshot: &dyn ReadSnapshot| Ok(self.target(snapshot, ctx, id, tree));
+        let read = || {
+            crate::ports::storage::read_snapshot(
+                self.store.as_ref(),
+                &Default::default(),
+                read_target,
+            )
+        };
+        let target = read()??;
+        let git = Git {
+            runner: &*self.helpers,
+            ctx,
+            program: &self.config.program,
+            deadline: self.config.deadline,
+            stop,
+        };
+        self.verify_target(&git, &target)
+            .map_err(|e| read_failure(e, id))?;
+        let root = git
+            .worktree_root(target.path())
+            .map_err(|e| read_failure(e, id))?;
+        if !self.same_worktree_path(Path::new(&root), target.path()) {
+            return Err(refuse(
+                DomainErrorCode::SourceChanged,
+                "migration_source",
+                id,
+            ));
+        }
+        let head = git
+            .revision_observation(target.path())
+            .map_err(|e| read_failure(e, id))?;
+        if !git
+            .is_ancestor(target.path(), &source.commit.hex, &head.head)
+            .map_err(|e| read_failure(e, id))?
+        {
+            return Err(refuse(
+                DomainErrorCode::SourceChanged,
+                "migration_source",
+                id,
+            ));
+        }
+        let bytes = git
+            .file_at(target.path(), &source.commit.hex, &source.path.0, 65_536)
+            .map_err(|e| read_failure(e, id))?;
+        self.verify_target(&git, &target)
+            .map_err(|e| read_failure(e, id))?;
+        let current = read()??;
+        if current.repository != target.repository || current.worktree != target.worktree {
+            return Err(refuse(
+                DomainErrorCode::SourceChanged,
+                "migration_source",
+                id,
+            ));
+        }
+        Ok(bytes)
+    }
+
     /// Resolve current source from the host's ownership witness. None means explicitly
     /// unbound; a stale, removed or unreadable binding is a refusal, never a guessed source.
     pub fn observe_source(

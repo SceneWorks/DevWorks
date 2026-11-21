@@ -193,7 +193,7 @@ def main():
         'prices':'usage', 'graph':'code-exploration', 'repository_analysis':'code-exploration',
         'instructions':'settings-Instructions',
         'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
-        'schemas':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
+        'schemas':'databases', 'database':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
         'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control'
     }
     for owner in re.findall(r'pub fn with_(\w+)\(', services):

@@ -143,7 +143,11 @@ impl RegisteredSchemas {
                     Mode::Query => "query",
                     Mode::Command => "command",
                 };
-                let wire_name = format!("{}_{}", name.replace('.', "_"), mode_name);
+                let wire_name = if name == "database.mysql_readonly_query" {
+                    "mysql_readonly_query".into()
+                } else {
+                    format!("{}_{}", name.replace('.', "_"), mode_name)
+                };
                 if wire_name.len() > 128 {
                     return Err(StorageError::InvalidRecord(
                         "built-in alias too long".into(),

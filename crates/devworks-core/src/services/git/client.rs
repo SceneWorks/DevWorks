@@ -1222,12 +1222,74 @@ impl Git<'_> {
         )?;
         parse_tree(&out)
     }
+    /// Read exactly one ordinary file from a validated immutable commit.
+    pub fn file_at(
+        &self,
+        dir: &Path,
+        commit: &str,
+        path: &str,
+        maximum: usize,
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(commit) {
+            return Err(GitFault::Malformed("commit".into()));
+        }
+        let args = [
+            "--no-replace-objects",
+            "--literal-pathspecs",
+            "ls-tree",
+            "-z",
+            "-l",
+            "--full-tree",
+            commit,
+            "--",
+            path,
+        ];
+        let mut command = self.spec(dir, &args, None);
+        command.env.push(("GIT_NO_LAZY_FETCH".into(), "1".into()));
+        let output = self.runner.run(
+            self.ctx,
+            command,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 8192,
+            },
+            self.stop,
+        )?;
+        let (mut entries, refused) = parse_tree(&output)?;
+        if !refused.is_empty() || entries.len() != 1 {
+            return Err(GitFault::SourceChanged);
+        }
+        let entry = entries.pop().expect("one tree entry");
+        if entry.path != path
+            || !(entry.mode == "100644" || entry.mode == "100755")
+            || entry.size > maximum as u64
+        {
+            return Err(GitFault::SourceChanged);
+        }
+        let mut contents = self.read_blobs(dir, &[entry.oid], entry.size as usize, true)?;
+        let bytes = contents.pop().ok_or(GitFault::SourceChanged)?;
+        if bytes.len() != entry.size as usize {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(bytes)
+    }
+
     /// The contents of `oids`, in order (one `cat-file --batch` process).
     pub fn blobs(
         &self,
         dir: &Path,
         oids: &[String],
         expected_bytes: usize,
+    ) -> Result<Vec<Vec<u8>>, GitFault> {
+        self.read_blobs(dir, oids, expected_bytes, false)
+    }
+
+    fn read_blobs(
+        &self,
+        dir: &Path,
+        oids: &[String],
+        expected_bytes: usize,
+        exact_local: bool,
     ) -> Result<Vec<Vec<u8>>, GitFault> {
         if oids.is_empty() {
             return Ok(Vec::new());
@@ -1241,9 +1303,20 @@ impl Git<'_> {
             request.push('\n');
         }
         let max = blob_output_limit(expected_bytes, oids.len());
+        let spec = if exact_local {
+            let mut local = self.spec(
+                dir,
+                &["--no-replace-objects", "cat-file", "--batch"],
+                Some(request.into_bytes()),
+            );
+            local.env.push(("GIT_NO_LAZY_FETCH".into(), "1".into()));
+            local
+        } else {
+            self.spec(dir, &["cat-file", "--batch"], Some(request.into_bytes()))
+        };
         let out = self.runner.run(
             self.ctx,
-            self.spec(dir, &["cat-file", "--batch"], Some(request.into_bytes())),
+            spec,
             HelperLimits {
                 deadline: self.deadline,
                 max_stdout: max,

@@ -1404,6 +1404,17 @@ impl HandlerTx<'_> {
     }
 }
 impl ArtifactRead for HandlerTx<'_> {
+    fn database_artifact_available(
+        &self,
+        access: &crate::ports::storage::DatabaseArtifactAccess,
+        owner: &ActorId,
+        project: Option<&ProjectId>,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .database_artifact_available(access, owner, project)
+    }
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
         self.inner.borrow_mut().artifacts().project_exists(project)
     }

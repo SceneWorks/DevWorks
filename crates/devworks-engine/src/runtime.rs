@@ -314,6 +314,7 @@ pub struct RuntimeConfig {
     /// Optional selected container backend. Without a qualified host binding the family is absent.
     pub containers: Option<ContainerComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
+    pub database: Option<crate::schemas::DatabaseComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
@@ -394,6 +395,7 @@ impl RuntimeConfig {
             containers: None,
             price_refresh: None,
             schemas: None,
+            database: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -944,6 +946,33 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let database = config
+        .database
+        .as_ref()
+        .zip(schemas.as_ref())
+        .map(|(ports, sources)| {
+            let service = devworks_core::services::database::DataExecutor::new(
+                store.clone(),
+                clock.clone(),
+                ports.adapter.clone(),
+                Arc::new(crate::schemas::DatabaseReadRunner(
+                    tokio::runtime::Handle::current(),
+                )),
+                sources.clone(),
+                artifacts.clone(),
+                ports.filesystem.clone(),
+            );
+            Arc::new(match &git {
+                Some(git) => service.with_git(git.clone()),
+                None => service,
+            })
+        });
+    let use_cases = if let Some(service) = &database {
+        consumers.push(crate::schemas::database_consumer(service.clone()));
+        use_cases.with_database(service.clone())
+    } else {
+        use_cases
+    };
     // A deliberately supplied native-job fixture may own DOCS. Production composes the
     // complete Help family and its consumer together; it never attaches to a foreign journal.
     let help = (!use_cases.has_command("help.generate_capability_docs")).then(|| {
@@ -1124,6 +1153,9 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(git) = &git {
         git.set_approval_control(control.clone());
         owners = owners.register(git.clone());
+    }
+    if let Some(database) = &database {
+        owners = owners.register(database.clone());
     }
     if let Some(packages) = &package_service {
         packages.set_approval_control(control.clone());

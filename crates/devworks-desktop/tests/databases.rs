@@ -44,11 +44,6 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     h.state_mut().navigate(Route::Databases);
     settle(&mut h);
     click(&mut h, Role::Button, "New database source");
-    // Data access switches are shown, but no data tool reads them yet.
-    assert!(has_text(
-        &h,
-        devworks_desktop::databases_screen::DATA_ACCESS_INACTIVE
-    ));
     replace(&mut h, "Database source name", "Native metadata fixture");
     click(&mut h, Role::Button, "Choose database file");
     click(&mut h, Role::Button, "Save database source");
@@ -1157,4 +1152,44 @@ fn native_database_review_rejected_new_source_keeps_staged_password() {
 #[test]
 fn native_database_review_rejected_edit_keeps_replacement_password() {
     corrected_password_save(true);
+}
+
+#[test]
+fn data_tab_uses_the_authorized_native_read_on_the_selected_database() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-native-data");
+    let path = root.file("source.sqlite", b"");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE fixture (label TEXT); INSERT INTO fixture VALUES('DESKTOP_READ_VALUE');",
+    )
+    .unwrap();
+    drop(db);
+    let engine = start(&root);
+    let dialogs = Script::default();
+    dialogs.files.lock().unwrap().push(vec![path]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New database source");
+    replace(&mut h, "Database source name", "Native data fixture");
+    click(&mut h, Role::Button, "Choose database file");
+    h.state_mut().databases.draft.as_mut().unwrap().config["exposureMode"] =
+        serde_json::json!("ReadOnly");
+    click(&mut h, Role::Button, "Save database source");
+    step_until(&mut h, "native read source is active", |s| {
+        !s.databases.busy && s.databases.source().is_some()
+    });
+    h.state_mut().databases.tab = 3;
+    settle(&mut h);
+    replace(&mut h, "SQL statement", "SELECT label FROM fixture");
+    click(&mut h, Role::Button, "Run read");
+    step_until(&mut h, "read returned from the actual SQLite source", |s| {
+        s.databases
+            .data
+            .result
+            .as_ref()
+            .is_some_and(|value| value.rows.0.len() == 1)
+    });
+    assert!(has_text(&h, "DESKTOP_READ_VALUE"));
 }
