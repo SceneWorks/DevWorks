@@ -6,7 +6,7 @@ Provider connections are separate from tier membership, model metadata, and pric
 
 OpenAI Responses and Anthropic Messages API profiles use API keys. Anthropic API requests use the pinned versioned API profile; they do not inherit subscription identity or OAuth beta headers. Codex subscription uses device-code sign-in; Claude subscription uses direct browser authorization-code/PKCE sign-in and is disabled until a human accepts the exact risk notice. Claude subscription access is unsupported by Anthropic for third-party apps and may be refused or stopped. It is distinct from API billing and does not require a Claude CLI.
 
-Compatible Chat and Embedding accept configured local or remote endpoints, including keyless local services where supported. Plain HTTP is an explicit compatible/local configuration exception, not a downgrade for subscription/API profiles. SystemOne connections describe explicit decision models rather than conversational tiers; actual decision invocation requires its qualified runtime.
+Compatible Chat and Embedding accept configured local or remote endpoints, including keyless local services where supported. Plain HTTP is an explicit compatible/local configuration exception, not a downgrade for subscription/API profiles.
 
 ## Default endpoints
 
@@ -30,3 +30,9 @@ OAuth refresh is shared per connection. A network failure is availability troubl
 Model inventories refresh hourly/manual/on overdue reopen. A failed/malformed/partial refresh keeps the last complete inventory. Missing models remain configured but unavailable. Refreshing inventory must not overwrite a human's concurrent name/endpoint/policy edit. Retain your draft on conflict and explicitly rebase it.
 
 OpenRouter allow/exclude patterns, cost tier and provider-routing constraints remain attached to that connection and are sent on every qualified request. Never replace a subscription credential with an API key automatically. See [Routing](help:routing-context), [Approvals](help:approvals), and [Recovery](help:recovery).
+
+## Use a SystemOne decision model
+
+Under **SystemOne decision models**, choose **Add decision model** and enter the upstream ID from a SystemOne connection's model inventory. Select the question types and media that model supports. To make the model eligible for automatic allocation, select **Include in decision pool** and set its input, question and batch limits.
+
+Open **Run a SystemOne decision** and fill in the request JSON. Use `"usePool": true` to allocate an eligible pool model. For an exact request, supply `modelId` and `expectedModelRevision` instead of `usePool`. Choose **Check decision result** to read the status of the recorded request. Treat returned answers and provider usage as untrusted observations. If the outcome is uncertain, check the recorded request before starting another.

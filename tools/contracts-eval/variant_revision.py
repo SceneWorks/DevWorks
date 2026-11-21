@@ -52,13 +52,19 @@ def method(definition, found):
     else:
         arms = [f'Self::{v}{{..}} if revision<{revision}=>{{return Err("union variant predates its introduction: {v}".into());}},'
                 for v, revision in definition.get('introducedVariants', {}).items()]
+        nested_checks = []
         for variant, fields in definition['variants'].items():
             nested = {name: value for name, value in fields.items() if tokens(value) & found}
             if nested:
-                arms.append(f'Self::{variant}{{{",".join(nested)},..}}=>{{{calls(nested, found, "")}}},')
-        if not arms:
-            return ''
-        body = 'match self {' + ''.join(arms) + '_=>{}}'
+                nested_checks.append((f'Self::{variant}{{{",".join(nested)},..}}', calls(nested, found, "")))
+        if not arms and len(nested_checks) == 1:
+            pattern, check = nested_checks[0]
+            body = f'if let {pattern} = self {{{check}}}'
+        else:
+            arms.extend(f'{pattern}=>{{{check}}},' for pattern, check in nested_checks)
+            if not arms:
+                return ''
+            body = 'match self {' + ''.join(arms) + '_=>{}}'
     return f'fn check_revision(&self,revision:u32)->Result<(),String>{{{body}Ok(())}}' if body else ''
 
 

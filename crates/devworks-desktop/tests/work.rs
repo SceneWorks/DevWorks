@@ -62,6 +62,126 @@ fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, 
 }
 
 #[test]
+fn native_home_sessions_have_the_workspace_coordinator_as_their_owner() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("workspace-coordinator");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let operation = "sessions.start";
+    let mut frame: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::command(
+            &*backend,
+            operation,
+            json!({"scope":{"kind":"Workspace"},"title":"Home"}),
+        ))
+        .unwrap();
+    frame["schemaRevision"] = json!(devworks_desktop::frame::latest_revision(operation));
+    let session = ops::started(backend.command(operation, frame.to_string().as_bytes())).unwrap();
+    let store = engine.host().runtime().store();
+    devworks_core::ports::storage::read_snapshot(
+        store.as_ref(),
+        &devworks_core::ports::storage::ReadOptions::default(),
+        |snapshot| {
+            let stored = snapshot.sessions().session(&session.id)?.unwrap();
+            let owner = snapshot.authority().principal(&stored.agent_id)?.unwrap();
+            assert!(owner.active);
+            assert_eq!(
+                owner.role,
+                Some(devworks_core::settings::catalog::AgentRole::WorkspaceCoordinator)
+            );
+            assert!(stored.root_id.is_none() && stored.project_id.is_none());
+            assert_ne!(stored.created_by, stored.agent_id);
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn overview_can_enable_and_stop_keep_working_without_taking_a_manual_reservation() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("keep-working");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Project scheduling", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    let pid = project.0.as_str().to_owned();
+    let issue = command(
+        &*backend,
+        "issues.create",
+        json!({
+            "projectId": project, "title":"Reserved work", "description":"An actionable issue.",
+            "repositoryIds":[], "statusId":default_status_id(&project, "ready"), "priority":1
+        }),
+    );
+    let queue = wops::queue_snapshot(backend.query(
+        "next_work.inspect_queue",
+        &wops::allocation_queue(&*backend, &pid, None),
+    ))
+    .unwrap();
+    let frame = wops::allocation_command(
+        &*backend,
+        command_input(
+            "next_work.claim_project_queue",
+            json!({"projectId":project,"expectedQueueRevision":queue.queue_revision,"leaseMs":"120000"}),
+        ),
+    );
+    let claim =
+        wops::allocation_selection(backend.command("next_work.claim_project_queue", &frame))
+            .unwrap();
+    use devworks_core::protocol::records::{AllocationOutcome, AllocationSelection};
+    let AllocationSelection::Current(AllocationOutcome::Claimed { claim, .. }) = claim else {
+        panic!("expected the existing manual reservation");
+    };
+    assert_eq!(claim.work_id, issue.id);
+
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    h.state_mut().select_project(Some(pid));
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Enable keep-working")
+        .click();
+    h.step();
+    assert!(h.state().wait_idle());
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        h.step();
+        if h.query_by_role_and_label(Role::Button, "Stop keep-working")
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "keep-working control updates"
+        );
+        std::thread::yield_now();
+    }
+    h.get_by_role_and_label(Role::Button, "Stop keep-working")
+        .click();
+    settle(&mut h);
+    h.get_by_role_and_label(Role::Button, "Enable keep-working");
+    let result = backend.query(
+        "next_work.inspect_claim",
+        &wops::allocation_inspect(&*backend, claim.id.as_str()),
+    );
+    let (devworks_core::protocol::results::OperationResult::NextWorkInspectClaim { value }, _) =
+        ops::query_result(result).expect("stopping the mode preserves the manual reservation")
+    else {
+        panic!("expected the exact claim inspection");
+    };
+    assert_eq!(value.id, claim.id);
+    assert!(matches!(
+        value.state,
+        devworks_core::protocol::records::LeaseState::Held
+    ));
+}
+
+#[test]
 fn overview_messages_use_the_retained_gateway_and_show_delivered_then_read_state() {
     let root = Root::new("work-message-board");
     let engine = start(&root);
@@ -955,30 +1075,35 @@ fn save_plan_now(
         })
         .expect("the feature row")
         .click();
-    // The control is disabled while the selected feature's read is in flight, which under load
-    // outlasts a fixed frame count; uploads of earlier saves may stay in flight meanwhile.
+    // Detail refresh can temporarily disable the button or move it below the viewport.
+    // Keep rendering and use the current enabled control without waiting for earlier uploads.
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
     while h
-        .query_by_role_and_label(Role::Button, "Edit plan")
-        .is_none_or(|b| b.accesskit_node().is_disabled())
+        .state()
+        .work
+        .plan
+        .as_ref()
+        .is_none_or(|p| p.snapshot.title.0 != title)
     {
         assert!(
             std::time::Instant::now() < deadline,
-            "the Edit plan control never became available"
+            "the plan editor for {title} never opened"
         );
+        if let Some(button) = h
+            .query_by_role_and_label(Role::Button, "Edit plan")
+            .filter(|node| !node.accesskit_node().is_disabled())
+        {
+            button.scroll_to_me();
+            h.step();
+            if let Some(button) = h
+                .query_by_role_and_label(Role::Button, "Edit plan")
+                .filter(|node| !node.accesskit_node().is_disabled())
+            {
+                button.click_accesskit();
+            }
+        }
         h.step();
     }
-    // An accessibility action, not a pointer click: the detail's layout may still move as
-    // its read lands, and a click at last frame's position would miss the control.
-    h.get_by_role_and_label(Role::Button, "Edit plan")
-        .click_accesskit();
-    // Another feature's editor may still be open while its save uploads.
-    step_until(h, "the plan editor opens", |s| {
-        s.work
-            .plan
-            .as_ref()
-            .is_some_and(|p| p.snapshot.title.0 == title)
-    });
     {
         let form = h
             .state_mut()
@@ -1508,6 +1633,189 @@ fn decision_text(
 }
 
 #[test]
+fn feature_start_shows_why_independent_plan_review_could_not_run() {
+    let root = Root::new("work-native-review-no-route");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    click(&mut h, Role::Button, "Start");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let failed = loop {
+        let work = wops::work_record(backend.query(
+            "features.get",
+            &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
+        ))
+        .unwrap();
+        if let Some(readiness) = work.readiness
+            && readiness
+                .summary
+                .0
+                .contains("Independent plan review failed")
+        {
+            assert!(!readiness.ready);
+            break readiness.id;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the reviewer failure is recorded"
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
+    click(&mut h, Role::Button, "Refresh");
+    assert!(has_text(&h, "Independent plan review failed"));
+    assert!(has_text(&h, "Start or Continue to retry"));
+
+    drop(h);
+    drop(backend);
+    engine.shutdown().unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    let fetch = || {
+        wops::work_record(backend.query(
+            "features.get",
+            &wops::work_get(&*backend, wops::Family::Features, feature.id.as_str()),
+        ))
+        .unwrap()
+        .readiness
+        .unwrap()
+    };
+    assert_eq!(
+        fetch().id,
+        failed,
+        "the failure survives reopening DevWorks"
+    );
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    h.state_mut()
+        .select_project(Some(feature.project_id.0.as_str().into()));
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    let retry = if h
+        .query_by_role_and_label(Role::Button, "Continue")
+        .is_some_and(|button| !button.accesskit_node().is_disabled())
+    {
+        "Continue"
+    } else {
+        "Start"
+    };
+    click(&mut h, Role::Button, retry);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let current = fetch();
+        if current.id != failed && current.summary.0.contains("Independent plan review failed") {
+            assert!(!current.ready);
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "retry creates a fresh attempt after reopening"
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+fn seed_completed_plan_review(engine: &devworks_desktop::host::Engine, feature: &WorkRecord) {
+    use devworks_core::ports::storage::{StoredReadiness, WriteOptions, run_write};
+    use devworks_core::services::work::model::{active_of, plan_units};
+    let feature_id = feature.id.clone();
+    run_write(
+        engine.host().runtime().store().as_ref(),
+        WriteOptions::host_state(),
+        move |tx| {
+            let plan = tx.work().feature_plan(&feature_id)?.unwrap();
+            let active = active_of(plan.approved.as_ref()).unwrap();
+            // These tests start at the post-review step and exercise unrelated desktop behavior.
+            let units = plan_units(&active.draft);
+            let body = json!({"planReviews": [{
+                "planRevision": active.plan_revision, "planDigest": active.digest,
+                "assignment": "completed-review", "session": "completed-review-session",
+                "actor": "completed-reviewer", "startedAtMs": tx.now_ms(),
+                "activation": "completed-review-activation", "ownerEpoch": 1,
+                "units": units, "affectedUnits": [],
+                "outcome": {"kind": "Complete", "report": active.draft.content, "findings": 0},
+            }]});
+            tx.work().put_readiness(
+                &StoredReadiness {
+                    feature_id,
+                    revision: 1,
+                    body,
+                },
+                None,
+            )
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_feature_shows_settled_findings_evicted_from_its_current_assessment() {
+    let root = Root::new("settled-readiness-history");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let feature = initial_approved_plan(&engine, &*backend, &mut h);
+    h.state_mut().work.plan = None;
+    seed_completed_plan_review(&engine, &feature);
+    let settled = |i: usize| {
+        json!({"id": format!("S{i}"), "disposition": "ResolvedDecision",
+        "blocking": false, "prerequisite": false, "state": "Resolved", "requirementIds": [],
+        "affectedWorkIds": [], "summary": format!("Checked case {i}"), "missing": "",
+        "consequence": "", "attempts": [], "insufficiency": "", "closureCondition": "",
+        "decision": "Confirmed on native checkout", "confidence": "High", "evidence": [],
+        "closureEvidence": []})
+    };
+    let assess = |feature: &WorkRecord, revision: &str, findings: Vec<_>| {
+        let approval = feature.approval.as_ref().unwrap();
+        command(
+            &*backend,
+            "features.edit",
+            json!({
+                "workId": feature.id, "expectedRevision": feature.revision,
+                "changes": {"readiness": {"kind": "Assess", "expectedAssessmentRevision": revision,
+                    "planRevision": approval.plan_revision, "planDigest": approval.plan_digest,
+                    "summary": "Checkout reviewed", "findings": findings}},
+            }),
+        )
+    };
+    let feature = assess(&feature, "1", (0..128).map(settled).collect());
+    let feature = assess(&feature, "2", vec![settled(128)]);
+    assert!(
+        !feature
+            .readiness
+            .as_ref()
+            .unwrap()
+            .findings
+            .0
+            .iter()
+            .any(|f| f.id.as_str() == "S127")
+    );
+    // The feature detail can have no visible assessment after a pending plan is discarded.
+    // History still has to open from that view.
+    let mut feature = feature;
+    feature.readiness = None;
+    h.state_mut()
+        .work
+        .detail
+        .insert(feature.id.as_str().to_owned(), feature);
+    click(&mut h, Role::Button, "Show settled findings history");
+    assert!(has_text(&h, "Resolved finding S127"));
+    assert!(has_text(&h, "Active plan revision"));
+    assert!(has_text(&h, "Confirmed on native checkout"));
+}
+
+#[test]
 fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
     let root = Root::new("readiness-after-unlink");
     let engine = start(&root);
@@ -1551,12 +1859,13 @@ fn refreshing_a_cached_feature_shows_independent_readiness_changes() {
         "acceptance":f.acceptance,"acceptanceTests":f.acceptance_tests.map(|x| x.0).unwrap_or_default()}}),
     );
     let f = approve_plan(&engine, &*backend, &f);
+    seed_completed_plan_review(&engine, &f);
     let approval = f.approval.as_ref().unwrap();
     let f = command(
         &*backend,
         "features.edit",
         json!({"workId":f.id,"expectedRevision":f.revision,
-        "changes":{"readiness":{"kind":"Assess","planRevision":approval.plan_revision,
+        "changes":{"readiness":{"kind":"Assess","expectedAssessmentRevision":"1","planRevision":approval.plan_revision,
         "planDigest":approval.plan_digest,"summary":"Ready to implement","findings":[]}}}),
     );
     assert!(f.readiness.as_ref().unwrap().ready);
@@ -2053,12 +2362,13 @@ fn next_task_selects_within_the_approved_assessed_feature_without_starting_it() 
         "acceptance":feature.acceptance,"acceptanceTests":feature.acceptance_tests.map(|a|a.0).unwrap_or_default()}}),
     );
     let feature = approve_plan(&engine, &*backend, &feature);
+    seed_completed_plan_review(&engine, &feature);
     let approval = feature.approval.as_ref().unwrap();
     let feature = command(
         &*backend,
         "features.edit",
         json!({"workId":feature.id,"expectedRevision":feature.revision,
-        "changes":{"statusId":default_status_id(&feature.project_id,"ready"),"readiness":{"kind":"Assess","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,
+        "changes":{"statusId":default_status_id(&feature.project_id,"ready"),"readiness":{"kind":"Assess","expectedAssessmentRevision":"1","planRevision":approval.plan_revision,"planDigest":approval.plan_digest,
         "summary":"Ready to implement the approved feature","findings":[]}}}),
     );
     h.state_mut()

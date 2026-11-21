@@ -16,6 +16,12 @@ Root run controls, durable sessions, ownership generations, instruction history,
 
 Each feature and standalone issue has its own configured subagent allowance, default 10. There is no global subagent-count cap. This setting does not itself launch workers. Real provider capacity, repository writes, compiler/indexing work, resources, dependencies, and permissions can still restrict dispatch.
 
+## Independent feature plan review
+
+DevWorks starts a fresh, read-only reviewer for a substantive feature plan. The reviewer receives the frozen plan and acceptance criteria. It can ask for source reads from the plan's exact repository revisions after its first pass. Each feature has one reserved review slot so the review can run while its workers wait for readiness.
+
+Affected implementation waits for a usable current report, disposition of its findings, and human approval of the plan. If model routing or the review fails, check the reason in the feature's readiness and retry after fixing it.
+
 ## Continuity and safe recovery
 
 Continuing existing work preserves logical history and reconciles current ownership. A new work item starts a fresh session with a scoped brief; another conversation is not permission to duplicate an existing execution owner. Membership handoff preserves an existing worker/session only through the native quiescent, generation-fenced boundary. Late results from an older generation cannot become current completion evidence.

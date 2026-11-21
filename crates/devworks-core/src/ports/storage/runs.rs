@@ -516,6 +516,8 @@ pub struct StoredPlanState {
     pub approved_plan: Option<Value>,
     /// The feature's readiness assessment (its revision and body), if one was recorded.
     pub readiness: Option<(i64, Value)>,
+    /// Current immutable index views for the approved plan repositories.
+    pub published_plan_views: Vec<Id>,
 }
 
 /// A linked card a pending feature stop came to cover after it was decided (the card was
@@ -648,7 +650,8 @@ pub trait RunRead {
     /// Shared safe-boundary check, including assignment-owned effects without queue entries.
     fn assignment_handoff_quiescent(&self, assignment: &AssignmentId)
     -> Result<bool, StorageError>;
-    /// Current task inheritance; dispatch checks every referenced requirement, not only one unit.
+    /// Current task inheritance, including requirements of its same-feature prerequisites.
+    /// Even a completed prerequisite can be affected by a change to the approved contract.
     fn work_inherited_requirements(&self, work: &RootId) -> Result<Vec<Id>, StorageError>;
     /// The root's assignments in ID order after `after` (only live ones when `live_only`).
     fn assignments(
@@ -658,6 +661,13 @@ pub trait RunRead {
         after: Option<&AssignmentId>,
         limit: u16,
     ) -> Result<Vec<StoredAssignment>, StorageError>;
+    /// Root-owned child assignments with the given stored role, used to account for dedicated slots.
+    fn child_assignments_with_role(
+        &self,
+        root: &RootId,
+        role_id: &str,
+        live_only: bool,
+    ) -> Result<Vec<AssignmentId>, StorageError>;
     fn instruction(&self, id: &Id) -> Result<Option<StoredInstruction>, StorageError>;
     /// The root's instructions with sequence greater than `after_seq`, in order.
     fn instructions(

@@ -1,0 +1,9 @@
+{
+  "schema": 66,
+  "policy": "dw22-dw107-router-ownership-v1",
+  "additionalTables": [
+    {"table": "router_decision_pool", "class": "global_provider_router", "disposition": "preserve_independent"},
+    {"table": "router_auto_low_cursor", "class": "global_provider_router", "disposition": "preserve_independent"},
+    {"table": "router_auto_sessions", "class": "session_lineage", "selector": "session_id in ownedSessions", "disposition": "owned_lineage"}
+  ]
+}

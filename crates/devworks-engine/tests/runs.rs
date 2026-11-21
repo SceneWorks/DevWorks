@@ -141,6 +141,59 @@ fn seed(h: &Harness) {
     c.execute_batch(&sql).unwrap();
 }
 
+fn seed_local_route(fx: &Fx) {
+    fx.tx(move |_, tx| {
+        tx.router().put_connection(
+            &StoredConnection {
+                id: id("watch-connection"),
+                name: "Fixture".into(),
+                profile: "CompatibleChat".into(),
+                endpoint: "http://localhost:11434/v1".into(),
+                enabled: true,
+                local_free: true,
+                open_router: None,
+                credential_ref: None,
+                credential_revision: 0,
+                credential_epoch: None,
+                lifecycle: "Connected".into(),
+                state_reason: None,
+                account_revision: 1,
+                refresh_operation_id: None,
+                account_digest: None,
+                access_expires_at_ms: None,
+                risk: None,
+                discovered: None,
+                discovered_at_ms: None,
+                healthy: Some(true),
+                checked_at_ms: Some(0),
+                revision: 1,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            },
+            None,
+        )?;
+        tx.router().put_route_model(
+            &StoredRouteModel {
+                id: id("watch-model"),
+                display_name: "Fixture model".into(),
+                endpoint_profile: "CompatibleChat".into(),
+                upstream_model_id: "fixture-model".into(),
+                enabled: true,
+                efforts: vec![],
+                image_input: false,
+                tools: true,
+                context_tokens: Some(16_000),
+                connection_id: Some(id("watch-connection")),
+                position: 1,
+                revision: 1,
+                updated_at_ms: 0,
+            },
+            None,
+        )?;
+        Ok(())
+    });
+}
+
 /// The one store, control service and gateway the tests drive.
 struct Fx {
     h: Harness,
@@ -8681,6 +8734,74 @@ fn a_reactivation_armed_before_a_card_is_linked_is_withdrawn_when_its_activation
 #[path = "runs/usage.rs"]
 mod usage_tests;
 
+#[path = "runs/keep_working.rs"]
+mod keep_working;
+
+#[path = "runs/auto_routing.rs"]
+mod auto_routing;
+#[path = "runs/workspace_reply.rs"]
+mod workspace_reply;
+
+#[test]
+fn boot_binds_configured_workspace_coordinator_before_opening_the_human_chat() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    let coordinator = ActorId(id("workspace-coordinator"));
+    let ports = || {
+        let mut ports = composition(&f, None, Arc::new(FakePower::default()));
+        ports.application.sessions = Some(devworks_engine::SessionPorts {
+            coordinator: Some(coordinator.clone()),
+        });
+        ports
+    };
+    runtime().block_on(async {
+        let app = boot(ports()).await.unwrap();
+        let binding = read(&*f.store, |read| read.authority().principal(&coordinator)).unwrap();
+        assert!(binding.active);
+        assert_eq!(binding.role, Some(AgentRole::WorkspaceCoordinator));
+        assert!(binding.project_id.is_none());
+
+        let frame = json!({
+            "mode":"Command","protocol":"1.0-draft.1","schemaRevision":1,
+            "requestKey":"open-workspace-chat",
+            "body":{"kind":"sessions.start","scope":{"kind":"Workspace"},"title":"Home"}
+        });
+        let result = applied(
+            &app.command(
+                &f.user,
+                "sessions.start",
+                &serde_json::to_vec(&frame).unwrap(),
+            )
+            .unwrap(),
+        );
+        let session_id = id(result["id"]
+            .as_str()
+            .expect("session start returned its ID"));
+        let session = read(&*f.store, |read| read.sessions().session(&session_id)).unwrap();
+        assert_eq!(session.agent_id, coordinator);
+        assert_eq!(&session.created_by, f.user.principal());
+        assert!(session.project_id.is_none());
+        assert!(session.root_id.is_none());
+        let (user, actor) = (f.user.clone(), coordinator.clone());
+        f.tx(move |_, tx| {
+            devworks_core::authority::service::revoke_principal(tx, &user, &actor, binding.revision)
+                .map(|_| ())
+                .map_err(|error| {
+                    StorageError::InvalidRecord(format!("coordinator revocation: {error:?}"))
+                })
+        });
+        app.shutdown().await;
+        drop(app);
+
+        let app = boot(ports())
+            .await
+            .expect("a revoked agent must not prevent boot");
+        let binding = read(&*f.store, |read| read.authority().principal(&coordinator)).unwrap();
+        assert!(!binding.active, "boot must preserve revocation");
+        app.shutdown().await;
+    });
+}
+
 #[path = "runs/auxiliary.rs"]
 mod auxiliary_tests;
 
@@ -8703,3 +8824,8 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+
+#[path = "runs/plan_review.rs"]
+mod plan_review_tests;
+#[path = "runs/review_capacity.rs"]
+mod review_capacity_tests;

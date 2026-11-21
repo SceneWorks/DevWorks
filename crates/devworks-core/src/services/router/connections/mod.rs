@@ -372,17 +372,42 @@ pub fn record_inference_rejection(
     status: u16,
     root: Option<&crate::protocol::RootId>,
 ) -> Result<bool, StorageError> {
+    record_bound_inference_rejection(tx, &basis.connection_id, status, root, |current| {
+        current.credential_revision == basis.credential_revision
+            && current.account_revision == basis.account_revision
+            && current.profile == format!("{:?}", basis.profile)
+            && crate::fingerprint::sha256_hex(current.endpoint.as_bytes()) == basis.endpoint_digest
+    })
+}
+
+/// Records an access refusal for the exact SystemOne connection that admitted the request.
+pub fn record_systemone_rejection(
+    tx: &mut dyn WriteTransaction,
+    sent: &StoredConnection,
+    status: u16,
+) -> Result<bool, StorageError> {
+    record_bound_inference_rejection(tx, &sent.id, status, None, |current| {
+        current.profile == "SystemOne"
+            && current.credential_revision == sent.credential_revision
+            && current.account_revision == sent.account_revision
+            && current.endpoint == sent.endpoint
+    })
+}
+
+fn record_bound_inference_rejection(
+    tx: &mut dyn WriteTransaction,
+    connection: &Id,
+    status: u16,
+    root: Option<&crate::protocol::RootId>,
+    bound: impl FnOnce(&StoredConnection) -> bool,
+) -> Result<bool, StorageError> {
     if !matches!(status, 401 | 403) {
         return Ok(false);
     }
-    let Some(mut current) = tx.router().connection(&basis.connection_id)? else {
+    let Some(mut current) = tx.router().connection(connection)? else {
         return Ok(false);
     };
-    if current.credential_revision != basis.credential_revision
-        || current.account_revision != basis.account_revision
-        || current.profile != format!("{:?}", basis.profile)
-        || crate::fingerprint::sha256_hex(current.endpoint.as_bytes()) != basis.endpoint_digest
-    {
+    if !bound(&current) {
         return Ok(false);
     }
     if current.lifecycle == "ReauthenticationRequired" {

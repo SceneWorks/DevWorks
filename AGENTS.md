@@ -1,5 +1,13 @@
 # DevWorks agent notes
 
+## Feature Plan Review
+
+Before implementation, run one independent review of a substantive feature plan, such as a plan that changes a shared contract, coordinates several repositories, or changes durable state or recovery behavior.
+
+- Start a fresh, read-only reviewer session without the planning conversation or its summaries. Give it the exact plan revision and its acceptance criteria. Ask it to identify material ambiguities, missing acceptance cases, and assumptions a fresh implementer would have to guess. Start with the plan alone, then provide relevant source at a named revision if the reviewer needs to check its fit with the code. Zero findings is a valid result.
+- The coordinator checks the findings against the requirements, CodeGraph items, and current source. Record the reviewed revision and the disposition of each material finding in CodeGraph. Update the plan and affected acceptance criteria as needed. Use the existing readiness and approval rules for closure and escalation.
+- Reuse current evidence on Continue. If a material change invalidates it, review the affected scope. If the harness cannot start an isolated reviewer, record that the review was unavailable and surface it in the readiness assessment.
+
 ## Pull requests
 
 - **Feature work.** Each CodeGraph feature gets one pushed branch, `feature/<feature-key>` (for example `feature/dw-f16`). Each item of the feature is built on its own local branch and worktree, gets exactly one independent review, has its valid findings fixed, and is merged locally into the feature branch, which is then pushed. Items do not get their own PRs, and nobody waits for CI between items.

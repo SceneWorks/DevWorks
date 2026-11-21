@@ -86,7 +86,13 @@ fn legacy(current: UsageQueryResult) -> Result<UsageReport, Failure> {
             output_tokens: row.output_tokens.ok_or_else(unsupported_legacy)?,
             cache_read_tokens: row.cache_read_tokens.ok_or_else(unsupported_legacy)?,
             cache_write_tokens: row.cache_write_tokens.ok_or_else(unsupported_legacy)?,
-            amount_usd: row.cost.amount_micro_usd.map(|v| dollars(v.get())),
+            amount_usd: row
+                .cost
+                .amount_micro_usd
+                .map(|value| match (&price_kind, value.get()) {
+                    (UsagePriceKind::Free, 0) => Money("0".into()),
+                    (_, micro) => dollars(micro),
+                }),
             price_kind,
             price_origin,
             price_revision: row.cost.price_revision,

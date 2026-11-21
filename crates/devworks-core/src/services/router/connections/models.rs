@@ -278,6 +278,13 @@ pub(super) fn configure_decision_model(
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         result_schema: serde_json::to_string(&model.result_schema)
             .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
+        decision_policy: model
+            .decision_policy
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| invalid("decision_policy"))?
+            .or_else(|| current.as_ref().and_then(|row| row.decision_policy.clone())),
         revision: current.as_ref().map_or(1, |c| c.revision),
         updated_at_ms: tx.now_ms(),
     };
@@ -289,6 +296,7 @@ pub(super) fn configure_decision_model(
         }
     }
     let saved = tx.router().put_decision_model(&next, expected)?;
+    tx.router().clear_cooldown(&saved.id)?;
     event(
         tx,
         actor,
@@ -302,6 +310,7 @@ pub(super) fn configure_decision_model(
             "acceptsImages": saved.accepts_images,
             "acceptsVideos": saved.accepts_videos,
             "enabled": saved.enabled,
+            "decisionPolicy": model.decision_policy,
         }),
     )?;
     Ok(applied(&saved.id, saved.revision))

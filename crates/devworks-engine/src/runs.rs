@@ -60,7 +60,8 @@ impl RunGate {
         entry: &QueueEntry,
     ) -> Result<bool, StorageError> {
         match &entry.root_id {
-            Some(root) => self.service.root_permits_dispatch(tx, root),
+            Some(root) => Ok(self.service.root_permits_dispatch(tx, root)?
+                && self.service.permits_implementation_delivery(tx, entry)?),
             None => Ok(true),
         }
     }
@@ -335,7 +336,7 @@ impl RunSupervisor {
     pub fn set_dispatcher_wakeup(&self, wakeup: Wakeup) {
         *self.dispatcher.locked() = Some(wakeup);
     }
-    fn wake_dispatcher(&self) {
+    pub(crate) fn wake_dispatcher(&self) {
         if let Some(w) = self.dispatcher.locked().as_ref() {
             w.wake();
         }

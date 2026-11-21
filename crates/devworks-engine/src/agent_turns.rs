@@ -4,8 +4,9 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
-    ActivationOutcome, ApplicationStore, ArtifactScope, AssignmentPurpose, AssignmentState,
-    Cancellation, ReadOptions, StorageError, StoredEpoch, WriteOptions, read_snapshot, run_write,
+    ActivationOutcome, ActivationPurpose, ApplicationStore, ArtifactScope, AssignmentPurpose,
+    AssignmentState, Cancellation, DeliveryFilter, ReadOptions, StorageError, StoredEpoch,
+    WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::ports::usage::{PriceQuery, PriceResolver};
 use devworks_core::protocol::provider::{
@@ -15,9 +16,7 @@ use devworks_core::protocol::provider::{
     Attribution, EffortOption, InferenceInput, InferenceOptions, InferencePurpose,
     InferenceRequest, ModelSelection,
 };
-use devworks_core::protocol::records::{
-    AgentRecord, EffortName, RouteChoice, RouteIntent, TierName,
-};
+use devworks_core::protocol::records::{AgentRecord, EffortName, RouteChoice, RouteIntent};
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
 use devworks_core::protocol::{
     AttemptId, CommandReply, Counter, Id, OperationState, Protocol, RetryAdvice, Revision,
@@ -27,6 +26,7 @@ use devworks_core::providers::context::{
     TextBlock,
 };
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 use tokio::sync::watch;
 
@@ -46,12 +46,13 @@ use devworks_core::settings::catalog::AgentRole;
 
 use crate::Runtime;
 use crate::agent_supervisor::AgentTurnExecutor;
+use crate::plan_review::{self, ScheduleResult};
 use crate::providers::driver::NativeInvocation;
 use crate::runs::{LaunchEnd, LaunchFuture};
 use crate::store;
 use crate::turn_engine::TurnEngine;
 use crate::turn_error::{TurnError, artifact_read_fault};
-use devworks_core::services::runs::substrate::ActivationFailure;
+use devworks_core::services::runs::{Target, root_assignments, substrate::ActivationFailure};
 use devworks_core::services::usage::accounting::AttemptEnd;
 
 /// The desktop-owned turn driver holds only a weak runtime reference so the supervisor does not
@@ -86,7 +87,9 @@ impl AgentTurnExecutor for NativeAgentTurnExecutor {
             // The turn holds the runtime for its whole run, as before: the engine's handles
             // alone do not keep the runtime's workers alive.
             let engine = runtime.turn_engine().clone();
-            let end = drive_agent_turn(engine, context, coordinator, stop).await;
+            let end =
+                drive_agent_turn(engine, runtime.agents().clone(), context, coordinator, stop)
+                    .await;
             drop(runtime);
             end
         })
@@ -104,11 +107,82 @@ fn cancelled() -> LaunchEnd {
     }
 }
 
+fn awaiting_plan_review() -> LaunchEnd {
+    LaunchEnd::Finished {
+        outcome: ActivationOutcome::Interrupted,
+        detail: Some("implementation awaits a successful plan review".into()),
+    }
+}
+
 async fn drive_agent_turn(
     engine: TurnEngine,
+    agents: Arc<devworks_core::services::agents::AgentService>,
     ctx: InvocationContext,
     coordinator: AgentRecord,
     mut stop: watch::Receiver<bool>,
+) -> LaunchEnd {
+    let Some(session) = ctx.session_id() else {
+        return turn_failure(StorageError::ScopeDenied);
+    };
+    let mut commits = engine.commit_changes();
+    loop {
+        let mut progress = TurnProgress::default();
+        let end = drive_agent_turn_once(
+            &engine,
+            &agents,
+            &ctx,
+            &coordinator,
+            stop.clone(),
+            &mut progress,
+        )
+        .await;
+        if !matches!(
+            end,
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                ..
+            }
+        ) {
+            return end;
+        }
+        loop {
+            if *stop.borrow() {
+                return cancelled();
+            }
+            commits.borrow_and_update();
+            match crate::watch::agent_input(&engine, session, progress.input_sequence).await {
+                Ok(crate::watch::AgentInput::Ready) => break,
+                Ok(crate::watch::AgentInput::Finished) => return end,
+                Ok(crate::watch::AgentInput::Waiting) => {
+                    if let Err(error) = plan_review::wait_for_change(&mut commits, &mut stop).await
+                    {
+                        return if matches!(error, StorageError::Cancelled) {
+                            cancelled()
+                        } else {
+                            turn_failure(error)
+                        };
+                    }
+                }
+                Err(error) => return turn_failure(error),
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct TurnProgress {
+    input_sequence: i64,
+    retry_at_ms: Option<i64>,
+    credentials_rejected: bool,
+}
+
+async fn drive_agent_turn_once(
+    engine: &TurnEngine,
+    agents: &Arc<devworks_core::services::agents::AgentService>,
+    ctx: &InvocationContext,
+    coordinator: &AgentRecord,
+    mut stop: watch::Receiver<bool>,
+    progress: &mut TurnProgress,
 ) -> LaunchEnd {
     if *stop.borrow() {
         return cancelled();
@@ -123,8 +197,20 @@ async fn drive_agent_turn(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    if let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await {
+    if !is_plan_reviewer(coordinator)
+        && let Err(error) = acknowledge_native_instructions(engine, ctx, coordinator).await
+    {
         return turn_failure(error);
+    }
+    let is_feature_coordinator =
+        coordinator.role_id.as_str() == AgentRole::FeatureCoordinator.as_str();
+    if is_feature_coordinator {
+        match plan_review::schedule(engine, agents, ctx, &mut stop, false).await {
+            Ok(ScheduleResult::Failed { .. }) => return awaiting_plan_review(),
+            Ok(_) => {}
+            Err(StorageError::Cancelled) => return cancelled(),
+            Err(error) => return turn_failure(error),
+        }
     }
     let control = engine.runs().service().clone();
     let session = session_id.clone();
@@ -145,27 +231,162 @@ async fn drive_agent_turn(
     let signal = cancellation.clone();
     // Set after the cancellation, so a held call's wait ends as soon as the turn is stopped.
     let (stopped_tx, stopped) = watch::channel(false);
+    let mut stop_bridge = stop.clone();
     let bridge = tokio::spawn(async move {
-        while !*stop.borrow() && stop.changed().await.is_ok() {}
+        while !*stop_bridge.borrow() && stop_bridge.changed().await.is_ok() {}
         signal.cancel();
         stopped_tx.send_replace(true);
         // Keep the sender until the loop ends: a closed channel would end every wait at once.
         std::future::pending::<()>().await;
     });
-    let mut retry_at_ms = None;
-    let mut credentials_rejected = false;
-    let result = run_native_loop(
-        &engine,
-        &ctx,
-        &coordinator,
+    let mut reviews = is_feature_coordinator.then(|| CoordinatorReview {
+        agents,
+        offered_reports: HashSet::new(),
+    });
+    let mut result = run_native_loop(
+        engine,
+        ctx,
+        coordinator,
+        reviews.as_mut(),
         Stop {
             cancellation: &cancellation,
-            stopped,
+            stopped: stopped.clone(),
         },
-        &mut retry_at_ms,
-        &mut credentials_rejected,
+        progress,
     )
     .await;
+    if is_plan_reviewer(coordinator) && !cancellation.is_cancelled() {
+        let mut report = review_report(engine, ctx, result).await;
+        if report.as_ref().is_ok_and(|report| report.needs_source) {
+            report = match crate::plan_review::enable_sources(engine, ctx).await {
+                Ok(()) => {
+                    let result = run_native_loop(
+                        engine,
+                        ctx,
+                        coordinator,
+                        None,
+                        Stop {
+                            cancellation: &cancellation,
+                            stopped: stopped.clone(),
+                        },
+                        progress,
+                    )
+                    .await;
+                    review_report(engine, ctx, result).await
+                }
+                Err(error) => Err(error.into()),
+            };
+        }
+        result = if cancellation.is_cancelled() {
+            Err(StorageError::Cancelled.into())
+        } else {
+            crate::plan_review::settle(
+                engine,
+                ctx,
+                report.map_err(|error| format!("Native plan review failed: {error:?}")),
+            )
+            .await
+            .map_err(Into::into)
+        };
+    } else if let Some(reviews) = reviews.as_mut() {
+        // The active coordinator still owns any review discovered while its children drain.
+        let mut commits = engine.commit_changes();
+        let mut drain_stop = stopped;
+        while !cancellation.is_cancelled() {
+            let own_effect_held = matches!(
+                result,
+                Err(TurnError::PlanReviewUnavailable {
+                    independent_scope: true
+                })
+            );
+            if result.is_err() && !own_effect_held {
+                break;
+            }
+            commits.borrow_and_update();
+            let scheduled = plan_review::schedule(engine, agents, ctx, &mut drain_stop, true).await;
+            let scheduled = match scheduled {
+                Ok(scheduled) => scheduled,
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            };
+            if matches!(
+                scheduled,
+                ScheduleResult::Failed {
+                    independent_scope: false
+                }
+            ) {
+                result = Err(TurnError::PlanReviewUnavailable {
+                    independent_scope: false,
+                });
+                break;
+            }
+            let new_report = match reviews.offer_reports(engine, ctx, true).await {
+                Ok(new_report) => new_report,
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            };
+            let watcher_input = if result.is_ok() {
+                match crate::watch::notice_after_input(engine, &session_id, progress.input_sequence)
+                    .await
+                {
+                    Ok(watcher_input) => watcher_input,
+                    Err(error) => {
+                        result = Err(error.into());
+                        break;
+                    }
+                }
+            } else {
+                false
+            };
+            if new_report || watcher_input || matches!(scheduled, ScheduleResult::Complete) {
+                result = run_native_loop(
+                    engine,
+                    ctx,
+                    coordinator,
+                    Some(reviews),
+                    Stop {
+                        cancellation: &cancellation,
+                        stopped: drain_stop.clone(),
+                    },
+                    progress,
+                )
+                .await;
+                continue;
+            }
+            let review_failed = matches!(scheduled, ScheduleResult::Failed { .. });
+            match children_to_drain(engine, ctx, review_failed).await {
+                Ok(ChildrenToDrain { runnable: true, .. }) => {
+                    if let Err(error) =
+                        plan_review::wait_for_change(&mut commits, &mut drain_stop).await
+                    {
+                        result = Err(error.into());
+                        break;
+                    }
+                }
+                Ok(children) => {
+                    // Independent children have finished. Keep held children and their effects
+                    // attached to their sessions for the next activation rather than completing them.
+                    if children.held || own_effect_held {
+                        result = Err(TurnError::PlanReviewUnavailable {
+                            independent_scope: review_failed,
+                        });
+                    }
+                    break;
+                }
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            }
+        }
+    }
+    if *stop.borrow() {
+        cancellation.cancel();
+    }
     bridge.abort();
     let control = engine.runs().service().clone();
     let turn_id = turn.turn_id;
@@ -189,19 +410,41 @@ async fn drive_agent_turn(
             outcome: ActivationOutcome::Completed,
             detail: None,
         },
+        Err(TurnError::PlanReviewUnavailable { .. }) => awaiting_plan_review(),
         Err(error) if error.is_cancelled() && cancellation.is_cancelled() => cancelled(),
-        Err(error) if retry_at_ms.is_some() => LaunchEnd::Failed(ActivationFailure::RateLimited {
-            until_ms: retry_at_ms.expect("checked above"),
-            detail: format!("native agent provider cooldown: {error:?}"),
+        Err(TurnError::Cooling { until_ms }) => LaunchEnd::Failed(ActivationFailure::RateLimited {
+            until_ms,
+            detail: "The assigned tier is cooling down.".into(),
         }),
+        Err(error) if progress.retry_at_ms.is_some() => {
+            LaunchEnd::Failed(ActivationFailure::RateLimited {
+                until_ms: progress.retry_at_ms.expect("checked above"),
+                detail: format!("native agent provider cooldown: {error:?}"),
+            })
+        }
         // The provider rejected the credential: its credentials hold explains the wait and
         // clears on repair. Retrying (not escalating) lets the root resume even when the repair
         // lands before this failure is reported.
-        Err(error) if credentials_rejected => LaunchEnd::Failed(ActivationFailure::Transient(
-            format!("native agent provider rejected the credential: {error:?}"),
-        )),
+        Err(error) if progress.credentials_rejected => {
+            LaunchEnd::Failed(ActivationFailure::Transient(format!(
+                "native agent provider rejected the credential: {error:?}"
+            )))
+        }
         Err(error) => turn_failure(error),
     }
+}
+
+async fn review_report(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    result: Result<(), TurnError>,
+) -> Result<devworks_core::services::work::plan_review::Report, TurnError> {
+    result?;
+    Ok(crate::plan_review::report(engine, ctx).await?)
+}
+
+pub(crate) fn is_plan_reviewer(agent: &AgentRecord) -> bool {
+    agent.role_id.as_str() == AgentRole::PlanReviewer.as_str()
 }
 
 async fn acknowledge_native_instructions(
@@ -280,13 +523,41 @@ async fn wait_for_state_change(
 /// the third attempt only adds margin.
 const STALE_HEAD_ATTEMPTS: u32 = 3;
 
+struct CoordinatorReview<'a> {
+    agents: &'a Arc<devworks_core::services::agents::AgentService>,
+    offered_reports: HashSet<Id>,
+}
+
+impl CoordinatorReview<'_> {
+    async fn offer_reports(
+        &mut self,
+        engine: &TurnEngine,
+        ctx: &InvocationContext,
+        include_pending: bool,
+    ) -> Result<bool, StorageError> {
+        let feature = ctx.root_id().ok_or(StorageError::ScopeDenied)?.0.clone();
+        let reports = store::read(engine.store(), move |snapshot| {
+            devworks_core::services::work::plan_review::reports_needing_disposition(
+                snapshot.work(),
+                snapshot.indexing(),
+                &feature,
+                include_pending,
+            )
+        })
+        .await?;
+        let previous = self.offered_reports.len();
+        self.offered_reports.extend(reports);
+        Ok(self.offered_reports.len() > previous)
+    }
+}
+
 async fn run_native_loop(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     agent: &AgentRecord,
+    mut review: Option<&mut CoordinatorReview<'_>>,
     mut stop: Stop<'_>,
-    retry_at_ms: &mut Option<i64>,
-    credentials_rejected: &mut bool,
+    turn_progress: &mut TurnProgress,
 ) -> Result<(), TurnError> {
     let cancellation = stop.cancellation;
     // Marked seen before each dispatch, so a change committed while a call is dispatched still
@@ -295,37 +566,82 @@ async fn run_native_loop(
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     ensure_membership_context(engine, ctx, agent)?;
     let mut recovered = engine.recover_native_context_head(ctx, session_id)?;
-    let mut window = 0;
-    let mut completed_windows = 0;
+    let mut sweep = ToolWindowSweep::default();
     // The digest of the last context this turn compacted to.
     let mut compacted: Option<String> = None;
     // Consecutive stale-head refusals of one request against one context version.
     let mut stale_refusals = None;
+    let mut stale_preparations = None;
     loop {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
+        if is_plan_reviewer(agent) {
+            let reviewer = ctx.clone();
+            let current = store::read(engine.store(), move |snapshot| {
+                crate::plan_review::attempt_is_current_in(snapshot, &reviewer)
+            })
+            .await?;
+            if !current {
+                return Err(StorageError::ScopeDenied.into());
+            }
+        }
+        if let Some(review) = review.as_ref()
+            && matches!(
+                plan_review::schedule(engine, review.agents, ctx, &mut stop.stopped, false).await?,
+                ScheduleResult::Failed { .. }
+            )
+        {
+            return Err(TurnError::PlanReviewUnavailable {
+                independent_scope: false,
+            });
+        }
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
-                let tools_required = !engine
-                    .providers()
-                    .ok_or(StorageError::ScopeDenied)?
-                    .schemas()
-                    .selected_agent_tools(ctx)?
-                    .is_empty();
-                let needs_images =
-                    context_has_images(&initial_context(engine.store().as_ref(), ctx, agent)?);
-                let route = route_context_head(
-                    engine,
-                    ctx,
-                    session_id,
-                    0,
-                    None,
-                    tools_required,
-                    needs_images,
-                )?;
-                let (head, binding) = publish_first_context(engine, ctx, agent, &route)?;
+                if crate::auto_routing::needs_assignment(engine, ctx)? {
+                    let material =
+                        initial_assignment_context(engine.store().as_ref(), ctx, agent, false)?;
+                    crate::auto_routing::assign(
+                        engine,
+                        ctx,
+                        agent.assignment_id.0.as_str().to_owned(),
+                        material,
+                        cancellation,
+                    )
+                    .await?;
+                }
+                let (engine, ctx, agent, session) = (
+                    engine.clone(),
+                    ctx.clone(),
+                    agent.clone(),
+                    session_id.clone(),
+                );
+                let (head, binding) = tokio::task::spawn_blocking(move || {
+                    let tools_required = !engine
+                        .providers()
+                        .ok_or(StorageError::ScopeDenied)?
+                        .schemas()
+                        .selected_agent_tools(&ctx)?
+                        .is_empty();
+                    let needs_images = context_has_images(&initial_context(
+                        engine.store().as_ref(),
+                        &ctx,
+                        &agent,
+                    )?);
+                    let route = route_context_head(
+                        &engine,
+                        &ctx,
+                        &session,
+                        0,
+                        None,
+                        tools_required,
+                        needs_images,
+                    )?;
+                    Ok::<_, TurnError>(publish_first_context(&engine, &ctx, &agent, &route)?)
+                })
+                .await
+                .map_err(|error| TurnError::Worker(format!("initial context worker: {error}")))??;
                 (head, binding, 0)
             }
         };
@@ -342,43 +658,13 @@ async fn run_native_loop(
                     sequence,
                     facts,
                 } => {
-                    let bytes = engine
-                        .artifacts()
-                        .read_exact(engine.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
-                        .map_err(artifact_read_fault)?
-                        .0;
-                    let mut context: ProviderContext = serde_json::from_slice(&bytes)
-                        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
-                    context.messages.push(Message {
-                        role: MessageRole::User,
-                        content: vec![ContentBlock::Text {
-                            text: "Host notice: The previous assistant response was interrupted before \
-                                completion. Continue from the last completed step; do not assume the \
-                                partial response was applied.".into(),
-                            cache: None,
-                        }],
-                    });
-                    for fact in facts {
-                        crate::tool_turn::append_context_fact(
-                            &mut context,
-                            engine.store().as_ref(),
-                            engine.artifacts(),
-                            ctx,
-                            session_id,
-                            fact,
-                        )?;
-                    }
-                    crate::tool_turn::publish_continuation(
-                        engine.store().as_ref(),
-                        engine.artifacts(),
+                    publish_interruption(
+                        engine,
                         ctx,
-                        session_id,
-                        &attempt_id,
-                        &binding,
-                        crate::tool_turn::ContinuationMaterial {
-                            context,
-                            observed_sequence: sequence,
-                        },
+                        (&head, &binding),
+                        attempt_id,
+                        sequence,
+                        facts,
                     )?;
                     recovered = engine.recover_native_context_head(ctx, session_id)?;
                     continue;
@@ -387,7 +673,9 @@ async fn run_native_loop(
             if has_tools {
                 changes.borrow_and_update();
                 let dispatched = tokio::time::Instant::now();
-                dispatch_pending_off_thread(engine, ctx, session_id, cancellation).await?;
+                engine
+                    .dispatch_pending_async(ctx, session_id, Some(cancellation))
+                    .await?;
                 if !crate::tool_turn::pending_calls(engine.store().as_ref(), ctx, session_id)?
                     .is_empty()
                 {
@@ -412,66 +700,61 @@ async fn run_native_loop(
                 &binding,
                 &head,
             )?;
-            crate::tool_turn::publish_continuation(
-                engine.store().as_ref(),
-                engine.artifacts(),
-                ctx,
-                session_id,
-                &attempt_id,
-                &binding,
-                material,
-            )?;
+            publish_agent_continuation(engine, ctx, &attempt_id, &binding, material)?;
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
         wait_for_running_mcp_calls(engine, ctx, session_id, cancellation).await?;
-        head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
-        let selected_count = engine
-            .providers()
-            .ok_or(StorageError::ScopeDenied)?
-            .schemas()
-            .selected_agent_tools(ctx)?
-            .len();
-        let tools_required = selected_count != 0;
-        let windows = tool_window_count(selected_count);
-        window %= windows;
-        let needs_images = context_head_has_images(engine, ctx, &head)?;
-        let route = route_context_head(
-            engine,
-            ctx,
-            session_id,
-            binding.context_epoch.get(),
-            Some(head.sha256.as_str()),
-            tools_required,
-            needs_images,
-        )?;
-        let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
-        if next.connection_id != binding.connection_id
-            || next.model_id != binding.model_id
-            || next.account_revision != binding.account_revision
-            || next.endpoint_profile != binding.endpoint_profile
-        {
-            let epoch = binding
-                .context_epoch
-                .get()
-                .checked_add(1)
-                .ok_or(StorageError::ScopeDenied)?;
-            let next = NativeBinding {
-                context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
-                ..next
-            };
-            head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
-            binding = next;
+        let prepared = {
+            let (engine, ctx, session, head, is_reviewer) = (
+                engine.clone(),
+                ctx.clone(),
+                session_id.clone(),
+                head.clone(),
+                is_plan_reviewer(agent),
+            );
+            tokio::task::spawn_blocking(move || {
+                prepare_generation_context(&engine, &ctx, &session, head, binding, is_reviewer)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("generation context worker: {error}")))?
+        };
+        let (prepared_head, prepared_binding, route, windows) = match prepared {
+            Ok(prepared) => {
+                stale_preparations = None;
+                prepared
+            }
+            Err(TurnError::Store(StorageError::ScopeDenied))
+                if crate::tool_turn::native_head_became_stale(
+                    engine.store().as_ref(),
+                    ctx,
+                    session_id,
+                    &head,
+                )? =>
+            {
+                let failure = (
+                    head.version_id.clone(),
+                    transcript_position(engine.store().as_ref(), session_id)?,
+                );
+                if stale_preparations.as_ref() == Some(&failure) {
+                    return Err(StorageError::ScopeDenied.into());
+                }
+                stale_preparations = Some(failure);
+                recovered = engine.recover_native_context_head(ctx, session_id)?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        head = prepared_head;
+        binding = prepared_binding;
+        let window = sweep.window(windows);
+        if !is_plan_reviewer(agent) {
+            acknowledge_native_instructions(engine, ctx, agent).await?;
         }
-        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
-        binding = engine
-            .recover_native_context_head(ctx, session_id)?
-            .ok_or(StorageError::ScopeDenied)?
-            .1;
-        acknowledge_native_instructions(engine, ctx, agent).await?;
         // A context this turn just compacted is sent as it is, even if it still reaches the
         // threshold: compacting it again could not shrink it.
-        if compacted.as_deref() != Some(head.sha256.as_str())
+        if !is_plan_reviewer(agent)
+            && compacted.as_deref() != Some(head.sha256.as_str())
             && compaction_due(engine, ctx, &route, &head, window)?
         {
             match compact(
@@ -481,7 +764,7 @@ async fn run_native_loop(
                 &binding,
                 &head,
                 cancellation,
-                retry_at_ms,
+                &mut turn_progress.retry_at_ms,
             )
             .await
             {
@@ -498,7 +781,15 @@ async fn run_native_loop(
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
-        let invocation = plan_generation_window(engine, ctx, &route, &binding, &head, window)?;
+        let invocation = {
+            let (engine, ctx, binding, head) =
+                (engine.clone(), ctx.clone(), binding.clone(), head.clone());
+            tokio::task::spawn_blocking(move || {
+                plan_generation_window(&engine, &ctx, &route, &binding, &head, window)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("generation request worker: {error}")))??
+        };
         let attempt = (
             invocation.request.request_id.clone(),
             head.version_id.clone(),
@@ -548,22 +839,36 @@ async fn run_native_loop(
             Err(error) => return Err(error.into()),
         };
         stale_refusals = None;
+        if let Some(sequence) = progress.provider.result.turn_start_sequence {
+            turn_progress.input_sequence = sequence;
+        }
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
         match progress.provider.result.outcome {
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
-                completed_windows += 1;
-                if completed_windows >= windows {
-                    wait_for_linked_effects(engine, ctx, session_id, cancellation).await?;
+                if sweep.complete_window() {
+                    if wait_for_linked_effects(
+                        engine,
+                        ctx,
+                        session_id,
+                        review.as_deref_mut(),
+                        &mut stop,
+                    )
+                    .await?
+                    {
+                        // A review may have found a gap that needs the coordinator's disposition
+                        // before the same durable effect can dispatch.
+                        sweep.restart();
+                        recovered = engine.recover_native_context_head(ctx, session_id)?;
+                        continue;
+                    }
                     return Ok(());
                 }
-                window = (window + 1) % windows;
                 recovered = engine.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) if progress.continuation.is_some() => {
-                completed_windows = 0;
-                window = (window + 1) % windows;
+                sweep.after_tools();
                 recovered = engine.recover_native_context_head(ctx, session_id)?;
             }
             Some(AttemptEnd::ToolCallsReady) => {
@@ -577,8 +882,8 @@ async fn run_native_loop(
             }
             Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled.into()),
             outcome => {
-                *retry_at_ms = progress.provider.result.retry_at_ms;
-                *credentials_rejected = progress
+                turn_progress.retry_at_ms = progress.provider.result.retry_at_ms;
+                turn_progress.credentials_rejected = progress
                     .provider
                     .result
                     .faults
@@ -593,19 +898,201 @@ async fn run_native_loop(
     }
 }
 
+pub(crate) fn recover_interrupted_workspace_turn(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session: &Id,
+) -> Result<(), StorageError> {
+    loop {
+        let Some((head, binding, observed)) = engine.recover_native_context_head(ctx, session)?
+        else {
+            return Ok(());
+        };
+        let Some(UnpublishedTurn::Interrupted {
+            attempt_id,
+            sequence,
+            facts,
+        }) = unpublished_turn(engine.store().as_ref(), ctx, session, observed)?
+        else {
+            return Ok(());
+        };
+        publish_interruption(engine, ctx, (&head, &binding), attempt_id, sequence, facts)?;
+    }
+}
+
+fn publish_interruption(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    (head, binding): (&ArtifactRef, &NativeBinding),
+    attempt: AttemptId,
+    sequence: i64,
+    facts: Vec<TranscriptBody>,
+) -> Result<(), StorageError> {
+    let store = engine.store().as_ref();
+    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let bytes = engine
+        .artifacts()
+        .read_exact(store, ctx, head, 8 * 1024 * 1024)
+        .map_err(artifact_read_fault)?
+        .0;
+    let mut context: ProviderContext = serde_json::from_slice(&bytes)
+        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
+    context.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: "Host notice: The previous assistant response was interrupted before completion. \
+                Continue from the last completed step; do not assume the partial response was applied.".into(),
+            cache: None,
+        }],
+    });
+    for fact in facts {
+        crate::tool_turn::append_context_fact(
+            &mut context,
+            store,
+            engine.artifacts(),
+            ctx,
+            session,
+            fact,
+        )?;
+    }
+    publish_agent_continuation(
+        engine,
+        ctx,
+        &attempt,
+        binding,
+        crate::tool_turn::ContinuationMaterial {
+            context,
+            observed_sequence: sequence,
+        },
+    )
+}
+
+/// A watcher can publish while an interrupted or settled exchange is being rebuilt. Recheck
+/// the transcript from the last published head when that concurrent append rejects publication.
+fn publish_agent_continuation(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    attempt: &AttemptId,
+    binding: &NativeBinding,
+    material: crate::tool_turn::ContinuationMaterial,
+) -> Result<(), StorageError> {
+    let store = engine.store().as_ref();
+    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let observed = material.observed_sequence;
+    match crate::tool_turn::publish_continuation(
+        store,
+        engine.artifacts(),
+        ctx,
+        session,
+        attempt,
+        binding,
+        material,
+    ) {
+        Ok(_) => Ok(()),
+        Err(StorageError::ScopeDenied) if transcript_position(store, session)? > observed => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn transcript_position(store: &dyn ApplicationStore, session: &Id) -> Result<i64, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |snapshot| {
+        snapshot
+            .sessions()
+            .session(session)?
+            .map(|row| row.last_durable_sequence())
+            .ok_or(StorageError::ScopeDenied)
+    })
+}
+
+struct ChildrenToDrain {
+    runnable: bool,
+    held: bool,
+}
+
+async fn children_to_drain(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    independent_only: bool,
+) -> Result<ChildrenToDrain, StorageError> {
+    let root = ctx.root_id().cloned().ok_or(StorageError::ScopeDenied)?;
+    let control = engine.runs().service().clone();
+    store::read(engine.store(), move |snapshot| {
+        let work = snapshot
+            .sessions()
+            .work_root(&root)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let mut held = false;
+        for assignment in root_assignments(snapshot.runs(), &root, true)? {
+            if assignment.purpose != AssignmentPurpose::Child {
+                continue;
+            }
+            if !independent_only
+                || control
+                    .evaluate(
+                        snapshot.runs(),
+                        &work,
+                        &Target::Assignment(assignment.id),
+                        ActivationPurpose::Implementation,
+                    )?
+                    .eligible
+            {
+                return Ok(ChildrenToDrain {
+                    runnable: true,
+                    held,
+                });
+            }
+            held = true;
+        }
+        Ok(ChildrenToDrain {
+            runnable: false,
+            held,
+        })
+    })
+    .await
+}
+
+async fn held_delivery(
+    engine: &TurnEngine,
+    pending: Vec<devworks_core::protocol::OperationId>,
+) -> Result<bool, StorageError> {
+    let control = engine.runs().service().clone();
+    store::write(engine.store(), WriteOptions::host_state(), move |tx| {
+        for operation_id in pending {
+            let page = tx.queue().deliveries(
+                &DeliveryFilter {
+                    consumer: None,
+                    operation_id: Some(operation_id),
+                },
+                None,
+                500,
+            )?;
+            for entry in page.entries {
+                if !control.permits_implementation_delivery(tx, &entry)? {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    })
+    .await
+}
+
 async fn wait_for_linked_effects(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
-    cancellation: &Cancellation,
-) -> Result<(), StorageError> {
+    mut review: Option<&mut CoordinatorReview<'_>>,
+    stop: &mut Stop<'_>,
+) -> Result<bool, TurnError> {
+    let mut commits = engine.commit_changes();
     loop {
-        if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled);
+        if stop.cancellation.is_cancelled() {
+            return Err(StorageError::Cancelled.into());
         }
+        commits.borrow_and_update();
         let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
         let pending = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let mut pending = false;
+            let mut pending = Vec::new();
             for call in &linked {
                 let Some(operation_id) = &call.operation_id else {
                     continue;
@@ -626,22 +1113,90 @@ async fn wait_for_linked_effects(
                     | OperationState::Failed
                     | OperationState::CancelledBeforeDispatch
                     | OperationState::OutcomeUnknown => {}
-                    _ => pending = true,
+                    _ => pending.push(operation.id),
                 }
             }
             Ok(pending)
         })?;
-        if !pending {
-            return Ok(());
+        if pending.is_empty() {
+            return Ok(false);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if let Some(review) = review.as_deref_mut() {
+            let scheduled =
+                plan_review::schedule(engine, review.agents, ctx, &mut stop.stopped, true).await?;
+            if let ScheduleResult::Failed { independent_scope } = scheduled
+                && (!independent_scope || held_delivery(engine, pending).await?)
+            {
+                return Err(TurnError::PlanReviewUnavailable { independent_scope });
+            }
+            let new_report = review.offer_reports(engine, ctx, false).await?;
+            if new_report || matches!(scheduled, ScheduleResult::Complete) {
+                return Ok(true);
+            }
+        }
+        plan_review::wait_for_change(&mut commits, &mut stop.stopped).await?;
     }
+}
+
+pub(crate) fn prepare_generation_context(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    mut head: ArtifactRef,
+    mut binding: NativeBinding,
+    is_reviewer: bool,
+) -> Result<(ArtifactRef, NativeBinding, RouteChoice, usize), TurnError> {
+    head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
+    let selected_count = engine
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_agent_tools(ctx)?
+        .len();
+    let tools_required = selected_count != 0;
+    let windows = tool_window_count(selected_count);
+    let needs_images = context_head_has_images(engine, ctx, &head)?;
+    let route = route_context_head(
+        engine,
+        ctx,
+        session_id,
+        binding.context_epoch.get(),
+        Some(head.sha256.as_str()),
+        tools_required,
+        needs_images,
+    )?;
+    let next = binding_for_route(engine, &route, binding.context_epoch.get())?;
+    if next.connection_id != binding.connection_id
+        || next.model_id != binding.model_id
+        || next.account_revision != binding.account_revision
+        || next.endpoint_profile != binding.endpoint_profile
+    {
+        let epoch = binding
+            .context_epoch
+            .get()
+            .checked_add(1)
+            .ok_or(StorageError::ScopeDenied)?;
+        let next = NativeBinding {
+            context_epoch: Counter::new(epoch).map_err(|_| StorageError::ScopeDenied)?,
+            ..next
+        };
+        head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
+        binding = next;
+    }
+    if !is_reviewer {
+        head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
+    }
+    binding = engine
+        .recover_native_context_head(ctx, session_id)?
+        .ok_or(StorageError::ScopeDenied)?
+        .1;
+    Ok((head, binding, route, windows))
 }
 
 /// An external MCP tool answers within its own call deadline, so the next provider request
 /// waits for it and carries the result instead of only the accepted receipt. A call that needs
 /// input or whose outcome is unknown does not hold the agent.
-async fn wait_for_running_mcp_calls(
+pub(crate) async fn wait_for_running_mcp_calls(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
@@ -677,28 +1232,6 @@ async fn wait_for_running_mcp_calls(
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-}
-
-async fn dispatch_pending_off_thread(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    session_id: &Id,
-    cancellation: &Cancellation,
-) -> Result<(), TurnError> {
-    // As above: the caller's upgraded Arc<Runtime> outlives this blocking task.
-    let worker = engine.clone();
-    let ctx = ctx.clone();
-    let session_id = session_id.clone();
-    let cancellation = cancellation.clone();
-    // The worker thread ends once every call is answered or parked: a receive that has nothing
-    // to read yet is awaited here without holding a thread.
-    let pass = tokio::task::spawn_blocking(move || {
-        worker.dispatch_pending_pass(&ctx, &session_id, Some(&cancellation), true)
-    })
-    .await
-    .map_err(|error| TurnError::Worker(format!("agent tool worker: {error}")))??;
-    engine.settle_pending(pass).await;
-    Ok(())
 }
 
 /// A provider exchange can be durable before its next context head is published. Recover that
@@ -780,8 +1313,15 @@ fn unpublished_turn(
                         has_tools = true;
                     }
                     fact @ (TranscriptBody::UserMessage { .. }
-                    | TranscriptBody::HostNotice { .. }
-                    | TranscriptBody::OperationUpdate { .. }) => facts.push(fact),
+                    | TranscriptBody::HostNotice { .. })
+                        if ctx
+                            .workspace_reply()
+                            .is_none_or(|reply| position <= reply.user_sequence)
+                            || crate::watch::is_notice(&fact) =>
+                    {
+                        facts.push(fact)
+                    }
+                    fact @ TranscriptBody::OperationUpdate { .. } => facts.push(fact),
                     _ => {}
                 }
             }
@@ -849,8 +1389,101 @@ fn tool_window<T>(all: &[T], index: usize) -> Result<&[T], StorageError> {
     Ok(&all[start..all.len().min(start.saturating_add(MAX_ALIASES_PER_TURN))])
 }
 
-fn tool_window_count(total: usize) -> usize {
+pub(crate) fn tool_window_count(total: usize) -> usize {
     total.div_ceil(MAX_ALIASES_PER_TURN).max(1)
+}
+
+/// Rotate through the selected tools until each window completes without a tool call.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolWindowSweep {
+    window: usize,
+    completed: usize,
+    total: usize,
+}
+
+impl Default for ToolWindowSweep {
+    fn default() -> Self {
+        Self {
+            window: 0,
+            completed: 0,
+            total: 1,
+        }
+    }
+}
+
+impl ToolWindowSweep {
+    pub(crate) fn checkpoint(self) -> (usize, usize, usize) {
+        (self.window, self.completed, self.total)
+    }
+
+    pub(crate) fn restore(checkpoint: (usize, usize, usize)) -> Result<Self, StorageError> {
+        let (window, completed, total) = checkpoint;
+        if window >= total || completed >= total {
+            return Err(StorageError::InvalidRecord(
+                "invalid tool window checkpoint".into(),
+            ));
+        }
+        Ok(Self {
+            window,
+            completed,
+            total,
+        })
+    }
+
+    pub(crate) fn window(&mut self, total: usize) -> usize {
+        if self.total != total {
+            self.total = total;
+            self.window %= total;
+            self.restart();
+        }
+        self.window
+    }
+
+    pub(crate) fn restart(&mut self) {
+        self.completed = 0;
+    }
+
+    fn advance(&mut self) {
+        self.window = (self.window + 1) % self.total;
+    }
+
+    pub(crate) fn complete_window(&mut self) -> bool {
+        self.completed += 1;
+        if self.completed >= self.total {
+            return true;
+        }
+        self.advance();
+        false
+    }
+
+    pub(crate) fn after_tools(&mut self) {
+        self.restart();
+        self.advance();
+    }
+}
+
+fn offered_tools(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    window: usize,
+) -> Result<Vec<devworks_core::protocol::provider::ToolSchema>, StorageError> {
+    let mut selected = engine
+        .providers()
+        .ok_or(StorageError::ScopeDenied)?
+        .schemas()
+        .selected_agent_tools(ctx)?;
+    if ctx.workspace_reply().is_some() {
+        // Keep screen discovery and explicitly selected extensions reachable on the first
+        // workspace turn, even when there are more built-in aliases than provider slots.
+        selected.sort_by_key(|tool| match tool.capability_id.as_str() {
+            "devworks-query/ui.current_screen" => 0,
+            "devworks-query/help.topic_for_screen" => 1,
+            "devworks-query/help.read" => 2,
+            id if crate::providers::schemas::builtin_operation(id).is_none() => 3,
+            _ => 4,
+        });
+    }
+    Ok(tool_window(&selected, window)?.to_vec())
 }
 
 /// Estimated input tokens of the next request from `head` with tool window `window`: the context
@@ -886,9 +1519,9 @@ fn measure(
         .providers()
         .ok_or(StorageError::ScopeDenied)?
         .schemas();
-    let selected = schemas.selected_agent_tools(ctx)?;
+    let offered = offered_tools(engine, ctx, window)?;
     let mut tool_bytes = 0usize;
-    for alias in tool_window(&selected, window)? {
+    for alias in &offered {
         // The encoder sends the resolved definition; an unresolvable one is refused there.
         let bytes = match schemas.tool(ctx, alias) {
             Ok(tool) => serde_json::to_vec(&(&tool.schema, &tool.description, &tool.wire_name)),
@@ -960,7 +1593,7 @@ fn measure(
 /// window while the part compaction keeps stays under it, or its context holds as many native
 /// blocks as one epoch change can record as omitted. When the kept part alone reaches the
 /// threshold, compacting cannot help and the request is sent as before.
-fn compaction_due(
+pub(crate) fn compaction_due(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     route: &RouteChoice,
@@ -999,10 +1632,28 @@ async fn compact(
     cancellation: &Cancellation,
     retry_at_ms: &mut Option<i64>,
 ) -> Result<ArtifactRef, TurnError> {
+    let (source, invocation) = prepare_compaction(engine, ctx, route, binding, head)?;
+    let providers = Arc::clone(engine.providers().ok_or(StorageError::ScopeDenied)?);
+    let stopped = cancellation.clone();
+    let handle = tokio::runtime::Handle::current();
+    let produced = tokio::task::spawn_blocking(move || {
+        handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
+    })
+    .await
+    .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
+    publish_compaction_result(engine, ctx, binding, source, produced.result, retry_at_ms)
+}
+
+pub(crate) fn prepare_compaction(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    route: &RouteChoice,
+    binding: &NativeBinding,
+    head: &ArtifactRef,
+) -> Result<(crate::context_epoch::EpochSource, NativeInvocation), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let store = engine.store().as_ref();
     let source = crate::context_epoch::current_source(
-        store,
+        engine.store().as_ref(),
         engine.artifacts(),
         ctx,
         session_id,
@@ -1012,7 +1663,7 @@ async fn compact(
     // Refuse a context the new epoch could not record before paying for its summary.
     crate::compaction::omitted_native(&source.context, binding)?;
     let input = crate::compaction::publish_input(
-        store,
+        engine.store().as_ref(),
         engine.artifacts(),
         ctx,
         session_id,
@@ -1020,15 +1671,19 @@ async fn compact(
         &source,
     )?;
     let invocation = plan_compaction(engine, ctx, route, binding, &input)?;
-    let providers = Arc::clone(engine.providers().ok_or(StorageError::ScopeDenied)?);
-    let stopped = cancellation.clone();
-    let handle = tokio::runtime::Handle::current();
-    let produced = tokio::task::spawn_blocking(move || {
-        handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
-    })
-    .await
-    .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
-    let result = produced.result;
+    Ok((source, invocation))
+}
+
+pub(crate) fn publish_compaction_result(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    binding: &NativeBinding,
+    source: crate::context_epoch::EpochSource,
+    result: crate::providers::sink::ProviderResult,
+    retry_at_ms: &mut Option<i64>,
+) -> Result<ArtifactRef, TurnError> {
+    let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let store = engine.store().as_ref();
     let summary = match (result.outcome, result.result_artifact) {
         (Some(AttemptEnd::Completed), Some(summary)) => summary,
         (Some(AttemptEnd::Cancelled), _) => return Err(StorageError::Cancelled.into()),
@@ -1058,7 +1713,7 @@ async fn compact(
     )?)
 }
 
-fn output_headroom(context_tokens: Option<i64>) -> i64 {
+pub(crate) fn output_headroom(context_tokens: Option<i64>) -> i64 {
     context_tokens
         .map(|window| (window / 4).max(1))
         .unwrap_or(DEFAULT_OUTPUT_HEADROOM)
@@ -1069,6 +1724,32 @@ fn output_headroom(context_tokens: Option<i64>) -> i64 {
 /// while the head and observed pin revision are unchanged. A new head or pin permits fresh
 /// availability assessment.
 pub fn route_context_head(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    context_epoch: i64,
+    head_digest: Option<&str>,
+    tools_required: bool,
+    needs_images: bool,
+) -> Result<RouteChoice, TurnError> {
+    for _ in 0..3 {
+        let result = route_observed_head(
+            engine,
+            ctx,
+            session_id,
+            context_epoch,
+            head_digest,
+            tools_required,
+            needs_images,
+        );
+        if !matches!(result, Err(TurnError::RouteChanged)) {
+            return result;
+        }
+    }
+    Err(TurnError::RouteChanged)
+}
+
+fn route_observed_head(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
@@ -1097,7 +1778,7 @@ pub fn route_context_head(
                 .is_some_and(|binding| {
                     binding.active
                         && binding.kind == PrincipalKind::Agent
-                        && binding.role == Some(AgentRole::CodeReviewer)
+                        && binding.role.is_some_and(AgentRole::read_only)
                 });
             match read.router().session_pin(session_id)? {
                 Some(pin) => Ok((
@@ -1109,15 +1790,11 @@ pub fn route_context_head(
                     pin.revision,
                     reviewer,
                 )),
-                None => Ok((
-                    RouteIntent::Tier {
-                        tier: TierName::High,
-                    },
-                    EffortName::Default,
-                    Vec::new(),
-                    0,
-                    reviewer,
-                )),
+                None => {
+                    let (intent, effort) =
+                        crate::auto_routing::unpinned_selection(read, ctx, session_id)?;
+                    Ok((intent, effort, Vec::new(), 0, reviewer))
+                }
             }
         })?;
     if tools_required && !required.iter().any(|capability| capability == "tools") {
@@ -1127,23 +1804,40 @@ pub fn route_context_head(
         required.push("vision".into());
     }
     required.sort();
-    let key = sha256_hex(
-        format!(
-            "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
-            session_id.as_str(),
-            head_digest.unwrap_or("initial"),
-            required.join(",")
-        )
-        .as_bytes(),
+    let mut route_identity = format!(
+        "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
+        session_id.as_str(),
+        head_digest.unwrap_or("initial"),
+        required.join(",")
     );
+    if ctx.workspace_reply().is_some() {
+        route_identity.push(':');
+        route_identity.push_str(ctx.invocation_id().as_str());
+    }
+    if matches!(intent, RouteIntent::DevWorksAuto {}) {
+        // A prior routing refusal must never mask freshly available members of the saved tier.
+        static ROUTE_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let attempt = ROUTE_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let boot = engine
+            .store()
+            .info()
+            .boot_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned())
+            .unwrap_or_default();
+        route_identity.push_str(&format!(":{boot}:{attempt}"));
+    }
+    let key = sha256_hex(route_identity.as_bytes());
     let frame = serde_json::to_vec(&json!({
         "mode": "Command",
         "protocol": devworks_core::protocol::CONTRACT,
+        "schemaRevision": 3,
         "requestKey": format!("agent-route-{key}"),
         "body": {
             "kind": "router.route",
             "sessionId": session_id,
             "expectedContextEpoch": context_epoch.to_string(),
+            "expectedPinRevision": pin_revision.to_string(),
             "intent": intent,
             "effort": effort,
             "requiredCapabilities": required,
@@ -1188,12 +1882,33 @@ pub fn route_context_head(
             | DomainDecision::NoChange {
                 result: OperationResult::RouterRoute { value },
             } => Ok(value),
-            // A recorded refusal replays under this stable request key until the head or pin
-            // changes, so repeating the same turn cannot reach a new routing decision.
-            DomainDecision::Refused { fault } => Err(refused(
-                format!("agent route refused: {fault:?}"),
-                RetryAdvice::Never,
-            )),
+            DomainDecision::Refused { fault } => {
+                if fault.code == devworks_core::protocol::DomainErrorCode::SourceChanged
+                    && fault
+                        .target_kind
+                        .as_ref()
+                        .is_some_and(|label| label.0 == "native_pin_changed")
+                {
+                    return Err(TurnError::RouteChanged);
+                }
+                let auto = matches!(intent, RouteIntent::DevWorksAuto {});
+                if auto
+                    && fault.code == devworks_core::protocol::DomainErrorCode::CapacityWait
+                    && let Some(until_ms) = crate::auto_routing::cooldown(
+                        engine, session_id, &intent, &effort, &required,
+                    )?
+                {
+                    return Err(TurnError::Cooling { until_ms });
+                }
+                Err(refused(
+                    format!("agent route refused: {fault:?}"),
+                    if auto {
+                        fault.retry
+                    } else {
+                        RetryAdvice::Never
+                    },
+                ))
+            }
             _ => Err(refused("agent route reply".into(), RetryAdvice::Never)),
         },
         CommandReply::Rejected { code, retry, .. } => {
@@ -1209,24 +1924,18 @@ pub fn route_context_head(
             RetryAdvice::ResolveReceipt,
         )),
     }?;
-    Ok(read_snapshot(
-        engine.store().as_ref(),
-        &ReadOptions::default(),
-        |read| {
-            let pin = read
-                .router()
-                .session_pin(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if pin.pin_id != choice.pin_id
-                || pin.revision != choice.pin_revision.get()
-                || pin.model_id != choice.model_id
-                || pin.connection_id != choice.connection_id
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            Ok(choice)
-        },
-    )?)
+    read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        Ok((pin.pin_id == choice.pin_id
+            && pin.revision == choice.pin_revision.get()
+            && pin.model_id == choice.model_id
+            && pin.connection_id == choice.connection_id)
+            .then_some(choice))
+    })?
+    .ok_or(TurnError::RouteChanged)
 }
 
 fn context_has_images(context: &ProviderContext) -> bool {
@@ -1263,6 +1972,15 @@ pub fn initial_context(
     ctx: &InvocationContext,
     agent: &AgentRecord,
 ) -> Result<ProviderContext, StorageError> {
+    initial_assignment_context(store, ctx, agent, true)
+}
+
+fn initial_assignment_context(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    agent: &AgentRecord,
+    include_redirects: bool,
+) -> Result<ProviderContext, StorageError> {
     let (role, brief, tasks, unlinked) =
         read_snapshot(store, &ReadOptions::default(), |snapshot| {
             let assignment = snapshot
@@ -1296,6 +2014,9 @@ pub fn initial_context(
             }
             let tasks: Vec<Id> = serde_json::from_value(source.task_ids)
                 .map_err(|_| StorageError::InvalidRecord("stored task references".into()))?;
+            if is_plan_reviewer(agent) || !include_redirects {
+                return Ok((source.role_instructions, source.brief, tasks, Vec::new()));
+            }
             let mut unlinked = Vec::new();
             let mut after = 0;
             loop {
@@ -1848,47 +2569,7 @@ pub fn publish_first_context(
     {
         return Err(StorageError::ScopeDenied);
     }
-    let (binding, headroom) =
-        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let pin = read
-                .router()
-                .session_pin(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let connection = read
-                .router()
-                .connection(&route.connection_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let session = read
-                .sessions()
-                .session(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let model = read
-                .router()
-                .route_model(&route.model_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if pin.pin_id != route.pin_id
-                || pin.revision != route.pin_revision.get()
-                || connection.id != pin.connection_id
-                || session.context_epoch != 0
-                || connection.account_revision < 1
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            let endpoint_profile =
-                serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
-                    .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
-            Ok((
-                NativeBinding {
-                    connection_id: pin.connection_id,
-                    account_revision: Revision::new(connection.account_revision)
-                        .map_err(|_| StorageError::ScopeDenied)?,
-                    endpoint_profile,
-                    model_id: pin.model_id,
-                    context_epoch: Counter::new(0).expect("zero epoch"),
-                },
-                output_headroom(model.context_tokens),
-            ))
-        })?;
+    let (binding, headroom) = initial_route_binding(engine, session_id, route)?;
     let mut prompt = initial_context(engine.store().as_ref(), ctx, agent)?;
     let selected_count = engine
         .providers()
@@ -1905,9 +2586,61 @@ pub fn publish_first_context(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let bound = engine.bind_provider_instructions(ctx, prompt, &[])?;
+    let bound = if is_plan_reviewer(agent) {
+        crate::plan_review::bind_prompt(engine, ctx, prompt)?
+    } else {
+        engine.bind_provider_instructions(ctx, prompt, &[])?
+    };
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
+}
+
+/// Validate the first durable pin and derive the native binding shared by new conversations.
+pub(crate) fn initial_route_binding(
+    engine: &TurnEngine,
+    session_id: &Id,
+    route: &RouteChoice,
+) -> Result<(NativeBinding, i64), StorageError> {
+    read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let connection = read
+            .router()
+            .connection(&route.connection_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let model = read
+            .router()
+            .route_model(&route.model_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if pin.pin_id != route.pin_id
+            || pin.revision != route.pin_revision.get()
+            || connection.id != pin.connection_id
+            || session.context_epoch != 0
+            || connection.account_revision < 1
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let endpoint_profile =
+            serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
+                .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
+        Ok((
+            NativeBinding {
+                connection_id: pin.connection_id,
+                account_revision: Revision::new(connection.account_revision)
+                    .map_err(|_| StorageError::ScopeDenied)?,
+                endpoint_profile,
+                model_id: pin.model_id,
+                context_epoch: Counter::new(0).expect("zero epoch"),
+            },
+            output_headroom(model.context_tokens),
+        ))
+    })
 }
 
 /// Build an attributed native request from the exact published head and routed pin. The driver
@@ -1959,17 +2692,22 @@ fn plan_request(
     window: Option<usize>,
 ) -> Result<NativeInvocation, StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
-    let project_id = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
+    let root_scope = match (ctx.root_id(), ctx.project_id()) {
+        (Some(root), Some(project)) => Some((root, project)),
+        (None, None)
+            if ctx.principal_kind() == PrincipalKind::Agent
+                && ctx.assignment_id().is_none()
+                && ctx.workspace_reply().is_some() =>
+        {
+            None
+        }
+        _ => return Err(StorageError::ScopeDenied),
+    };
     if binding.model_id != route.model_id || binding.connection_id != route.connection_id {
         return Err(StorageError::ScopeDenied);
     }
-    let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
     let tools = match window {
-        Some(window) => {
-            let selected = providers.schemas().selected_agent_tools(ctx)?;
-            tool_window(&selected, window)?.to_vec()
-        }
+        Some(window) => offered_tools(engine, ctx, window)?,
         None => Vec::new(),
     };
     let compaction = window.is_none();
@@ -2010,12 +2748,38 @@ fn plan_request(
         identity.push(':');
         identity.push_str(head.version_id.as_str());
     }
-    let request_id = Id::new(format!(
-        "agent-{}-{}",
-        if compaction { "compaction" } else { "request" },
-        sha256_hex(identity.as_bytes())
-    ))
-    .map_err(|_| StorageError::ScopeDenied)?;
+    if root_scope.is_none() {
+        // The origin of a workspace turn is its durable message intent, not a run activation.
+        identity.push(':');
+        identity.push_str(ctx.invocation_id().as_str());
+    } else if !compaction {
+        // After a disconnected carrying turn, recovery can settle its provider attempt without
+        // adding a transcript entry. Keep requests stable within the turn, but let its replacement
+        // send the same unacknowledged watcher input under its own resume/admission identity.
+        let watch_turn = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+            let turn = read.runs().session_turn(session_id)?;
+            if turn.as_ref().is_some_and(|turn| {
+                ctx.activation().is_some_and(|(owner, epoch)| {
+                    owner == &turn.execution_id && epoch == turn.owner_epoch
+                })
+            }) && !read
+                .watchers()
+                .watch_events(
+                    session_id,
+                    &[devworks_core::ports::storage::WatchEventState::Delivered],
+                    1,
+                )?
+                .is_empty()
+            {
+                return Ok(turn.map(|turn| turn.turn_id));
+            }
+            Ok(None)
+        })?;
+        if let Some(turn) = watch_turn {
+            identity.push(':');
+            identity.push_str(turn.as_str());
+        }
+    }
     let info = engine.store().info();
     let (
         query,
@@ -2023,10 +2787,10 @@ fn plan_request(
         quote,
         price_generation,
         override_revision,
-        control,
-        work,
+        rooted,
         headroom,
         required,
+        readiness_planning,
     ) = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let pin = read
             .router()
@@ -2044,14 +2808,33 @@ fn plan_request(
             .sessions()
             .session(session_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        let control = read
-            .runs()
-            .root_control(root_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        let work = read
-            .work()
-            .work(&root_id.0)?
-            .ok_or(StorageError::ScopeDenied)?;
+        let principal = read.authority().principal(ctx.principal())?;
+        let rooted = if let Some((root, project)) = root_scope {
+            let control = read
+                .runs()
+                .root_control(root)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let work = read
+                .work()
+                .work(&root.0)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if work.project_id != *project || control.generation < 1 {
+                return Err(StorageError::ScopeDenied);
+            }
+            Some((control, work.is_feature()))
+        } else {
+            if session.project_id.is_some()
+                || session.root_id.is_some()
+                || !principal.as_ref().is_some_and(|binding| {
+                    binding.active
+                        && binding.role == Some(AgentRole::WorkspaceCoordinator)
+                        && binding.project_id.is_none()
+                })
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            None
+        };
         if pin.pin_id != route.pin_id
             || pin.revision != route.pin_revision.get()
             || pin.model_id != binding.model_id
@@ -2067,8 +2850,6 @@ fn plan_request(
                     .required_capabilities
                     .iter()
                     .any(|capability| capability == "tools"))
-            || work.project_id != *project_id
-            || control.generation < 1
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -2087,8 +2868,30 @@ fn plan_request(
                 vec!["Text".into()]
             },
         };
-        let owner =
+        let mut owner =
             auxiliary::ownership(read, &info, ctx).map_err(|_| StorageError::ScopeDenied)?;
+        let mut readiness_planning = false;
+        if let Some(dispatch) = owner.dispatch.as_mut()
+            && dispatch.implementation
+        {
+            let role = principal.and_then(|p| p.role);
+            // These owned turns investigate readiness. Their actual tools still recheck
+            // implementation eligibility, and inference retains every owner and access fence.
+            readiness_planning = match role {
+                Some(AgentRole::PlanReviewer) => true,
+                Some(AgentRole::FeatureCoordinator) => {
+                    !devworks_core::services::work::plan_review::reports_needing_disposition(
+                        read.work(),
+                        read.indexing(),
+                        &dispatch.root_id.0,
+                        false,
+                    )?
+                    .is_empty()
+                }
+                _ => false,
+            };
+            dispatch.implementation = !readiness_planning;
+        }
         let quote = CatalogPriceResolver.quote(read, &query)?;
         Ok((
             query,
@@ -2096,16 +2899,36 @@ fn plan_request(
             quote,
             read.usage().price_revision()?,
             read.usage().price_override_revision(&route.model_id)?,
-            control,
-            work,
+            rooted,
             output_headroom(model.context_tokens),
             pin.required_capabilities,
+            readiness_planning,
         ))
     })?;
+    if readiness_planning {
+        identity.push_str(":readiness-planning");
+    }
+    let request_id = Id::new(format!(
+        "agent-{}-{}",
+        if compaction { "compaction" } else { "request" },
+        sha256_hex(identity.as_bytes())
+    ))
+    .map_err(|_| StorageError::ScopeDenied)?;
     let revision = |value: i64| Revision::new(value).map_err(|_| StorageError::ScopeDenied);
     let effort_name =
         serde_json::to_value(&route.requested_effort).map_err(|_| StorageError::ScopeDenied)?;
     let effort = effort_name.as_str().ok_or(StorageError::ScopeDenied)?;
+    let (generation, instruction, cancellation) = match rooted.as_ref() {
+        Some((control, _)) => (
+            control.generation,
+            control.instruction_revision.max(1),
+            control
+                .stop_epoch
+                .checked_add(1)
+                .ok_or(StorageError::ScopeDenied)?,
+        ),
+        None => (1, 1, 1),
+    };
     let inference = InferenceRequest {
         options: InferenceOptions {
             selection: ModelSelection::Model {
@@ -2123,18 +2946,15 @@ fn plan_request(
             deadline_ms: 120_000,
         },
         authority_revision: ctx.policy_revision().clone(),
-        control_generation: revision(control.generation)?,
-        instruction_revision: revision(control.instruction_revision.max(1))?,
-        cancellation_revision: revision(
-            control
-                .stop_epoch
-                .checked_add(1)
-                .ok_or(StorageError::ScopeDenied)?,
-        )?,
+        control_generation: revision(generation)?,
+        instruction_revision: revision(instruction)?,
+        cancellation_revision: revision(cancellation)?,
         protocol: Protocol::Draft1,
         request_id: request_id.clone(),
         purpose: if compaction {
             InferencePurpose::Compaction
+        } else if root_scope.is_none() {
+            InferencePurpose::Conversation
         } else if owner
             .dispatch
             .as_ref()
@@ -2144,20 +2964,23 @@ fn plan_request(
         } else {
             InferencePurpose::Planning
         },
-        attribution: if work.is_feature() {
-            Attribution::Feature {
-                project_id: project_id.clone(),
-                root_id: root_id.clone(),
+        attribution: match (root_scope, rooted) {
+            (Some((root, project)), Some((_, true))) => Attribution::Feature {
+                project_id: project.clone(),
+                root_id: root.clone(),
                 assignment_id: ctx.assignment_id().cloned(),
                 job_run_id: ctx.job_run_id().cloned(),
-            }
-        } else {
-            Attribution::Issue {
-                project_id: project_id.clone(),
-                root_id: root_id.clone(),
+            },
+            (Some((root, project)), Some((_, false))) => Attribution::Issue {
+                project_id: project.clone(),
+                root_id: root.clone(),
                 assignment_id: ctx.assignment_id().cloned(),
                 job_run_id: ctx.job_run_id().cloned(),
-            }
+            },
+            (None, None) => Attribution::Workspace {
+                session_id: session_id.clone(),
+            },
+            _ => return Err(StorageError::ScopeDenied),
         },
         input: InferenceInput::Generation {
             session_id: session_id.clone(),
@@ -2182,8 +3005,8 @@ fn plan_request(
             Purpose::Conversation
         },
         session_id: Some(session_id.clone()),
-        project_id: Some(project_id.clone()),
-        root_id: Some(root_id.clone()),
+        project_id: root_scope.map(|(_, project)| project.clone()),
+        root_id: root_scope.map(|(root, _)| root.clone()),
         model_id: route.model_id.clone(),
         connection_id: route.connection_id.clone(),
         pin_id: Some(route.pin_id.clone()),

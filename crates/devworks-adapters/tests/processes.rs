@@ -2520,6 +2520,12 @@ fn native_podman_container_effects_commit_owned_create_start_and_stop() {
 }
 
 fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, executable_key: &str) {
+    use devworks_core::protocol::{DomainErrorCode, records::PlanDraft};
+    use devworks_core::services::work::{
+        model::{ActivePlan, plan_digest, plan_units},
+        readiness::Assessment,
+    };
+
     let _serial = serial();
     let executable = std::env::var(executable_key).expect("registered container CLI path");
     struct Cleanup(String, String);
@@ -2696,16 +2702,73 @@ fn native_container_effects_commit_owned_create_start_and_stop(engine: &str, exe
     }
     let _image_cleanup = ImageCleanup(executable.clone(), scoped_tag(&tag));
     let _pull_cleanup = ImageCleanup(executable.clone(), scoped_tag(QUALIFIED_IMAGE));
-    let build = fx.command_keyed(
-        &context,
-        "containers.build",
-        "native-effect-build",
-        json!({"engineId":engine,"projectId":"project-a",
-            "context":{"rootId":"container-build-repo","relative":"container-build-context"},
-            "definition":definition,"tag":tag}),
-        Some(1),
-    );
-    let build_id = match recorded(build).0 {
+    let build = |key| {
+        fx.command_keyed(
+            &context,
+            "containers.build",
+            key,
+            json!({"engineId":engine,"projectId":"project-a",
+                "context":{"rootId":"container-build-repo","relative":"container-build-context"},
+                "definition":definition,"tag":tag}),
+            Some(1),
+        )
+    };
+    assert!(matches!(
+        recorded(build("native-effect-build-held")).0,
+        DomainDecision::Refused { fault }
+            if fault.code == DomainErrorCode::DependencyBlocked
+                && fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "readiness")
+    ));
+    let draft: PlanDraft = serde_json::from_value(json!({
+        "content": definition, "repositoryIds": ["container-build-repo"],
+        "acceptance": [], "acceptanceTests": [], "goals": [], "requirements": [],
+    }))
+    .unwrap();
+    let digest = plan_digest(&draft);
+    fx.write(move |tx| {
+        let now = tx.now_ms();
+        let feature_id = id("root-a");
+        let assessment = Assessment {
+            id: id("native-container-readiness"),
+            plan_revision: 1,
+            plan_digest: digest.clone(),
+            reviewed_pending: false,
+            units: plan_units(&draft),
+            summary: "Ready for native container qualification".into(),
+            findings: vec![],
+            assessed_by: actor("user-a"),
+            assessed_at_ms: now,
+        };
+        tx.work()
+            .set_work_repositories(&feature_id, &[id("container-build-repo")])?;
+        tx.work().put_feature_plan(
+            &StoredFeaturePlan {
+                feature_id: feature_id.clone(),
+                revision: 1,
+                approved: Some(json!(ActivePlan {
+                    draft,
+                    digest,
+                    plan_revision: 1,
+                    proposal_id: id("native-container-plan"),
+                    review_required: false,
+                })),
+                approved_by: Some(actor("user-a")),
+                approved_at_ms: Some(now),
+                pending: None,
+                pending_revision: None,
+            },
+            None,
+        )?;
+        tx.work().put_readiness(
+            &StoredReadiness {
+                feature_id,
+                revision: 1,
+                body: json!({"active": assessment}),
+            },
+            None,
+        )
+    });
+    let build_id = match recorded(build("native-effect-build")).0 {
         DomainDecision::Accepted { operation_id } => operation_id,
         other => panic!("expected accepted build: {other:?}"),
     };

@@ -1,6 +1,6 @@
 # Agent limits and context settings
 
-The inherited maximum subagents defaults to 10 independently for each feature and standalone issue, not globally. Real resource/capability/ownership waits remain separate. The workspace context-compaction threshold defaults to 80%, with the supported range shown in the settings catalog. Saving these values does not install an autonomous supervisor or a compaction runtime. Do not interpret an open conversation as an active worker.
+The inherited maximum subagents defaults to 10 ordinary worker slots for each feature and standalone issue. Feature coordinators have one reserved slot for independent plan review. Resource availability and permissions can still restrict dispatch. The workspace context-compaction threshold defaults to 80%, with the supported range shown in the settings catalog. An open conversation can belong to an inactive worker.
 
 ## Apply a change
 

@@ -223,7 +223,7 @@ pub(crate) fn provider_change(
         previous_binding,
     )?;
     let mut context = source.context;
-    if ctx.assignment_id().is_some() {
+    if ctx.assignment_id().is_some() || ctx.workspace_reply().is_some() {
         // Agent bootstrap supplies this value for the first route. Later routes use their own
         // response headroom, and some endpoints do not accept a max-output override at all.
         context.parameters.max_output_tokens = None;
@@ -313,9 +313,18 @@ pub(crate) fn publish(
             .sessions()
             .session(&session_for_write)?
             .ok_or(StorageError::ScopeDenied)?;
-        if session.closed()
-            || session.context_epoch != previous_epoch
-            || observed_sequence.is_some_and(|sequence| session.last_durable_sequence() != sequence)
+        if session.closed() || session.context_epoch != previous_epoch {
+            return Err(StorageError::ScopeDenied);
+        }
+        if let Some(sequence) = observed_sequence
+            && session.last_durable_sequence() != sequence
+            && !(ctx_for_write.workspace_reply().is_some()
+                && crate::tool_turn::workspace_input_tail(
+                    tx.sessions(),
+                    &session,
+                    sequence,
+                    false,
+                )?)
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -363,16 +372,22 @@ pub(crate) fn publish(
         let scope = session
             .project_id
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
+        let mut provenance = json!({"kind":"ProviderContextEpoch","reason":reason_name,
+            "sessionId":session_for_write,"previousEpoch":previous_epoch,
+            "binding":binding_for_write,"observedSequence":session.next_sequence,
+            "omittedNative":omitted_for_write});
+        if let Some(reply) = ctx_for_write.workspace_reply() {
+            provenance["workspaceReply"] = json!(ctx_for_write.invocation_id());
+            provenance["workspaceUserSequence"] = json!(reply.user_sequence);
+            provenance["sourceContext"] = json!(source_for_write);
+        }
         let version = artifacts_for_write.commit_host_bytes_in_scope(
             tx,
             &staged_for_write,
             HostArtifactPublication {
                 title: "Provider context epoch",
                 media_type: "application/vnd.devworks.provider-context+json",
-                provenance: json!({"kind":"ProviderContextEpoch","reason":reason_name,
-                    "sessionId":session_for_write,"previousEpoch":previous_epoch,
-                    "binding":binding_for_write,"observedSequence":session.next_sequence,
-                    "omittedNative":omitted_for_write}),
+                provenance,
                 scope,
                 owner: ctx_for_write.principal().clone(),
             },

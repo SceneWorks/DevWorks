@@ -60,6 +60,12 @@ pub enum AttemptSelection {
         required_capabilities: Vec<String>,
         pin: Option<PinFence>,
     },
+    /// A pinless Low attempt qualifies the precise catalog and billing identities it saved.
+    TierClassifier {
+        model_revision: i64,
+        account_revision: i64,
+        required_capabilities: Vec<String>,
+    },
     /// Exact discovered embedding model and explicitly qualified native host space; no pin.
     Embedding {
         embedding_space_id: Id,
@@ -69,13 +75,28 @@ pub enum AttemptSelection {
         registration_digest: String,
     },
     Decision {
-        question_type: String,
-        images: bool,
-        videos: bool,
+        model_revision: i64,
+        connection_revision: i64,
+        account_revision: i64,
+        credential_revision: i64,
+        endpoint_digest: String,
+        requirements: crate::providers::systemone::Requirements,
+        pooled: bool,
     },
 }
 
 impl AttemptSelection {
+    pub fn classifier_binding(&self) -> Option<(i64, i64)> {
+        match self.route() {
+            Self::TierClassifier {
+                model_revision,
+                account_revision,
+                ..
+            } => Some((*model_revision, *account_revision)),
+            _ => None,
+        }
+    }
+
     fn route(&self) -> &Self {
         match self {
             Self::NativeGeneration { route, .. } => route,
@@ -98,6 +119,15 @@ impl InferenceRouter {
             ..
         } = selection
         {
+            if matches!(route.as_ref(), AttemptSelection::TierClassifier { .. }) {
+                if effective_effort
+                    .as_deref()
+                    .is_some_and(|effort| effort != "none")
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                return self.attempt_route_current(tx, session, route, query);
+            }
             let mut selected = route.as_ref().clone();
             let AttemptSelection::Conversation { effort, .. } = &mut selected else {
                 return Err(StorageError::ScopeDenied);
@@ -149,12 +179,17 @@ impl InferenceRouter {
                         "session route pin changed before inference admission".into(),
                     ));
                 }
+                let Some(effective) =
+                    super::auto_routing::effective_intent(tx.router(), session, intent)?
+                else {
+                    return Ok(Some("DevWorks Auto has no assigned tier".into()));
+                };
                 let pinned = current_pin
                     .as_ref()
                     .filter(|current| pin.as_ref().is_some_and(|p| p.id == current.pin_id))
-                    .and_then(|pin| facts.assess_pin(intent, pin, &connections, &need));
+                    .and_then(|pin| facts.assess_pin(&effective, pin, &connections, &need));
                 let pool = facts.assess_pool(
-                    intent,
+                    &effective,
                     &connections,
                     &need,
                     Some((&query.catalog_model_id, &query.connection_id)),
@@ -203,6 +238,35 @@ impl InferenceRouter {
                     ));
                 }
             }
+            AttemptSelection::TierClassifier {
+                model_revision,
+                account_revision,
+                required_capabilities,
+            } => {
+                let model = tx.router().route_model(&query.catalog_model_id)?;
+                let connection = tx.router().connection(&query.connection_id)?;
+                if !model.is_some_and(|model| model.revision == *model_revision)
+                    || !connection
+                        .is_some_and(|connection| connection.account_revision == *account_revision)
+                {
+                    return Ok(Some(
+                        "Low classifier model or billing account changed".into(),
+                    ));
+                }
+                return self.attempt_route_current(
+                    tx,
+                    session,
+                    &AttemptSelection::Conversation {
+                        intent: RouteIntent::Tier {
+                            tier: TierName::Low,
+                        },
+                        effort: EffortName::Default,
+                        required_capabilities: required_capabilities.clone(),
+                        pin: None,
+                    },
+                    query,
+                );
+            }
             AttemptSelection::Embedding {
                 dimensions,
                 upstream_model_id,
@@ -243,38 +307,33 @@ impl InferenceRouter {
                 }
             }
             AttemptSelection::Decision {
-                question_type,
-                images,
-                videos,
+                model_revision,
+                connection_revision,
+                account_revision,
+                credential_revision,
+                endpoint_digest,
+                requirements,
+                pooled,
             } => {
                 let Some(model) = tx.router().decision_model(&query.catalog_model_id)? else {
                     return Ok(Some("decision model is unavailable".into()));
                 };
-                let connection = connections
-                    .iter()
-                    .find(|connection| connection.id == model.connection_id);
                 let now = tx.now_ms();
-                let cooling = tx
-                    .router()
-                    .cooldowns()?
-                    .iter()
-                    .any(|cooldown| cooldown.model_id == model.id && cooldown.until_ms > now);
-                let eligible = !cooling
-                    && model.enabled
-                    && model.connection_id == query.connection_id
-                    && query.endpoint_profile == "SystemOne"
+                let cooldowns = select::active_cooldowns(&tx.router().cooldowns()?, now);
+                let connection = tx.router().connection(&model.connection_id)?;
+                let eligible = model.connection_id == query.connection_id
+                    && query.endpoint_profile == decision_models::PROFILE
                     && query.provider_model_id.as_ref() == Some(&model.upstream_model_id)
-                    && model.question_types.contains(question_type)
-                    && (!images || model.accepts_images)
-                    && (!videos || model.accepts_videos)
+                    && model.revision == *model_revision
                     && connection.is_some_and(|connection| {
-                        connection.profile == "SystemOne"
-                            && connection.state == crate::ports::router::ConnectionState::Connected
-                            && connection.permits(&model.upstream_model_id)
-                            && connection.discovered.as_ref().is_none_or(|ids| {
-                                select::lists(&connection.profile, ids, &model.upstream_model_id)
-                            })
-                    });
+                        connection.revision == *connection_revision
+                            && connection.account_revision == *account_revision
+                            && connection.credential_revision == *credential_revision
+                            && crate::fingerprint::sha256_hex(connection.endpoint.as_bytes())
+                                == *endpoint_digest
+                    })
+                    && decisions::supports(&model, requirements, *pooled)?
+                    && decision_models::availability(&model, &connections, &cooldowns).is_ok();
                 if !eligible {
                     return Ok(Some("decision model does not meet the current question, media or connection constraints".into()));
                 }
@@ -318,8 +377,18 @@ impl InferenceRouter {
                 "embedding requires its qualified native route".into(),
             ));
         }
-        if route.purpose == "TierClassification"
-            && matches!(request.selection.route(),AttemptSelection::Conversation{intent,..} if !matches!(intent,RouteIntent::Tier{tier:TierName::Low}))
+        if (route.purpose == "Decision")
+            != matches!(request.selection.route(), AttemptSelection::Decision { .. })
+        {
+            return Ok(Admission::SourceChanged(
+                "decision inference requires its current native decision route".into(),
+            ));
+        }
+        if (route.purpose == "TierClassification")
+            != matches!(
+                request.selection.route(),
+                AttemptSelection::TierClassifier { .. }
+            )
         {
             return Ok(Admission::SourceChanged(
                 "the conversational classifier must target Low directly".into(),

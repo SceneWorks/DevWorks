@@ -61,6 +61,13 @@ pub struct RouteInput {
     pub intent: RouteIntent,
     pub effort: EffortName,
     pub required_capabilities: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub expected_pin_revision: Option<Counter>,
 }
 impl Check for RouteInput {
     fn check(&self) -> Result<(), String> {
@@ -69,11 +76,21 @@ impl Check for RouteInput {
         self.intent.check()?;
         self.effort.check()?;
         self.required_capabilities.check()?;
+        self.expected_pin_revision.check()?;
         Ok(())
     }
 }
 impl Revisioned for RouteInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.expected_pin_revision = None;
+        }
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `router.pin` Command input.
@@ -95,7 +112,13 @@ impl Check for PinInput {
     }
 }
 impl Revisioned for PinInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `router.availability` Query input.
@@ -127,6 +150,11 @@ impl Revisioned for AvailabilityInput {
         if revision < 2 {
             self.session_id = None;
         }
+        self.intent.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.intent.check_revision(revision)?;
+        Ok(())
     }
 }
 
@@ -445,14 +473,34 @@ impl Revisioned for DecisionModelsInput {
 /// `router.decide` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["modelId", "expectedModelRevision", "state", "questions", "images", "videos", "timeoutMs"], "x-until": 4}, {"required": ["modelId", "expectedModelRevision", "state", "questions", "images", "videos", "timeoutMs"], "not": {"anyOf": [{"required": ["usePool"]}]}, "x-since": 4}, {"required": ["state", "questions", "images", "videos", "timeoutMs", "usePool"], "not": {"anyOf": [{"required": ["modelId"]}, {"required": ["expectedModelRevision"]}]}, "x-since": 4}]))]
 pub struct DecideInput {
-    pub model_id: Id,
-    pub expected_model_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id")]
+    pub model_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision")]
+    pub expected_model_revision: Option<Revision>,
     pub state: DynamicJson,
     pub questions: NonEmpty<NamedQuestion>,
     pub images: Items<MediaRef>,
     pub videos: Items<MediaRef>,
     pub timeout_ms: PositiveCounter,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 4, "const" = true))]
+    pub use_pool: Option<bool>,
 }
 impl Check for DecideInput {
     fn check(&self) -> Result<(), String> {
@@ -463,11 +511,17 @@ impl Check for DecideInput {
         self.images.check()?;
         self.videos.check()?;
         self.timeout_ms.check()?;
+        self.use_pool.check()?;
         Ok(())
     }
 }
 impl Revisioned for DecideInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 4 {
+            self.use_pool = None;
+        }
+        self.questions.retain_revision(revision);
+    }
 }
 
 /// `router.embedding_spaces` Query input.

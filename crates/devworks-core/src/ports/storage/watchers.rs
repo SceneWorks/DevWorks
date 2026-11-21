@@ -238,6 +238,14 @@ pub trait WatcherRead {
         states: &[WatchEventState],
         limit: u16,
     ) -> Result<Vec<StoredWatchEvent>, StorageError>;
+    /// Delivered events within an exact provider transcript, ordered by notice sequence.
+    fn delivered_watch_events(
+        &self,
+        session: &Id,
+        after_sequence: i64,
+        through_sequence: i64,
+        limit: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError>;
 }
 
 pub trait WatcherRepository: WatcherRead {
@@ -254,9 +262,14 @@ pub trait WatcherRepository: WatcherRead {
         transcript_sequence: i64,
         at_ms: i64,
     ) -> Result<bool, StorageError>;
-    /// Marks the session's delivered, unacknowledged events as carried by `turn` (replacing a
-    /// carry left by an ended turn). Returns how many it carries.
-    fn carry_watch_events(&mut self, session: &Id, turn: &Id) -> Result<u64, StorageError>;
+    /// Carries delivered, unacknowledged events through the provider input's transcript cursor.
+    /// A new turn replaces the carry of a turn interrupted by a previous owner.
+    fn carry_watch_events(
+        &mut self,
+        session: &Id,
+        turn: &Id,
+        through_sequence: i64,
+    ) -> Result<u64, StorageError>;
     /// Ends `turn`'s carry: a completed turn acknowledges its events; any other end leaves them
     /// delivered for the next turn. Returns how many it changed.
     fn release_watch_events(

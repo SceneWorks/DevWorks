@@ -567,6 +567,20 @@ pub struct SessionCommandRequest {
     pub expected_session_revision: Revision,
     #[schemars(length(min = 1, max = 128))]
     pub content: Vec<UserContent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::domain_support::gated_member"
+    )]
+    #[schemars(with = "ConversationRoutePreference", extend("x-since" = 3))]
+    pub reply_route: Option<ConversationRoutePreference>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRoutePreference {
+    pub intent: crate::domain_generated::RouteIntent,
+    pub effort: crate::domain_generated::EffortName,
 }
 impl SessionCommandRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -583,6 +597,13 @@ impl SessionCommandRequest {
             }
         }
         Ok(())
+    }
+}
+impl crate::domain_support::Revisioned for SessionCommandRequest {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.reply_route = None;
+        }
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

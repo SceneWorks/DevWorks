@@ -52,6 +52,8 @@ def request(name,mode):
  d=OPS[name];fs=d[mode.lower()+'Fields'] if d['mode']=='Hybrid' else d['fields']
  body={'kind':name,**{camel(n):sample(t) for n,t in fs.items() if not t.startswith('?')}}
  if d.get('exactlyOne'):m=d['exactlyOne'][0];body[camel(m)]=sample(fs[m][1:])
+ if d.get('inputAlternatives'):
+  for n in d['inputAlternatives'][0]['members']:body[camel(n)]=sample(fs[n][1:])
  if name=='git.diff':body['paths']=['src/name:part\\literal.rs']
  if name=='tasks.create':body['parentId']='feature-a'
  if name=='tasks.assign':body['clearAssignment']=True
@@ -243,6 +245,16 @@ for kind in ['Choice','Noul','Score','Box','Extension']:
  if kind=='Choice':question['criteria']=[{'name':'yes'},{'name':'no'}]
  if kind=='Score':question['criteria']=['low','high']
  obj['body']['questions']=[{'name':'fixture','question':question}];case('decision-'+kind,'domain-request',obj)
+_decision=copy.deepcopy(POS['decision-Noul']);_decision['schemaRevision']=4
+case('decision-current-exact','domain-request.r4',_decision)
+_decision['body'].pop('modelId');_decision['body'].pop('expectedModelRevision')
+_decision['body']['usePool']=True
+_decision['body']['questions'][0]['question']['instructionParts']=[{'type':'image_url','image_url':{'url':'https://fixture.invalid/photo.png'}}]
+case('decision-current-pool','domain-request.r4',_decision)
+case('decision-pool-reject-false','domain-request.r4',{**_decision,'body':{**_decision['body'],'usePool':False}},False,False)
+case('decision-pool-reject-model','domain-request.r4',{**_decision,'body':{**_decision['body'],'modelId':'jev'}},False,False)
+_decision['schemaRevision']=1
+case('decision-reject-pool-under-legacy-revision','domain-request',_decision,False,False)
 for key,t in [('entities','KnowledgeEntityDraft'),('evidence','SourceEvidence')]:
  obj=copy.deepcopy(POS['input-knowledge.record-Command']);obj['body']['batch']['claims']=[];obj['body']['batch'][key]=[sample(t)];case('knowledge-'+key+'-only','domain-request',obj)
 # Explicit price semantics: reported zero is distinct from local free and untracked.
@@ -508,6 +520,10 @@ case('r2-input-sessions.get','domain-request.r2',domain('sessions.get'))
 for name in ['sessions.start','sessions.end']:
  case('r2-input-'+name,'domain-request.r2',command_at(name))
 case('r2-input-sessions.append_message','session-command-request',{'protocol':'1.0-draft.1','requestKey':'request-a','sessionId':'session-a','expectedSessionRevision':'1','content':[{'kind':'Text','text':'Hello'}],'schemaRevision':2})
+case('r3-input-sessions.append_message','session-command-request.r3',{
+ 'protocol':'1.0-draft.1','requestKey':'request-a','sessionId':'session-a',
+ 'expectedSessionRevision':'1','content':[{'kind':'Text','text':'Hello'}],'schemaRevision':3,
+ 'replyRoute':{'intent':{'kind':'DevWorksAuto'},'effort':'Default'}})
 session_r2={**sample('SessionRecord'),'createdAtMs':'1793570000000','lastActivityMs':'1793570060000'}
 for name in ['sessions.get','sessions.start','sessions.end','sessions.append_message']:
  case('r2-result-'+name,'operation-result.r2',{'kind':name,'value':session_r2})
@@ -750,6 +766,11 @@ case('reject-r1-result-catalog-latest','operation-result',{'kind':'router.catalo
 case('reject-r3-result-catalog-null-availability','operation-result.r3',{'kind':'router.catalog','value':{'items':[{**latest_alias,'available':None}],'hasMore':False}},False,False)
 # Revision 4 adds each row's offered efforts, query-only like revision 3.
 offered_row={**latest_alias,'offeredEfforts':['Low','High']}
+decision_policy={'poolMember':True,'maxInputBytes':'65536','maxQuestionCount':'4','maxBatchBytes':'65536'}
+decision_model={**sample('DecisionModel'),'enabled':True,'questionTypes':['choice'],'decisionPolicy':decision_policy}
+case('r4-input-router.configure-decision-model','domain-request.r4',command_at('router.configure',4,action={'kind':'DecisionModel','model':decision_model}))
+case('r4-input-router.decision_models','domain-request.r4',domain('router.decision_models',4))
+case('r4-result-router.decision_models','operation-result.r4',{'kind':'router.decision_models','value':{'items':[{**decision_model,'available':True}],'hasMore':False}})
 case('r4-input-router.catalog','domain-request.r3',domain('router.catalog',4))
 case('r4-result-router.catalog','operation-result.r4',{'kind':'router.catalog','value':{'items':[offered_row],'hasMore':False}})
 case('r4-result-catalog-nothing-offered','operation-result.r4',{'kind':'router.catalog','value':{'items':[{**offered_row,'offeredEfforts':[]}],'hasMore':False}})

@@ -32,6 +32,9 @@ pub enum SettingsSlot {
     Connections(u64),
     /// A page of the full catalog (disabled models included) for the connections panel.
     ConnectionCatalog(u64),
+    DecisionModels(u64),
+    SystemOneDecide,
+    SystemOneCompletion,
     /// One bounded persistent embedding-space status page.
     EmbeddingSpaces(u64),
     /// One `router.configure` submission from the connections panel (its sequence number).

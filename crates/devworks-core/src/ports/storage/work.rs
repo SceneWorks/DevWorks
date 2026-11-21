@@ -240,6 +240,8 @@ pub struct StoredAllocationClaim {
     pub work_id: Id,
     pub kind: String,
     pub queue_key: String,
+    /// The boot-local project's automatic slot. Ordinary reservations use their own slot.
+    pub automatic: bool,
     pub owner_id: ActorId,
     pub session_id: Option<Id>,
     pub ingress_namespace: Id,

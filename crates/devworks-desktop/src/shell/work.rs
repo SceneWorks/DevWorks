@@ -85,6 +85,7 @@ impl std::ops::Deref for Activity {
 pub struct WorkUi {
     pub messages: MessageBoard,
     pub histories: BTreeMap<String, Activity>,
+    pub keep_working: BTreeMap<String, devworks_engine::KeepWorkingStatus>,
 
     /// Workflow drafts and inspected claims survive project switches; records remain authoritative.
     pub workflows: BTreeMap<String, WorkflowUi>,
@@ -108,6 +109,8 @@ pub struct WorkUi {
     pub activity: Activity,
     /// Current records of opened features (readiness at schema revision 2).
     pub detail: BTreeMap<String, WorkRecord>,
+    pub(crate) readiness_history:
+        BTreeMap<String, Paged<devworks_core::protocol::records::LineageRecord>>,
     /// Each root's source-control links: a re-read keeps the list on screen until every page
     /// arrived, so a refresh never shifts the controls beneath it.
     pub git: BTreeMap<String, Paged<devworks_core::protocol::records::AttributedGitLink>>,
@@ -273,6 +276,7 @@ impl WorkUi {
 /// What the screens ask the shell to do.
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
+    KeepWorking(bool),
     RefreshMessages,
     PollMessages,
     MoreInbox,
@@ -310,6 +314,7 @@ pub(crate) enum Action {
     SelectCard(Option<String>),
     OpenDetail(String),
     RefreshGit(String),
+    ReadinessHistory(String, bool),
     InspectGit(String, String),
     OpenGitSession(String),
 }
