@@ -351,6 +351,13 @@ fn a_queued_burst_of_watcher_events_reaches_the_same_provider_input() {
             input = request(&mut receive) => input,
             result = &mut task => panic!("provider turn ended before carrying the burst: {result:?}"),
         };
+        let input = if input.is_compaction() {
+            input.answer(COMPLETED);
+            request(&mut receive).await
+        } else {
+            input
+        };
+        assert!(!input.is_compaction());
         let messages = input.body["messages"].to_string();
         let mut remaining = messages.as_str();
         for event in &ids {
