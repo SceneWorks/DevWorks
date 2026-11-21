@@ -292,6 +292,7 @@ pub(crate) enum Action {
     InspectClaim(String),
     ReleaseClaim(String),
     OpenWork(String),
+    OpenImportedHistory(String),
     Create(CreateForm),
     Edit(EditForm),
     /// A work command on one item.

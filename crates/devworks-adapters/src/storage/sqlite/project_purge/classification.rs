@@ -88,6 +88,11 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema66-routing-extension.json"
     ),
+    policy_document!(
+        "workImportExtension",
+        Tables,
+        "schema67-work-import-extension.json"
+    ),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {

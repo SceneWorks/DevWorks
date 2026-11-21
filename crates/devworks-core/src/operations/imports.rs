@@ -3,7 +3,7 @@
 
 //! Selected-operation inputs for the `imports` family (owner: ImportService).
 //!
-//! Read-only source snapshot and explicit selected work/history import; no legacy live connector
+//! A sealed local CodeGraph work export, workspace-owned selection and apply, project-owned historical evidence, and separately authorized incremental schedules
 //!
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
@@ -13,7 +13,7 @@ use crate::protocol::provider::Digest;
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Id, Revision};
+use crate::protocol::{Counter, Id, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,15 +23,39 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreviewInput {
     pub config: ImportConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+    pub mode: Option<ImportIntentMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_since_ms: Option<Counter>,
 }
 impl Check for PreviewInput {
     fn check(&self) -> Result<(), String> {
         self.config.check()?;
+        self.mode.check()?;
+        self.updated_since_ms.check()?;
         Ok(())
     }
 }
 impl Revisioned for PreviewInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.mode = None;
+        }
+        if revision < 2 {
+            self.updated_since_ms = None;
+        }
+        self.config.retain_revision(revision);
+    }
 }
 
 /// `imports.configure` Command input.
@@ -43,17 +67,30 @@ pub struct ConfigureInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<Revision>,
     pub config: ImportConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub approve: Option<bool>,
 }
 impl Check for ConfigureInput {
     fn check(&self) -> Result<(), String> {
         self.config_id.check()?;
         self.expected_revision.check()?;
         self.config.check()?;
+        self.approve.check()?;
         Ok(())
     }
 }
 impl Revisioned for ConfigureInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.approve = None;
+        }
+        self.config.retain_revision(revision);
+    }
 }
 
 /// `imports.apply` Command input.
@@ -83,15 +120,27 @@ impl Revisioned for ApplyInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunsInput {
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub source_namespace: Option<Id>,
 }
 impl Check for RunsInput {
     fn check(&self) -> Result<(), String> {
         self.page.check()?;
+        self.source_namespace.check()?;
         Ok(())
     }
 }
 impl Revisioned for RunsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.source_namespace = None;
+        }
+    }
 }
 
 /// `imports.inspect` Query input.
@@ -110,6 +159,81 @@ impl Revisioned for InspectInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `imports.settings` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingsInput {
+    pub source_namespace: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<ImportConfig>,
+}
+impl Check for SettingsInput {
+    fn check(&self) -> Result<(), String> {
+        self.source_namespace.check()?;
+        self.proposal.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SettingsInput {
+    fn retain_revision(&mut self, revision: u32) {
+        self.proposal.retain_revision(revision);
+    }
+}
+
+/// `imports.history` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryInput {
+    pub work_id: Id,
+    pub page: PageRequest,
+}
+impl Check for HistoryInput {
+    fn check(&self) -> Result<(), String> {
+        self.work_id.check()?;
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for HistoryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `imports.cancel` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelInput {
+    pub run_id: Id,
+    pub expected_revision: Revision,
+}
+impl Check for CancelInput {
+    fn check(&self) -> Result<(), String> {
+        self.run_id.check()?;
+        self.expected_revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for CancelInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `imports.sync` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SyncInput {
+    pub config_id: Id,
+    pub expected_revision: Revision,
+}
+impl Check for SyncInput {
+    fn check(&self) -> Result<(), String> {
+        self.config_id.check()?;
+        self.expected_revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SyncInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `imports` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -123,6 +247,14 @@ pub enum Input {
     Runs(RunsInput),
     /// `imports.inspect` (Query).
     Inspect(InspectInput),
+    /// `imports.settings` (Query).
+    Settings(SettingsInput),
+    /// `imports.history` (Query).
+    History(HistoryInput),
+    /// `imports.cancel` (Command).
+    Cancel(CancelInput),
+    /// `imports.sync` (Command).
+    Sync(SyncInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -132,6 +264,10 @@ impl Input {
             Self::Apply(_) => "imports.apply",
             Self::Runs(_) => "imports.runs",
             Self::Inspect(_) => "imports.inspect",
+            Self::Settings(_) => "imports.settings",
+            Self::History(_) => "imports.history",
+            Self::Cancel(_) => "imports.cancel",
+            Self::Sync(_) => "imports.sync",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -141,6 +277,10 @@ impl Input {
             Self::Apply(_) => Mode::Command,
             Self::Runs(_) => Mode::Query,
             Self::Inspect(_) => Mode::Query,
+            Self::Settings(_) => Mode::Query,
+            Self::History(_) => Mode::Query,
+            Self::Cancel(_) => Mode::Command,
+            Self::Sync(_) => Mode::Command,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -151,6 +291,10 @@ impl Input {
             Self::Apply(i) => serde_json::to_value(i),
             Self::Runs(i) => serde_json::to_value(i),
             Self::Inspect(i) => serde_json::to_value(i),
+            Self::Settings(i) => serde_json::to_value(i),
+            Self::History(i) => serde_json::to_value(i),
+            Self::Cancel(i) => serde_json::to_value(i),
+            Self::Sync(i) => serde_json::to_value(i),
         }
     }
 }

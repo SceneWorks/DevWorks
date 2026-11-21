@@ -74,7 +74,7 @@ pub(super) const FAMILIES: [&str; 50] = [
     "watch",
 ];
 
-pub(super) static CATALOG: [OperationDescriptor; 380] = [
+pub(super) static CATALOG: [OperationDescriptor; 384] = [
     OperationDescriptor {
         name: "projects.list",
         family: "projects",
@@ -9674,10 +9674,10 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
+        human_only: true,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
@@ -9700,11 +9700,11 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "MutationSummary",
         result_schema: schema_of::<MutationSummary>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
-        assignment_scope: AssignmentScope::Project,
+        human_only: true,
+        assignment_scope: AssignmentScope::Administration,
     },
     OperationDescriptor {
         name: "imports.apply",
@@ -9726,11 +9726,11 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
-        assignment_scope: AssignmentScope::Project,
+        human_only: true,
+        assignment_scope: AssignmentScope::Administration,
     },
     OperationDescriptor {
         name: "imports.runs",
@@ -9752,10 +9752,10 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "Page<ImportRun>",
         result_schema: schema_of::<Page<ImportRun>>,
         completion: false,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
         native_execution: false,
         approval_required: false,
-        human_only: false,
+        human_only: true,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
@@ -9778,7 +9778,111 @@ pub(super) static CATALOG: [OperationDescriptor; 380] = [
         result_type: "ImportRun",
         result_schema: schema_of::<ImportRun>,
         completion: false,
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "imports.settings",
+        family: "imports",
+        owner: "ImportService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "imports.settings",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "imports::SettingsInput",
+            decode: decode_imports_settings_query,
+            input_schema: schema_of::<ops::imports::SettingsInput>,
+        }],
+        result_type: "ImportSettingsView",
+        result_schema: schema_of::<ImportSettingsView>,
+        completion: false,
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "imports.history",
+        family: "imports",
+        owner: "ImportService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "imports.history",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "imports::HistoryInput",
+            decode: decode_imports_history_query,
+            input_schema: schema_of::<ops::imports::HistoryInput>,
+        }],
+        result_type: "Page<ImportedWorkEvidence>",
+        result_schema: schema_of::<Page<ImportedWorkEvidence>>,
+        completion: false,
         revisions: &[SchemaRevision(1)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "imports.cancel",
+        family: "imports",
+        owner: "ImportService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "imports.cancel",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Local,
+            input_type: "imports::CancelInput",
+            decode: decode_imports_cancel_command,
+            input_schema: schema_of::<ops::imports::CancelInput>,
+        }],
+        result_type: "MutationSummary",
+        result_schema: schema_of::<MutationSummary>,
+        completion: true,
+        revisions: &[SchemaRevision(1)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::Administration,
+    },
+    OperationDescriptor {
+        name: "imports.sync",
+        family: "imports",
+        owner: "ImportService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "imports.sync",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Journaled,
+            input_type: "imports::SyncInput",
+            decode: decode_imports_sync_command,
+            input_schema: schema_of::<ops::imports::SyncInput>,
+        }],
+        result_type: "ImportRun",
+        result_schema: schema_of::<ImportRun>,
+        completion: true,
+        revisions: &[SchemaRevision(1), SchemaRevision(2)],
         native_execution: false,
         approval_required: false,
         human_only: false,
@@ -10543,21 +10647,25 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
         "imports.apply" => Some(362),
         "imports.runs" => Some(363),
         "imports.inspect" => Some(364),
-        "maintenance.prune_diagnostics" => Some(365),
-        "maintenance.prune_index_runs" => Some(366),
-        "maintenance.prune_messages" => Some(367),
-        "maintenance.prune_sessions" => Some(368),
-        "repository_docs.generate" => Some(369),
-        "mcp_server.status" => Some(370),
-        "mcp_server.configure" => Some(371),
-        "mcp_server.clients" => Some(372),
-        "mcp_server.set_client_access" => Some(373),
-        "evals.grade" => Some(374),
-        "evals.results" => Some(375),
-        "watch.create" => Some(376),
-        "watch.list" => Some(377),
-        "watch.inspect" => Some(378),
-        "watch.cancel" => Some(379),
+        "imports.settings" => Some(365),
+        "imports.history" => Some(366),
+        "imports.cancel" => Some(367),
+        "imports.sync" => Some(368),
+        "maintenance.prune_diagnostics" => Some(369),
+        "maintenance.prune_index_runs" => Some(370),
+        "maintenance.prune_messages" => Some(371),
+        "maintenance.prune_sessions" => Some(372),
+        "repository_docs.generate" => Some(373),
+        "mcp_server.status" => Some(374),
+        "mcp_server.configure" => Some(375),
+        "mcp_server.clients" => Some(376),
+        "mcp_server.set_client_access" => Some(377),
+        "evals.grade" => Some(378),
+        "evals.results" => Some(379),
+        "watch.create" => Some(380),
+        "watch.list" => Some(381),
+        "watch.inspect" => Some(382),
+        "watch.cancel" => Some(383),
         _ => None,
     }
 }
@@ -14451,6 +14559,50 @@ fn decode_imports_inspect_query(
         v,
         |i| OperationInput::Imports(ops::imports::Input::Inspect(i)),
     )
+}
+fn decode_imports_settings_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::SettingsInput>(
+        "imports.settings",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::Settings(i)),
+    )
+}
+fn decode_imports_history_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::HistoryInput>(
+        "imports.history",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::History(i)),
+    )
+}
+fn decode_imports_cancel_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::CancelInput>(
+        "imports.cancel",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Imports(ops::imports::Input::Cancel(i)),
+    )
+}
+fn decode_imports_sync_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::imports::SyncInput>("imports.sync", Mode::Command, revision, v, |i| {
+        OperationInput::Imports(ops::imports::Input::Sync(i))
+    })
 }
 fn decode_maintenance_prune_diagnostics_command(
     v: Value,

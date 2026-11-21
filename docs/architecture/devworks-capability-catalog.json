@@ -722,10 +722,14 @@
         "configure",
         "apply",
         "runs",
-        "inspect"
+        "inspect",
+        "settings",
+        "history",
+        "cancel",
+        "sync"
       ],
-      "effectAndAuthority": "Read-only source snapshot and explicit selected work/history import; no legacy live connector",
-      "status": "Proposed native operation contract; exact schemas and actual implementation pending"
+      "effectAndAuthority": "A sealed local CodeGraph work export, workspace-owned selection and apply, project-owned historical evidence, and separately authorized incremental schedules",
+      "status": "Native operation and desktop workflow"
     },
     {
       "family": "maintenance",

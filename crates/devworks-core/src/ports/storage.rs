@@ -109,6 +109,7 @@ mod sessions;
 mod usage;
 mod watchers;
 mod work;
+mod work_imports;
 pub use agents::*;
 pub use artifacts::*;
 pub use authority::*;
@@ -138,6 +139,7 @@ pub use sessions::*;
 pub use usage::*;
 pub use watchers::*;
 pub use work::*;
+pub use work_imports::*;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -812,6 +814,10 @@ pub trait WriteTransaction {
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
+    fn work_imports(&mut self) -> Result<&mut dyn WorkImportRepository, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
+
     fn usage(&mut self) -> &mut dyn UsageRepository;
 }
 
@@ -874,6 +880,10 @@ pub trait ReadSnapshot {
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
+    fn work_imports(&self) -> Result<&dyn WorkImportRead, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
+
     fn usage(&self) -> &dyn UsageRead;
 }
 

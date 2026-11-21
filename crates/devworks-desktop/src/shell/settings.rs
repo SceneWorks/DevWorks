@@ -297,6 +297,7 @@ impl SettingsCtl<'_, '_> {
                 SettingsAction::OpenNotifications => {
                     self.effects.push(Effect::OpenNotifications);
                 }
+                SettingsAction::OpenImports => self.effects.push(Effect::OpenImports),
                 SettingsAction::OpenConnections => self.load_connections(),
                 SettingsAction::OpenHelp(topic) => self.effects.push(Effect::OpenHelp(topic)),
                 SettingsAction::Connection(a) => self.connection_action(a),

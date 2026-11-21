@@ -122,6 +122,9 @@ impl WorkCtl<'_, '_> {
                 Action::InspectClaim(claim) => self.inspect_allocation(&claim),
                 Action::ReleaseClaim(claim) => self.release_allocation(&claim),
                 Action::OpenWork(id) => self.open_work(&id),
+                Action::OpenImportedHistory(id) => {
+                    self.cx.effects.push(Effect::OpenImportedHistory(id))
+                }
                 Action::Reload => {
                     self.load_work();
                     self.refresh_history(self.work.activity.item.clone());

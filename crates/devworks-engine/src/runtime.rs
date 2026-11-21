@@ -314,6 +314,7 @@ pub struct RuntimeConfig {
     /// Optional selected container backend. Without a qualified host binding the family is absent.
     pub containers: Option<ContainerComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
+    pub work_import_sources: Option<devworks_core::services::imports::ImportSources>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
@@ -394,6 +395,7 @@ impl RuntimeConfig {
             containers: None,
             price_refresh: None,
             schemas: None,
+            work_import_sources: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -935,6 +937,26 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     ));
     consumers.push(crate::conventions_import::consumer(conventions.imports()));
     let use_cases = use_cases.with_conventions(conventions.clone());
+    let use_cases = if let Some(sources) = &config.work_import_sources {
+        let service = Arc::new(devworks_core::services::imports::ImportService::new(
+            store.clone(),
+            sources.clone(),
+            artifacts.clone(),
+        ));
+        consumers.push(crate::effect_consumer::effect_consumer(
+            devworks_core::services::imports::EFFECT_CONSUMER,
+            service.clone(),
+            crate::effect_consumer::PanicReasons {
+                execute: "Work import stopped unexpectedly after dispatch",
+                observe: "Work import checkpoint observation stopped unexpectedly",
+            },
+            crate::effect_consumer::STANDARD_RETRY,
+            Some(1),
+        ));
+        use_cases.with_work_imports(service)
+    } else {
+        use_cases
+    };
     let schemas = config.schemas.as_ref().map(|ports| {
         Arc::new(
             devworks_core::services::schemas::SchemaService::new(ids.clone(), clock.clone())

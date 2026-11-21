@@ -7661,6 +7661,48 @@ pub struct ImportRun {
     pub state: OperationState,
     pub imported_ids: Items<Id>,
     pub report: ArtifactRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 2))]
+    pub preview_digest: Option<Digest>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 2))]
+    pub source_namespace: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+    pub mode: Option<ImportIntentMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub updated_since_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub processed: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 2))]
+    pub total: Option<Counter>,
 }
 impl Check for ImportRun {
     fn check(&self) -> Result<(), String> {
@@ -7670,8 +7712,131 @@ impl Check for ImportRun {
         self.state.check()?;
         self.imported_ids.check()?;
         self.report.check()?;
+        self.preview_digest.check()?;
+        self.source_namespace.check()?;
+        self.mode.check()?;
+        self.updated_since_ms.check()?;
+        self.processed.check()?;
+        self.total.check()?;
         crate::protocol::rules::record(
             "ImportRun",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for ImportRun {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.preview_digest = None;
+        }
+        if revision < 2 {
+            self.source_namespace = None;
+        }
+        if revision < 2 {
+            self.mode = None;
+        }
+        if revision < 2 {
+            self.updated_since_ms = None;
+        }
+        if revision < 2 {
+            self.processed = None;
+        }
+        if revision < 2 {
+            self.total = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum ImportIntentMode {
+    Full,
+    Delta,
+}
+impl Check for ImportIntentMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportSettingsView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<Revision>,
+    pub source_namespace: Id,
+    pub approved: bool,
+    pub config: ImportConfig,
+}
+impl Check for ImportSettingsView {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.source_namespace.check()?;
+        self.approved.check()?;
+        self.config.check()?;
+        crate::protocol::rules::record(
+            "ImportSettingsView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for ImportSettingsView {
+    fn retain_revision(&mut self, revision: u32) {
+        self.config.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedWorkEvidence {
+    pub id: Id,
+    pub source_namespace: Id,
+    pub source_id: Id,
+    pub kind: Label,
+    pub source_created_at_ms: Counter,
+    pub evidence: DynamicJson,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_reference: Option<ImportedCodeReference>,
+}
+impl Check for ImportedWorkEvidence {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.source_namespace.check()?;
+        self.source_id.check()?;
+        self.kind.check()?;
+        self.source_created_at_ms.check()?;
+        self.evidence.check()?;
+        self.current_reference.check()?;
+        crate::protocol::rules::record(
+            "ImportedWorkEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedCodeReference {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub commit: Label,
+    pub path: RelativePath,
+}
+impl Check for ImportedCodeReference {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.commit.check()?;
+        self.path.check()?;
+        crate::protocol::rules::record(
+            "ImportedCodeReference",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -7686,6 +7851,20 @@ pub struct ImportConfig {
     pub work_ids: Items<Id>,
     pub include_history: bool,
     pub include_git_links: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub all_projects: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 2))]
+    pub allow_scheduled_delta: Option<bool>,
 }
 impl Check for ImportConfig {
     fn check(&self) -> Result<(), String> {
@@ -7694,11 +7873,24 @@ impl Check for ImportConfig {
         self.work_ids.check()?;
         self.include_history.check()?;
         self.include_git_links.check()?;
+        self.all_projects.check()?;
+        self.allow_scheduled_delta.check()?;
         crate::protocol::rules::record(
             "ImportConfig",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ImportConfig {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.all_projects = None;
+        }
+        if revision < 2 {
+            self.allow_scheduled_delta = None;
+        }
     }
 }
 

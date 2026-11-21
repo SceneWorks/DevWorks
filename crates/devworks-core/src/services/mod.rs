@@ -23,6 +23,7 @@ pub mod github;
 pub mod graph;
 pub mod help;
 pub mod history;
+pub mod imports;
 pub mod indexing;
 pub mod instructions;
 pub mod jobs;
@@ -115,6 +116,7 @@ pub fn queue_service() -> queue::QueueService {
     queue::QueueService::new(vec![
         Arc::new(artifacts::replies::ReplyQueueHook),
         Arc::new(schemas::indexing::QueueHook),
+        Arc::new(imports::QueueHook),
     ])
 }
 
@@ -231,6 +233,13 @@ impl UseCases {
     /// Authored guidance shares one owner across native UI, tools and durable jobs.
     pub fn with_conventions(mut self, service: Arc<conventions::ConventionService>) -> Self {
         for operation in conventions::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    pub fn with_work_imports(mut self, service: Arc<imports::ImportService>) -> Self {
+        for operation in imports::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self

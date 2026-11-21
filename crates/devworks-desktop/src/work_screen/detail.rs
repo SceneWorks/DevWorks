@@ -105,6 +105,10 @@ pub(crate) fn feature_detail(
             workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
             run_controls(ui, work, f, enabled, actions);
             source_control(ui, work, f.id.as_str(), actions);
+            if f.id.as_str().starts_with("import-") && ui.button("Imported work history").clicked()
+            {
+                actions.push(Action::OpenImportedHistory(f.id.as_str().to_owned()));
+            }
             ui.add_space(6.0);
             // Approval and readiness are separate facts, shown apart.
             chip(
@@ -980,6 +984,10 @@ pub(crate) fn card_detail(
                 ui.label(&w.description.0);
             }
             source_control(ui, work, w.id.as_str(), actions);
+            if w.id.as_str().starts_with("import-") && ui.button("Imported work history").clicked()
+            {
+                actions.push(Action::OpenImportedHistory(w.id.as_str().to_owned()));
+            }
             // Workflow status: moving it never starts, pauses or completes execution.
             let mut target = w.status_id.as_str().to_owned();
             egui::ComboBox::from_id_salt(("card-status", w.id.as_str()))

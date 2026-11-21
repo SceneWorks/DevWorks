@@ -1873,6 +1873,7 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
                         | TaskOutput::McpContent(_)
+                        | TaskOutput::WorkImportReport(_)
                         | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_),
@@ -1946,6 +1947,7 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
                             | TaskOutput::McpContent(_)
+                            | TaskOutput::WorkImportReport(_)
                             | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_),

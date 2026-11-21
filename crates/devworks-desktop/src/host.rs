@@ -440,6 +440,27 @@ async fn compose(
         .with_store(&*store),
     );
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
+    let import_root = config.data_root.join("work-imports");
+    std::fs::create_dir_all(&import_root)
+        .map_err(|e| StartError::Thread(format!("could not prepare work import folder: {e}")))?;
+    let bindings = devworks_core::services::process::tools::ToolBindings::new(
+        std::iter::empty(),
+        std::iter::once(
+            devworks_core::services::process::tools::RegisteredWorkingRoot {
+                id: Id::new("work-import-inbox").expect("static working root ID"),
+                project: None,
+                path: import_root,
+            },
+        ),
+    )
+    .map_err(|reason| StartError::Thread(reason.into()))?;
+    let filesystem = Arc::new(NativeFilesystem::new());
+    runtime_config.work_import_sources =
+        Some(devworks_core::services::imports::ImportSources::new(
+            bindings,
+            filesystem.clone(),
+            filesystem,
+        ));
     runtime_config.purge = Some(devworks_engine::runtime::PurgeComposition {
         files: {
             let (data_root, paste_root) = (

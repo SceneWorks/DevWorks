@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "190bcb28c0f8f226fd0088cdc52a88e2087d69c58757faf8d0674efcc1e17ec0",
+  "catalogSha256": "3512f35dc63ec31124b34652f1f9f3a32a5daad66418c7be3b791b6cc257141b",
   "familyCount": 50,
-  "operationCount": 380,
-  "concreteInputCandidates": 380,
+  "operationCount": 384,
+  "concreteInputCandidates": 384,
   "domainInputsPending": 0,
   "families": [
     {
@@ -19196,7 +19196,7 @@
     {
       "family": "imports",
       "owner": "ImportService",
-      "effectAndAuthority": "Read-only source snapshot and explicit selected work/history import; no legacy live connector",
+      "effectAndAuthority": "A sealed local CodeGraph work export, workspace-owned selection and apply, project-owned historical evidence, and separately authorized incremental schedules",
       "operations": [
         {
           "operation": "imports.preview",
@@ -19231,6 +19231,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -19279,6 +19287,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Configuration",
@@ -19325,6 +19341,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -19369,6 +19393,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -19417,11 +19449,219 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
+          "familyRules": "Selected legacy work/history only, source snapshot/identity map and idempotent replay. Excluded knowledge/conventions/index migration remains excluded.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "imports.settings",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "imports.settings",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "imports.settings"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "imports.settings"
+          },
+          "resultValueType": "ImportSettingsView",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Return the exact saved selection and approval of this source, or the current bounded proposal.",
+          "familyRules": "Selected legacy work/history only, source snapshot/identity map and idempotent replay. Excluded knowledge/conventions/index migration remains excluded.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "imports.history",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "imports.history",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "imports.history"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "imports.history"
+          },
+          "resultValueType": "Page<ImportedWorkEvidence>",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Return inert imported evidence for the requested work and independently resolve its exact historical code location against the published native view when available.",
+          "familyRules": "Selected legacy work/history only, source snapshot/identity map and idempotent replay. Excluded knowledge/conventions/index migration remains excluded.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "imports.cancel",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "imports.cancel",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "imports.cancel"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "imports.cancel"
+          },
+          "resultValueType": "MutationSummary",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The workspace owner cancels further publication for this exact run revision; earlier committed checkpoints and observations remain available.",
+          "familyRules": "Selected legacy work/history only, source snapshot/identity map and idempotent replay. Excluded knowledge/conventions/index migration remains excluded.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "operation": "imports.sync",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "imports.sync",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "imports.sync"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Journaled"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "imports.sync"
+          },
+          "resultValueType": "ImportRun",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 1,
+              "inputSchema": "domain-request.schema.json",
+              "resultSchema": "operation-result.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.schema.json",
+              "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 2,
+              "inputSchema": "domain-request.r2.schema.json",
+              "resultSchema": "operation-result.r2.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r2.schema.json",
+              "completionSchema": "operation-completion.r2.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Journaled",
+          "semanticRules": "A human-authorized delta schedule uses the current approved configuration and a fresh sealed source snapshot.",
           "familyRules": "Selected legacy work/history only, source snapshot/identity map and idempotent replay. Excluded knowledge/conventions/index migration remains excluded.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

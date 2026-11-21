@@ -2670,7 +2670,49 @@
         "source_snapshot": "Digest",
         "state": "OperationState",
         "imported_ids": "Items<Id>",
-        "report": "ArtifactRef"
+        "report": "ArtifactRef",
+        "preview_digest": "?Digest",
+        "source_namespace": "?Id",
+        "mode": "?ImportIntentMode",
+        "updated_since_ms": "?Counter",
+        "processed": "?Counter",
+        "total": "?Counter"
+      },
+      "since": {"preview_digest": 2, "source_namespace": 2, "mode": 2, "updated_since_ms": 2, "processed": 2, "total": 2}
+    },
+    "ImportIntentMode": {
+      "kind": "enum",
+      "values": ["Full", "Delta"]
+    },
+    "ImportSettingsView": {
+      "kind": "record",
+      "fields": {
+        "id": "?Id",
+        "revision": "?Revision",
+        "source_namespace": "Id",
+        "approved": "bool",
+        "config": "ImportConfig"
+      }
+    },
+    "ImportedWorkEvidence": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "source_namespace": "Id",
+        "source_id": "Id",
+        "kind": "Label",
+        "source_created_at_ms": "Counter",
+        "evidence": "DynamicJson",
+        "current_reference": "?ImportedCodeReference"
+      }
+    },
+    "ImportedCodeReference": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "commit": "Label",
+        "path": "RelativePath"
       }
     },
     "ImportConfig": {
@@ -2680,8 +2722,11 @@
         "project_ids": "Items<ProjectId>",
         "work_ids": "Items<Id>",
         "include_history": "bool",
-        "include_git_links": "bool"
-      }
+        "include_git_links": "bool",
+        "all_projects": "?bool",
+        "allow_scheduled_delta": "?bool"
+      },
+      "since": {"all_projects": 2, "allow_scheduled_delta": 2}
     },
     "PrunePreview": {
       "kind": "record",
@@ -11145,8 +11190,11 @@
       "operation": "imports.preview",
       "mode": "Query",
       "fields": {
-        "config": "ImportConfig"
+        "config": "ImportConfig",
+        "mode": "?ImportIntentMode",
+        "updated_since_ms": "?Counter"
       },
+      "since": {"mode": 2, "updated_since_ms": 2},
       "result": "ImportRun",
       "effect": "ExternalRead",
       "authority": "Scoped",
@@ -11158,8 +11206,10 @@
       "fields": {
         "config_id": "?Id",
         "expected_revision": "?Revision",
-        "config": "ImportConfig"
+        "config": "ImportConfig",
+        "approve": "?bool"
       },
+      "since": {"approve": 2},
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Configuration",
@@ -11183,8 +11233,10 @@
       "operation": "imports.runs",
       "mode": "Query",
       "fields": {
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "source_namespace": "?Id"
       },
+      "since": {"source_namespace": 2},
       "result": "Page<ImportRun>",
       "effect": "Local",
       "authority": "Scoped",
@@ -11200,6 +11252,54 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
+    },
+    "imports.settings": {
+      "operation": "imports.settings",
+      "mode": "Query",
+      "fields": {
+        "source_namespace": "Id",
+        "proposal": "?ImportConfig"
+      },
+      "result": "ImportSettingsView",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Return the exact saved selection and approval of this source, or the current bounded proposal."
+    },
+    "imports.history": {
+      "operation": "imports.history",
+      "mode": "Query",
+      "fields": {
+        "work_id": "Id",
+        "page": "PageRequest"
+      },
+      "result": "Page<ImportedWorkEvidence>",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Return inert imported evidence for the requested work and independently resolve its exact historical code location against the published native view when available."
+    },
+    "imports.cancel": {
+      "operation": "imports.cancel",
+      "mode": "Command",
+      "fields": {
+        "run_id": "Id",
+        "expected_revision": "Revision"
+      },
+      "result": "MutationSummary",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "The workspace owner cancels further publication for this exact run revision; earlier committed checkpoints and observations remain available."
+    },
+    "imports.sync": {
+      "operation": "imports.sync",
+      "mode": "Command",
+      "fields": {
+        "config_id": "Id",
+        "expected_revision": "Revision"
+      },
+      "result": "ImportRun",
+      "effect": "Journaled",
+      "authority": "Scoped",
+      "rules": "A human-authorized delta schedule uses the current approved configuration and a fresh sealed source snapshot."
     },
     "maintenance.prune_diagnostics": {
       "operation": "maintenance.prune_diagnostics",
@@ -12548,6 +12648,15 @@
       1,
       5
     ],
+    "imports.preview": [1, 2],
+    "imports.configure": [1, 2],
+    "imports.apply": [1, 2],
+    "imports.runs": [1, 2],
+    "imports.inspect": [1, 2],
+    "imports.settings": [1, 2],
+    "imports.sync": [1, 2],
+    "imports.history": [1],
+    "imports.cancel": [1],
     "projects.prepare_purge": [
       6
     ],
@@ -13025,11 +13134,15 @@
     "queue.retry": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "queue.consumer_status": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "queue.reconcile": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "imports.preview": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "imports.configure": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "imports.apply": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "imports.runs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "imports.inspect": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "imports.preview": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.configure": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.apply": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.runs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.inspect": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.settings": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.history": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.cancel": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "imports.sync": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "maintenance.prune_diagnostics": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "maintenance.prune_index_runs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "maintenance.prune_messages": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

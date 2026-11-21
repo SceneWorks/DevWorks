@@ -93,6 +93,7 @@ pub enum SettingsAction {
     /// Scheduled jobs (schedules and their controls, JOB-01).
     OpenJobs,
     OpenNotifications,
+    OpenImports,
     /// The provider-connections topic was opened (load connections and the catalog).
     OpenConnections,
     OpenHelp(String),
@@ -456,6 +457,9 @@ impl SettingsScreen {
                 ui.heading("Notifications");
                 if widgets::secondary_button(ui, "Notification preferences").clicked() {
                     actions.push(SettingsAction::OpenNotifications);
+                }
+                if widgets::secondary_button(ui, "Import work history").clicked() {
+                    actions.push(SettingsAction::OpenImports);
                 }
                 host(ui, HostSection::Indexing);
             }

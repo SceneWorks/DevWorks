@@ -1931,6 +1931,11 @@ impl WriteTransaction for HandlerTx<'_> {
     fn watchers(&mut self) -> &mut dyn crate::ports::storage::WatcherRepository {
         self.inner.get_mut().watchers()
     }
+    fn work_imports(
+        &mut self,
+    ) -> Result<&mut dyn crate::ports::storage::WorkImportRepository, StorageError> {
+        self.inner.get_mut().work_imports()
+    }
     fn conventions(&mut self) -> &mut dyn crate::ports::storage::ConventionRepository {
         self.inner.get_mut().conventions()
     }

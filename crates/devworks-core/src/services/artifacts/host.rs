@@ -482,9 +482,120 @@ impl ArtifactService {
                 super::release_blob(tx, &version.blob_digest)?;
             }
         }
-        self.retire(tx, &mut artifact)?;
+        Self::retire(tx, &mut artifact)?;
         artifact.revision += 1;
         tx.artifacts().update_artifact(&artifact)?;
         Ok(())
     }
+}
+
+/// Ephemeral, host-owned source scoped to the exact journaled import that captured it.
+pub(crate) const WORK_IMPORT_INPUT: &str = "SelectedWorkImportInput";
+
+impl ArtifactService {
+    pub(crate) fn read_work_import_input(
+        &self,
+        store: &dyn ApplicationStore,
+        reference: &crate::protocol::provider::ArtifactRef,
+        operation: &crate::protocol::OperationId,
+        expected_snapshot: &str,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, StorageError> {
+        use std::io::Read as _;
+        let _hold = self.readers.acquire(reference.sha256.as_str());
+        let info = store.info();
+        let env = Preparation::new(store, None, None);
+        let version = env.read(|read| {
+            let artifact = read
+                .artifacts()
+                .artifact(&reference.artifact_id)?
+                .ok_or(StorageError::ViewUnavailable)?;
+            if !work_import_input(&artifact, &info.host_actor, operation)
+                || artifact.provenance["derived"]["sourceSnapshot"].as_str()
+                    != Some(expected_snapshot)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            read.artifacts()
+                .version(&reference.version_id)?
+                .filter(|v| {
+                    v.live()
+                        && v.artifact_id == artifact.id
+                        && artifact.current_version_id.as_ref() == Some(&v.id)
+                        && v.blob_digest == reference.sha256.as_str()
+                        && v.byte_count == reference.byte_length.get()
+                        && v.media_type == reference.media_type
+                        && v.byte_count <= crate::services::imports::MAX_EXPORT_BYTES as i64
+                })
+                .ok_or(StorageError::ViewUnavailable)
+        })?;
+        let mut reader = self
+            .files
+            .open_controlled(
+                &version.blob_digest,
+                &version.blob_generation,
+                version.byte_count as u64,
+                stopped,
+            )
+            .map_err(super::file_failure)?;
+        let mut bytes = Vec::with_capacity(version.byte_count as usize);
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            if stopped() {
+                return Err(StorageError::Cancelled);
+            }
+            let n = reader
+                .read(&mut buffer)
+                .map_err(|_| StorageError::ViewUnavailable)?;
+            if n == 0 {
+                break;
+            }
+            if bytes.len() + n > version.byte_count as usize {
+                return Err(StorageError::ViewUnavailable);
+            }
+            bytes.extend_from_slice(&buffer[..n]);
+        }
+        if bytes.len() != version.byte_count as usize || sha256_hex(&bytes) != version.blob_digest {
+            return Err(StorageError::ViewUnavailable);
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn retire_work_import_input(
+        tx: &mut dyn WriteTransaction,
+        reference: &crate::protocol::provider::ArtifactRef,
+        operation: &crate::protocol::OperationId,
+    ) -> Result<(), StorageError> {
+        let Some(mut artifact) = tx.artifacts().artifact(&reference.artifact_id)? else {
+            return Ok(());
+        };
+        if !work_import_input(&artifact, &tx.store().host_actor, operation) {
+            return Ok(());
+        }
+        let now = tx.now_ms();
+        for version in tx.artifacts().versions(&artifact.id)? {
+            if version.live() {
+                tx.artifacts().tombstone_version(&version.id, now)?;
+                super::release_blob(tx, &version.blob_digest)?;
+            }
+        }
+        Self::retire(tx, &mut artifact)?;
+        artifact.revision += 1;
+        tx.artifacts().update_artifact(&artifact)?;
+        Ok(())
+    }
+}
+
+fn work_import_input(
+    artifact: &StoredArtifact,
+    host: &crate::protocol::ActorId,
+    operation: &crate::protocol::OperationId,
+) -> bool {
+    artifact.state == ArtifactState::Live
+        && artifact.scope == ArtifactScope::Workspace
+        && artifact.owner.as_ref() == Some(host)
+        && artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["producedBy"].as_str() == Some(host.0.as_str())
+        && artifact.provenance["derived"]["kind"] == WORK_IMPORT_INPUT
+        && artifact.provenance["derived"]["operationId"] == json!(operation)
 }
