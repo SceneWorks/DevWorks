@@ -120,6 +120,65 @@ impl SweepLease {
         self.delivery.restore(tx, &self.operation.id, false)
     }
 
+    /// Opens only the immutable instruction versions selected by this live lease. The
+    /// workspace version is shared input for project sweeps, even when its original upload
+    /// was a private workspace artifact. The caller gains no other artifact authority.
+    pub fn instruction_texts(
+        &self,
+        store: &dyn crate::ports::storage::ApplicationStore,
+        artifacts: &crate::services::artifacts::ArtifactService,
+    ) -> Result<Vec<String>, StorageError> {
+        use crate::ports::storage::{WriteOptions, run_write};
+        use crate::protocol::Counter;
+        let lease = self.clone();
+        let (host, captured) = run_write(store, WriteOptions::observed(), move |tx| {
+            let context = lease.context(tx)?;
+            let row = lease.read(tx, true)?;
+            let repo = tx.dreaming()?;
+            let select = |scope: &KnowledgeScope, revision: i64| {
+                if revision == 0 {
+                    return Ok(None);
+                }
+                repo.dream_instructions(scope, revision.checked_add(1), 1)?
+                    .into_iter()
+                    .find(|entry| entry.revision == revision)
+                    .map(|entry| (scope.project().cloned(), entry.artifact))
+                    .map(Some)
+                    .ok_or(StorageError::ViewUnavailable)
+            };
+            let captured = [
+                select(
+                    &KnowledgeScope::Workspace,
+                    row.cutoffs.base_instruction_revision,
+                )?,
+                select(&row.scope, row.cutoffs.project_instruction_revision)?,
+            ];
+            let info = tx.store();
+            let host = InvocationContext::new(
+                info.host_actor.clone(),
+                crate::context::PrincipalKind::Host,
+                context.invocation_id().clone(),
+                lease.operation.id.0.clone(),
+                info.store_id.clone(),
+                Counter::new(info.restore_epoch)
+                    .map_err(|_| invalid("invalid Dreaming restore epoch"))?,
+                context.policy_revision().clone(),
+            );
+            Ok((host, captured))
+        })?;
+        captured
+            .into_iter()
+            .flatten()
+            .map(|(project, reference)| {
+                let context = host.clone().with_lineage(project, None, None);
+                let (bytes, _) = artifacts
+                    .read_exact(store, &context, &reference, 65_536)
+                    .map_err(|_| StorageError::ViewUnavailable)?;
+                String::from_utf8(bytes).map_err(|_| invalid("Dreaming instructions are not UTF-8"))
+            })
+            .collect()
+    }
+
     pub fn send_fences(&self, request: &Id) -> Vec<AuthorityFence> {
         let mut fences = self.delivery.fences.clone();
         fences.push(AuthorityFence::DreamingSweep {

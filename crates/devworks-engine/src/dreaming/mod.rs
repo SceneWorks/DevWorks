@@ -12,8 +12,8 @@ use devworks_core::context::InvocationContext;
 use devworks_core::ports::packages::SchemaValidator;
 use devworks_core::ports::storage::{
     ApplicationStore, ArtifactScope, AttemptState, Cancellation, DreamPhase, DreamRequestStage,
-    DreamRunRow, KnowledgeScope, OperationRecord, ReadOptions, StorageError, WriteOptions,
-    read_snapshot, run_write,
+    DreamRunRow, OperationRecord, ReadOptions, StorageError, WriteOptions, read_snapshot,
+    run_write,
 };
 use devworks_core::protocol::AttemptId;
 use devworks_core::protocol::provider::{ArtifactRef, ProviderBody};
@@ -249,14 +249,36 @@ impl NativeDreaming {
                 }
                 (original.logical_id, original.frame)
             } else {
-                let frame = if let Some(material) = checkpoint.continuation {
-                    if run.continued_from.is_some() && checkpoint.turn == 0 {
-                        self.resume_context(lease, &context, &run, &material)?
-                    } else {
-                        material
+                let material = match checkpoint.continuation {
+                    Some(material) if run.continued_from.is_some() && checkpoint.turn == 0 => {
+                        self.resume_context(lease, &context, &run, &material)
                     }
-                } else {
-                    self.first_context(lease, &context, &run)?
+                    Some(material) => Ok(material),
+                    None => self.first_context(lease, &context, &run),
+                };
+                let frame = match material {
+                    Ok(frame) => frame,
+                    Err(
+                        StorageError::ViewUnavailable
+                        | StorageError::ScopeDenied
+                        | StorageError::InvalidRecord(_),
+                    ) => {
+                        return self.finish(
+                            lease,
+                            DreamPhase::Blocked,
+                            "DreamingContextUnavailable",
+                            None,
+                        );
+                    }
+                    Err(StorageError::Cancelled) => {
+                        return self.finish(
+                            lease,
+                            DreamPhase::Cancelled,
+                            "CancellationRequested",
+                            None,
+                        );
+                    }
+                    Err(error) => return Err(error),
                 };
                 let lease = lease.clone();
                 let saved_frame = frame.clone();
@@ -359,40 +381,12 @@ impl NativeDreaming {
         }
     }
 
-    fn instructions(
-        &self,
-        ctx: &InvocationContext,
-        run: &DreamRunRow,
-    ) -> Result<Vec<TextBlock>, StorageError> {
-        let rows = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-            let repo = read.dreaming()?;
-            let instruction = |scope, revision: i64| -> Result<_, StorageError> {
-                if revision == 0 {
-                    return Ok(None);
-                }
-                let row = repo
-                    .dream_instructions(scope, revision.checked_add(1), 1)?
-                    .into_iter()
-                    .find(|row| row.revision == revision)
-                    .ok_or(StorageError::ViewUnavailable)?;
-                Ok(Some(row.artifact))
-            };
-            Ok([
-                instruction(
-                    &KnowledgeScope::Workspace,
-                    run.cutoffs.base_instruction_revision,
-                )?,
-                instruction(&run.scope, run.cutoffs.project_instruction_revision)?,
-            ])
-        })?;
-        let mut instructions = Vec::new();
-        for reference in rows.into_iter().flatten() {
-            let raw = self.exact(ctx, &reference, 65_536)?;
-            let text = String::from_utf8(raw)
-                .map_err(|_| invalid("Dreaming instructions are not UTF-8"))?;
-            instructions.push(TextBlock { text, cache: None });
-        }
-        Ok(instructions)
+    fn instructions(&self, lease: &SweepLease) -> Result<Vec<TextBlock>, StorageError> {
+        Ok(lease
+            .instruction_texts(self.store.as_ref(), &self.artifacts)?
+            .into_iter()
+            .map(|text| TextBlock { text, cache: None })
+            .collect())
     }
 
     fn initial_message(
@@ -436,7 +430,7 @@ impl NativeDreaming {
     ) -> Result<ArtifactRef, StorageError> {
         let material = ProviderContext {
             version: 1,
-            instructions: self.instructions(ctx, run)?,
+            instructions: self.instructions(lease)?,
             instruction_stamps: vec![],
             skill_stamp: None,
             messages: vec![self.initial_message(lease, run)?],
@@ -461,7 +455,7 @@ impl NativeDreaming {
         let bytes = self.exact(ctx, saved, 2 * 1024 * 1024)?;
         let mut material: ProviderContext = serde_json::from_slice(&bytes)
             .map_err(|_| invalid("invalid saved Dreaming context"))?;
-        material.instructions = self.instructions(ctx, run)?;
+        material.instructions = self.instructions(lease)?;
         let first = material
             .messages
             .first_mut()
