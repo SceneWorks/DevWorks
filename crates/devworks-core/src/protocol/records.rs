@@ -3931,6 +3931,182 @@ impl Check for GithubAccount {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueLink {
+    pub repository_id: Id,
+    pub work_id: RootId,
+    pub remote_repository_id: Text,
+    pub remote_issue_id: Text,
+    pub remote_issue_number: PositiveCounter,
+    pub url: Url,
+    pub source_revision: Text,
+}
+impl Check for GithubIssueLink {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.work_id.check()?;
+        self.remote_repository_id.check()?;
+        self.remote_issue_id.check()?;
+        self.remote_issue_number.check()?;
+        self.url.check()?;
+        self.source_revision.check()?;
+        crate::protocol::rules::record(
+            "GithubIssueLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 2}))]
+pub enum GithubIssueLinkResult {
+    #[schemars(extend("x-until" = 2))]
+    Legacy(GitLink),
+    #[schemars(extend("x-since" = 2))]
+    Current(GithubIssueLink),
+}
+impl Check for GithubIssueLinkResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for GithubIssueLinkResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 2 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 2 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPollEndpoint {
+    pub endpoint: Label,
+    pub state: Label,
+    pub next_poll_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_polled_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Text>,
+}
+impl Check for GithubPollEndpoint {
+    fn check(&self) -> Result<(), String> {
+        self.endpoint.check()?;
+        self.state.check()?;
+        self.next_poll_at_ms.check()?;
+        self.last_polled_at_ms.check()?;
+        self.failure.check()?;
+        crate::protocol::rules::record(
+            "GithubPollEndpoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueIntakeView {
+    pub remote_issue_number: PositiveCounter,
+    pub source_revision: Text,
+    pub state: Label,
+    pub url: Url,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_state: Option<OperationState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_state: Option<OperationState>,
+}
+impl Check for GithubIssueIntakeView {
+    fn check(&self) -> Result<(), String> {
+        self.remote_issue_number.check()?;
+        self.source_revision.check()?;
+        self.state.check()?;
+        self.url.check()?;
+        self.work_id.check()?;
+        self.comment_state.check()?;
+        self.close_state.check()?;
+        crate::protocol::rules::record(
+            "GithubIssueIntakeView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPollStatusView {
+    pub repository_id: Id,
+    pub endpoints: Items<GithubPollEndpoint>,
+    pub intake: Page<GithubIssueIntakeView>,
+    pub interval_seconds: PositiveCounter,
+    pub next_admission_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_admitted_at_ms: Option<Counter>,
+}
+impl Check for GithubPollStatusView {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.endpoints.check()?;
+        self.intake.check()?;
+        self.interval_seconds.check()?;
+        self.next_admission_at_ms.check()?;
+        self.last_admitted_at_ms.check()?;
+        crate::protocol::rules::record(
+            "GithubPollStatusView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 2}))]
+pub enum GithubPollStatusResult {
+    #[schemars(extend("x-until" = 2))]
+    Legacy(Page<GithubObservation>),
+    #[schemars(extend("x-since" = 2))]
+    Current(GithubPollStatusView),
+}
+impl Check for GithubPollStatusResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for GithubPollStatusResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 2 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 2 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GithubObservation {
     pub repository_id: Id,
     pub subject_id: Id,
@@ -8415,17 +8591,77 @@ pub struct GithubAccountState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_flow_id: Option<Id>,
     pub state: ItemState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub api_host: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 2))]
+    pub authorization_state: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 2))]
+    pub permission_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    pub granted_scopes: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 2))]
+    pub failure: Option<Text>,
 }
 impl Check for GithubAccountState {
     fn check(&self) -> Result<(), String> {
         self.account.check()?;
         self.auth_flow_id.check()?;
         self.state.check()?;
+        self.api_host.check()?;
+        self.authorization_state.check()?;
+        self.permission_revision.check()?;
+        self.granted_scopes.check()?;
+        self.failure.check()?;
         crate::protocol::rules::record(
             "GithubAccountState",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for GithubAccountState {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.api_host = None;
+        }
+        if revision < 2 {
+            self.authorization_state = None;
+        }
+        if revision < 2 {
+            self.permission_revision = None;
+        }
+        if revision < 2 {
+            self.granted_scopes = None;
+        }
+        if revision < 2 {
+            self.failure = None;
+        }
     }
 }
 

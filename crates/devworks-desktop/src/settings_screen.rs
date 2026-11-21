@@ -9,7 +9,9 @@ use crate::memory::SettingsMemory;
 use crate::theme;
 use crate::web_panel::{WebAction, WebPanel, WebSettings};
 use crate::widgets::{self, Tone, ViewState, chip};
-use devworks_core::protocol::records::{ContainerCapability, ItemState, SettingEntry};
+use devworks_core::protocol::records::{
+    AccountAction, ContainerCapability, GithubAccountState, ItemState, SettingEntry,
+};
 use devworks_core::settings::catalog::{
     Adoption, Category, ValueKind, WEB_FETCH_MAX_REDIRECTS_KEY, WEB_FETCH_PRIVATE_KEY,
     WEB_SEARCH_CREDENTIAL_KEY, WEB_SEARCH_PROVIDER_KEY, WEB_TIMEOUT_KEY,
@@ -56,6 +58,10 @@ pub struct SettingsScreen {
     /// The web search and fetch section of Agent tools.
     pub web: WebPanel,
     pub mcp: McpPanel,
+    pub github_account: Option<GithubAccountState>,
+    pub github_loading: bool,
+    pub github_busy: bool,
+    pub github_error: Option<String>,
     pub container_capabilities: Option<Vec<ContainerCapability>>,
     pub container_error: Option<String>,
     /// Roles and skills (DW-34).
@@ -80,6 +86,8 @@ pub enum HostSection<'a> {
 pub enum SettingsAction {
     Reload,
     RefreshContainers,
+    ReadGithub,
+    ChangeGithub(AccountAction),
     Validate,
     Save,
     /// Native user input only; the worker stages it before preparing the reference-only save.
@@ -459,6 +467,9 @@ impl SettingsScreen {
                 }
                 host(ui, HostSection::Indexing);
             }
+            if self.category == Some(Category::GitHub) {
+                self.github_account_ui(ui, actions);
+            }
             if self.category == Some(Category::Tools) {
                 let settings = self.web_settings();
                 let mut web = Vec::new();
@@ -471,6 +482,83 @@ impl SettingsScreen {
         });
         scrolls.record("settings-items", out.state.clamped_offset().y);
         self.scrolls = scrolls;
+    }
+
+    fn github_account_ui(&self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {
+        ui.heading("GitHub.com account");
+        ui.label(
+            "Verify the GitHub API credential saved above. Git uses its own transport credentials.",
+        );
+        if let Some(error) = &self.github_error {
+            chip(ui, error.clone(), Tone::Bad);
+        }
+        if let Some(view) = &self.github_account {
+            if let Some(host) = &view.api_host {
+                ui.hyperlink_to(&host.0, "https://github.com");
+            }
+            if let Some(status) = &view.authorization_state {
+                ui.label(format!("Authorization · {}", status.0));
+            }
+            if let Some(account) = &view.account {
+                ui.hyperlink_to(
+                    &account.login.0,
+                    format!("https://github.com/{}", account.login.0),
+                );
+            }
+            if let Some(scopes) = &view.granted_scopes {
+                let scopes = scopes
+                    .0
+                    .iter()
+                    .map(|scope| scope.0.as_str())
+                    .collect::<Vec<_>>();
+                ui.label(format!(
+                    "Reported scopes · {}",
+                    if scopes.is_empty() {
+                        "None".into()
+                    } else {
+                        scopes.join(", ")
+                    }
+                ));
+            } else if view.account.is_some() {
+                ui.label("GitHub did not report token scopes.");
+            }
+            if let Some(error) = &view.failure {
+                chip(ui, error.0.clone(), Tone::Bad);
+            }
+        }
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    !self.github_loading,
+                    egui::Button::new("Read account status"),
+                )
+                .clicked()
+            {
+                actions.push(SettingsAction::ReadGithub);
+            }
+            if ui
+                .add_enabled(
+                    !self.github_busy && !self.saving,
+                    egui::Button::new("Verify saved credential"),
+                )
+                .clicked()
+            {
+                actions.push(SettingsAction::ChangeGithub(AccountAction::Refresh));
+            }
+            if ui
+                .add_enabled(
+                    !self.github_busy
+                        && self
+                            .github_account
+                            .as_ref()
+                            .is_some_and(|view| view.account.is_some()),
+                    egui::Button::new("Disconnect"),
+                )
+                .clicked()
+            {
+                actions.push(SettingsAction::ChangeGithub(AccountAction::Disconnect));
+            }
+        });
     }
 
     fn container_status_ui(&self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {

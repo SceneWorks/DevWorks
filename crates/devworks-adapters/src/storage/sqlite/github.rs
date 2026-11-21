@@ -357,6 +357,7 @@ fn validate_observation(r: &StoredGithubObservation) -> Result<(), StorageError>
             | "ReviewComment"
             | "CheckRun"
             | "CheckSuite"
+            | "CommitStatus"
             | "WorkflowRun"
     ) || !nonempty(&r.subject_id)
         || !nonempty(&r.remote_revision)
@@ -450,6 +451,10 @@ fn save_issue(c: &Connection, r: &StoredGithubIssueIntake) -> Result<(), Storage
 macro_rules! reads {
     ($t:ty) => {
         impl GithubRead for $t {
+            fn github_index_target(&self, run: &Id) -> Result<Option<StoredGithubIndexTarget>, StorageError> {
+                by_external(self.conn, "GithubIndexTarget", run.as_str())
+            }
+
             fn github_adjudication_owner(
                 &self,
                 artifact: &Id,
@@ -723,6 +728,28 @@ macro_rules! reads {
             fn github_intake_clock(&self) -> Result<GithubIntakeClock, StorageError> {
                 clock(self.conn)
             }
+            fn github_issues_for_work(
+                &self,
+                work: &RootId,
+                repository: &Id,
+                limit: u16,
+            ) -> Result<Vec<StoredGithubIssueIntake>, StorageError> {
+                let mut statement = db(self.conn.prepare_cached(
+                    "SELECT intake.body_json FROM integration_links link
+                     JOIN integration_records source ON source.id=link.record_id AND source.kind='GithubIssue'
+                     JOIN integration_records intake ON intake.external_key=source.external_key
+                         AND intake.kind='GithubIssueIntake'
+                     WHERE link.work_id=?1 AND link.purpose='GithubIssue'
+                         AND json_extract(source.body_json,'$.repository_id')=?2
+                     ORDER BY source.id LIMIT ?3",
+                ))?;
+                let rows = db(db(statement.query_map(
+                    params![work.0.as_str(), repository.as_str(), page_limit(limit)?],
+                    |row| row.get::<_, String>(0),
+                ))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(decode).collect()
+            }
             fn github_obligation_revision(&self, k: &GithubIssueKey) -> Result<i64, StorageError> {
                 obligation_revision(self.conn, k)
             }
@@ -819,6 +846,26 @@ macro_rules! reads {
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl GithubRepository for Unit<'_> {
+    fn put_github_index_target(
+        &mut self,
+        target: &StoredGithubIndexTarget,
+    ) -> Result<(), StorageError> {
+        require_repository(self.conn, &target.github_repository_id)?;
+        let id = format!("github-index-{}", hash(&target.run_id)?);
+        insert(
+            self.conn,
+            &id,
+            "GithubIndexTarget",
+            target.run_id.as_str(),
+            Some(&target.repository_id),
+            None,
+            None,
+            1,
+            "Observed",
+            target,
+        )
+    }
+
     fn retire_github_work_link(
         &mut self,
         r: &StoredGithubObligationRetirement,

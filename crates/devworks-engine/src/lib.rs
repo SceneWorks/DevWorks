@@ -220,6 +220,7 @@ pub mod dispatch;
 pub mod effect_consumer;
 pub mod evals;
 pub mod git;
+pub mod github;
 pub mod help;
 pub mod indexing;
 mod instruction_guard;

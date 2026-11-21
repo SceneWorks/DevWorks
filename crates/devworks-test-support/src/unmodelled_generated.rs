@@ -1064,6 +1064,9 @@ impl GitRepository for Unmodelled {
     }
 }
 impl GithubRead for Unmodelled {
+    fn github_index_target(&self, _: &Id) -> Result<Option<StoredGithubIndexTarget>, StorageError> {
+        unmodelled()
+    }
     fn github_adjudication_owner(
         &self,
         _: &Id,
@@ -1178,6 +1181,14 @@ impl GithubRead for Unmodelled {
     fn github_intake_clock(&self) -> Result<GithubIntakeClock, StorageError> {
         unmodelled()
     }
+    fn github_issues_for_work(
+        &self,
+        _: &RootId,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredGithubIssueIntake>, StorageError> {
+        unmodelled()
+    }
     fn github_obligation_revision(&self, _: &GithubIssueKey) -> Result<i64, StorageError> {
         unmodelled()
     }
@@ -1212,6 +1223,9 @@ impl GithubRead for Unmodelled {
     }
 }
 impl GithubRepository for Unmodelled {
+    fn put_github_index_target(&mut self, _: &StoredGithubIndexTarget) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn retire_github_work_link(
         &mut self,
         _: &StoredGithubObligationRetirement,

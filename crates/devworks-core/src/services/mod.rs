@@ -220,6 +220,27 @@ impl UseCases {
         self
     }
 
+    /// GitHub account, saved issue history and observations share the native gateway.
+    pub fn with_github(mut self, service: Arc<github::GitHubService>) -> Self {
+        self.register(
+            "github.account",
+            Some(service.clone()),
+            Some(service.clone()),
+        );
+        for op in [
+            "github.repositories",
+            "github.poll_status",
+            "github.checks",
+            "github.reviews",
+        ] {
+            self.register(op, None, Some(service.clone()));
+        }
+        for op in ["github.issue_sync", "issues.link", "issues.publish"] {
+            self.register(op, Some(service.clone()), None);
+        }
+        self
+    }
+
     /// Registers the artifacts family (`ArtifactService`).
     pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
         for op in artifacts::OPERATIONS {

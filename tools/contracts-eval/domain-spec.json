@@ -1526,6 +1526,66 @@
         "permission_revision": "Revision"
       }
     },
+    "GithubIssueLink": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "work_id": "RootId",
+        "remote_repository_id": "Text",
+        "remote_issue_id": "Text",
+        "remote_issue_number": "PositiveCounter",
+        "url": "Url",
+        "source_revision": "Text"
+      }
+    },
+    "GithubIssueLinkResult": {
+      "kind": "versioned",
+      "legacy": "GitLink",
+      "current": "GithubIssueLink",
+      "revision": 2,
+      "projection": "none"
+    },
+    "GithubPollEndpoint": {
+      "kind": "record",
+      "fields": {
+        "endpoint": "Label",
+        "state": "Label",
+        "next_poll_at_ms": "Counter",
+        "last_polled_at_ms": "?Counter",
+        "failure": "?Text"
+      }
+    },
+    "GithubIssueIntakeView": {
+      "kind": "record",
+      "fields": {
+        "remote_issue_number": "PositiveCounter",
+        "source_revision": "Text",
+        "state": "Label",
+        "url": "Url",
+        "work_id": "?RootId",
+        "comment_state": "?OperationState",
+        "close_state": "?OperationState"
+      }
+    },
+    "GithubPollStatusView": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "endpoints": "Items<GithubPollEndpoint>",
+        "intake": "Page<GithubIssueIntakeView>",
+        "interval_seconds": "PositiveCounter",
+        "next_admission_at_ms": "Counter",
+        "last_admitted_at_ms": "?Counter"
+      }
+    },
+    "GithubPollStatusResult": {
+      "kind": "versioned",
+      "legacy": "Page<GithubObservation>",
+      "current": "GithubPollStatusView",
+      "revision": 2,
+      "projection": "none",
+      "earlierName": "Page"
+    },
     "GithubObservation": {
       "kind": "record",
       "fields": {
@@ -2921,8 +2981,14 @@
       "fields": {
         "account": "?GithubAccount",
         "auth_flow_id": "?Id",
-        "state": "ItemState"
-      }
+        "state": "ItemState",
+        "api_host": "?Label",
+        "authorization_state": "?Label",
+        "permission_revision": "?Revision",
+        "granted_scopes": "?Items<Label>",
+        "failure": "?Text"
+      },
+      "since": {"api_host": 2, "authorization_state": 2, "permission_revision": 2, "granted_scopes": 2, "failure": 2}
     },
     "EvidenceKind": {
       "kind": "enum",
@@ -7132,10 +7198,10 @@
         "repository_id": "Id",
         "expected_remote_revision": "?Text"
       },
-      "result": "GitLink",
+      "result": "GithubIssueLinkResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Reconcile saved remote identity after an uncertain create; no duplicate publish."
+      "rules": "Reconcile saved remote identity after an uncertain create without duplicate publication. The native operation requires revision 2 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "issues.link": {
       "operation": "issues.link",
@@ -7146,10 +7212,10 @@
         "repository_id": "Id",
         "remote_issue_number": "PositiveCounter"
       },
-      "result": "GitLink",
+      "result": "GithubIssueLinkResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Link an existing authenticated issue to this local work and preserve both identities. The native operation requires revision 2 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "tasks.move": {
       "operation": "tasks.move",
@@ -9547,9 +9613,11 @@
       "operation": "github.poll_status",
       "mode": "Query",
       "fields": {
-        "repository_id": "Id"
+        "repository_id": "Id",
+        "page": "?PageRequest"
       },
-      "result": "Page<GithubObservation>",
+      "since": {"page": 2},
+      "result": "GithubPollStatusResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Include persisted issue intake/admission timing and pending/failed resolution observations; scope unrouted incoming reports by repository access. No agent is required to inspect a waiting queue."
@@ -11642,6 +11710,10 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "issues.publish": [1, 2],
+    "issues.link": [1, 2],
+    "github.account": [1, 2],
+    "github.poll_status": [1, 2],
     "artifacts.save": [
       1,
       2,

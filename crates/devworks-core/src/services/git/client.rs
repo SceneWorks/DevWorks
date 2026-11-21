@@ -661,6 +661,64 @@ impl Git<'_> {
             .ok_or_else(|| GitFault::Malformed("literal push URL unavailable".into()))
     }
 
+    /// Obtain one observed GitHub commit for indexing. This uses Git's own transport
+    /// credentials and a private ref and does not switch or update any user's branch.
+    pub(crate) fn fetch_index_source(
+        &self,
+        dir: &Path,
+        remote: &str,
+        head: &str,
+    ) -> Result<String, GitFault> {
+        let expected = super::github::Repository::from_remote(remote)
+            .ok_or_else(|| GitFault::Malformed("GitHub index remote identity".into()))?;
+        if !crate::services::github::indexing::valid_oid(head) {
+            return Err(GitFault::Malformed("GitHub index commit identity".into()));
+        }
+        if let Some((oid, _)) = self.resolve(dir, head)?
+            && oid == head
+        {
+            return Ok(oid);
+        }
+        let effective = self
+            .line(dir, &["ls-remote", "--get-url", "--", remote])?
+            .and_then(|url| super::github::Repository::from_remote(&url))
+            .ok_or_else(|| GitFault::Malformed("GitHub index remote is unavailable".into()))?;
+        if !effective.owner.eq_ignore_ascii_case(&expected.owner)
+            || !effective.name.eq_ignore_ascii_case(&expected.name)
+        {
+            return Err(GitFault::Malformed(
+                "GitHub index remote was redirected".into(),
+            ));
+        }
+        let reference = format!("refs/devworks/github-index/{head}");
+        let refspec = format!("{head}:{reference}");
+        self.run(
+            dir,
+            &[
+                "-c",
+                "protocol.file.allow=never",
+                "-c",
+                "protocol.ext.allow=never",
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--no-write-fetch-head",
+                "--no-auto-gc",
+                "--refmap=",
+                "--",
+                remote,
+                &refspec,
+            ],
+            64 * 1024,
+        )?;
+        self.resolve(dir, &reference)?
+            .filter(|(oid, _)| oid == head)
+            .map(|(oid, _)| oid)
+            .ok_or_else(|| {
+                GitFault::Malformed("Fetched GitHub commit does not match the observation".into())
+            })
+    }
+
     pub fn remote_default(&self, dir: &Path, url: &str) -> Result<Option<String>, GitFault> {
         let bytes = self.run(
             dir,

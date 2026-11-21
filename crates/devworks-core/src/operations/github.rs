@@ -79,15 +79,27 @@ impl Revisioned for RepositoriesInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PollStatusInput {
     pub repository_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PageRequest", extend("x-since" = 2))]
+    pub page: Option<PageRequest>,
 }
 impl Check for PollStatusInput {
     fn check(&self) -> Result<(), String> {
         self.repository_id.check()?;
+        self.page.check()?;
         Ok(())
     }
 }
 impl Revisioned for PollStatusInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 2 {
+            self.page = None;
+        }
+    }
 }
 
 /// `github.issue_sync` Command input.

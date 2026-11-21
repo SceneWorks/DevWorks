@@ -7,6 +7,8 @@ use crate::backend::screen_slot;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SettingsSlot {
     SettingsRead,
+    GithubAccount,
+    GithubAccountChange,
     ContainerCapabilities,
     SettingsValidate,
     SettingsHealth,

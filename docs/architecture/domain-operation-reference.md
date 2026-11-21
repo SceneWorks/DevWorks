@@ -51,8 +51,8 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 | `issues.create` | **Command**<br>`projectId`: `ProjectId`<br>`title`: `Label`<br>`description`: `Content`<br>`repositoryIds`: `Items<Id>`<br>`statusId`: `Id`<br>`priority`: `i32`<br>`featureId`: `?RootId`<br>`taskType`: `?WorkItemType`<br>`labels`: `?Items<Label>`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `WorkRecord` |
 | `issues.edit` | **Command**<br>`workId`: `Id`<br>`expectedRevision`: `Revision`<br>`changes`: `IssuePatch`<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `WorkRecord` |
 | `issues.prioritize` | **Command**<br>`projectId`: `ProjectId`<br>`expectedQueueRevision`: `Revision`<br>`orderedWorkIds`: `?NonEmpty<Id>`<br>`placement`: `?QueuePlacement`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `MutationSummary` |
-| `issues.publish` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`expectedRemoteRevision`: `?Text` | `GitLink` |
-| `issues.link` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`remoteIssueNumber`: `PositiveCounter` | `GitLink` |
+| `issues.publish` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`expectedRemoteRevision`: `?Text`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `GithubIssueLinkResult` |
+| `issues.link` | **Command**<br>`issueId`: `RootId`<br>`expectedRevision`: `Revision`<br>`repositoryId`: `Id`<br>`remoteIssueNumber`: `PositiveCounter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `GithubIssueLinkResult` |
 
 ### Tasks
 
@@ -452,9 +452,9 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `github.account` | **Query**<br>No caller fields<br><br>**Command**<br>`action`: `AccountAction`<br>`connectionId`: `?Id`<br>`authFlowId`: `?Id` | `GithubAccountState` |
+| `github.account` | **Query**<br>No caller fields<br><br>**Command**<br>`action`: `AccountAction`<br>`connectionId`: `?Id`<br>`authFlowId`: `?Id`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `GithubAccountState` |
 | `github.repositories` | **Query**<br>`accountId`: `Id`<br>`page`: `PageRequest`<br>`organization`: `?Label` | `Page<RepositoryRecord>` |
-| `github.poll_status` | **Query**<br>`repositoryId`: `Id` | `Page<GithubObservation>` |
+| `github.poll_status` | **Query**<br>`repositoryId`: `Id`<br>`page`: `?PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `GithubPollStatusResult` |
 | `github.issue_sync` | **Command**<br>`repositoryId`: `Id`<br>`expectedCursorRevision`: `Revision`<br>`remoteIssueNumber`: `?PositiveCounter` | `OperationRef` |
 | `github.checks` | **Query**<br>`repositoryId`: `Id`<br>`pullRequestNumber`: `PositiveCounter`<br>`head`: `GitOid`<br>`page`: `PageRequest` | `Page<GithubObservation>` |
 | `github.reviews` | **Query**<br>`repositoryId`: `Id`<br>`pullRequestNumber`: `PositiveCounter`<br>`head`: `GitOid`<br>`page`: `PageRequest` | `Page<GithubObservation>` |
