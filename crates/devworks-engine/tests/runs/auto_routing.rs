@@ -109,7 +109,7 @@ fn seed_systemone(f: &Fx) {
         con.local_free = false;
         con.credential_ref = Some(id("decision-credential"));
         con.credential_revision = 1;
-        con.credential_epoch = Some(1);
+        con.credential_epoch = Some(tx.store().restore_epoch);
         con.discovered = Some(vec![
             DiscoveredModel { id: "decision-a-upstream".into(), context_tokens: None },
             DiscoveredModel { id: "decision-b-upstream".into(), context_tokens: None },
@@ -356,7 +356,7 @@ fn a_saved_automatic_tier_handles_capability_failover_and_explicit_restoration()
         assert_eq!(vision["replacedPinId"], pin.pin_id.as_str());
         let unavailable = route("automatic-no-capable-member", "context:20000");
         assert!(matches!(unavailable, CommandReply::Recorded { receipt, .. }
-            if matches!(receipt.decision, DomainDecision::Refused { fault }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault }
                 if fault.code == DomainErrorCode::UnsupportedCapability)));
 
         // Manual override must still satisfy the saved capability, so clear it with an
@@ -380,7 +380,7 @@ fn a_saved_automatic_tier_handles_capability_failover_and_explicit_restoration()
             "intent":{"kind":"DevWorksAuto"},"effort":"Default"}});
         let stale = app.command(&f.user, "router.route", &serde_json::to_vec(&stale).unwrap()).unwrap();
         assert!(matches!(stale, CommandReply::Recorded { receipt, .. }
-            if matches!(receipt.decision, DomainDecision::Refused { fault }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault }
                 if fault.code == DomainErrorCode::SourceChanged)));
         assert_eq!(read(&*f.store, |r| r.router().session_pin(&session)).unwrap().model_id, id("low-a"));
         let restored = manual("auto-restored", json!({"kind":"DevWorksAuto"}));
@@ -401,7 +401,7 @@ fn a_delegated_worker_classifies_its_own_first_assignment_with_project_attributi
     seed_auto(&f, true);
     let wire = Arc::new(AutoWire::default());
     runtime().block_on(async {
-        let app = boot(auto_ports(&f, wire.clone(), false)).await.unwrap();
+        let app = Arc::new(boot(auto_ports(&f, wire.clone(), false)).await.unwrap());
         applied(&f.start(&f.user, "root-i", 1, 1));
         let activation = f.launch("auto-worker-runner");
         let host = principal(&*f.store, "auto-worker-host", PrincipalKind::Host);
@@ -483,7 +483,8 @@ fn a_delegated_worker_classifies_its_own_first_assignment_with_project_attributi
         })
         .unwrap();
         assert_eq!(route.project_id, Some(ProjectId(id("project-a"))));
-        assert_eq!(route.root_id, Some(rid("root-i")));
+        let operation = read(&*f.store, |r| r.operations().operation(&route.operation_id)).unwrap();
+        assert_eq!(operation.root_id, Some(rid("root-i")));
         assert_eq!(route.purpose, "TierClassification");
         assert!(route.pin_id.is_none());
         assert!(read(&*f.store, |r| r.router().auto_route(&parent.id)).is_none());

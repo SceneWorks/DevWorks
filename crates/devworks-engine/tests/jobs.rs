@@ -763,7 +763,7 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
             .unwrap();
         if schema_revision < 3 {
             assert!(
-                matches!(reply, DomainQueryReply::Rejected { fault, .. }
+                matches!(&reply, DomainQueryReply::Rejected { fault, .. }
                 if fault.code == DomainErrorCode::UnsupportedCapability),
                 "{reply:?}"
             );
@@ -789,6 +789,52 @@ fn scheduled_inference_without_a_pipeline_fails_before_dispatch_in_the_runtime()
             .contains("Nothing was sent to a model")
     );
     assert!(failed.session_id.is_none() && failed.agent_actor.is_none());
+    rt.block_on(app.runtime.shutdown());
+
+    use devworks_core::services::jobs::runner::{InferenceJobs, InferenceRefusal, InferenceStart};
+    #[derive(Default)]
+    struct RecordingInference(std::sync::Mutex<Vec<InferenceStart>>);
+    impl InferenceJobs for RecordingInference {
+        fn availability(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn start(&self, run: &InferenceStart) -> Result<Option<Id>, InferenceRefusal> {
+            self.0.lock().unwrap().push(run.clone());
+            Err(InferenceRefusal {
+                dispatched: false,
+                reason: "Recorded the scheduled route input.".into(),
+            })
+        }
+        fn cancel(&self, _: &Id) -> Result<bool, String> {
+            Ok(true)
+        }
+    }
+    let pipeline = Arc::new(RecordingInference::default());
+    let store = app.store.clone();
+    drop(app);
+    let app = boot_over(&rt, &h, false, store, pipeline.clone());
+    let run = value(app.command(
+        "jobs.run_now",
+        json!({"jobId":job["id"],"expectedRevision":"1"}),
+    ));
+    app.tick(&rt);
+    {
+        let calls = pipeline.0.lock().unwrap();
+        let [start] = calls.as_slice() else {
+            panic!("expected one scheduled handoff")
+        };
+        assert_eq!(start.run_id.as_str(), run["id"].as_str().unwrap());
+        assert_eq!(start.ctx.job_run_id(), Some(&start.run_id));
+        assert!(matches!(
+            start.route,
+            devworks_core::protocol::records::RouteIntent::DevWorksAuto {}
+        ));
+        assert!(matches!(
+            start.effort,
+            devworks_core::protocol::records::EffortName::Default
+        ));
+        assert_eq!(start.prompt.version_id.as_str(), "prompt-v1");
+    }
     rt.block_on(app.runtime.shutdown());
 }
 

@@ -119,6 +119,15 @@ impl InferenceRouter {
             ..
         } = selection
         {
+            if matches!(route.as_ref(), AttemptSelection::TierClassifier { .. }) {
+                if effective_effort
+                    .as_deref()
+                    .is_some_and(|effort| effort != "none")
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
+                return self.attempt_route_current(tx, session, route, query);
+            }
             let mut selected = route.as_ref().clone();
             let AttemptSelection::Conversation { effort, .. } = &mut selected else {
                 return Err(StorageError::ScopeDenied);
