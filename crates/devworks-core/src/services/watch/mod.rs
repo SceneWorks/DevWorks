@@ -25,8 +25,9 @@ use crate::ports::{
 };
 use crate::protocol::provider::TranscriptBody;
 use crate::protocol::records::{
-    WatchDeliveryState, WatchEvent, WatchOutcome, WatchOutcomeKind, WatchOwner, WatchProbeStatus,
-    WatchProcessSource, WatchSourceKind, WatcherPage, WatcherRecord, WatcherState,
+    WatchAssignmentSource, WatchDeliveryState, WatchEvent, WatchOutcome, WatchOutcomeKind,
+    WatchOwner, WatchProbeStatus, WatchProcessSource, WatchSourceKind, WatcherPage, WatcherRecord,
+    WatcherState,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText};
@@ -55,9 +56,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod attached;
+mod delegated;
 mod file_scan;
 use attached::{Attachments, PreparedAttachment};
 use file_scan::{FileScan, scan_file};
+
+const ASSIGNMENT_WATCH_REVISION: u32 = 10;
 
 /// Store bound on an event body (`watcher_events.payload_json`), with room for its envelope.
 const MAX_EVENT_PAYLOAD_BYTES: usize = 200_000;
@@ -344,6 +348,9 @@ impl WatchService {
     /// Checks one open watcher's source by the backup path; returns why its owner must be
     /// reminded, if it must. An outcome found here is settled (and later delivered as a backup).
     fn backup_check(&self, watcher: &StoredWatcher) -> Result<Option<&'static str>, StorageError> {
+        if watcher.assignment.is_some() {
+            return self.backup_assignment(watcher);
+        }
         if let Some(identity) = &watcher.attached_process {
             return self.backup_attachment(watcher, identity);
         }
@@ -610,6 +617,9 @@ impl WatchService {
             }
             self.attachments.forget(&watcher.id);
             return Ok(false);
+        }
+        if watcher.assignment.is_some() {
+            return self.advance_assignment(watcher);
         }
         if let Some(identity) = &watcher.attached_process {
             return self.advance_attachment(watcher, identity);
@@ -976,8 +986,17 @@ impl WatchService {
             matching,
             file_path: None,
             attached_process: None,
+            assignment: None,
         };
-        if let Some(attached) = &input.attached_process {
+        if let Some(id) = &input.assignment_id {
+            let source = match delegated::bind(tx, ctx, id) {
+                Ok(source) => source,
+                Err(error) => return decided(tx, Err(error)),
+            };
+            watcher.source_kind = "Assignment".into();
+            watcher.tail_bytes = 0;
+            watcher.assignment = Some(source);
+        } else if let Some(attached) = &input.attached_process {
             let lifetime = match input.max_lifetime_ms.as_ref() {
                 Some(ms) => ms.get(),
                 None => max_lifetime_default(tx.configuration(), ctx.project_id())?,
@@ -1049,6 +1068,7 @@ impl WatchService {
             json!({
                 "sourceKind": watcher.source_kind,
                 "processId": operation.as_ref().map(|o| o.0.as_str()),
+                "assignmentId": watcher.assignment.as_ref().map(|a| a.id.0.as_str()),
                 "dueAtMs": watcher.due_at_ms,
                 "expiresAtMs": watcher.expires_at_ms,
             }),
@@ -1067,6 +1087,7 @@ impl WatchService {
         &self,
         ctx: &InvocationContext,
         input: &ops::CancelInput,
+        revision: u32,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
         let not_found = || {
@@ -1079,7 +1100,7 @@ impl WatchService {
         let Some(mut watcher) = tx.watchers().watcher(&input.watcher_id)? else {
             return decided(tx, Err(not_found().into()));
         };
-        if !Self::visible(ctx, &watcher) {
+        if !Self::visible(ctx, &watcher) || !available_at(&watcher, revision) {
             return decided(tx, Err(not_found().into()));
         }
         if input.expected_revision.get() != watcher.revision {
@@ -1274,7 +1295,9 @@ impl CommandHandler for WatchService {
             OperationInput::Watch(ops::Input::Create(input)) => {
                 self.decide_create(ctx, command, input, tx)
             }
-            OperationInput::Watch(ops::Input::Cancel(input)) => self.decide_cancel(ctx, input, tx),
+            OperationInput::Watch(ops::Input::Cancel(input)) => {
+                self.decide_cancel(ctx, input, command.schema_revision().0, tx)
+            }
             _ => decided(
                 tx,
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into()),
@@ -1292,13 +1315,14 @@ impl QueryHandler for WatchService {
     ) -> Result<QueryAnswer, DomainFault> {
         let fault = |error: StorageError| query_fault(error.into(), "watcher", self.correlation());
         let now = self.clock.now_ms().get();
+        let revision = query.schema_revision().0;
         let result = match query.input() {
             OperationInput::Watch(ops::Input::Inspect(input)) => {
                 let watcher = snapshot
                     .watchers()
                     .watcher(&input.watcher_id)
                     .map_err(fault)?
-                    .filter(|w| Self::visible(ctx, w))
+                    .filter(|w| Self::visible(ctx, w) && available_at(w, revision))
                     .ok_or_else(|| {
                         Refusal::new(
                             DomainErrorCode::NotFound,
@@ -1347,16 +1371,18 @@ impl QueryHandler for WatchService {
                     .map(|states| states.0.iter().map(phase_of).collect())
                     .unwrap_or_default();
                 let feature = input.feature_id.clone();
-                let binding = CursorBinding::new(
-                    ctx,
-                    "watch.list",
-                    &[
-                        &format!("{filter:?}"),
-                        &format!("{phases:?}"),
-                        &format!("{feature:?}"),
-                    ],
-                    1,
-                );
+                let filter_key = format!("{filter:?}");
+                let phases_key = format!("{phases:?}");
+                let feature_key = format!("{feature:?}");
+                let mut keys = vec![
+                    filter_key.as_str(),
+                    phases_key.as_str(),
+                    feature_key.as_str(),
+                ];
+                if revision >= ASSIGNMENT_WATCH_REVISION {
+                    keys.push("assignment");
+                }
+                let binding = CursorBinding::new(ctx, "watch.list", &keys, 1);
                 // Rows another caller may not see are skipped; reading continues until the page
                 // fills.
                 let rows = cursor::page(
@@ -1380,6 +1406,7 @@ impl QueryHandler for WatchService {
                             |w| Some((w.created_at_ms, w.id.clone())),
                             |w| {
                                 Ok(Self::visible(ctx, w)
+                                    && available_at(w, revision)
                                     && match &feature {
                                         None => true,
                                         Some(feature) => {
@@ -2434,6 +2461,10 @@ fn assignment_of(
     }
 }
 
+fn available_at(watcher: &StoredWatcher, revision: u32) -> bool {
+    watcher.assignment.is_none() || revision >= ASSIGNMENT_WATCH_REVISION
+}
+
 fn record_of(
     watcher: &StoredWatcher,
     event: Option<&StoredWatchEvent>,
@@ -2454,6 +2485,7 @@ fn record_of(
             "Timer" => WatchSourceKind::Timer,
             "File" => WatchSourceKind::File,
             "AttachedProcess" => WatchSourceKind::AttachedProcess,
+            "Assignment" => WatchSourceKind::Assignment,
             _ => WatchSourceKind::Process,
         },
         process: watcher.process_operation_id.as_ref().and_then(|op| {
@@ -2463,6 +2495,10 @@ fn record_of(
             })
         }),
         attached_pid: watcher.attached_process.as_ref().map(|a| a.pid),
+        assignment: watcher.assignment.as_ref().map(|a| WatchAssignmentSource {
+            assignment_id: a.id.clone(),
+            session_id: a.session_id.clone(),
+        }),
         probe: watcher.probe.as_ref().map(|p| WatchProbeStatus {
             interval_ms: counter(p.interval_ms),
             runs: counter(p.runs),
@@ -2525,6 +2561,14 @@ fn notice_text(event: &StoredWatchEvent) -> String {
         outcome.push_str(&format!(" (signal {signal})"));
     }
     let (observed, source) = match s("/sourceKind") {
+        "Assignment" => (
+            "its delegated assignment finish".to_owned(),
+            format!(
+                "assignment {}. Child session: sessions.transcript for {}",
+                s("/assignment/assignmentId"),
+                s("/assignment/sessionId")
+            ),
+        ),
         "Timer" => (
             "its timer fire".to_owned(),
             format!("timer due at {} ms", n("/dueAtMs").unwrap_or_default()),
@@ -2689,6 +2733,7 @@ mod tests {
             matching: None,
             file_path: None,
             attached_process: None,
+            assignment: None,
         }
     }
 

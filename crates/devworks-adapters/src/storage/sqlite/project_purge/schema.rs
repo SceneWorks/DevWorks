@@ -63,8 +63,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// project artifact ownership and the operation journal follows its existing scope.
 /// Migration 67 adds the PID and birth token of an attached process to its watcher row.
 /// Those scalars add no ownership edge and the existing project and session policy still applies.
+/// Migration 68 records the observed child assignment and its session on the watcher. The
+/// direct child belongs to the same root and project as the parent that created the watcher.
+/// Both IDs are observations. The existing project and session ownership still applies.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "8536d759cecb2b85806d11c8509f28cdab83a53dc80073704e1acf5288607aba";
+    "7509f9432e82b866c1928c4e1fe9ad652fda1e50dafb2ade57b444955a61980e";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

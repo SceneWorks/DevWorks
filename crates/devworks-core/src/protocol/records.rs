@@ -18398,6 +18398,8 @@ pub enum WatchSourceKind {
     File,
     #[schemars(extend("x-since" = 9))]
     AttachedProcess,
+    #[schemars(extend("x-since" = 10))]
+    Assignment,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
@@ -18414,6 +18416,9 @@ impl Revisioned for WatchSourceKind {
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         if matches!(self, Self::AttachedProcess) && revision < 9 {
             return Err("enum variant predates its introduction: AttachedProcess".into());
+        }
+        if matches!(self, Self::Assignment) && revision < 10 {
+            return Err("enum variant predates its introduction: Assignment".into());
         }
         Ok(())
     }
@@ -18463,6 +18468,24 @@ impl Check for WatchAttachedProcess {
         self.birth_token.check()?;
         crate::protocol::rules::record(
             "WatchAttachedProcess",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAssignmentSource {
+    pub assignment_id: AssignmentId,
+    pub session_id: Id,
+}
+impl Check for WatchAssignmentSource {
+    fn check(&self) -> Result<(), String> {
+        self.assignment_id.check()?;
+        self.session_id.check()?;
+        crate::protocol::rules::record(
+            "WatchAssignmentSource",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -18765,6 +18788,13 @@ pub struct WatcherRecord {
     )]
     #[schemars(with = "u32", extend("x-since" = 9))]
     pub attached_pid: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchAssignmentSource", extend("x-since" = 10))]
+    pub assignment: Option<WatchAssignmentSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<WatchProbeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18803,6 +18833,7 @@ impl Check for WatcherRecord {
         self.source_kind.check()?;
         self.process.check()?;
         self.attached_pid.check()?;
+        self.assignment.check()?;
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
@@ -18832,6 +18863,9 @@ impl Revisioned for WatcherRecord {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 9 {
             self.attached_pid = None;
+        }
+        if revision < 10 {
+            self.assignment = None;
         }
         self.source_kind.retain_revision(revision);
         self.outcome.retain_revision(revision);

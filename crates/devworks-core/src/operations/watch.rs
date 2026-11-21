@@ -12,7 +12,7 @@
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision, RootId};
+use crate::protocol::{AssignmentId, Counter, Id, Revision, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,13 @@ pub struct CreateInput {
     )]
     #[schemars(with = "WatchAttachedProcess", extend("x-since" = 9))]
     pub attached_process: Option<WatchAttachedProcess>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AssignmentId", extend("x-since" = 10))]
+    pub assignment_id: Option<AssignmentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching: Option<WatchMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -50,6 +57,7 @@ impl Check for CreateInput {
         self.timer.check()?;
         self.file.check()?;
         self.attached_process.check()?;
+        self.assignment_id.check()?;
         self.matching.check()?;
         self.tail_bytes.check()?;
         self.max_lifetime_ms.check()?;
@@ -60,6 +68,9 @@ impl Revisioned for CreateInput {
     fn retain_revision(&mut self, revision: u32) {
         if revision < 9 {
             self.attached_process = None;
+        }
+        if revision < 10 {
+            self.assignment_id = None;
         }
     }
 }

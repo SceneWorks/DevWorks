@@ -10,6 +10,7 @@ A watcher takes exactly one source:
 
 - **Process.** The behavior described above.
 - **Attached process.** In schema revision 9, pass `attachedProcess` with the running process's `pid` and `birthToken`. DevWorks resumes watching that identity after restart and reports Exited with an exit code when available, or Exited with unknown status. You can cancel the watcher and leave the process running.
+- **Delegated assignment.** In schema revision 10, pass `assignmentId` for one of your direct child assignments. When it finishes, the parent receives the outcome, the child session ID and the recorded evidence. Cancelling the watcher leaves the child running.
 - **Probe.** DevWorks runs a command, then runs it again after an interval, waiting twice as long after each failed run up to eight intervals, until a run meets the condition: an exit code (0 by default) and, optionally, an output pattern. The watcher then reports Succeeded with the number of runs. A run that cannot start, or is lost or uncertain, ends the watcher with that outcome.
 - **Timer.** It fires at a time or after a delay and reports Succeeded. A timer starts nothing, so every role can create and cancel one.
 - **File.** DevWorks reads the lines of one regular file inside a registered root and looks for a pattern. The file may not exist yet.
@@ -22,7 +23,7 @@ A probe, file or attached-process watcher always ends. Its maximum lifetime is s
 
 A watcher follows its owner. If the owning session ends, or the project is archived or deleted, the watcher is cancelled, any process it launched is stopped, and nothing is delivered. While the owner is paused or held, events wait and arrive in order after Continue. At shutdown, a process DevWorks stopped is reported Interrupted. A probe runs again after you reopen the app and continue, and a timer that came due while the app was closed fires once.
 
-A backup check runs on the watcher timer when `watch.backupEnabled` is on (the default), at the interval in `watch.backupIntervalMs` (15 minutes by default, at least 1 minute). It settles outcomes the main pass missed, reports an owned process the system says is gone as Lost, and delivers any message still waiting. For an attached process it checks the PID and birth token again. A message sent this way starts with "Backup delivery" and is recorded in History and Diagnostics. It also reminds you about a probe that has not run for twice its interval.
+A backup check runs on the watcher timer when `watch.backupEnabled` is on (the default), at the interval in `watch.backupIntervalMs` (15 minutes by default, at least 1 minute). It settles outcomes the main pass missed, reports an owned process the system says is gone as Lost, and delivers any message still waiting. For an attached process it checks the PID and birth token again. For a delegated assignment it reads the child’s stored assignment directly. A message sent this way starts with "Backup delivery" and is recorded in History and Diagnostics. It also reminds you about a probe that has not run for twice its interval.
 
 Use `watch.list` and `watch.inspect` to see a watcher's state, elapsed time and current output tail. `watch.cancel` with `stopProcess` stops the launched process and reports Cancelled; without it the watcher stops observing and reports nothing, and the process keeps running under its owner.
 

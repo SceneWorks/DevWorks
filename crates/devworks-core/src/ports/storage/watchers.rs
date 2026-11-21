@@ -2,7 +2,7 @@
 //! observed outcome as one durable watcher event. The event is delivered into the session's
 //! input, carried by the next turn that starts, and acknowledged only when that turn completes.
 use super::StorageError;
-use crate::protocol::{ActorId, Id, OperationId, ProjectId};
+use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId};
 use serde_json::Value;
 
 /// Bound on a stored output tail.
@@ -89,6 +89,14 @@ pub struct StoredWatcher {
     pub file_path: Option<String>,
     /// The external process identity. It confers observation only and has no group.
     pub attached_process: Option<crate::ports::process::NativeIdentity>,
+    /// The direct child observed by the watcher.
+    pub assignment: Option<StoredWatchAssignment>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredWatchAssignment {
+    pub id: AssignmentId,
+    pub session_id: Id,
 }
 
 /// A watcher's match rule and its progress through the source.

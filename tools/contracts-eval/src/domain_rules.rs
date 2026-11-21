@@ -663,7 +663,7 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
         )?
     }
     if op == "watch.create" {
-        let sources = ["process", "probe", "timer", "file", "attachedProcess"]
+        let sources = ["process", "probe", "timer", "file", "attachedProcess", "assignmentId"]
             .iter()
             .filter(|k| present(v, k))
             .count();
@@ -681,8 +681,9 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             "a file watcher needs a match",
         )?;
         require(
-            !present(v, "tailBytes") || (!present(v, "timer") && !present(v, "attachedProcess")),
-            "a timer or attached-process watcher has no output tail",
+            !present(v, "tailBytes")
+                || (!present(v, "timer") && !present(v, "attachedProcess") && !present(v, "assignmentId")),
+            "timer, attached process and assignment watchers have no output tail",
         )?;
     }
     if op == "indexing.status" {

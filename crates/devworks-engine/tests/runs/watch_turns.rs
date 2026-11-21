@@ -598,3 +598,240 @@ fn a_restart_before_the_provider_terminal_frame_redelivers_the_watcher() {
         app.shutdown().await;
     });
 }
+
+fn delegate(fx: &Fx, parent: &InvocationContext) -> StoredAssignment {
+    let agents = AgentService::new(fx.h.ids.clone(), fx.service.clone());
+    let request = devworks_core::operations::agents::DelegateInput {
+        root_id: parent.root_id().unwrap().clone(),
+        expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
+        task_ids: devworks_core::protocol::support::BoundedList(Vec::new()),
+        role_id: id("worker"),
+        instruction: devworks_core::protocol::support::BoundedText("Scripted child".into()),
+        source_checkpoint_id: None,
+    };
+    let ctx = parent.clone();
+    fx.tx(move |_, tx| {
+        let child = agents.delegate(tx, &ctx, &request).map_err(|error| {
+            StorageError::InvalidRecord(format!("delegating scripted child: {error:?}"))
+        })?;
+        Ok(tx.runs().assignment(&child.assignment_id)?.unwrap())
+    })
+}
+
+fn watch_assignment(
+    app: &Runtime,
+    parent: &InvocationContext,
+    child: &StoredAssignment,
+    key: &str,
+) -> Id {
+    let record = command_at(
+        app,
+        parent,
+        "watch.create",
+        json!({"assignmentId":child.id}),
+        key,
+        10,
+    );
+    assert_eq!(record["sourceKind"], "Assignment");
+    assert_eq!(record["assignment"]["assignmentId"], json!(child.id));
+    assert_eq!(record["assignment"]["sessionId"], json!(child.session_id));
+    id(record["id"].as_str().unwrap())
+}
+
+fn assignment_transition(fx: &Fx, child: &StoredAssignment, state: &str) -> EventRecord {
+    read(fx.store.as_ref(), |snapshot| {
+        snapshot.history().page(
+            &EventFilter::Aggregate {
+                kind: "assignment".into(),
+                id: child.id.0.as_str().into(),
+            },
+            0,
+            100,
+        )
+    })
+    .events
+    .into_iter()
+    .find(|event| event.kind == "AssignmentStateChanged" && event.payload["to"] == state)
+    .unwrap()
+}
+
+#[test]
+fn completed_delegated_assignment_wakes_its_idle_parent_with_session_and_evidence() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (app, mut receive) = scenario(&fx).await;
+        let (parent, primary) = agent_context(&fx);
+        select_watch_tools(&fx, &parent);
+        let child = delegate(&fx, &parent);
+        let watcher = watch_assignment(&app, &parent, &child, "watch-child-completion");
+        let supervisor = app.watchers().unwrap();
+        assert_eq!(supervisor.tick().unwrap().settled, 0);
+        let session = parent.session_id().unwrap();
+
+        let (_parent_stop, stop) = tokio::sync::watch::channel(false);
+        let task =
+            tokio::spawn(NativeAgentTurnExecutor::new(&app).run(parent.clone(), primary, stop));
+        request(&mut receive).await.answer(COMPLETED);
+        tokio::time::timeout(LIMIT, async {
+            while turn_id(&fx, session).is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!task.is_finished());
+
+        let launcher = AgentLauncher::new(
+            fx.store.clone(),
+            fx.h.ids.clone(),
+            Arc::new(AgentService::new(fx.h.ids.clone(), fx.service.clone())),
+            Arc::new(CompletedCoordinator::default()),
+        );
+        let (activation, epoch) = parent.activation().unwrap();
+        let (_child_stop, stop) = tokio::sync::watch::channel(false);
+        assert!(matches!(
+            launcher
+                .launch_child(child.id.clone(), activation.clone(), epoch, stop)
+                .await,
+            ChildLaunch::End(LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                ..
+            })
+        ));
+        let evidence = assignment_transition(&fx, &child, "Completed");
+        let pass = supervisor.tick().unwrap();
+        assert_eq!((pass.settled, pass.delivered), (1, 1));
+        let delivery = event(&fx, &watcher);
+        assert_eq!(delivery.session_id, *session);
+        assert_eq!(delivery.payload["outcome"]["kind"], "Succeeded");
+        let wake = request(&mut receive).await;
+        assert_eq!(wake.event_count(&delivery.id), 1);
+        let messages = wake.body["messages"].to_string();
+        assert!(messages.contains(&format!(
+            "Child session: sessions.transcript for {}",
+            child.session_id.as_str()
+        )));
+        assert!(messages.contains(&format!(
+            "Evidence: history.events for root root-i, event {}",
+            evidence.id.0.as_str()
+        )));
+        assert!(messages.contains("Child assignment Completed"));
+        wake.answer(COMPLETED);
+        assert_completed(finished(task).await);
+        assert_eq!(event(&fx, &watcher).state, WatchEventState::Acknowledged);
+        assert_eq!(supervisor.tick().unwrap().delivered, 0);
+        assert!(notices(&fx, &child.session_id).is_empty());
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn delegated_assignment_backup_reads_terminal_state_without_primary_observation() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    runtime().block_on(async {
+        let (app, _) = scenario(&fx).await;
+        let (parent, primary) = agent_context(&fx);
+        select_watch_tools(&fx, &parent);
+        let child = delegate(&fx, &parent);
+        let watcher = watch_assignment(&app, &parent, &child, "watch-child-backup");
+
+        // The parent cannot watch its own primary assignment or use a revision that cannot
+        // represent an assignment source.
+        let create = |target: &AssignmentId, revision, key| {
+            app.command(
+                &parent,
+                "watch.create",
+                &frame_at(
+                    "Command",
+                    "watch.create",
+                    json!({"assignmentId":target}),
+                    key,
+                    revision,
+                ),
+            )
+            .unwrap()
+        };
+        assert!(matches!(
+            create(&primary.assignment_id, 10, "watch-nonchild"),
+            CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        assert!(matches!(
+            create(&child.id, 9, "watch-legacy"),
+            CommandReply::Rejected { .. }
+        ));
+        assert!(matches!(
+            app.query(
+                &parent,
+                "watch.inspect",
+                &frame_at(
+                    "Query",
+                    "watch.inspect",
+                    json!({"watcherId":watcher}),
+                    "inspect-legacy",
+                    9
+                )
+            )
+            .unwrap(),
+            DomainQueryReply::Rejected { .. }
+        ));
+
+        let supervisor = app.watchers().unwrap();
+        assert_eq!(supervisor.backup_if_due().unwrap(), None);
+        fx.h.advance(900_000);
+        let active = supervisor.backup_if_due().unwrap().unwrap();
+        assert_eq!((active.caught, active.reminded), (0, 0));
+        assert!(notices(&fx, parent.session_id().unwrap()).is_empty());
+
+        let actor = fx.user.principal().clone();
+        let target = child.id.clone();
+        fx.tx(move |service, tx| {
+            service
+                .set_assignment_state(
+                    tx,
+                    &actor,
+                    &target,
+                    child.revision,
+                    AssignmentState::Failed,
+                    None,
+                )?
+                .map_err(|error| {
+                    StorageError::InvalidRecord(format!("scripted failure: {error:?}"))
+                })?;
+            Ok(())
+        });
+        let evidence = assignment_transition(&fx, &child, "Failed");
+        assert_eq!(
+            inspect_at(&app, &parent, watcher.as_str(), 10)["state"],
+            "Active"
+        );
+        assert!(
+            read(fx.store.as_ref(), |snapshot| {
+                snapshot.watchers().watch_event_for_watcher(&watcher)
+            })
+            .is_none()
+        );
+        fx.h.advance(900_000);
+        let backup = supervisor.backup_if_due().unwrap().unwrap();
+        assert_eq!((backup.caught, backup.reminded), (1, 0));
+        let caught = event(&fx, &watcher);
+        assert_eq!(caught.state, WatchEventState::Delivered);
+        assert_eq!(caught.payload["outcome"]["kind"], "Failed");
+        assert_eq!(
+            caught.payload["assignment"]["sessionId"],
+            json!(child.session_id)
+        );
+        assert!(
+            caught.payload["outcome"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains(evidence.id.0.as_str())
+        );
+        assert_eq!(supervisor.tick().unwrap().delivered, 0);
+        assert_eq!(event(&fx, &watcher).id, caught.id);
+        assert_eq!(notices(&fx, parent.session_id().unwrap()).len(), 1);
+        app.shutdown().await;
+    });
+}

@@ -96,7 +96,7 @@ fn assignment_scope(
     Ok((assignment, root.project_id))
 }
 
-fn source_assignment(
+pub(super) fn source_assignment(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     project: &ProjectId,
@@ -259,14 +259,10 @@ fn fenced(error: Fenced) -> Failure {
     Refusal::new(code, "assignment", None).into()
 }
 
-fn agent_record(
-    read: &dyn RunRead,
+pub(super) fn assignment_checkpoint(
     assignment: &StoredAssignment,
-) -> Result<AgentRecord, StorageError> {
-    let context = read
-        .agent_assignment_context(&assignment.id)?
-        .ok_or_else(|| corrupt("assignment context"))?;
-    let checkpoint = assignment
+) -> Result<Option<ArtifactRef>, StorageError> {
+    assignment
         .checkpoint
         .as_ref()
         .map(|value| {
@@ -274,7 +270,17 @@ fn agent_record(
                 .map(|record| record.content)
                 .map_err(|_| corrupt("assignment checkpoint"))
         })
-        .transpose()?;
+        .transpose()
+}
+
+fn agent_record(
+    read: &dyn RunRead,
+    assignment: &StoredAssignment,
+) -> Result<AgentRecord, StorageError> {
+    let context = read
+        .agent_assignment_context(&assignment.id)?
+        .ok_or_else(|| corrupt("assignment context"))?;
+    let checkpoint = assignment_checkpoint(assignment)?;
     let state = match assignment.state {
         AssignmentState::Ready => OperationState::IntentRecorded,
         AssignmentState::Active => OperationState::Dispatching,

@@ -762,6 +762,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: ATTACHED_WATCHERS_SHA256,
         rebuilds_tables: true,
     },
+    // Older builds cannot interpret assignment watchers.
+    Migration {
+        version: 68,
+        minimum_reader: 68,
+        minimum_writer: 68,
+        sql: include_str!("migrations/0068_assignment_watchers.sql"),
+        expected_sha256: "b2432a633eec00d44bc5f9bcd7cb23161e4f6dd303755fad5d27e245afdc50b1",
+        rebuilds_tables: true,
+    },
 ];
 const ATTACHED_WATCHERS_SHA256: &str =
     "a23ddfe3134f16970b55a18a91f6582fd3e3fe9f087a3ed5224e04288211b8e2";
