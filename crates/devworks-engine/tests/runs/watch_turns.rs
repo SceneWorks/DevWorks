@@ -1,6 +1,7 @@
 use super::*;
 use devworks_core::context::HostIngress;
 use devworks_core::ports::provider_http::{SendPhase, TransportFailure};
+use devworks_core::protocol::Counter;
 use std::sync::mpsc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
