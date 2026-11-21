@@ -1465,6 +1465,20 @@ impl SessionRepository for Unit<'_> {
         Ok(())
     }
 
+    fn adopt_workspace_coordinator(
+        &mut self,
+        session: &Id,
+        expected_revision: i64,
+        creator: &ActorId,
+        coordinator: &ActorId,
+    ) -> Result<bool, StorageError> {
+        let changed = db(self.conn.execute(
+            "UPDATE sessions SET agent_id=?4 WHERE id=?1 AND revision=?2 AND created_by=?3 +             AND agent_id=?3 AND closed_at IS NULL AND root_id IS NULL AND project_id IS NULL +             AND NOT EXISTS (SELECT 1 FROM assignments WHERE session_id=?1)",
+            params![session.as_str(), expected_revision, creator.0.as_str(), coordinator.0.as_str()],
+        ))?;
+        Ok(changed == 1)
+    }
+
     fn touch_session_activity(&mut self, id: &Id, at_ms: i64) -> Result<(), StorageError> {
         if at_ms < 0 {
             return Err(invalid("negative session activity time"));

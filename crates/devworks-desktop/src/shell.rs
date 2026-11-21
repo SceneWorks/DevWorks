@@ -723,9 +723,25 @@ impl Shell {
     /// Tells the coordinator beside the screen which screen, project, item and selection the
     /// user is looking at (the conversation sends it once per change).
     fn append_coordinator_context_if_changed(&mut self) {
-        if !self.chat.coordinator_open || self.route == Route::Chat {
+        use devworks_core::protocol::records::ScreenContext;
+        use devworks_core::protocol::support::BoundedList;
+        use devworks_core::protocol::{Id, ProjectId, Revision, RootId};
+        let Some(backend) = self.backend() else {
             return;
-        }
+        };
+        let session = self
+            .chat
+            .selected
+            .as_deref()
+            .and_then(|value| Id::new(value).ok());
+        let Some(session) = session.filter(|_| {
+            (self.chat.coordinator_open || self.route == Route::Chat)
+                && self.online().is_ok()
+                && !self.purge.frozen
+        }) else {
+            backend.publish_current_screen(None, "");
+            return;
+        };
         let screen = self.route.screen();
         let (board, card) = if matches!(
             self.route,
@@ -764,6 +780,42 @@ impl Shell {
             selection,
             knowledge_project
         );
+        let project = match self.route {
+            Route::Knowledge => Some(knowledge_project.as_str()),
+            _ if screen.group == NavGroup::Project => self.selected_project.as_deref(),
+            _ => None,
+        }
+        .and_then(|value| Id::new(value).ok())
+        .map(ProjectId);
+        let mut selected_ids = Vec::new();
+        for value in board.into_iter().chain(card).chain(Some(selection)) {
+            if let Ok(id) = Id::new(value)
+                && !selected_ids.contains(&id)
+            {
+                selected_ids.push(id);
+            }
+        }
+        let root_id = board
+            .or(card)
+            .and_then(|value| Id::new(value).ok())
+            .map(RootId);
+        backend.publish_current_screen(
+            Some((
+                session,
+                ScreenContext {
+                    screen_id: Id::new(screen.id).expect("registered screen ID"),
+                    project_id: project,
+                    root_id,
+                    selected_ids: BoundedList(selected_ids),
+                    help_topic_id: Id::new(screen.help_topic).expect("registered Help topic"),
+                    revision: Revision::new(1).expect("positive revision"),
+                },
+            )),
+            &key,
+        );
+        if self.route == Route::Chat {
+            return;
+        }
         let context = format!(
             "Current screen: {}. {}\nProject: {}\nFeature: {}\nItem: {}\nSubview: {}\nSelection: {}\nKnowledge scope: {}\nLocal Help topic: {}",
             screen.title,

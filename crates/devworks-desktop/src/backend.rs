@@ -44,6 +44,13 @@ pub trait Backend: Send + Sync {
     ) -> Result<(), String> {
         Err("Project keep-working is unavailable.".into())
     }
+    /// Publishes the current host observation without appending a transcript notice.
+    fn publish_current_screen(
+        &self,
+        _screen: Option<(Id, devworks_core::protocol::records::ScreenContext)>,
+        _selection_key: &str,
+    ) {
+    }
     /// Trusted host-only append of the selected coordinator conversation's screen context.
     fn append_coordinator_notice(
         &self,

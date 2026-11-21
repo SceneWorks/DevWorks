@@ -48,6 +48,7 @@
 pub mod notice;
 pub mod transcript;
 pub mod turn;
+pub mod workspace_reply;
 
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
@@ -569,9 +570,22 @@ impl SessionService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         input: &SessionCommandRequest,
-    ) -> Result<DomainDecision, Failure> {
+    ) -> Result<(DomainDecision, Option<crate::protocol::OperationId>), Failure> {
         let session = project_session(tx.sessions(), ctx, &input.session_id)?;
         Self::may_act(tx, ctx, &session)?;
+        if input.reply_route.is_some()
+            && (ctx.principal_kind() != PrincipalKind::Human
+                || ctx.principal() != &session.created_by
+                || session.project_id.is_some()
+                || session.root_id.is_some())
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "workspace_reply_route",
+                Some(session.id),
+            )
+            .into());
+        }
         if session.closed() {
             return Err(Refusal::new(
                 DomainErrorCode::Conflict,
@@ -590,6 +604,7 @@ impl SessionService {
             )
             .into());
         }
+        let sequence = session.next_sequence;
         let batch_id = tx.new_id(IdKind::TranscriptBatch);
         let entry_id = tx.new_id(IdKind::TranscriptEntry);
         let batch = turn::batch_of(
@@ -613,15 +628,33 @@ impl SessionService {
             BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_) => {}
             BatchOutcome::Refused(r) => return Err(append_refusal(&r).into()),
         }
-        let session = tx
+        let mut session = tx
             .sessions()
             .session(&session.id)?
             .ok_or_else(|| StorageError::InvalidRecord("session vanished".into()))?;
-        Ok(DomainDecision::Applied {
-            result: OperationResult::SessionsAppendMessage {
-                value: record_from(tx.sessions(), &session)?,
+        let operation_id = if let Some(coordinator) = self.coordinator.as_ref()
+            && workspace_reply::prepare(tx, ctx, &session, coordinator)?
+        {
+            session.agent_id = coordinator.clone();
+            Some(workspace_reply::record(
+                tx,
+                ctx,
+                &session,
+                entry_id,
+                sequence,
+                input.reply_route.clone(),
+            )?)
+        } else {
+            None
+        };
+        Ok((
+            DomainDecision::Applied {
+                result: OperationResult::SessionsAppendMessage {
+                    value: record_from(tx.sessions(), &session)?,
+                },
             },
-        })
+            operation_id,
+        ))
     }
 
     fn list(
@@ -1117,7 +1150,13 @@ impl CommandHandler for SessionService {
             OperationInput::Sessions(ops::Input::Start(i)) => self.start(tx, ctx, i),
             OperationInput::Sessions(ops::Input::End(i)) => self.end(tx, ctx, i),
             OperationInput::Sessions(ops::Input::AppendMessage(i)) => {
-                self.append_message(tx, ctx, i)
+                return match self.append_message(tx, ctx, i) {
+                    Ok((decision, operation_id)) => Ok(Decided {
+                        decision,
+                        operation_id,
+                    }),
+                    Err(error) => decided(tx, Err(error)),
+                };
             }
             _ => {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())

@@ -3434,6 +3434,15 @@ impl SessionRepository for Unmodelled {
     fn update_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
         unmodelled()
     }
+    fn adopt_workspace_coordinator(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &ActorId,
+        _: &ActorId,
+    ) -> Result<bool, StorageError> {
+        unmodelled()
+    }
     fn insert_entry(&mut self, _: &StoredEntry) -> Result<(), StorageError> {
         unmodelled()
     }

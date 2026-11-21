@@ -826,6 +826,17 @@ impl ChatCtl<'_, '_> {
         let (text, refs) = (draft.text.clone(), draft.stored());
         let submitted = draft.submission();
         let id = session.id.as_str().to_owned();
+        let selection = self
+            .chat
+            .routing
+            .selections
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        let route = devworks_core::protocol::provider::ConversationRoutePreference {
+            intent: selection.intent,
+            effort: selection.effort,
+        };
         let revision = session.revision.get();
         self.chat.sending = Some(id.clone());
         self.chat.submitted = Some(submitted);
@@ -834,7 +845,7 @@ impl ChatCtl<'_, '_> {
             ChatSlot::Append(id),
             "Saving your message",
             "sessions.append_message",
-            move |b| ops::append_message(b, &sid, revision, &text, &refs),
+            move |b| ops::append_message_with_route(b, &sid, revision, &text, &refs, Some(route)),
         );
     }
 
@@ -1713,6 +1724,9 @@ impl ChatCtl<'_, '_> {
             }
             (ChatSlot::Append(id), Reply::Command(c)) => {
                 self.chat.sending = None;
+                let queued = matches!(&c, Ok(devworks_core::protocol::CommandReply::Recorded {
+                    receipt, ..
+                }) if receipt.operation_id.is_some());
                 let outcome = ops::appended(c);
                 if matches!(outcome, Err(Failure::Unknown)) {
                     // Not known whether the message was saved: the composer keeps it as
@@ -1744,9 +1758,14 @@ impl ChatCtl<'_, '_> {
                             d.settle_sent(sent);
                         }
                         self.chat.notice = None;
-                        self.announce("Message saved to the conversation. No coordinator is connected to reply (DW-16).");
                         self.load_transcript(&id);
-                        self.route_first(&id);
+                        if queued {
+                            self.announce("Message saved. Coordinator reply queued.");
+                        } else {
+                            self.announce(
+                                "Message saved. The workspace coordinator is unavailable.",
+                            );
+                        }
                     }
                     Err(e) => {
                         if let Failure::Refused(f) = &e

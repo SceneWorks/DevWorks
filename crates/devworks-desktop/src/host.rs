@@ -255,6 +255,7 @@ impl std::fmt::Display for StartError {
 /// The booted host: the runtime handle and the host-bound user identity.
 pub struct Host {
     runtime: Arc<Runtime>,
+    navigation: Arc<devworks_core::services::navigation::NavigationContextService>,
     async_runtime: tokio::runtime::Handle,
     ctx: InvocationContext,
     sources: Arc<HostArtifactSources>,
@@ -363,7 +364,10 @@ async fn compose(
         history: true,
         mcp: true,
     };
-    let use_cases = UseCases::new().with_queue();
+    let navigation =
+        Arc::new(devworks_core::services::navigation::NavigationContextService::default());
+    let mut use_cases = UseCases::new().with_queue();
+    use_cases.register("ui.current_screen", Some(navigation.clone()), None);
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
         clock: clock.clone(),
@@ -712,6 +716,7 @@ async fn compose(
     runtime.notification_wakeup();
     Ok(Host {
         runtime,
+        navigation,
         async_runtime: tokio::runtime::Handle::current(),
         ctx,
         sources,
@@ -963,6 +968,13 @@ pub struct DesktopBackend {
     host: Arc<Host>,
 }
 impl Backend for DesktopBackend {
+    fn publish_current_screen(
+        &self,
+        screen: Option<(Id, devworks_core::protocol::records::ScreenContext)>,
+        selection_key: &str,
+    ) {
+        self.host.navigation.publish(screen, selection_key);
+    }
     fn keep_working_status(
         &self,
         project: &devworks_core::protocol::ProjectId,

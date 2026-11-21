@@ -29,6 +29,7 @@ pub mod jobs;
 pub mod kernel;
 pub mod knowledge;
 pub mod mcp;
+pub mod navigation;
 pub mod notifications;
 pub mod packages;
 pub mod power;
