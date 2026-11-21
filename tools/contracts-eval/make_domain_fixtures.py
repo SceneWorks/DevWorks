@@ -436,6 +436,25 @@ def domain(name,revision=2,**extra):
  obj=request(name,'Query')
  if revision is not None:obj['schemaRevision']=revision
  obj['body'].update(extra);return obj
+# The selected-work importer negotiates revision 2 on both native and scheduled paths.
+import_config={**sample('ImportConfig'),'allowScheduledDelta':True}
+import_run={**sample('ImportRun'),'previewDigest':sample('Digest'),'sourceNamespace':'codegraph-source',
+            'mode':'Delta','updatedSinceMs':'1000','processed':'1','total':'1'}
+for name,fields,value in [
+ ('imports.preview',{'config':import_config,'mode':'Delta','updatedSinceMs':'1000'},import_run),
+ ('imports.configure',{'config':import_config,'approve':True},sample('MutationSummary')),
+ ('imports.apply',{},import_run),
+ ('imports.runs',{'sourceNamespace':'codegraph-source'},{'items':[import_run],'hasMore':False}),
+ ('imports.inspect',{},import_run),
+ ('imports.settings',{'proposal':import_config},{**sample('ImportSettingsView'),'config':import_config}),
+ ('imports.sync',{},import_run),
+]:
+ frame=request(name,OPS[name]['mode'])
+ frame['schemaRevision']=2
+ frame['body'].update(fields)
+ case('dw54-r2-input-'+name,'domain-request.r2',frame)
+ case('dw54-r2-result-'+name,'operation-result.r2',{'kind':name,'value':value})
+
 for name in ['history.work_lineage','history.git_links','history.evidence_links','history.tool_usage']:
  case('r2-input-'+name,'domain-request.r2',domain(name))
 case('r2-input-sessions.briefing','domain-request.r2',domain('sessions.briefing',item='root-a',paths=['src/lib.rs','crates/core'],budgetTokens=1500))
