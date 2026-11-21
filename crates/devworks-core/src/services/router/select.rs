@@ -280,12 +280,28 @@ fn connection_for(
     connections: &[ConnectionStatus],
     preferred: Option<&Id>,
 ) -> Result<Id, Block> {
+    serving_connection(
+        &model.endpoint_profile,
+        model.connection_id.as_ref(),
+        &model.upstream_model_id,
+        connections,
+        preferred,
+    )
+}
+
+pub(super) fn serving_connection(
+    profile: &str,
+    bound: Option<&Id>,
+    upstream: &str,
+    connections: &[ConnectionStatus],
+    preferred: Option<&Id>,
+) -> Result<Id, Block> {
     // A model bound to one connection is served by that connection only (never by another
     // endpoint of the same profile, which could hold another account or billing).
     let serving: Vec<&ConnectionStatus> = connections
         .iter()
-        .filter(|c| c.profile == model.endpoint_profile)
-        .filter(|c| model.connection_id.as_ref().is_none_or(|b| b == &c.id))
+        .filter(|c| c.profile == profile)
+        .filter(|c| bound.is_none_or(|b| b == &c.id))
         .collect();
     if serving.is_empty() {
         return Err(Block::NoConnection);
@@ -294,7 +310,7 @@ fn connection_for(
     // exclude everywhere is ineligible, whatever the connections' state.
     let serving: Vec<&ConnectionStatus> = serving
         .into_iter()
-        .filter(|c| c.permits(&model.upstream_model_id))
+        .filter(|c| c.permits(upstream))
         .collect();
     if serving.is_empty() {
         return Err(Block::NotAllowed);
@@ -302,7 +318,7 @@ fn connection_for(
     let lists = |c: &ConnectionStatus| {
         c.discovered
             .as_ref()
-            .is_none_or(|d| lists(&model.endpoint_profile, d, &model.upstream_model_id))
+            .is_none_or(|d| lists(profile, d, upstream))
     };
     let usable: Vec<&ConnectionStatus> = serving
         .iter()

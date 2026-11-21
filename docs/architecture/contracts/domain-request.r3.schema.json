@@ -5809,6 +5809,10 @@
             "expectedContextEpoch": {
               "$ref": "#/$defs/Counter"
             },
+            "expectedPinRevision": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
+            },
             "intent": {
               "$ref": "#/$defs/RouteIntent"
             },
@@ -14069,6 +14073,34 @@
             "kind"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "DevWorksAuto",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "OpenRouterAutoBeta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 3
         }
       ]
     },

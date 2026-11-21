@@ -60,7 +60,13 @@ impl Check for CreateInput {
     }
 }
 impl Revisioned for CreateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.definition.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.definition.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `jobs.edit` Command input.
@@ -84,7 +90,13 @@ impl Check for EditInput {
     }
 }
 impl Revisioned for EditInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.definition.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.definition.check_revision(revision)?;
+        Ok(())
+    }
 }
 
 /// `jobs.enable` Command input.

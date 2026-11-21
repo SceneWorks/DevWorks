@@ -131,6 +131,45 @@ fn router(f: &Fx) -> Arc<InferenceRouter> {
         Arc::new(Directory),
     ))
 }
+fn seed_usage_prices(f: &Fx) {
+    f.tx(|_, tx| {
+        let mut connection = tx.router().connection(&id("usage-connection"))?.unwrap();
+        connection.local_free = false;
+        connection.revision += 1;
+        tx.router().put_connection(&connection, Some(1))?;
+        let tariffs = ["Input", "Output"]
+            .map(|kind| devworks_core::ports::usage::PublishedTariff {
+                upstream_model_id: "native-metadata-source".into(),
+                service_tier: "Standard".into(),
+                context_lower_exclusive: None,
+                context_upper_inclusive: None,
+                modality: "Text".into(),
+                charge_kind: kind.into(),
+                cache_ttl_seconds: None,
+                unit: "Token".into(),
+                units: 1_000_000,
+                amount_usd: if kind == "Input" {
+                    "1".into()
+                } else {
+                    "2".into()
+                },
+                region: None,
+                endpoint_profile: Some("CompatibleChat".into()),
+            })
+            .to_vec();
+        tx.usage().put_price_override(
+            &StoredPriceOverride {
+                model_id: id("usage-model"),
+                revision: 2,
+                mode: "Set".into(),
+                tariffs,
+                updated_by: ActorId(id("user-a")),
+                updated_at_ms: T0,
+            },
+            1,
+        )
+    });
+}
 fn job_run(f: &Fx, running: bool) -> Id {
     f.tx(move |_, tx| {
         tx.jobs().insert_job(&StoredJob {
@@ -323,44 +362,7 @@ fn actual_coordinator_and_worker_transports_hold_quiescence_until_owned_close() 
                 let selected_router = router(&f);
                 let physical_child = std::env::var_os("DW21_CAPTURE_OWNER").is_some();
                 if physical_child || manual_failed_close.is_some() {
-                    f.tx(|_, tx| {
-                        let mut connection =
-                            tx.router().connection(&id("usage-connection"))?.unwrap();
-                        connection.local_free = false;
-                        connection.revision += 1;
-                        tx.router().put_connection(&connection, Some(1))?;
-                        let tariffs = ["Input", "Output"]
-                            .map(|kind| devworks_core::ports::usage::PublishedTariff {
-                                upstream_model_id: "native-metadata-source".into(),
-                                service_tier: "Standard".into(),
-                                context_lower_exclusive: None,
-                                context_upper_inclusive: None,
-                                modality: "Text".into(),
-                                charge_kind: kind.into(),
-                                cache_ttl_seconds: None,
-                                unit: "Token".into(),
-                                units: 1_000_000,
-                                amount_usd: if kind == "Input" {
-                                    "1".into()
-                                } else {
-                                    "2".into()
-                                },
-                                region: None,
-                                endpoint_profile: Some("CompatibleChat".into()),
-                            })
-                            .to_vec();
-                        tx.usage().put_price_override(
-                            &StoredPriceOverride {
-                                model_id: id("usage-model"),
-                                revision: 2,
-                                mode: "Set".into(),
-                                tariffs,
-                                updated_by: ActorId(id("user-a")),
-                                updated_at_ms: T0,
-                            },
-                            1,
-                        )
-                    });
+                    seed_usage_prices(&f);
                 }
                 let execution_root = if membership { "root-i" } else { "root-f" };
                 let destination = if membership {

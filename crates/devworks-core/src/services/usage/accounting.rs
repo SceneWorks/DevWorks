@@ -250,6 +250,8 @@ fn prior_work_owner_unclosed(
     tx: &mut dyn WriteTransaction,
     work: &Id,
     owner: &DispatchIdentity,
+    session: &Id,
+    dispatching: Option<&Id>,
 ) -> Result<bool, StorageError> {
     let mut after = None;
     loop {
@@ -262,6 +264,9 @@ fn prior_work_owner_unclosed(
             MAX_PAGE,
         )?;
         for attempt in &rows {
+            if dispatching == Some(&attempt.attempt_id) {
+                continue;
+            }
             // Monetary attribution alone (for example a manual Human feature chat) does
             // not establish managed-execution custody. Never infer it from work membership.
             let (Some(root), Some(execution)) = (&attempt.execution_root_id, &attempt.execution_id)
@@ -285,7 +290,18 @@ fn prior_work_owner_unclosed(
                 .map(summary)
                 .transpose()?
                 .is_some_and(|s| s.custody_recovery_reason.is_some());
-            if prior_owner != owner || uncertain {
+            if uncertain {
+                return Ok(true);
+            }
+            if prior_owner != owner
+                && (balance.as_ref().is_none_or(|b| b.unknown_tail)
+                    || !matches!(
+                        attempt.state,
+                        AttemptState::Admitted | AttemptState::Dispatched
+                    )
+                    || tx.store().boot_id.as_ref() != Some(&bound.admitted_boot_id)
+                    || !concurrent_plan_review(tx, work, owner, session, prior_owner, attempt)?)
+            {
                 return Ok(true);
             }
         }
@@ -294,6 +310,58 @@ fn prior_work_owner_unclosed(
         }
         after = rows.last().map(|a| a.attempt_id.clone());
     }
+}
+
+// The coordinator and its isolated plan reviewer share feature-level accounting, but each
+// owns a separate live turn. Preserve the recovery fence for prior turns, epochs, and boot IDs.
+fn concurrent_plan_review(
+    tx: &mut dyn WriteTransaction,
+    work: &Id,
+    owner: &DispatchIdentity,
+    session: &Id,
+    prior: &DispatchIdentity,
+    attempt: &StoredInferenceAttempt,
+) -> Result<bool, StorageError> {
+    if owner.root_id.0 != *work
+        || prior.root_id != owner.root_id
+        || prior.execution_id != owner.execution_id
+        || prior.owner_epoch != owner.owner_epoch
+    {
+        return Ok(false);
+    }
+    let Some(prior_session) = attempt.session_id.as_ref().filter(|id| *id != session) else {
+        return Ok(false);
+    };
+    let (Some(current), Some(previous)) = (
+        managed_assignment(tx.runs(), owner)?,
+        managed_assignment(tx.runs(), prior)?,
+    ) else {
+        return Ok(false);
+    };
+    if !assignment_owns_turn(tx, &current, owner, session)?
+        || !assignment_owns_turn(tx, &previous, prior, prior_session)?
+    {
+        return Ok(false);
+    }
+    let reviewer = if current.purpose == AssignmentPurpose::Primary
+        && previous.parent_id.as_ref() == Some(&current.id)
+    {
+        previous
+    } else if previous.purpose == AssignmentPurpose::Primary
+        && current.parent_id.as_ref() == Some(&previous.id)
+    {
+        current
+    } else {
+        return Ok(false);
+    };
+    crate::services::work::plan_review::owns_attempt(
+        tx.work(),
+        work,
+        &reviewer.id,
+        &reviewer.session_id,
+        &owner.execution_id,
+        owner.owner_epoch,
+    )
 }
 
 fn prior_job_owner_unclosed(
@@ -527,8 +595,9 @@ pub(crate) fn admit_attempt(
             return Ok(Admission::Fenced(Fenced::Blocked(Box::new(allowed))));
         }
     }
-    if let (Some(work), Some(owner)) = (&work_id, &request.dispatch)
-        && prior_work_owner_unclosed(tx, work, owner)?
+    if let (Some(work), Some(owner), Some(session)) =
+        (&work_id, &request.dispatch, &route.session_id)
+        && prior_work_owner_unclosed(tx, work, owner, session, None)?
     {
         return Ok(Admission::Fenced(Fenced::LeaseLost(
             "an earlier work turn still has an unclosed inference transport".into(),
@@ -746,30 +815,46 @@ fn managed_owner(
     session: Option<&Id>,
 ) -> Result<StoredAssignment, StorageError> {
     let session = session.ok_or_else(|| invalid("managed inference has no session"))?;
-    let owner = match &proof.assignment_id {
-        Some(id) => tx.runs().assignment(id)?,
-        None => crate::services::runs::coordinator(tx.runs(), &proof.root_id)?,
+    let owner = managed_assignment(tx.runs(), proof)?
+        .ok_or_else(|| invalid("managed inference owner is unavailable"))?;
+    if !assignment_owns_turn(tx, &owner, proof, session)? {
+        return Err(StorageError::ScopeDenied);
     }
-    .ok_or_else(|| invalid("managed inference owner is unavailable"))?;
+    Ok(owner)
+}
+
+fn managed_assignment(
+    runs: &dyn RunRead,
+    proof: &DispatchIdentity,
+) -> Result<Option<StoredAssignment>, StorageError> {
+    match &proof.assignment_id {
+        Some(id) => runs.assignment(id),
+        None => crate::services::runs::coordinator(runs, &proof.root_id),
+    }
+}
+
+fn assignment_owns_turn(
+    tx: &mut dyn WriteTransaction,
+    owner: &StoredAssignment,
+    proof: &DispatchIdentity,
+    session: &Id,
+) -> Result<bool, StorageError> {
     if owner.root_id != proof.root_id
         || owner.session_id != *session
         || owner.generation != proof.assignment_generation
         || owner.execution_id.as_ref() != Some(&proof.execution_id)
         || !owner.state.is_live()
     {
-        return Err(StorageError::ScopeDenied);
+        return Ok(false);
     }
     let current_boot = tx.store().boot_id.clone();
-    if !tx.runs().session_turn(session)?.is_some_and(|turn| {
+    Ok(tx.runs().session_turn(session)?.is_some_and(|turn| {
         turn.turn_id == proof.turn_id
             && turn.assignment_id == owner.id
             && turn.execution_id == proof.execution_id
             && turn.owner_epoch == proof.owner_epoch
             && Some(turn.boot_id) == current_boot
-    }) {
-        return Err(StorageError::ScopeDenied);
-    }
-    Ok(owner)
+    }))
 }
 
 fn journal_attempt(
@@ -881,6 +966,15 @@ pub(crate) fn mark_dispatched(
         if owner != attempt.feature_id {
             return Ok(Admission::Fenced(Fenced::Invalid(
                 "work membership changed after reservation".into(),
+            )));
+        }
+        // A sibling can lose custody between reservation and the final transport admission.
+        if current.is_feature()
+            && let (Some(dispatch), Some(session)) = (&bound.dispatch, &attempt.session_id)
+            && prior_work_owner_unclosed(tx, work, dispatch, session, Some(id))?
+        {
+            return Ok(Admission::Fenced(Fenced::LeaseLost(
+                "an earlier work turn still has an unclosed inference transport".into(),
             )));
         }
     }

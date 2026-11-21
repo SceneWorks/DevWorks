@@ -2778,6 +2778,9 @@ impl RouterRead for Unmodelled {
     ) -> Result<Vec<StoredDecisionModel>, StorageError> {
         unmodelled()
     }
+    fn decision_pool_cursor(&self) -> Result<Option<Id>, StorageError> {
+        unmodelled()
+    }
     fn route_models(
         &self,
         _: Option<(i64, &str)>,
@@ -2786,6 +2789,12 @@ impl RouterRead for Unmodelled {
         unmodelled()
     }
     fn tier_cursor(&self, _: &str) -> Result<i64, StorageError> {
+        unmodelled()
+    }
+    fn auto_route(&self, _: &Id) -> Result<Option<StoredAutoRoute>, StorageError> {
+        unmodelled()
+    }
+    fn auto_low_cursor(&self) -> Result<i64, StorageError> {
         unmodelled()
     }
     fn session_pin(&self, _: &Id) -> Result<Option<StoredPin>, StorageError> {
@@ -2806,6 +2815,39 @@ impl RouterRead for Unmodelled {
     }
 }
 impl RouterRepository for Unmodelled {
+    fn begin_auto_route(
+        &mut self,
+        _: &Id,
+        _: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        unmodelled()
+    }
+    fn bind_auto_decision_operation(
+        &mut self,
+        _: &Id,
+        _: &OperationId,
+        _: Option<&OperationId>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn save_auto_low_plan(
+        &mut self,
+        _: &Id,
+        _: &serde_json::Value,
+        _: Option<&serde_json::Value>,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        unmodelled()
+    }
+    fn finish_auto_route(
+        &mut self,
+        _: &Id,
+        _: &serde_json::Value,
+    ) -> Result<StoredAutoRoute, StorageError> {
+        unmodelled()
+    }
+    fn set_decision_pool_cursor(&mut self, _: &Id) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn put_route_model(
         &mut self,
         _: &StoredRouteModel,
@@ -3018,6 +3060,14 @@ impl RunRead for Unmodelled {
         _: Option<&AssignmentId>,
         _: u16,
     ) -> Result<Vec<StoredAssignment>, StorageError> {
+        unmodelled()
+    }
+    fn child_assignments_with_role(
+        &self,
+        _: &RootId,
+        _: &str,
+        _: bool,
+    ) -> Result<Vec<AssignmentId>, StorageError> {
         unmodelled()
     }
     fn instruction(&self, _: &Id) -> Result<Option<StoredInstruction>, StorageError> {
@@ -3424,6 +3474,15 @@ impl SessionRepository for Unmodelled {
         unmodelled()
     }
     fn update_session(&mut self, _: &StoredSession) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn adopt_workspace_coordinator(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &ActorId,
+        _: &ActorId,
+    ) -> Result<bool, StorageError> {
         unmodelled()
     }
     fn insert_entry(&mut self, _: &StoredEntry) -> Result<(), StorageError> {

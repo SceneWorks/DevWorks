@@ -27,6 +27,19 @@ mod case_budget;
 #[path = "help_startup.rs"]
 mod help_startup;
 
+/// Suppresses unrelated background Help publication in sync-sensitive runtime fixtures.
+pub struct UnusedHelpGeneration;
+impl devworks_core::ports::CommandHandler for UnusedHelpGeneration {
+    fn decide(
+        &self,
+        _: &devworks_core::context::InvocationContext,
+        _: &devworks_core::gateway::AdmittedCommand,
+        _: &mut dyn WriteTransaction,
+    ) -> Result<devworks_core::ports::Decided, devworks_core::ports::HandlerFailure> {
+        Err(StorageError::ScopeDenied.into())
+    }
+}
+
 /// Acquire first in a heavy case so its owned permit drops after every app/runtime and on panic.
 /// Multiple apps, commands and tasks within the case retain their original concurrency.
 #[must_use = "hold the case permit until runtime cleanup has finished"]

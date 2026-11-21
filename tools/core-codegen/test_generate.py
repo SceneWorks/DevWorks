@@ -37,6 +37,7 @@ class SchemaRevisionRules(unittest.TestCase):
         carried = {o['operation']: generate.introduced_in(o) for _, o in generate.operations()}
         self.assertEqual({n for n, s in carried.items() if s}, {
             'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides',
+            'router.decision_models', 'router.decide',
             'repositories.nodes', 'code.search', 'code.architecture', 'code.dependency',
             'code.impact', 'code.source', 'code.traverse', 'code.graph_scope_status', 'code.overview',
             'code.nodes_by_file', 'code.node_detail', 'code.set_trust', 'code.file_impact',
@@ -120,7 +121,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['router.route'], {3})
         self.assertEqual(carried['router.pin'], {3})
         self.assertEqual(carried['router.connections'], {2, 3})
-        self.assertEqual(carried['router.configure'], {2, 3})
+        self.assertEqual(carried['router.configure'], {2, 3, 4})
+        self.assertEqual(carried['router.decision_models'], {4})
+        self.assertEqual(carried['router.decide'], {4})
         # Knowledge projections expose independent challenges at revision 3 and the skills that name a
         # lesson at revision 8; full source labels are additive.
         self.assertEqual(carried['knowledge.subgraph'], {2, 3, 8})
@@ -152,7 +155,7 @@ class SchemaRevisionRules(unittest.TestCase):
         catalog = next(o for _, o in generate.operations() if o['operation'] == 'router.catalog')
         configure = next(o for _, o in generate.operations() if o['operation'] == 'router.configure')
         self.assertEqual(generate.introduced_in(catalog), {2, 3, 4})
-        self.assertEqual(generate.introduced_in(configure), {2, 3})
+        self.assertEqual(generate.introduced_in(configure), {2, 3, 4})
 
     def test_approval_views_preserve_owner_records_and_new_operations_begin_at_three(self):
         view = generate.TYPES['ApprovalViewRecord']

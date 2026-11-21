@@ -8,3 +8,4 @@ pub mod notice;
 pub mod reply_intent;
 pub mod run_roots;
 pub mod work_brief;
+pub(crate) mod work_plan;

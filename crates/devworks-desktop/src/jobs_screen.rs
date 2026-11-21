@@ -26,7 +26,13 @@ pub const TABS: [&str; 2] = ["Schedules", "Runs"];
 pub(crate) const SCHEDULE_KINDS: [&str; 3] = ["Manual", "Interval", "Calendar (cron)"];
 pub(crate) const TIERS: [&str; 4] = ["Max", "High", "Mid", "Low"];
 /// How an inference task is routed: a tier's pool, one named model, or OpenRouter's own route.
-pub const ROUTES: [&str; 3] = ["Tier", "Named model", "OpenRouter Auto"];
+pub const ROUTES: [&str; 5] = [
+    "Tier",
+    "Named model",
+    "Open Router Auto",
+    "DevWorks Auto",
+    "Open Router Auto Beta",
+];
 /// Effort levels (`Default` lets the provider choose).
 pub const EFFORTS: [&str; 7] = [
     "Default", "Minimal", "Low", "Medium", "High", "XHigh", "Max",
@@ -151,6 +157,8 @@ impl JobForm {
                         f.model = r["modelId"].as_str().unwrap_or_default().to_owned();
                     }
                     Some("OpenRouterAuto") => f.route_kind = 2,
+                    Some("DevWorksAuto") => f.route_kind = 3,
+                    Some("OpenRouterAutoBeta") => f.route_kind = 4,
                     _ => {
                         f.route_kind = 0;
                         f.tier = TIERS
@@ -270,6 +278,8 @@ pub fn form_values(
                 }
             }
             2 => RouteIntent::OpenRouterAuto {},
+            3 => RouteIntent::DevWorksAuto {},
+            4 => RouteIntent::OpenRouterAutoBeta {},
             _ => RouteIntent::Tier {
                 tier: frame::text(TIERS[form.tier.min(TIERS.len() - 1)])
                     .ok_or("Check the routing tier.")?,
@@ -915,6 +925,8 @@ pub(crate) fn form_ui(
         let intent = serde_json::from_value::<RouteIntent>(match form.route_kind {
             0 => json!({"kind":"Tier", "tier":TIERS[form.tier.min(TIERS.len()-1)]}),
             1 => json!({"kind":"Model", "modelId": if form.model.is_empty() { "unselected" } else { &form.model }}),
+            3 => json!({"kind":"DevWorksAuto"}),
+            4 => json!({"kind":"OpenRouterAutoBeta"}),
             _ => json!({"kind":"OpenRouterAuto"}),
         }).ok();
         let offered = intent

@@ -267,6 +267,7 @@ pub fn role_title(role: AgentRole) -> &'static str {
         AgentRole::Worker => "Implementation agent role",
         AgentRole::CodeReviewer => "Code review agent role",
         AgentRole::Dreaming => "Dreaming agent role",
+        AgentRole::PlanReviewer => "Plan reviewer role",
         AgentRole::Scheduled => "Scheduled agent role",
     }
 }

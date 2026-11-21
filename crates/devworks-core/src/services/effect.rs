@@ -23,6 +23,9 @@ pub enum EffectOutcome {
 /// Both methods block and run on a blocking thread, never on the async runtime. `observe` must
 /// not perform the effect again.
 pub trait JournaledEffect: Send + Sync + 'static {
+    fn observes_delivery_cancellation(&self) -> bool {
+        false
+    }
     /// Performs the effect of a `Dispatching` operation once.
     fn execute(&self, operation: &OperationRecord) -> EffectOutcome;
     /// Reads the target for an operation whose outcome is unknown, using its saved identity.

@@ -243,7 +243,7 @@ pub struct SessionPosition {
 }
 
 /// Keyset position in committed-sequence order: `(sequence, source, id)`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct SequenceKey {
     pub sequence: i64,
     /// 0 = work hierarchy, 1 = history link, 2 = event, 3 = usage.
@@ -498,6 +498,15 @@ pub trait SessionRepository: SessionRead {
     /// Replaces the mutable columns (title, epoch, revision, close, append bookkeeping). The
     /// identity, lineage, creator and creation time never change.
     fn update_session(&mut self, session: &StoredSession) -> Result<(), StorageError>;
+    /// Changes a legacy human-owned workspace conversation to its configured coordinator.
+    /// The message append in the same transaction advances the expected session revision.
+    fn adopt_workspace_coordinator(
+        &mut self,
+        session: &Id,
+        expected_revision: i64,
+        creator: &ActorId,
+        coordinator: &ActorId,
+    ) -> Result<bool, StorageError>;
     /// Appends an entry; its `(session, sequence)` and `(session, entry_id)` are unique.
     fn insert_entry(&mut self, entry: &StoredEntry) -> Result<(), StorageError>;
     /// Records a batch receipt; its batch ID is unique within its session.

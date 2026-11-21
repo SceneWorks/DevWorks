@@ -105,7 +105,12 @@ fn canonical_auto_and_auto_beta_routes_send_registered_upstream_then_record_actu
             let f=Fx::new("OpenRouterChat",Script::sse("data: {\"id\":\"native-generation\",\"model\":\"vendor/actual-served\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"actual reply\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"cost\":0.00000125}}\n\ndata: [DONE]\n\n"),false);
             register(&f,upstream);
             let input=f.generation(vec![]);
-            let (logical,request)=attempt(&f,&input,devworks_core::protocol::records::RouteIntent::OpenRouterAuto{});
+            let intent=if upstream.ends_with("-beta") {
+                devworks_core::protocol::records::RouteIntent::OpenRouterAutoBeta{}
+            } else {
+                devworks_core::protocol::records::RouteIntent::OpenRouterAuto{}
+            };
+            let (logical,request)=attempt(&f,&input,intent);
             assert_eq!(request.query.provider_model_id,None);
             let outcome=f.driver.produce(f.context.clone(),logical.clone(),ReportCategory::Assistant,request.clone(),input.clone()).await.unwrap();
             let DriveOutcome::Settled(balance)=outcome.accounting else{panic!("not settled")};

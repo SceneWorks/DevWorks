@@ -78,8 +78,15 @@ fn decide(
     key: &str,
 ) -> DomainDecision {
     let mut frame: Value = serde_json::from_slice(&frame("Command", op, body, key)).unwrap();
-    if op == "process.execute" {
-        // process.execute negotiates only its first schema revision.
+    if matches!(
+        op,
+        "process.execute"
+            | "git.worktree"
+            | "containers.build"
+            | "containers.start"
+            | "containers.exec"
+    ) {
+        // These operations negotiate only their first schema revision.
         frame.as_object_mut().unwrap().remove("schemaRevision");
     }
     match app
@@ -202,6 +209,274 @@ fn register_manifest(
     });
     json!({"artifactId": "install-manifest", "versionId": "install-manifest-1",
         "sha256": digest, "byteLength": bytes.len().to_string(), "mediaType": media_type})
+}
+
+#[test]
+fn planning_feature_agents_need_current_readiness_for_git_commit_and_process_execution() {
+    use devworks_core::ports::storage::{StoredFeaturePlan, StoredReadiness};
+    use devworks_core::protocol::{RetryAdvice, records::PlanDraft};
+    use devworks_core::services::git::{GitConfig, RegisteredGitRoot};
+    use devworks_core::services::work::{
+        model::{ActivePlan, plan_digest, plan_units},
+        readiness::Assessment,
+    };
+    use devworks_engine::dispatch::RootEligibility;
+
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let source = fx.h.root.join("readiness-source");
+    let owned = fx.h.root.join("readiness-worktrees");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::create_dir(&owned).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(&source)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {:?}", output.stderr);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["config", "user.email", "fixture@example.invalid"]);
+    git(&["commit", "--allow-empty", "-m", "Initial"]);
+    let head = GitOid {
+        format: ObjectFormat::Sha1,
+        hex: git(&["rev-parse", "HEAD"]),
+    };
+    let content = register_manifest(&fx, &source, "Plan", b"Fixture plan", "text/plain");
+    let draft: PlanDraft = serde_json::from_value(json!({
+        "content": content, "repositoryIds": ["install-repository"],
+        "acceptance": [], "acceptanceTests": [], "goals": [], "requirements": [],
+    }))
+    .unwrap();
+    let digest = plan_digest(&draft);
+    let approved = serde_json::to_value(ActivePlan {
+        draft: draft.clone(),
+        digest: digest.clone(),
+        plan_revision: 1,
+        proposal_id: id("approved-fixture"),
+        review_required: false,
+    })
+    .unwrap();
+    fx.tx(move |_, tx| {
+        tx.work()
+            .set_work_repositories(&id("root-f"), &[id("install-repository")])?;
+        tx.work().put_feature_plan(
+            &StoredFeaturePlan {
+                feature_id: id("root-f"),
+                revision: 1,
+                approved: Some(approved),
+                approved_by: Some(ActorId(id("user-a"))),
+                approved_at_ms: Some(T0),
+                pending: None,
+                pending_revision: None,
+            },
+            None,
+        )
+    });
+
+    let mut composition = composition_with_tools(
+        &fx,
+        vec![RegisteredExecutable {
+            id: id("sh"),
+            path: "/bin/sh".into(),
+        }],
+        None,
+    );
+    composition.git = Some(devworks_engine::git::GitComposition {
+        config: GitConfig {
+            roots: vec![RegisteredGitRoot {
+                id: id("readiness-root"),
+                path: owned.canonicalize().unwrap(),
+            }],
+            filesystem: Some(Arc::new(NativeFilesystem::new())),
+            ..GitConfig::default()
+        },
+        github_http: None,
+    });
+    let private_files = Arc::new(
+        devworks_adapters::containers::NativeRegistryAuth::new(fx.h.root.join("container-auth"))
+            .unwrap(),
+    );
+    composition.config.containers = Some(devworks_engine::runtime::ContainerComposition {
+        bindings: ToolBindings::new([], []).unwrap(),
+        filesystem: Arc::new(NativeFilesystem::new()),
+        protected_roots: ProtectedRoots::new(Vec::new(), Vec::new(), None),
+        secrets: Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+        registry_auth: private_files.clone(),
+        workload_environment: private_files,
+        host: devworks_core::services::containers::probe::HostPlatform {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            macos_major: 26,
+        },
+    });
+    runtime().block_on(async {
+        let app = boot(composition).await.unwrap();
+        applied(&fx.start(&fx.user, "root-f", 1, 1));
+        assert_eq!(fx.live("root-f").unwrap().purpose, ActivationPurpose::Planning);
+        let (agent, _) = super::watch_tests::bind(&fx, "readiness-fixture");
+        let create = decide(&app, &agent, "git.worktree", json!({
+            "repositoryId": "install-repository", "workId": "root-f", "expectedRevision": "1",
+            "action": "Create", "base": head, "registeredRootId": "readiness-root",
+        }), "readiness-create-tree");
+        assert_eq!(settled(&app, create).await, OperationState::ObservedComplete);
+        let tree = read(&*fx.store, |s| s.git().git_worktrees(&id("root-f"), None, 10)).remove(0);
+        let change = Path::new(&tree.path).join("change.txt");
+        std::fs::write(&change, b"changed").unwrap();
+        std::fs::create_dir(Path::new(&tree.path).join("work")).unwrap();
+        let message = app.artifacts().publish_evidence(
+            &*fx.store,
+            devworks_core::services::artifacts::evidence::Evidence {
+                scope: ArtifactScope::Project(ProjectId(id("project-a"))),
+                producer: agent.principal().clone(),
+                principal_kind: "Agent".into(),
+                agent_session: agent.session_id().cloned(),
+                root: agent.root_id().cloned(),
+                assignment: agent.assignment_id().cloned(),
+                title: "Commit message".into(),
+                media_type: "text/plain".into(),
+                tags: vec![],
+                source: json!({"kind":"TestMessage"}),
+            },
+            b"Fixture change",
+            |_, _| Ok(()),
+        ).unwrap().0;
+        let commit = |key: &str| {
+            let frame = json!({"protocol": PROTOCOL, "requestKey": key, "command": {
+                "kind": "Commit", "worktreeId": tree.id, "expectedHead": tree.head, "message": message,
+            }});
+            match app.command(&agent, "git.commit", frame.to_string().as_bytes()).unwrap() {
+                CommandReply::Recorded { receipt, .. } => receipt.decision,
+                other => panic!("{other:?}"),
+            }
+        };
+        let spec = json!({
+            "executableRef": "sh", "args": ["-c", "exit 0"],
+            "workingDirectory": {"rootId": "install-repository", "relative": "work"},
+            "environment": [], "profile": "Full", "timeoutMs": "10000", "outputLimitBytes": "4096",
+        });
+        let process = |key: &str| decide(&app, &agent, "process.execute", json!({"spec": spec}), key);
+        let container_build = |key: &str| decide(&app, &agent, "containers.build", json!({
+            "engineId": "docker", "projectId": "project-a",
+            "context": {"rootId": "install-repository", "relative": "work"},
+            "definition": message, "tag": "readiness-test:latest",
+        }), key);
+        let container_start = |key: &str| decide(&app, &agent, "containers.start", json!({
+            "containerId": "missing-container", "expectedRevision": "1",
+        }), key);
+        let container_exec = |key: &str| decide(&app, &agent, "containers.exec", json!({
+            "containerId": "missing-container", "expectedRevision": "1",
+            "command": ["true"], "environment": [], "timeoutMs": "10000",
+        }), key);
+        let missing = [
+            commit("missing-commit"),
+            process("missing-process"),
+            container_build("missing-ready-container-build"),
+            container_start("missing-ready-container-start"),
+            container_exec("missing-ready-container-exec"),
+            decide(&app, &agent, "watch.create", json!({"process": spec}), "missing-watch"),
+            decide(&app, &agent, "watch.create", json!({"probe": {
+                "process": spec, "intervalMs": "1000", "condition": {},
+            }}), "missing-probe"),
+        ];
+        for decision in &missing {
+            assert!(matches!(decision, DomainDecision::Refused { fault }
+                if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "readiness")
+                    && fault.code == DomainErrorCode::DependencyBlocked
+                    && !fault.blocker_ids.0.is_empty()
+                    && fault.retry == RetryAdvice::AfterBlockerClears), "{missing:?}");
+        }
+
+        let assessment = serde_json::to_value(Assessment {
+            id: id("readiness-fixture"),
+            plan_revision: 1,
+            plan_digest: digest,
+            reviewed_pending: false,
+            units: plan_units(&draft),
+            summary: "Ready".into(),
+            findings: vec![],
+            assessed_by: ActorId(id("user-a")),
+            assessed_at_ms: T0,
+        }).unwrap();
+        fx.tx(move |_, tx| tx.work().put_readiness(&StoredReadiness {
+            feature_id: id("root-f"), revision: 1, body: json!({"active": assessment}),
+        }, None));
+        assert_eq!(settled(&app, commit("ready-commit")).await, OperationState::ObservedComplete);
+        let accepted = process("ready-process");
+        assert_eq!(settled(&app, accepted.clone()).await, OperationState::ObservedComplete);
+
+        // Once ready, the requests reach the real container service, which rejects the
+        // nonexistent fixture ID before starting any local container or contacting a runtime.
+        for result in [
+            container_start("ready-container-start"),
+            container_exec("ready-container-exec"),
+        ] {
+            assert!(matches!(&result, DomainDecision::Refused { fault }
+                if fault.code == DomainErrorCode::NotFound), "{result:?}");
+        }
+
+        // A queued launch can encounter a newer assessment before the dispatcher begins it.
+        // Exercise the real queue gate while the write owner controls that ordering.
+        let gate = RunGate::new(fx.service.clone(), None);
+        let assignment = agent.assignment_id().cloned();
+        fx.tx(move |_, tx| {
+            let effects = [
+                ("process.execute", devworks_core::services::process::tools::EFFECT_CONSUMER),
+                ("containers.build", devworks_core::services::containers::EFFECT_CONSUMER),
+                ("containers.start", devworks_core::services::containers::EFFECT_CONSUMER),
+                ("containers.exec", devworks_core::services::containers::EFFECT_CONSUMER),
+            ];
+            let mut entries = Vec::new();
+            for (index, (capability, consumer)) in effects.into_iter().enumerate() {
+                let operation = OperationId(id(&format!("queued-readiness-effect-{index}")));
+                tx.operations().record_intent(NewOperation {
+                    id: operation.clone(),
+                    root_id: Some(rid("root-f")),
+                    assignment_id: assignment.clone(),
+                    capability: capability.into(),
+                    schema_version: 1,
+                    args_digest: "a".repeat(64),
+                    payload: json!({"kind": "Agent"}),
+                })?;
+                let event_id = event(tx, "Changed")?;
+                let entry_id = id(&format!("queued-readiness-entry-{index}"));
+                tx.queue().enqueue(NewQueueEntry {
+                    id: entry_id.clone(),
+                    consumer: consumer.into(),
+                    event_id,
+                    root_id: Some(rid("root-f")),
+                    operation_id: Some(operation),
+                    partition: None,
+                    priority: 0,
+                    ready_at_ms: T0 + 60_000,
+                    payload: json!({}),
+                })?;
+                let entry = tx.queue().entry(&entry_id)?.unwrap();
+                assert!(gate.may_dispatch(tx, &entry)?);
+                entries.push(entry);
+            }
+            let mut stale = tx.work().readiness(&id("root-f"))?.unwrap();
+            stale.revision += 1;
+            stale.body["active"]["units"] = json!({});
+            tx.work().put_readiness(&stale, Some(1))?;
+            for entry in entries {
+                assert!(!gate.may_dispatch(tx, &entry)?);
+                assert!(!gate.may_resume(tx, &entry)?);
+            }
+            Ok(())
+        });
+        let replay = process("ready-process");
+        assert!(
+            matches!((&replay, &accepted),
+                (DomainDecision::Accepted { operation_id: replayed },
+                 DomainDecision::Accepted { operation_id: original }) if replayed == original),
+            "readiness must not hide an accepted receipt: {replay:?}",
+        );
+        app.shutdown().await;
+    });
 }
 
 #[test]

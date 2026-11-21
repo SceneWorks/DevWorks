@@ -16,5 +16,6 @@ pub mod live;
 pub mod schemas;
 pub mod sink;
 pub mod source;
+pub(crate) mod systemone;
 
 mod wire_model;

@@ -350,8 +350,9 @@ fn a_reply_interrupted_by_a_crash_is_delivered_exactly_once_after_boot() {
                 .block_on(boot(composition(&h, store.clone(), files, src.clone())))
                 .unwrap();
             assert!(recovered_nothing(app.report()));
-            rt.block_on(within(
+            rt.block_on(durable(
                 "boot publications before crash",
+                || h.ids.issued(),
                 settle_boot_publications(&app),
             ));
             let baseline = published_baseline(&h, &*store);

@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2082), 2082);
+    assert_eq!(run("domain-fixtures.json", 2105), 2105);
 }
 
 #[test]
@@ -460,7 +460,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
     // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8;
     // router.catalog revision 4 (offeredEfforts) adds one.
-    assert_eq!(admitted.len(), 662);
+    // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
+    assert_eq!(admitted.len(), 673);
 }
 
 #[test]
@@ -611,7 +612,8 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "index-command-request/scope",
             "index-command-request/unitKey",
             "query-request/newestFirst",
-            "query-request/projectId"
+            "query-request/projectId",
+            "session-command-request/replyRoute"
         ]
     );
 }

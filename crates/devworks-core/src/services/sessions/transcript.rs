@@ -439,6 +439,25 @@ pub fn append_session_batch(
             "ActorMismatch",
         )));
     }
+    if !(ctx.principal_kind() == PrincipalKind::Host
+        && ctx.ingress_namespace().as_str() == "plan-review")
+        && batch.batch.entries.iter().any(|entry| {
+            matches!(
+                entry.body,
+                TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
+            )
+        })
+        && let Some(session) = tx.sessions().session(&batch.batch.session_id)?
+        && tx
+            .authority()
+            .principal(&session.agent_id)?
+            .and_then(|binding| binding.role)
+            == Some(crate::settings::catalog::AgentRole::PlanReviewer)
+    {
+        return Ok(BatchOutcome::Refused(BatchRefusal::Unauthorized(
+            "IsolatedPlanReview",
+        )));
+    }
     if ctx.principal_kind() != PrincipalKind::Host
         && batch
             .batch

@@ -29,6 +29,7 @@ pub mod jobs;
 pub mod kernel;
 pub mod knowledge;
 pub mod mcp;
+pub mod navigation;
 pub mod notifications;
 pub mod packages;
 pub mod power;
@@ -88,6 +89,7 @@ pub struct UseCases {
     inference_router: Option<Arc<router::InferenceRouter>>,
     connection_service: Option<Arc<router::connections::ConnectionService>>,
     mcp_service: Option<Arc<mcp::McpClientService>>,
+    run_control: Option<Arc<runs::ControlService>>,
     /// Signalled when a command commits, so a waiting `agents.receive` looks again at once.
     delivery_wake: Option<Arc<crate::ports::storage::Wake>>,
 }
@@ -280,6 +282,7 @@ impl UseCases {
         for op in runs::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
+        self.run_control = Some(service);
         self
     }
 
@@ -296,6 +299,12 @@ impl UseCases {
     /// The same qualified routing owner used by native attempt admission.
     pub fn inference_router(&self) -> Option<Arc<router::InferenceRouter>> {
         self.inference_router.clone()
+    }
+
+    /// Installs decision writes only when the native host installed their owned consumer.
+    pub fn with_systemone(mut self, service: Arc<router::decisions::DecisionService>) -> Self {
+        self.register(router::decisions::OPERATION, None, Some(service));
+        self
     }
 
     /// Canonical usage reports share the native gateway and its authority fences.
@@ -576,7 +585,17 @@ impl UseCases {
     ) -> CommandOutcome {
         match self.commands.get(operation) {
             Some(handler) => {
-                let outcome = gateway.command_with(ctx, operation, raw, handler.clone(), options);
+                let control = self.run_control.clone();
+                let outcome = gateway.command_checked(
+                    ctx,
+                    operation,
+                    raw,
+                    handler.clone(),
+                    options,
+                    Some(Arc::new(move |tx, ctx, input| {
+                        runs::implementation_tool_refusal(tx, ctx, input, control.as_deref())
+                    })),
+                );
                 self.signal_commit(&outcome);
                 outcome
             }

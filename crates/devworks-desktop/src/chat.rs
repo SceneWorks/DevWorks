@@ -36,6 +36,7 @@ pub enum ChatSlot {
     SessionsList,
     SessionStart,
     Transcript(String),
+    WorkspaceReplyStatus(String),
     TextPreview(String, u64),
     Append(String),
     /// An attachment being stored for a draft (`draft`, local attachment ID).
@@ -76,10 +77,6 @@ pub const ATTACHMENT_CHIP_WIDTH: f32 = 180.0;
 pub const ATTACH_LABEL: &str = "Attach images or files";
 pub const COMPOSER_LABEL: &str = "Message the workspace coordinator";
 pub const SEND_LABEL: &str = "Send message";
-/// The coordinator is not part of this build: say so wherever a reply would be expected.
-pub const NO_COORDINATOR: &str = "The workspace coordinator is not connected in this build \
-    (DW-16). Messages are saved to this conversation, but no model receives them and no reply \
-    will appear.";
 
 #[derive(Clone, Debug)]
 pub enum AttachState {
@@ -304,6 +301,7 @@ pub struct Chat {
     /// The height each surface's conversation (transcript and composer) had last frame.
     pub conversation_heights: [f32; 2],
     pub notice: Option<(Tone, String)>,
+    pub reply_status: HashMap<String, devworks_engine::WorkspaceReplyStatus>,
     /// The overlay sidebar is shown on narrow Home layouts.
     pub narrow_sidebar_open: bool,
     pub scrolls: Scrolls,
@@ -349,6 +347,7 @@ impl Chat {
             composer_overheads: [110.0, 110.0],
             conversation_heights: [0.0, 0.0],
             notice: None,
+            reply_status: HashMap::new(),
             narrow_sidebar_open: false,
             scrolls: Scrolls::default(),
             routing: Routing::default(),
@@ -452,6 +451,23 @@ impl Chat {
     pub fn session(&self, id: &str) -> Option<&SessionRecord> {
         self.sessions.items.iter().find(|s| s.id.as_str() == id)
     }
+    pub fn coordinator_reply_notice(&self) -> Option<(Tone, &'static str)> {
+        use devworks_engine::WorkspaceReplyStatus::*;
+        match self.reply_status.get(self.selected.as_ref()?)? {
+            Queued => Some((Tone::Neutral, "Coordinator reply queued.")),
+            Running => Some((Tone::Neutral, "Coordinator reply in progress.")),
+            NeedsReconciliation => Some((
+                Tone::Attention,
+                "The coordinator is checking the previous reply before it can continue.",
+            )),
+            Unavailable => Some((
+                Tone::Attention,
+                "The coordinator could not finish the reply. Check model availability below before sending again.",
+            )),
+            Cancelled => Some((Tone::Neutral, "Coordinator reply cancelled.")),
+        }
+    }
+
     pub fn selected_session(&self) -> Option<&SessionRecord> {
         self.selected.as_deref().and_then(|s| self.session(s))
     }
@@ -484,6 +500,11 @@ impl Chat {
             .cloned()
             .unwrap_or_default()
     }
+    /// A saved reply carries the exact route selected when its message was submitted.
+    pub(crate) fn route_selection_locked(&self, key: &str) -> bool {
+        self.sending.as_deref() == Some(key) || self.routing.selection_locked(key)
+    }
+
     /// Moves the not-yet-started draft onto a started session.
     pub fn adopt_new_draft(&mut self, session: &str) {
         // The new chat's route and effort selection becomes the session's.
@@ -803,12 +824,11 @@ fn transcript_state(
         ui,
         &mut chat.scrolls,
         &format!("transcript-{}-{id}", surface.salt()),
-        entries.len() + 1,
+        entries.len() + usize::from(preview.is_some()),
         true,
         |ui, i| {
             ui.set_width(width - 8.0);
             if i == entries.len() {
-                // The honest coordinator status sits after the latest message.
                 if let Some(preview) = preview {
                     egui::Frame::new()
                         .fill(theme::PANEL)
@@ -817,8 +837,6 @@ fn transcript_state(
                             widgets::caption(ui, "Streaming response");
                             ui.label(&preview.text);
                         });
-                } else {
-                    widgets::caption(ui, NO_COORDINATOR);
                 }
                 return;
             }
@@ -842,8 +860,6 @@ fn empty_invitation(ui: &mut Ui, surface: Surface) {
             )
             .color(theme::MUTED),
         );
-        ui.add_space(8.0);
-        widgets::caption(ui, NO_COORDINATOR);
     });
 }
 
@@ -1074,14 +1090,14 @@ fn composer(
                 // A conversation's selection may be its durable pin: it is changed only once
                 // the router said what it is pinned to (never over an unknown pin).
                 let key = chat.draft_key();
-                // Nor while its first route, which carries the current selection, is saved.
+                // The exact selection belongs to its pending save or legacy first route.
                 let known = (key == NEW_DRAFT
                     || chat
                         .routing
                         .status
                         .get(&key)
                         .is_some_and(|s| s.availability.is_some()))
-                    && !chat.routing.selection_locked(&key);
+                    && !chat.route_selection_locked(&key);
                 selectors(
                     ui,
                     &chat.routing,

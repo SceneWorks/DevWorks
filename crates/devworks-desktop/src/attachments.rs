@@ -387,9 +387,11 @@ mod tests {
             | TaskOutput::PackagePrepared { .. }
             | TaskOutput::Refreshed
             | TaskOutput::TextPreview(_)
+            | TaskOutput::WorkspaceReplyStatus(_)
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)
             | TaskOutput::McpContent(_)
+            | TaskOutput::SystemOneCompletion(_)
             | TaskOutput::RepositoryDeletionPreview(_)
             | TaskOutput::RepositoryDeleted(_) => {
                 panic!("expected a preview")

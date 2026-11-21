@@ -7,7 +7,8 @@ use common::*;
 use devworks_core::protocol::provider::{TranscriptBody, UserContent};
 use devworks_core::settings::catalog::{Category, descriptor};
 use devworks_desktop::backend::Backend;
-use devworks_desktop::chat::{ATTACH_LABEL, COMPOSER_LABEL, NO_COORDINATOR, SEND_LABEL};
+use devworks_desktop::chat::{ATTACH_LABEL, COMPOSER_LABEL, SEND_LABEL};
+use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::host::{Engine, StartError};
 use devworks_desktop::notifications::CompletionCard;
 use devworks_desktop::ops;
@@ -325,7 +326,6 @@ fn home_chat_has_current_first_history_second_and_new_chat_in_the_header() {
         "the sidebar is on the right"
     );
     assert!(has_text(&h, "What would you like to work on?"));
-    assert!(has_text(&h, NO_COORDINATOR));
     assert!(has_text(&h, "Needs you") && has_text(&h, "Recently completed"));
 
     // A draft survives tab switches; New Chat works with either tab selected.
@@ -468,6 +468,126 @@ fn the_coordinator_notice_names_the_databases_and_repositories_graph_selection()
         1,
         "Repositories with the graph open names the graph node"
     );
+}
+
+#[test]
+fn current_screen_uses_the_visible_native_workspace_session_and_help_binding() {
+    use devworks_core::context::{HostIngress, PrincipalKind};
+    use devworks_core::ports::storage::{ReadOptions, read_snapshot};
+    use devworks_core::protocol::results::OperationResult;
+    use devworks_core::protocol::{Counter, Id, Revision};
+
+    let root = Root::new("current-screen-tool");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    let selected = Id::new(h.state().chat.selected.as_deref().unwrap()).unwrap();
+    let runtime = engine.host().runtime();
+    let store = runtime.store();
+    let owner = read_snapshot(store.as_ref(), &ReadOptions::default(), |view| {
+        Ok(view.sessions().session(&selected)?.unwrap().agent_id)
+    })
+    .unwrap();
+    let new_id = |s| Id::new(s).unwrap();
+    let ctx = HostIngress::new(store.as_ref())
+        .context(
+            owner,
+            PrincipalKind::Agent,
+            new_id("current-screen-invocation"),
+            new_id("current-screen-tools"),
+            Counter::new(store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(selected);
+    let query = |ctx: &devworks_core::context::InvocationContext| {
+        let frame = devworks_desktop::frame::fixture::at_revision(
+            devworks_desktop::frame::fixture::query(&*backend, "ui.current_screen", json!({})),
+            1,
+        );
+        ops::query_result(runtime.query(ctx, "ui.current_screen", &frame))
+            .map_err(|error| format!("{error:?}"))
+    };
+    let screen = || {
+        let (OperationResult::UiCurrentScreen { value }, _) = query(&ctx).unwrap() else {
+            panic!("expected the structured current screen");
+        };
+        value
+    };
+    assert_eq!(screen().screen_id.as_str(), Route::Chat.screen().id);
+    click_nav(&mut h, "Settings");
+    assert!(
+        query(&ctx).is_err(),
+        "a closed sidebar has no current screen observation"
+    );
+    click(&mut h, Role::Button, "Workspace coordinator");
+    let first = screen();
+    assert_eq!(first.screen_id.as_str(), Route::Settings.screen().id);
+    assert_eq!(
+        first.help_topic_id.as_str(),
+        Route::Settings.screen().help_topic
+    );
+    settle(&mut h);
+    assert_eq!(screen().revision, first.revision);
+    click_nav(&mut h, "Artifacts");
+    let next = screen();
+    assert_eq!(next.screen_id.as_str(), Route::Artifacts.screen().id);
+    assert!(next.revision.get() > first.revision.get());
+    assert!(query(&ctx.clone().with_session(new_id("other-session"))).is_err());
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Visible work project", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    let backlog = devworks_core::services::work::workflow::default_status_id(&project, "backlog");
+    let create = |operation: &str, payload| {
+        let frame =
+            devworks_desktop::work_ops::work_command(&*backend, command_input(operation, payload));
+        devworks_desktop::work_ops::work_changed(backend.command(operation, &frame)).unwrap()
+    };
+    let feature = create(
+        "features.create",
+        json!({"projectId":project,"creation":{
+            "kind":"Single","title":"Visible feature","description":"","repositoryIds":[],
+            "statusId":backlog,"priority":1
+        }}),
+    );
+    let issue = create(
+        "issues.create",
+        json!({"projectId":project,"title":"Visible issue",
+            "description":"","repositoryIds":[],"statusId":backlog,"priority":1
+        }),
+    );
+    h.state_mut()
+        .select_project(Some(project.0.as_str().into()));
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    h.state_mut().work.board = Some(feature.id.as_str().into());
+    click(&mut h, Role::Button, "Board");
+    assert_eq!(screen().root_id.unwrap().0, feature.id);
+    h.state_mut().navigate(Route::Overview);
+    settle(&mut h);
+    let overview = screen();
+    assert_eq!(overview.project_id.unwrap().0, project.0);
+    assert!(overview.root_id.is_none() && overview.selected_ids.0.is_empty());
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    h.query_all_by_label_contains("Visible issue")
+        .find(|node| {
+            node.accesskit_node()
+                .label()
+                .is_some_and(|label| label.starts_with("Visible issue"))
+        })
+        .expect("a visible issue row")
+        .click();
+    settle(&mut h);
+    let issue_screen = screen();
+    assert_eq!(issue_screen.root_id.unwrap().0, issue.id);
+    assert_eq!(issue_screen.selected_ids.0, vec![issue.id]);
+    click_nav(&mut h, "Chat");
+    assert_eq!(screen().screen_id.as_str(), Route::Chat.screen().id);
 }
 
 // UI-11..13: the toolbar chat icon and the app-level coordinator sidebar.

@@ -158,7 +158,7 @@ pub(super) fn agent_context(
 
 /// Claims the root's current activation and binds the primary agent's context to it (after a
 /// restart the earlier boot's activation is no longer the one that may run a turn).
-fn bind(
+pub(super) fn bind(
     fx: &Fx,
     owner: &str,
 ) -> (
@@ -198,6 +198,7 @@ fn bind(
 }
 
 fn route(fx: &Fx, session: &Id) {
+    seed_local_route(fx);
     let pin = StoredPin {
         session_id: session.clone(),
         pin_id: id("watch-pin"),
@@ -218,57 +219,7 @@ fn route(fx: &Fx, session: &Id) {
         reason: "Initial".into(),
         updated_at_ms: 0,
     };
-    fx.tx(move |_, tx| {
-        tx.router().put_connection(
-            &StoredConnection {
-                id: id("watch-connection"),
-                name: "Fixture".into(),
-                profile: "CompatibleChat".into(),
-                endpoint: "http://localhost:11434/v1".into(),
-                enabled: true,
-                local_free: true,
-                open_router: None,
-                credential_ref: None,
-                credential_revision: 0,
-                credential_epoch: None,
-                lifecycle: "Connected".into(),
-                state_reason: None,
-                account_revision: 1,
-                refresh_operation_id: None,
-                account_digest: None,
-                access_expires_at_ms: None,
-                risk: None,
-                discovered: None,
-                discovered_at_ms: None,
-                healthy: Some(true),
-                checked_at_ms: Some(0),
-                revision: 1,
-                created_at_ms: 0,
-                updated_at_ms: 0,
-            },
-            None,
-        )?;
-        tx.router().put_route_model(
-            &StoredRouteModel {
-                id: id("watch-model"),
-                display_name: "Fixture model".into(),
-                endpoint_profile: "CompatibleChat".into(),
-                upstream_model_id: "fixture-model".into(),
-                enabled: true,
-                efforts: vec![],
-                image_input: false,
-                tools: true,
-                context_tokens: Some(16_000),
-                connection_id: Some(id("watch-connection")),
-                position: 1,
-                revision: 1,
-                updated_at_ms: 0,
-            },
-            None,
-        )?;
-        tx.router().put_session_pin(&pin, None)?;
-        Ok(())
-    });
+    fx.tx(move |_, tx| tx.router().put_session_pin(&pin, None));
 }
 
 pub(super) fn frame(mode: &str, op: &str, body: Value, key: &str) -> Vec<u8> {

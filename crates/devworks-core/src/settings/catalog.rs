@@ -166,6 +166,7 @@ pub enum AgentRole {
     IssueCoordinator,
     Worker,
     CodeReviewer,
+    PlanReviewer,
     Dreaming,
     Scheduled,
 }
@@ -182,7 +183,7 @@ impl AgentRole {
     /// Harness policy of the role, independent of its instruction text: code reviewers are
     /// always read-only and can never write settings or propose changes.
     pub fn read_only(self) -> bool {
-        matches!(self, Self::CodeReviewer)
+        matches!(self, Self::CodeReviewer | Self::PlanReviewer)
     }
     /// Stable record name of the role (host authority bindings).
     pub fn as_str(self) -> &'static str {
@@ -192,11 +193,15 @@ impl AgentRole {
             Self::IssueCoordinator => "issueCoordinator",
             Self::Worker => "worker",
             Self::CodeReviewer => "codeReviewer",
+            Self::PlanReviewer => "planReviewer",
             Self::Dreaming => "dreaming",
             Self::Scheduled => "scheduled",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
+        if name == Self::PlanReviewer.as_str() {
+            return Some(Self::PlanReviewer);
+        }
         Self::ALL.into_iter().find(|r| r.as_str() == name)
     }
     pub fn instructions_key(self) -> &'static str {
@@ -206,6 +211,7 @@ impl AgentRole {
             Self::IssueCoordinator => "roles.issueCoordinator.instructions",
             Self::Worker => "roles.worker.instructions",
             Self::CodeReviewer => "roles.codeReviewer.instructions",
+            Self::PlanReviewer => "roles.planReviewer.instructions",
             Self::Dreaming => "roles.dreaming.instructions",
             Self::Scheduled => "roles.scheduled.instructions",
         }
@@ -217,6 +223,7 @@ impl AgentRole {
             Self::IssueCoordinator => "Issue coordinator instructions",
             Self::Worker => "Implementation agent instructions",
             Self::CodeReviewer => "Code review agent instructions",
+            Self::PlanReviewer => "Plan review agent instructions",
             Self::Dreaming => "Dreaming agent instructions",
             Self::Scheduled => "Scheduled agent instructions",
         }
@@ -432,6 +439,16 @@ fn build() -> Vec<SettingDescriptor> {
             ValueKind::Directory,
             "~/DevWorks/Repositories",
             NewClonesOnly
+        ),
+        setting!(
+            MANAGED_AUTO_KEY,
+            "DevWorks Auto for new managed sessions",
+            "Classify each new managed assignment once before its first reply. Existing pins and automatic tiers are retained.",
+            Routing,
+            WORKSPACE,
+            ValueKind::Bool,
+            false,
+            NextAdmission
         ),
         setting!(
             "routing.tierMax.members",
@@ -1098,6 +1115,8 @@ pub const OVERLAY_RECORDS_KEPT_KEY: &str = "indexing.overlayRecordsKept";
 pub const PROCESS_EXECUTABLES_KEY: &str = "tools.processExecutables";
 /// Whether agents may use the shared web fetch tool.
 pub const WEB_FETCH_TOOLS_KEY: &str = "tools.webFetch";
+/// Whether new managed sessions default to DevWorks Auto.
+pub const MANAGED_AUTO_KEY: &str = "routing.managedAuto";
 /// Explicit shared per-tool choices; missing IDs use origin-specific defaults.
 pub const TOOL_OVERRIDES_KEY: &str = "tools.overrides";
 /// The configured external search provider (`none` or a provider ID).
