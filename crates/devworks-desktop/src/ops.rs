@@ -18,7 +18,8 @@ use devworks_core::protocol::data::{
 };
 use devworks_core::protocol::data::{DataScope, GitOid, ObjectFormat, ViewSelection};
 use devworks_core::protocol::provider::{
-    ArtifactRef, SessionCommandRequest, SessionQueryRequest, TranscriptPage, UserContent,
+    ArtifactRef, ConversationRoutePreference, SessionCommandRequest, SessionQueryRequest,
+    TranscriptPage, UserContent,
 };
 use devworks_core::protocol::records::{
     AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
@@ -560,7 +561,24 @@ pub fn append_message(
     text: &str,
     attachments: &[ArtifactRef],
 ) -> Vec<u8> {
-    frame::with(backend, Negotiate::Latest, || {
+    append_message_with_route(backend, session, revision, text, attachments, None)
+}
+
+/// Saves the workspace composer's selected route with the same message used to request a reply.
+pub fn append_message_with_route(
+    backend: &dyn Backend,
+    session: &str,
+    revision: i64,
+    text: &str,
+    attachments: &[ArtifactRef],
+    route: Option<ConversationRoutePreference>,
+) -> Vec<u8> {
+    let revision_mode = if route.is_some() {
+        Negotiate::Latest
+    } else {
+        Negotiate::pinned(2, "message append without workspace routing preferences")
+    };
+    frame::with(backend, revision_mode, || {
         let mut content = Vec::new();
         if !text.trim().is_empty() {
             content.push(UserContent::Text {
@@ -577,6 +595,7 @@ pub fn append_message(
                 session_id: frame::id(session)?,
                 expected_session_revision: frame::text(&revision.to_string())?,
                 content,
+                reply_route: route,
             },
         )))
     })
@@ -959,12 +978,26 @@ pub fn router_availability(
     effort: &EffortName,
     session: Option<&str>,
 ) -> Vec<u8> {
+    router_availability_for(backend, intent, effort, session, &[])
+}
+pub(crate) fn router_availability_for(
+    backend: &dyn Backend,
+    intent: &RouteIntent,
+    effort: &EffortName,
+    session: Option<&str>,
+    required: &[&str],
+) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::Router(router::Input::Availability(
             router::AvailabilityInput {
                 intent: intent.clone(),
                 effort: effort.clone(),
-                required_capabilities: BoundedList(Vec::new()),
+                required_capabilities: BoundedList(
+                    required
+                        .iter()
+                        .map(|value| frame::text(value))
+                        .collect::<Option<_>>()?,
+                ),
                 session_id: frame::lift(session.map(frame::id))?,
             },
         )))

@@ -587,10 +587,19 @@ specialized!(
     data::ArtifactDeletionRequest => |_| Ok(()),
     data::ReleaseCommandRequest => |v| v.validate(),
     data::RetrievalRequest => |v| v.validate(),
-    provider::SessionCommandRequest => |v| v.validate(),
     provider::SessionQueryRequest => |v| v.validate(),
     crate::protocol::addons::AddonCommandRequest => |v| v.validate(),
 );
+impl SpecializedEnvelope for provider::SessionCommandRequest {
+    fn validate_envelope(&self) -> Result<(), String> {
+        self.validate().map_err(str::to_owned)
+    }
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.reply_route = None;
+        }
+    }
+}
 /// Revision 2 adds artifact tags (a set: decoding sorts it, an empty set is no tags).
 macro_rules! revisioned_artifact {
     ($($ty:ty),*) => {$(

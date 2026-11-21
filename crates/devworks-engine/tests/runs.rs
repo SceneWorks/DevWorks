@@ -8737,6 +8737,9 @@ mod usage_tests;
 #[path = "runs/keep_working.rs"]
 mod keep_working;
 
+#[path = "runs/workspace_reply.rs"]
+mod workspace_reply;
+
 #[test]
 fn boot_binds_configured_workspace_coordinator_before_opening_the_human_chat() {
     let _native_case = native_runtime_case();

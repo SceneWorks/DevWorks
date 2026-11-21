@@ -44,6 +44,13 @@ pub trait Backend: Send + Sync {
     ) -> Result<(), String> {
         Err("Project keep-working is unavailable.".into())
     }
+    /// Publishes the current host observation without appending a transcript notice.
+    fn publish_current_screen(
+        &self,
+        _screen: Option<(Id, devworks_core::protocol::records::ScreenContext)>,
+        _selection_key: &str,
+    ) {
+    }
     /// Trusted host-only append of the selected coordinator conversation's screen context.
     fn append_coordinator_notice(
         &self,
@@ -161,6 +168,13 @@ pub trait Backend: Send + Sync {
     }
     fn purge_client_freeze(&self, _project: &str, _frozen: bool) -> Result<(), String> {
         Err("Native project purge custody is unavailable".into())
+    }
+    /// Reads the durable reply for the host-bound human's workspace conversation.
+    fn workspace_reply_status(
+        &self,
+        _session: &Id,
+    ) -> Result<Option<devworks_engine::WorkspaceReplyStatus>, String> {
+        Ok(None)
     }
     /// Volatile host-owned response text, authorized against the current session on each read.
     /// This is not a transcript entry or a generic tool operation.
@@ -418,6 +432,8 @@ pub enum TaskOutput {
         size: [usize; 2],
         rgba: Vec<u8>,
     },
+    /// The saved status of a workspace reply.
+    WorkspaceReplyStatus(Option<devworks_engine::WorkspaceReplyStatus>),
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// A bounded convention editor or transfer task.

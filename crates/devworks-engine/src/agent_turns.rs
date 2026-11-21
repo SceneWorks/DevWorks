@@ -952,7 +952,7 @@ async fn wait_for_linked_effects(
     }
 }
 
-fn prepare_generation_context(
+pub(crate) fn prepare_generation_context(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     session_id: &Id,
@@ -1478,15 +1478,30 @@ pub fn route_context_head(
                     pin.revision,
                     reviewer,
                 )),
-                None => Ok((
-                    RouteIntent::Tier {
-                        tier: TierName::High,
-                    },
-                    EffortName::Default,
-                    Vec::new(),
-                    0,
-                    reviewer,
-                )),
+                None => {
+                    let preferred = ctx
+                        .workspace_reply()
+                        .and_then(|scope| scope.preference.clone())
+                        .map(
+                            serde_json::from_value::<
+                                devworks_core::protocol::provider::ConversationRoutePreference,
+                            >,
+                        )
+                        .transpose()
+                        .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+                    let (intent, effort) = preferred.map_or_else(
+                        || {
+                            (
+                                RouteIntent::Tier {
+                                    tier: TierName::High,
+                                },
+                                EffortName::Default,
+                            )
+                        },
+                        |route| (route.intent, route.effort),
+                    );
+                    Ok((intent, effort, Vec::new(), 0, reviewer))
+                }
             }
         })?;
     if tools_required && !required.iter().any(|capability| capability == "tools") {
@@ -1496,15 +1511,17 @@ pub fn route_context_head(
         required.push("vision".into());
     }
     required.sort();
-    let key = sha256_hex(
-        format!(
-            "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
-            session_id.as_str(),
-            head_digest.unwrap_or("initial"),
-            required.join(",")
-        )
-        .as_bytes(),
+    let mut route_identity = format!(
+        "agent-route:{}:{context_epoch}:{pin_revision}:{}:{}",
+        session_id.as_str(),
+        head_digest.unwrap_or("initial"),
+        required.join(",")
     );
+    if ctx.workspace_reply().is_some() {
+        route_identity.push(':');
+        route_identity.push_str(ctx.invocation_id().as_str());
+    }
+    let key = sha256_hex(route_identity.as_bytes());
     let frame = serde_json::to_vec(&json!({
         "mode": "Command",
         "protocol": devworks_core::protocol::CONTRACT,
@@ -2220,47 +2237,7 @@ pub fn publish_first_context(
     {
         return Err(StorageError::ScopeDenied);
     }
-    let (binding, headroom) =
-        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let pin = read
-                .router()
-                .session_pin(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let connection = read
-                .router()
-                .connection(&route.connection_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let session = read
-                .sessions()
-                .session(session_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let model = read
-                .router()
-                .route_model(&route.model_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if pin.pin_id != route.pin_id
-                || pin.revision != route.pin_revision.get()
-                || connection.id != pin.connection_id
-                || session.context_epoch != 0
-                || connection.account_revision < 1
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            let endpoint_profile =
-                serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
-                    .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
-            Ok((
-                NativeBinding {
-                    connection_id: pin.connection_id,
-                    account_revision: Revision::new(connection.account_revision)
-                        .map_err(|_| StorageError::ScopeDenied)?,
-                    endpoint_profile,
-                    model_id: pin.model_id,
-                    context_epoch: Counter::new(0).expect("zero epoch"),
-                },
-                output_headroom(model.context_tokens),
-            ))
-        })?;
+    let (binding, headroom) = initial_route_binding(engine, session_id, route)?;
     let mut prompt = initial_context(engine.store().as_ref(), ctx, agent)?;
     let selected_count = engine
         .providers()
@@ -2284,6 +2261,54 @@ pub fn publish_first_context(
     };
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
+}
+
+/// Validate the first durable pin and derive the native binding shared by new conversations.
+pub(crate) fn initial_route_binding(
+    engine: &TurnEngine,
+    session_id: &Id,
+    route: &RouteChoice,
+) -> Result<(NativeBinding, i64), StorageError> {
+    read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+        let pin = read
+            .router()
+            .session_pin(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let connection = read
+            .router()
+            .connection(&route.connection_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let session = read
+            .sessions()
+            .session(session_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let model = read
+            .router()
+            .route_model(&route.model_id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        if pin.pin_id != route.pin_id
+            || pin.revision != route.pin_revision.get()
+            || connection.id != pin.connection_id
+            || session.context_epoch != 0
+            || connection.account_revision < 1
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let endpoint_profile =
+            serde_json::from_value::<EndpointProfile>(Value::String(connection.profile))
+                .map_err(|_| StorageError::InvalidRecord("route endpoint profile".into()))?;
+        Ok((
+            NativeBinding {
+                connection_id: pin.connection_id,
+                account_revision: Revision::new(connection.account_revision)
+                    .map_err(|_| StorageError::ScopeDenied)?,
+                endpoint_profile,
+                model_id: pin.model_id,
+                context_epoch: Counter::new(0).expect("zero epoch"),
+            },
+            output_headroom(model.context_tokens),
+        ))
+    })
 }
 
 /// Build an attributed native request from the exact published head and routed pin. The driver
@@ -2335,15 +2360,44 @@ fn plan_request(
     window: Option<usize>,
 ) -> Result<NativeInvocation, StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?;
-    let project_id = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
+    let root_scope = match (ctx.root_id(), ctx.project_id()) {
+        (Some(root), Some(project)) => Some((root, project)),
+        (None, None)
+            if ctx.principal_kind() == PrincipalKind::Agent
+                && ctx.assignment_id().is_none()
+                && ctx.workspace_reply().is_some() =>
+        {
+            None
+        }
+        _ => return Err(StorageError::ScopeDenied),
+    };
     if binding.model_id != route.model_id || binding.connection_id != route.connection_id {
         return Err(StorageError::ScopeDenied);
     }
     let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
     let tools = match window {
         Some(window) => {
-            let selected = providers.schemas().selected_agent_tools(ctx)?;
+            let mut selected = providers.schemas().selected_agent_tools(ctx)?;
+            if root_scope.is_none() {
+                // Screen and Help discovery remain reachable even when the complete selected
+                // inventory exceeds the first provider window.
+                for (target, capability) in [
+                    "devworks-query/ui.current_screen",
+                    "devworks-query/help.topic_for_screen",
+                    "devworks-query/help.read",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if let Some(index) = selected
+                        .iter()
+                        .position(|tool| tool.capability_id.as_str() == capability)
+                    {
+                        let target = target.min(index);
+                        selected[target..=index].rotate_right(1);
+                    }
+                }
+            }
             tool_window(&selected, window)?.to_vec()
         }
         None => Vec::new(),
@@ -2386,6 +2440,11 @@ fn plan_request(
         identity.push(':');
         identity.push_str(head.version_id.as_str());
     }
+    if root_scope.is_none() {
+        // The origin of a workspace turn is its durable message intent, not a run activation.
+        identity.push(':');
+        identity.push_str(ctx.invocation_id().as_str());
+    }
     let info = engine.store().info();
     let (
         query,
@@ -2393,8 +2452,7 @@ fn plan_request(
         quote,
         price_generation,
         override_revision,
-        control,
-        work,
+        rooted,
         headroom,
         required,
         readiness_planning,
@@ -2415,14 +2473,33 @@ fn plan_request(
             .sessions()
             .session(session_id)?
             .ok_or(StorageError::ScopeDenied)?;
-        let control = read
-            .runs()
-            .root_control(root_id)?
-            .ok_or(StorageError::ScopeDenied)?;
-        let work = read
-            .work()
-            .work(&root_id.0)?
-            .ok_or(StorageError::ScopeDenied)?;
+        let principal = read.authority().principal(ctx.principal())?;
+        let rooted = if let Some((root, project)) = root_scope {
+            let control = read
+                .runs()
+                .root_control(root)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let work = read
+                .work()
+                .work(&root.0)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if work.project_id != *project || control.generation < 1 {
+                return Err(StorageError::ScopeDenied);
+            }
+            Some((control, work.is_feature()))
+        } else {
+            if session.project_id.is_some()
+                || session.root_id.is_some()
+                || !principal.as_ref().is_some_and(|binding| {
+                    binding.active
+                        && binding.role == Some(AgentRole::WorkspaceCoordinator)
+                        && binding.project_id.is_none()
+                })
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            None
+        };
         if pin.pin_id != route.pin_id
             || pin.revision != route.pin_revision.get()
             || pin.model_id != binding.model_id
@@ -2438,8 +2515,6 @@ fn plan_request(
                     .required_capabilities
                     .iter()
                     .any(|capability| capability == "tools"))
-            || work.project_id != *project_id
-            || control.generation < 1
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -2464,10 +2539,7 @@ fn plan_request(
         if let Some(dispatch) = owner.dispatch.as_mut()
             && dispatch.implementation
         {
-            let role = read
-                .authority()
-                .principal(ctx.principal())?
-                .and_then(|p| p.role);
+            let role = principal.and_then(|p| p.role);
             // These owned turns investigate readiness. Their actual tools still recheck
             // implementation eligibility, and inference retains every owner and access fence.
             readiness_planning = match role {
@@ -2476,7 +2548,7 @@ fn plan_request(
                     !devworks_core::services::work::plan_review::reports_needing_disposition(
                         read.work(),
                         read.indexing(),
-                        &root_id.0,
+                        &dispatch.root_id.0,
                         false,
                     )?
                     .is_empty()
@@ -2492,8 +2564,7 @@ fn plan_request(
             quote,
             read.usage().price_revision()?,
             read.usage().price_override_revision(&route.model_id)?,
-            control,
-            work,
+            rooted,
             output_headroom(model.context_tokens),
             pin.required_capabilities,
             readiness_planning,
@@ -2512,6 +2583,17 @@ fn plan_request(
     let effort_name =
         serde_json::to_value(&route.requested_effort).map_err(|_| StorageError::ScopeDenied)?;
     let effort = effort_name.as_str().ok_or(StorageError::ScopeDenied)?;
+    let (generation, instruction, cancellation) = match rooted.as_ref() {
+        Some((control, _)) => (
+            control.generation,
+            control.instruction_revision.max(1),
+            control
+                .stop_epoch
+                .checked_add(1)
+                .ok_or(StorageError::ScopeDenied)?,
+        ),
+        None => (1, 1, 1),
+    };
     let inference = InferenceRequest {
         options: InferenceOptions {
             selection: ModelSelection::Model {
@@ -2529,18 +2611,15 @@ fn plan_request(
             deadline_ms: 120_000,
         },
         authority_revision: ctx.policy_revision().clone(),
-        control_generation: revision(control.generation)?,
-        instruction_revision: revision(control.instruction_revision.max(1))?,
-        cancellation_revision: revision(
-            control
-                .stop_epoch
-                .checked_add(1)
-                .ok_or(StorageError::ScopeDenied)?,
-        )?,
+        control_generation: revision(generation)?,
+        instruction_revision: revision(instruction)?,
+        cancellation_revision: revision(cancellation)?,
         protocol: Protocol::Draft1,
         request_id: request_id.clone(),
         purpose: if compaction {
             InferencePurpose::Compaction
+        } else if root_scope.is_none() {
+            InferencePurpose::Conversation
         } else if owner
             .dispatch
             .as_ref()
@@ -2550,20 +2629,23 @@ fn plan_request(
         } else {
             InferencePurpose::Planning
         },
-        attribution: if work.is_feature() {
-            Attribution::Feature {
-                project_id: project_id.clone(),
-                root_id: root_id.clone(),
+        attribution: match (root_scope, rooted) {
+            (Some((root, project)), Some((_, true))) => Attribution::Feature {
+                project_id: project.clone(),
+                root_id: root.clone(),
                 assignment_id: ctx.assignment_id().cloned(),
                 job_run_id: ctx.job_run_id().cloned(),
-            }
-        } else {
-            Attribution::Issue {
-                project_id: project_id.clone(),
-                root_id: root_id.clone(),
+            },
+            (Some((root, project)), Some((_, false))) => Attribution::Issue {
+                project_id: project.clone(),
+                root_id: root.clone(),
                 assignment_id: ctx.assignment_id().cloned(),
                 job_run_id: ctx.job_run_id().cloned(),
-            }
+            },
+            (None, None) => Attribution::Workspace {
+                session_id: session_id.clone(),
+            },
+            _ => return Err(StorageError::ScopeDenied),
         },
         input: InferenceInput::Generation {
             session_id: session_id.clone(),
@@ -2588,8 +2670,8 @@ fn plan_request(
             Purpose::Conversation
         },
         session_id: Some(session_id.clone()),
-        project_id: Some(project_id.clone()),
-        root_id: Some(root_id.clone()),
+        project_id: root_scope.map(|(_, project)| project.clone()),
+        root_id: root_scope.map(|(root, _)| root.clone()),
         model_id: route.model_id.clone(),
         connection_id: route.connection_id.clone(),
         pin_id: Some(route.pin_id.clone()),

@@ -224,6 +224,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             serde_json::from_str::<SessionCommandRequest>(&raw)
                                 .map_err(|e| e.to_string())
                                 .and_then(|v| {
+                                    at_revision(&v, revision)?;
                                     v.validate().map_err(str::to_owned)?;
                                     serde_json::to_value(v).map_err(|e| e.to_string())
                                 })

@@ -4,6 +4,7 @@
 use crate::indexing::IndexSupervisor;
 use crate::package_host::PackageHost;
 use crate::providers::driver::NativeProviders;
+use crate::providers::sink::ProviderResult;
 use crate::runs::RunSupervisor;
 use crate::runtime::{
     Admitter, NativeTurnProgress, PendingCall, ReceiveStart, ReceiveWait, ToolDispatch,
@@ -15,9 +16,11 @@ use devworks_core::locks::LockExt;
 use devworks_core::ports::storage::{ApplicationStore, Cancellation, WriteOptions};
 use devworks_core::ports::storage::{StorageError, Unavailable};
 use devworks_core::protocol::Id;
+use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::services::approvals::ApprovalService;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::mcp::McpClientService;
+use devworks_core::services::usage::accounting::AttemptEnd;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -128,68 +131,85 @@ impl TurnEngine {
         let provider = providers
             .produce_cancellable(invocation, cancellation)
             .await?;
-        let mut tool_dispatches = Vec::new();
-        let mut continuation = None;
-        if matches!(
-            provider.result.outcome,
-            Some(
-                devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady
-                    | devworks_core::services::usage::accounting::AttemptEnd::Completed
+        let (tool_dispatches, continuation) = self
+            .continue_recorded_turn(
+                &ctx,
+                &session_id,
+                &previous,
+                &provider.result,
+                tool_cancellation.as_ref(),
+                true,
             )
-        ) {
-            let has_tools = provider.result.outcome
-                == Some(devworks_core::services::usage::accounting::AttemptEnd::ToolCallsReady);
-            let attempt_id = provider.result.attempt_id.as_ref().ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
-            })?;
-            let binding = provider.result.binding.as_ref().ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks native binding".into())
-            })?;
-            let after_sequence = provider.result.turn_start_sequence.ok_or_else(|| {
-                StorageError::InvalidRecord("tool turn lacks durable start position".into())
-            })?;
-            if has_tools {
-                let pass = self.dispatch_pending_pass(
-                    &ctx,
-                    &session_id,
-                    tool_cancellation.as_ref(),
-                    true,
-                )?;
-                tool_dispatches = self.settle_pending(pass).await;
-            }
-            let unanswered =
-                !crate::tool_turn::pending_calls(self.store.as_ref(), &ctx, &session_id)?
-                    .is_empty();
-            if !unanswered {
-                let material = crate::tool_turn::continuation_context(
-                    self.store.as_ref(),
-                    &self.artifacts,
-                    &ctx,
-                    crate::tool_turn::TurnSource {
-                        session_id: &session_id,
-                        attempt_id,
-                        after_sequence,
-                        has_tools,
-                    },
-                    binding,
-                    &previous,
-                )?;
-                continuation = Some(crate::tool_turn::publish_continuation(
-                    self.store.as_ref(),
-                    &self.artifacts,
-                    &ctx,
-                    &session_id,
-                    attempt_id,
-                    binding,
-                    material,
-                )?);
-            }
-        }
+            .await?;
         Ok(NativeTurnProgress {
             provider,
             tool_dispatches,
             continuation,
         })
+    }
+
+    /// Publish or recover a settled turn from its exact recorded source. Observation can
+    /// finish publication without dispatching the tools from that result.
+    pub(crate) async fn continue_recorded_turn(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+        previous: &ArtifactRef,
+        result: &ProviderResult,
+        cancellation: Option<&Cancellation>,
+        dispatch_tools: bool,
+    ) -> Result<(Vec<ToolDispatch>, Option<ArtifactRef>), StorageError> {
+        if !matches!(
+            result.outcome,
+            Some(AttemptEnd::ToolCallsReady | AttemptEnd::Completed)
+        ) {
+            return Ok((Vec::new(), None));
+        }
+        if result.source_context.as_ref() != Some(previous) {
+            return Err(StorageError::ScopeDenied);
+        }
+        let has_tools = result.outcome == Some(AttemptEnd::ToolCallsReady);
+        let attempt_id = result.attempt_id.as_ref().ok_or_else(|| {
+            StorageError::InvalidRecord("tool turn lacks settled attempt identity".into())
+        })?;
+        let binding = result
+            .binding
+            .as_ref()
+            .ok_or_else(|| StorageError::InvalidRecord("tool turn lacks native binding".into()))?;
+        let after_sequence = result.turn_start_sequence.ok_or_else(|| {
+            StorageError::InvalidRecord("tool turn lacks durable start position".into())
+        })?;
+        let mut dispatches = Vec::new();
+        if has_tools && dispatch_tools {
+            let pass = self.dispatch_pending_pass(ctx, session_id, cancellation, true)?;
+            dispatches = self.settle_pending(pass).await;
+        }
+        if !crate::tool_turn::pending_calls(self.store.as_ref(), ctx, session_id)?.is_empty() {
+            return Ok((dispatches, None));
+        }
+        let material = crate::tool_turn::continuation_context(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            crate::tool_turn::TurnSource {
+                session_id,
+                attempt_id,
+                after_sequence,
+                has_tools,
+            },
+            binding,
+            previous,
+        )?;
+        let continuation = crate::tool_turn::publish_continuation(
+            self.store.as_ref(),
+            &self.artifacts,
+            ctx,
+            session_id,
+            attempt_id,
+            binding,
+            material,
+        )?;
+        Ok((dispatches, Some(continuation)))
     }
 
     /// Resume one durable provider call through the shared gateway, recording its single

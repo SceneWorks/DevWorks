@@ -493,7 +493,7 @@ pub struct Runtime {
     connections: Option<Arc<devworks_core::services::router::connections::ConnectionService>>,
     use_cases: UseCases,
     /// The narrow handle set agent turns and durable tool dispatch run on.
-    turn: crate::turn_engine::TurnEngine,
+    turn: Arc<crate::turn_engine::TurnEngine>,
     dispatcher: Dispatcher,
     collector: Arc<Collector>,
     resources: Arc<ResourceService>,
@@ -565,6 +565,7 @@ struct Engine {
     use_cases: UseCases,
     usage: Arc<crate::usage::UsageRuntime>,
     dispatcher: Dispatcher,
+    workspace_replies: Option<Arc<crate::workspace_reply::WorkspaceReplies>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
@@ -615,7 +616,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         power,
         diagnostics: _,
         knowledge: _,
-        application: _,
+        application,
         web: _,
         browser,
         git,
@@ -1023,6 +1024,15 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let workspace_replies = (config.providers.is_some()
+        && application
+            .sessions
+            .as_ref()
+            .is_some_and(|sessions| sessions.coordinator.is_some()))
+    .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
+    if let Some(worker) = &workspace_replies {
+        consumers.push(worker.consumer());
+    }
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -1377,6 +1387,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         use_cases,
         usage,
         dispatcher,
+        workspace_replies,
         process_tools,
         containers,
         git,
@@ -1484,6 +1495,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         use_cases,
         usage,
         dispatcher,
+        workspace_replies,
         process_tools,
         containers,
         git,
@@ -1708,6 +1720,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     #[cfg(any(test, feature = "test-support"))]
     let polling_marks = (stored.clone(), delivered.clone());
     let turn_commits = stored.clone();
+    let turn = Arc::new(crate::turn_engine::TurnEngine {
+        store: store.clone(),
+        artifacts: artifacts.clone(),
+        providers: providers.clone(),
+        mcp: use_cases.mcp_service(),
+        packages: package_host.clone(),
+        approvals: approvals.clone(),
+        runs: run_supervisor.clone(),
+        instructions: instructions.clone(),
+        indexing: index_supervisor.clone(),
+        admitter: admitter.clone(),
+        commits: turn_commits,
+    });
+    if let Some(worker) = &workspace_replies {
+        worker.bind(&turn);
+    }
     let commits = {
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
         let registered = polling_loops.clone();
@@ -1828,20 +1856,25 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     );
     // Unknown external effects remain held, never retried. Re-observe them while the app is
     // running as well as at boot; an owner can establish a terminal fact without a restart.
-    if process_tools.is_some() || containers.is_some() {
+    if process_tools.is_some() || containers.is_some() || workspace_replies.is_some() {
         let observing = dispatcher.clone();
+        let stopping = workspace_replies.clone();
         workers.start(
             StopAt::Work,
             None,
-            Arc::new(Loop::new(
-                "unknown outcome observation",
-                |mut stopped| async move {
+            Arc::new(
+                Loop::new("unknown outcome observation", |mut stopped| async move {
                     while !stopped.is_set() {
                         let _ = observing.observe_unknown().await;
                         stopped.wait(Duration::from_secs(10)).await;
                     }
-                },
-            )),
+                })
+                .on_stop(move || {
+                    if let Some(worker) = &stopping {
+                        worker.stop();
+                    }
+                }),
+            ),
         );
     }
     if let Some(worker) = purge_worker {
@@ -2217,19 +2250,6 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             ),
         );
     }
-    let turn = crate::turn_engine::TurnEngine {
-        store: store.clone(),
-        artifacts: artifacts.clone(),
-        providers: providers.clone(),
-        mcp: use_cases.mcp_service(),
-        packages: package_host.clone(),
-        approvals: approvals.clone(),
-        runs: run_supervisor.clone(),
-        instructions: instructions.clone(),
-        indexing: index_supervisor.clone(),
-        admitter: admitter.clone(),
-        commits: turn_commits,
-    };
     Ok(Runtime {
         store,
         keep_working,
@@ -2404,6 +2424,14 @@ impl Runtime {
     pub fn store(&self) -> &Arc<dyn ApplicationStore> {
         &self.store
     }
+    pub fn workspace_reply_status(
+        &self,
+        ctx: &InvocationContext,
+        session_id: &Id,
+    ) -> Result<Option<crate::WorkspaceReplyStatus>, StorageError> {
+        crate::workspace_reply::status(self.store.as_ref(), ctx, session_id)
+    }
+
     /// The artifact service the use cases, reply publication and collection share (artifact
     /// streams are opened through it).
     pub fn artifacts(&self) -> &Arc<ArtifactService> {

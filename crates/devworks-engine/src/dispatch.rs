@@ -179,6 +179,12 @@ pub trait EffectExecutor: Send + Sync {
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
+    /// An operation with an established outcome can return to delivery without operator input.
+    /// Consumers opt in only when their observation establishes an exact safe continuation.
+    fn resumes_after_observation(&self) -> bool {
+        false
+    }
+
     /// Resolves once `operation` may be dispatched, for example once the effect it is ordered
     /// behind has settled. Until then the dispatcher keeps the delivery's claim (renewing its
     /// lease) but releases its worker permit, so waiting work never takes capacity from other
@@ -979,8 +985,9 @@ impl Dispatcher {
     /// Observes operations whose outcome is unknown behind held deliveries, using each
     /// consumer's executor, and records what the target shows (`ObservedComplete`, `Failed`,
     /// `RetryPending` when it shows the effect did not happen). It never re-executes an effect
-    /// and never redelivers: an explicit `queue.reconcile` decides that. Returns the number of
-    /// operations whose outcome was established.
+    /// and never redelivers it directly. Consumers that can prove safe continuation may
+    /// requeue an established outcome. Other consumers wait for explicit `queue.reconcile`.
+    /// Returns the number of operations whose outcome was established.
     pub async fn observe_unknown(&self) -> Result<usize, StorageError> {
         let mut resolved = 0;
         for consumer in &self.inner.consumers {
@@ -997,26 +1004,26 @@ impl Dispatcher {
             let mut after: Option<DeliveryKey> = None;
             loop {
                 let (f, from) = (filter.clone(), after.clone());
-                let (held, next): (Vec<OperationRecord>, Option<DeliveryKey>) =
-                    store::read(&self.inner.store, move |r| {
-                        let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
-                        let mut ops = Vec::new();
-                        for e in page.entries {
-                            if e.state != QueueState::Reconciling {
-                                continue;
-                            }
-                            if let Some(op) = &e.operation_id
-                                && let Some(rec) = r.operations().operation(op)?
-                                && rec.state == OperationState::OutcomeUnknown
-                            {
-                                ops.push(rec);
-                            }
+                let (held, next) = store::read(&self.inner.store, move |r| {
+                    let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
+                    let mut ops = Vec::new();
+                    for e in page.entries {
+                        if e.state != QueueState::Reconciling {
+                            continue;
                         }
-                        Ok((ops, page.next))
-                    })
-                    .await?;
-                for op in held {
+                        if let Some(op) = &e.operation_id
+                            && let Some(rec) = r.operations().operation(op)?
+                            && rec.state == OperationState::OutcomeUnknown
+                        {
+                            ops.push((e.id, e.revision, rec));
+                        }
+                    }
+                    Ok((ops, page.next))
+                })
+                .await?;
+                for (delivery, delivery_revision, op) in held {
                     let observed = executor.observe(op.clone()).await;
+                    let auto_resume = executor.resumes_after_observation();
                     let established =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
                             let Some(current) = tx.operations().operation(&op.id)? else {
@@ -1037,6 +1044,14 @@ impl Dispatcher {
                                         to,
                                         Some(json!({"reconciliation": note})),
                                     )?;
+                                    if auto_resume
+                                        && tx.queue().entry(&delivery)?.is_some_and(|entry| {
+                                            entry.state == QueueState::Reconciling
+                                                && entry.revision == delivery_revision
+                                        })
+                                    {
+                                        tx.queue().requeue(&delivery, 0)?;
+                                    }
                                     Ok(true)
                                 }
                                 None => {
@@ -1064,6 +1079,7 @@ impl Dispatcher {
         }
         if resolved > 0 {
             self.notify_status();
+            self.wakeup().wake();
         }
         Ok(resolved)
     }
