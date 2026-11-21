@@ -18,7 +18,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 pub const CONSUMER: &str = "github-triage";
-const CAPABILITY: &str = "github.triage";
+pub(super) const CAPABILITY: &str = "github.triage";
 const INTERVAL: &str = "github.issueTriageIntervalSeconds";
 const PAGE: u16 = 100;
 
@@ -73,6 +73,7 @@ fn admit(
     let op = OperationId(tx.new_id(IdKind::Operation));
     let payload = json!({
         "repositoryId": issue.key.repository_id,
+        "actorId": actor,
         "issueNumber": issue.key.number,
         "sourceRevision": issue.remote_revision,
         "projectId": issue.project_id,

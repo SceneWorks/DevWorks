@@ -13171,7 +13171,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "GitLink",
+      "resultValueType": "GithubIssueLinkResult",
       "requestModes": [
         "Command"
       ],
@@ -13185,7 +13185,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "GitLink",
+      "resultValueType": "GithubIssueLinkResult",
       "requestModes": [
         "Command"
       ],
@@ -16269,7 +16269,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<GithubObservation>",
+      "resultValueType": "GithubPollStatusResult",
       "requestModes": [
         "Query"
       ],

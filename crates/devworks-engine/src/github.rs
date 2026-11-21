@@ -1,11 +1,34 @@
 //! GitHub effect delivery uses the shared outbox and its recovery/settlement rules.
-use crate::dispatch::Consumer;
+use crate::dispatch::{
+    AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
+    DeliveryHandler, Outcome,
+};
 use crate::effect_consumer::{PanicReasons, STANDARD_RETRY, effect_consumer};
-use devworks_core::services::github::{EFFECT_CONSUMER, GitHubService};
+use devworks_core::ports::storage::{ApplicationStore, StorageError, WriteTransaction};
+use devworks_core::services::artifacts::ArtifactService;
+use devworks_core::services::github::{EFFECT_CONSUMER, GitHubService, settle_effect};
+use devworks_core::services::work::WorkService;
 use std::sync::Arc;
 
+struct SettleGithubEffect;
+
+impl DeliveryHandler for SettleGithubEffect {
+    fn apply(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        delivery: &Delivery,
+    ) -> Result<Outcome, StorageError> {
+        if let Some(op_id) = &delivery.entry.operation_id
+            && let Some(op) = tx.operations().operation(op_id)?
+        {
+            settle_effect(tx, &op)?;
+        }
+        Ok(Outcome::Completed)
+    }
+}
+
 pub fn consumer(service: Arc<GitHubService>) -> Consumer {
-    effect_consumer(
+    let mut consumer = effect_consumer(
         EFFECT_CONSUMER,
         service,
         PanicReasons {
@@ -14,21 +37,22 @@ pub fn consumer(service: Arc<GitHubService>) -> Consumer {
         },
         STANDARD_RETRY,
         Some(1),
-    )
+    );
+    consumer.handler = Arc::new(SettleGithubEffect);
+    consumer
 }
 
 struct Notice;
 
-impl crate::dispatch::DeliveryHandler for Notice {
+impl DeliveryHandler for Notice {
     fn apply(
         &self,
-        tx: &mut dyn devworks_core::ports::storage::WriteTransaction,
-        delivery: &crate::dispatch::Delivery,
-    ) -> Result<crate::dispatch::Outcome, devworks_core::ports::storage::StorageError> {
-        use crate::dispatch::Outcome;
+        tx: &mut dyn WriteTransaction,
+        delivery: &Delivery,
+    ) -> Result<Outcome, StorageError> {
         match devworks_core::services::github::notices::deliver(tx, &delivery.event) {
             Ok(()) => Ok(Outcome::Completed),
-            Err(devworks_core::ports::storage::StorageError::ScopeDenied) => {
+            Err(StorageError::ScopeDenied) => {
                 Ok(Outcome::Hold("GitHub source authorization changed".into()))
             }
             Err(error) => Err(error),
@@ -36,12 +60,65 @@ impl crate::dispatch::DeliveryHandler for Notice {
     }
 }
 
-pub(crate) fn notice_consumer() -> Consumer {
+struct NoticeRunner {
+    store: Arc<dyn ApplicationStore>,
+    artifacts: Arc<ArtifactService>,
+    work: Arc<WorkService>,
+}
+
+impl AsyncDeliveryHandler for NoticeRunner {
+    fn start(&self, delivery: AsyncDelivery) -> AsyncFuture {
+        let store = self.store.clone();
+        let artifacts = self.artifacts.clone();
+        let work = self.work.clone();
+        let event = delivery.delivery.event;
+        Box::pin(async move {
+            let outcome = tokio::task::spawn_blocking(move || {
+                devworks_core::services::github::notices::reconcile_and_deliver(
+                    &*store, &artifacts, &work, &event,
+                )
+            })
+            .await;
+            match outcome {
+                Ok(Ok(())) => AsyncOutcome::Committed,
+                Ok(Err(StorageError::ScopeDenied)) => {
+                    AsyncOutcome::Hold("GitHub source authorization changed".into())
+                }
+                Ok(Err(StorageError::InvalidRecord(reason))) => AsyncOutcome::Poison(reason),
+                Ok(Err(error)) => AsyncOutcome::Retry(error.to_string()),
+                Err(_) => AsyncOutcome::Retry("GitHub notice task panicked".into()),
+            }
+        })
+    }
+}
+
+pub fn notice_consumer() -> Consumer {
     Consumer {
         name: devworks_core::services::github::references::NOTICE_CONSUMER.into(),
         handler: Arc::new(Notice),
         effect: None,
         async_handler: None,
+        eligibility: None,
+        stop_grace_ms: 5000,
+        retry: STANDARD_RETRY,
+        max_in_flight: Some(1),
+    }
+}
+
+pub fn notice_consumer_with_services(
+    store: Arc<dyn ApplicationStore>,
+    artifacts: Arc<ArtifactService>,
+    work: Arc<WorkService>,
+) -> Consumer {
+    Consumer {
+        name: devworks_core::services::github::references::NOTICE_CONSUMER.into(),
+        handler: Arc::new(Notice),
+        effect: None,
+        async_handler: Some(Arc::new(NoticeRunner {
+            store,
+            artifacts,
+            work,
+        })),
         eligibility: None,
         stop_grace_ms: 5000,
         retry: STANDARD_RETRY,
@@ -97,14 +174,12 @@ pub(crate) async fn run(
 
 struct IndexRefresh(Arc<devworks_core::services::indexing::IndexEnv>);
 
-impl crate::dispatch::DeliveryHandler for IndexRefresh {
+impl DeliveryHandler for IndexRefresh {
     fn apply(
         &self,
-        tx: &mut dyn devworks_core::ports::storage::WriteTransaction,
-        delivery: &crate::dispatch::Delivery,
-    ) -> Result<crate::dispatch::Outcome, devworks_core::ports::storage::StorageError> {
-        use crate::dispatch::Outcome;
-        use devworks_core::ports::storage::StorageError;
+        tx: &mut dyn WriteTransaction,
+        delivery: &Delivery,
+    ) -> Result<Outcome, StorageError> {
         use devworks_core::services::github::indexing::{IndexDelivery, deliver};
         match deliver(tx, &self.0, &delivery.event) {
             Ok(IndexDelivery::Settled) => Ok(Outcome::Completed),

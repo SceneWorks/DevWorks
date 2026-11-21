@@ -262,6 +262,15 @@ impl ApprovalService {
                             return Err(conflict(id));
                         }
                     }
+                    None if p.operation_kind == "github.issue_update" => {
+                        let work = tx
+                            .work()
+                            .work(&p.target_id)?
+                            .ok_or_else(|| not_found("work", &p.target_id))?;
+                        if work.revision != p.target_revision {
+                            return Err(conflict(id));
+                        }
+                    }
                     Some("FindingRisk") => {
                         let payload: ApprovalContent =
                             serde_json::from_value(p.payload["content"].clone())

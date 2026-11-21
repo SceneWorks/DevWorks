@@ -10,7 +10,8 @@ use crate::theme;
 use crate::web_panel::{WebAction, WebPanel, WebSettings};
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::protocol::records::{
-    AccountAction, ContainerCapability, GithubAccountState, ItemState, SettingEntry,
+    AccountAction, ContainerCapability, GithubAccountState, ItemState, RepositoryRecord,
+    SettingEntry,
 };
 use devworks_core::settings::catalog::{
     Adoption, Category, ValueKind, WEB_FETCH_MAX_REDIRECTS_KEY, WEB_FETCH_PRIVATE_KEY,
@@ -62,6 +63,10 @@ pub struct SettingsScreen {
     pub github_loading: bool,
     pub github_busy: bool,
     pub github_error: Option<String>,
+    pub github_repositories: Vec<RepositoryRecord>,
+    pub github_repos_next_cursor: Option<String>,
+    pub github_repos_loading: bool,
+    pub github_org_filter: String,
     pub container_capabilities: Option<Vec<ContainerCapability>>,
     pub container_error: Option<String>,
     /// Roles and skills (DW-34).
@@ -88,6 +93,7 @@ pub enum SettingsAction {
     RefreshContainers,
     ReadGithub,
     ChangeGithub(AccountAction),
+    DiscoverGithubRepositories(Option<String>),
     Validate,
     Save,
     /// Native user input only; the worker stages it before preparing the reference-only save.
@@ -484,7 +490,7 @@ impl SettingsScreen {
         self.scrolls = scrolls;
     }
 
-    fn github_account_ui(&self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {
+    fn github_account_ui(&mut self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {
         ui.heading("GitHub.com account");
         ui.label(
             "Verify the GitHub API credential saved above. Git uses its own transport credentials.",
@@ -559,6 +565,49 @@ impl SettingsScreen {
                 actions.push(SettingsAction::ChangeGithub(AccountAction::Disconnect));
             }
         });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            let input = ui.add(
+                egui::TextEdit::singleline(&mut self.github_org_filter)
+                    .hint_text("Organization filter (optional)")
+                    .desired_width(220.0),
+            );
+            input.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::TextInput, true, "GitHub organization filter")
+            });
+            let can_discover = !self.github_repos_loading
+                && self
+                    .github_account
+                    .as_ref()
+                    .is_some_and(|view| view.account.is_some());
+            if ui
+                .add_enabled(can_discover, egui::Button::new("Discover repositories"))
+                .clicked()
+            {
+                actions.push(SettingsAction::DiscoverGithubRepositories(None));
+            }
+            if let Some(cursor) = &self.github_repos_next_cursor
+                && ui
+                    .add_enabled(can_discover, egui::Button::new("Next repositories"))
+                    .clicked()
+            {
+                actions.push(SettingsAction::DiscoverGithubRepositories(Some(
+                    cursor.clone(),
+                )));
+            }
+        });
+        for repo in &self.github_repositories {
+            ui.horizontal_wrapped(|ui| {
+                if let Some(url) = &repo.remote_url {
+                    let clean = url.0.strip_suffix(".git").unwrap_or(&url.0);
+                    let label =
+                        widgets::github_link_label(clean).unwrap_or_else(|| repo.name.0.clone());
+                    ui.hyperlink_to(label, clean);
+                } else {
+                    ui.label(&repo.name.0);
+                }
+            });
+        }
     }
 
     fn container_status_ui(&self, ui: &mut Ui, actions: &mut Vec<SettingsAction>) {

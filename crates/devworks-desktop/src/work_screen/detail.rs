@@ -100,7 +100,7 @@ pub(crate) fn feature_detail(
             );
             metadata_summary(ui, f);
             if !f.description.0.is_empty() {
-                ui.label(&f.description.0);
+                widgets::text_with_github_links(ui, &f.description.0);
             }
             workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
             run_controls(ui, work, f, enabled, actions);
@@ -977,7 +977,10 @@ pub(crate) fn card_detail(
             );
             metadata_summary(ui, w);
             if !w.description.0.is_empty() {
-                ui.label(&w.description.0);
+                widgets::text_with_github_links(ui, &w.description.0);
+            }
+            if matches!(w.kind, WorkKind::Issue) {
+                github_issue_controls(ui, work, w, enabled, actions);
             }
             source_control(ui, work, w.id.as_str(), actions);
             // Workflow status: moving it never starts, pauses or completes execution.
@@ -1291,7 +1294,9 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
             for link in latest.values() {
                 ui.separator();
                 if let Some(url) = &link.repository_url {
-                    ui.hyperlink_to(link.repository_id.as_str(), &url.0);
+                    let repo_label = widgets::github_link_label(&url.0)
+                        .unwrap_or_else(|| link.repository_id.as_str().to_owned());
+                    ui.hyperlink_to(repo_label, &url.0);
                 } else {
                     ui.label(link.repository_id.as_str());
                 }
@@ -1373,7 +1378,36 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                     ui.monospace(&link.head.hex);
                 }
                 if let Some(url) = &link.pull_request_url {
-                    ui.hyperlink_to("Pull request", &url.0);
+                    let pr_label = widgets::github_link_label(&url.0).map_or_else(
+                        || "Pull request".to_owned(),
+                        |repo| format!("Pull request · {repo}"),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.hyperlink_to(pr_label, &url.0);
+                        if ui.small_button("Read checks & reviews").clicked() {
+                            actions.push(Action::ReadGithubPullObservations {
+                                repository_id: link.repository_id.as_str().to_owned(),
+                                pull_request_url: url.0.clone(),
+                                expected_head: link.head.hex.clone(),
+                            });
+                        }
+                    });
+                    for obs in work
+                        .github_pr_checks
+                        .get(&url.0)
+                        .into_iter()
+                        .flatten()
+                        .chain(work.github_pr_reviews.get(&url.0).into_iter().flatten())
+                    {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("{} · {}", obs.kind.0, obs.state.0));
+                            if let Some(obs_url) = &obs.url {
+                                let label = widgets::github_link_label(&obs_url.0)
+                                    .unwrap_or_else(|| obs.subject_id.as_str().to_owned());
+                                ui.hyperlink_to(label, &obs_url.0);
+                            }
+                        });
+                    }
                 }
                 if let Some(session) = &link.agent_session_id
                     && ui
@@ -1383,5 +1417,62 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                     actions.push(Action::OpenGitSession(session.as_str().to_owned()));
                 }
             }
+        });
+}
+
+fn github_issue_controls(
+    ui: &mut Ui,
+    work: &mut WorkUi,
+    w: &WorkRecord,
+    enabled: bool,
+    actions: &mut Vec<Action>,
+) {
+    let Some(repo_id) = w.repository_ids.0.first() else {
+        return;
+    };
+    egui::CollapsingHeader::new("GitHub issue")
+        .id_salt(("work-github-issue", w.id.as_str()))
+        .show(ui, |ui| {
+            if let Some(linked) = work.github_links.get(w.id.as_str()) {
+                let label = widgets::github_link_label(&linked.url.0)
+                    .unwrap_or_else(|| format!("GitHub issue #{}", linked.remote_issue_number.0));
+                ui.hyperlink_to(label, &linked.url.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(enabled, egui::Button::new("Publish to GitHub"))
+                    .clicked()
+                {
+                    actions.push(Action::PublishGithubIssue {
+                        issue_id: w.id.as_str().to_owned(),
+                        expected_revision: w.revision.as_str().to_owned(),
+                        repository_id: repo_id.as_str().to_owned(),
+                    });
+                }
+                let draft = work
+                    .github_link_number_drafts
+                    .entry(w.id.as_str().to_owned())
+                    .or_default();
+                let input = ui.add(
+                    egui::TextEdit::singleline(draft)
+                        .hint_text("Issue #")
+                        .desired_width(80.0),
+                );
+                input.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, "GitHub issue number")
+                });
+                let valid_num = draft.trim().parse::<i64>().is_ok_and(|n| n > 0);
+                if ui
+                    .add_enabled(enabled && valid_num, egui::Button::new("Link GitHub issue"))
+                    .clicked()
+                {
+                    actions.push(Action::LinkGithubIssue {
+                        issue_id: w.id.as_str().to_owned(),
+                        expected_revision: w.revision.as_str().to_owned(),
+                        repository_id: repo_id.as_str().to_owned(),
+                        remote_issue_number: draft.trim().to_owned(),
+                    });
+                }
+            });
         });
 }

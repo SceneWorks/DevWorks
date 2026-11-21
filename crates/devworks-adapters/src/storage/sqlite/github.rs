@@ -288,6 +288,10 @@ fn poll(
         .optional())?;
     v.map(decode).transpose()
 }
+fn case_key(issue: &GithubIssueKey, project: &ProjectId) -> Result<String, StorageError> {
+    hash(&(key(issue)?, project.0.as_str()))
+}
+
 fn obligation_revision(c: &Connection, k: &GithubIssueKey) -> Result<i64, StorageError> {
     let rev: Option<i64> = db(c
         .query_row(
@@ -451,6 +455,14 @@ fn save_issue(c: &Connection, r: &StoredGithubIssueIntake) -> Result<(), Storage
 macro_rules! reads {
     ($t:ty) => {
         impl GithubRead for $t {
+            fn github_triage_case(
+                &self,
+                issue: &GithubIssueKey,
+                project: &ProjectId,
+            ) -> Result<Option<StoredGithubTriageCase>, StorageError> {
+                by_external(self.conn, "GithubTriageCase", &case_key(issue, project)?)
+            }
+
             fn github_index_target(&self, run: &Id) -> Result<Option<StoredGithubIndexTarget>, StorageError> {
                 by_external(self.conn, "GithubIndexTarget", run.as_str())
             }
@@ -658,6 +670,35 @@ macro_rules! reads {
                 .collect::<rusqlite::Result<Vec<_>>>())?;
                 rows.into_iter().map(decode).collect()
             }
+            fn github_open_pulls(
+                &self,
+                repository: &Id,
+                after: i64,
+                limit: u16,
+            ) -> Result<Vec<StoredGithubObservation>, StorageError> {
+                let mut query = db(self.conn.prepare_cached(
+                    "WITH revisions AS (
+                        SELECT body_json, CAST(json_extract(body_json, '$.subject_id') AS INTEGER) AS number,
+                            row_number() OVER (
+                                PARTITION BY json_extract(body_json, '$.subject_id')
+                                ORDER BY json_extract(body_json, '$.source_updated_at_ms') DESC,
+                                    json_extract(body_json, '$.observed_at_ms') DESC, rowid DESC
+                            ) AS latest
+                        FROM integration_records
+                        WHERE kind='GithubObservation'
+                            AND json_extract(body_json, '$.repository_id')=?1
+                            AND json_extract(body_json, '$.kind')='PullRequest'
+                            AND CAST(json_extract(body_json, '$.subject_id') AS INTEGER)>?2
+                    ) SELECT body_json FROM revisions WHERE latest=1
+                        AND json_extract(body_json, '$.payload.state')='open' ORDER BY number LIMIT ?3",
+                ))?;
+                let rows = db(db(query.query_map(
+                    params![repository.as_str(), after, page_limit(limit)?],
+                    |row| row.get::<_, String>(0),
+                ))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter().map(decode).collect()
+            }
             fn github_poll_cursor(
                 &self,
                 r: &Id,
@@ -846,6 +887,57 @@ macro_rules! reads {
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl GithubRepository for Unit<'_> {
+    fn put_github_triage_case(
+        &mut self,
+        case: &StoredGithubTriageCase,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        let external = case_key(&case.key, &case.project_id)?;
+        let current = self.github_triage_case(&case.key, &case.project_id)?;
+        cas(
+            case.revision,
+            expected,
+            current.as_ref().map(|row| row.revision),
+            case.id.as_str(),
+        )?;
+        let (project, _) = work(self.conn, &case.work_id)?;
+        if project != case.project_id.0.as_str()
+            || current
+                .as_ref()
+                .is_some_and(|row| row.id != case.id || row.work_id != case.work_id)
+            || !matches!(
+                case.state.as_str(),
+                "NeedsProof" | "AwaitingDecision" | "Verified" | "Working" | "Closed"
+            )
+        {
+            return Err(invalid("invalid GitHub triage obligation"));
+        }
+        member(self.conn, &project, &case.key.repository_id)?;
+        if current.is_some() {
+            update(
+                self.conn,
+                case.id.as_str(),
+                "GithubTriageCase",
+                case.revision,
+                &case.state,
+                case,
+            )
+        } else {
+            insert(
+                self.conn,
+                case.id.as_str(),
+                "GithubTriageCase",
+                &external,
+                None,
+                Some(&case.project_id),
+                Some(&case.work_id),
+                case.revision,
+                &case.state,
+                case,
+            )
+        }
+    }
+
     fn put_github_index_target(
         &mut self,
         target: &StoredGithubIndexTarget,

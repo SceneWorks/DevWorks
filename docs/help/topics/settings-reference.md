@@ -292,7 +292,7 @@ Poll GitHub for changes.
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: DevWorks does not poll GitHub yet, so this switch changes nothing. Once polling is built, pushes, merges, reviews and checks notify agents through authenticated polling.
+Pushes, merges, reviews and checks notify agents through authenticated polling.
 
 ## github.importOpenIssues
 
@@ -304,7 +304,7 @@ Import open issues.
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: GitHub issue import is not built yet, so this switch changes nothing. Once it is, existing open issues are imported when a repository is connected, and newly reported ones thereafter.
+Existing open issues are imported when a repository is connected, and newly reported ones thereafter.
 
 ## github.syncLinkedIssueFields
 
@@ -316,7 +316,7 @@ Receive linked issue updates.
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: GitHub issue synchronization is not built yet, so this switch changes nothing. Once it is, remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.
+Remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.
 
 ## github.issueTriageIntervalSeconds
 
@@ -328,7 +328,7 @@ Issue triage interval (seconds).
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: automatic issue triage is not built yet, so this value changes nothing. Once it is, this is the app-wide minimum interval between automatic issue triage admissions.
+The app-wide minimum interval between automatic issue triage admissions.
 
 ## delivery.autoMerge
 

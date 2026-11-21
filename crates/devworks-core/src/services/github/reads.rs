@@ -7,11 +7,11 @@ use crate::ports::storage::{
     StorageError, StoredGithubObservation, StoredGithubRepository,
 };
 use crate::protocol::records::{
-    GithubIssueIntakeView, GithubObservation, GithubPollEndpoint, GithubPollStatusResult,
-    GithubPollStatusView, PageRequest,
+    GithubIssueIntakePage, GithubIssueIntakeView, GithubObservation, GithubPollEndpoint,
+    GithubPollStatusResult, GithubPollStatusView, PageRequest,
 };
 use crate::protocol::support::{BoundedList, BoundedText, Limit, Page, PositiveCounter, Url};
-use crate::protocol::{Counter, Id, ProjectId};
+use crate::protocol::{Counter, Id, OperationState, ProjectId};
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::kernel::{Failure, label, not_found};
 
@@ -145,7 +145,7 @@ pub(super) fn poll_status(
     schema_revision: u32,
 ) -> Result<(GithubPollStatusResult, i64), Failure> {
     let (scope, remote) = qualified(ctx, snapshot, repository)?;
-    if schema_revision < 2 {
+    if schema_revision < 3 {
         let (page, revision) = legacy_poll_status(snapshot, repository, scope, remote)?;
         return Ok((GithubPollStatusResult::Legacy(page), revision));
     }
@@ -216,6 +216,7 @@ pub(super) fn poll_status(
             .ok_or_else(|| {
                 StorageError::InvalidRecord("Missing GitHub issue observation".into())
             })?;
+        let (comment_state, close_state) = resolution_state(snapshot, &filter.scope, &issue.key)?;
         Ok::<_, StorageError>(GithubIssueIntakeView {
             remote_issue_number: PositiveCounter(issue.key.number.to_string()),
             state: label(&issue.state, "Unknown"),
@@ -228,11 +229,14 @@ pub(super) fn poll_status(
                 .next()
                 .map(|link| link.work_id)
                 .or(issue.work_id),
-            comment_state: None,
-            close_state: None,
+            comment_state,
+            close_state,
         })
     })?;
-    let mut endpoint_keys = vec![("issues", "issues".to_owned())];
+    let mut endpoint_keys = vec![
+        ("issues", "issues".to_owned()),
+        ("pull requests", super::pulls::ENDPOINT.to_owned()),
+    ];
     if let Some(branch) = &remote.default_branch {
         endpoint_keys.push(("default ref", references::endpoint_key(branch)));
     }
@@ -264,7 +268,11 @@ pub(super) fn poll_status(
         GithubPollStatusResult::Current(GithubPollStatusView {
             repository_id: repository.clone(),
             endpoints: BoundedList(endpoints),
-            intake,
+            intake: GithubIssueIntakePage {
+                items: intake.items,
+                next_cursor: intake.next_cursor,
+                has_more: intake.has_more,
+            },
             interval_seconds: PositiveCounter(clock.interval_seconds.to_string()),
             next_admission_at_ms: Counter(clock.next_admission_at_ms.to_string()),
             last_admitted_at_ms: clock
@@ -273,6 +281,47 @@ pub(super) fn poll_status(
         }),
         revision.max(clock.revision),
     ))
+}
+
+fn resolution_state(
+    snapshot: &dyn ReadSnapshot,
+    scope: &GithubScope,
+    issue: &GithubIssueKey,
+) -> Result<(Option<OperationState>, Option<OperationState>), StorageError> {
+    let mut after = None;
+    let mut latest: Option<(i64, OperationState, Option<OperationState>)> = None;
+    const PAGE: u16 = 32;
+    loop {
+        let page = snapshot
+            .github()
+            .github_resolutions(issue, after.as_ref(), PAGE)?;
+        for row in &page {
+            if let Some(project) = &scope.project_id
+                && snapshot
+                    .github()
+                    .github_resolution_witnesses(&row.id, Some(project), None, 1)?
+                    .is_empty()
+            {
+                continue;
+            }
+            if let Some(comment) = snapshot.operations().operation(&row.comment_operation_id)?
+                && latest
+                    .as_ref()
+                    .is_none_or(|(time, ..)| comment.created_at_ms >= *time)
+            {
+                let close = snapshot.operations().operation(&row.close_operation_id)?;
+                latest = Some((
+                    comment.created_at_ms,
+                    comment.state,
+                    close.map(|close| close.state),
+                ));
+            }
+        }
+        if page.len() < usize::from(PAGE) {
+            return Ok(latest.map_or((None, None), |(_, comment, close)| (Some(comment), close)));
+        }
+        after = page.last().map(|row| row.id.clone());
+    }
 }
 
 fn legacy_poll_status(

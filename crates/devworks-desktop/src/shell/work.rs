@@ -117,6 +117,12 @@ pub struct WorkUi {
     pub runs: BTreeMap<String, RootSnapshot>,
     pub git_inspections:
         BTreeMap<String, Result<devworks_core::protocol::records::GitInspection, String>>,
+    pub github_links: BTreeMap<String, devworks_core::protocol::records::GithubIssueLink>,
+    pub github_link_number_drafts: BTreeMap<String, String>,
+    pub github_pr_checks:
+        BTreeMap<String, Vec<devworks_core::protocol::records::GithubObservation>>,
+    pub github_pr_reviews:
+        BTreeMap<String, Vec<devworks_core::protocol::records::GithubObservation>>,
     /// The feature the board shows.
     pub board: Option<String>,
     /// The selected card of the board.
@@ -317,6 +323,22 @@ pub(crate) enum Action {
     ReadinessHistory(String, bool),
     InspectGit(String, String),
     OpenGitSession(String),
+    PublishGithubIssue {
+        issue_id: String,
+        expected_revision: String,
+        repository_id: String,
+    },
+    LinkGithubIssue {
+        issue_id: String,
+        expected_revision: String,
+        repository_id: String,
+        remote_issue_number: String,
+    },
+    ReadGithubPullObservations {
+        repository_id: String,
+        pull_request_url: String,
+        expected_head: String,
+    },
 }
 
 pub(crate) fn kind_label(w: &WorkRecord) -> &'static str {

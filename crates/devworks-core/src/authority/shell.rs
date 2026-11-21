@@ -2149,6 +2149,14 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         | "remote" | "tag" | "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am"
         | "config" | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file"
         | "ls-remote" | "merge-base" | "check-attr" => true,
+        "archive" => !rest.iter().any(|a| {
+            a.text == "-o"
+                || a.text.starts_with("-o")
+                || a.text == "--output"
+                || a.text.starts_with("--output=")
+                || a.text == "--remote"
+                || a.text.starts_with("--remote=")
+        }),
         "stash" => match rest.first().map(|w| w.text.as_str()) {
             Some("drop" | "clear") => consequential(c, &dir),
             _ => true,

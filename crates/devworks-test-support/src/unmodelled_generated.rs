@@ -1064,6 +1064,13 @@ impl GitRepository for Unmodelled {
     }
 }
 impl GithubRead for Unmodelled {
+    fn github_triage_case(
+        &self,
+        _: &GithubIssueKey,
+        _: &ProjectId,
+    ) -> Result<Option<StoredGithubTriageCase>, StorageError> {
+        unmodelled()
+    }
     fn github_index_target(&self, _: &Id) -> Result<Option<StoredGithubIndexTarget>, StorageError> {
         unmodelled()
     }
@@ -1156,6 +1163,14 @@ impl GithubRead for Unmodelled {
     ) -> Result<Vec<StoredGithubObservation>, StorageError> {
         unmodelled()
     }
+    fn github_open_pulls(
+        &self,
+        _: &Id,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredGithubObservation>, StorageError> {
+        unmodelled()
+    }
     fn github_poll_cursor(
         &self,
         _: &Id,
@@ -1223,6 +1238,13 @@ impl GithubRead for Unmodelled {
     }
 }
 impl GithubRepository for Unmodelled {
+    fn put_github_triage_case(
+        &mut self,
+        _: &StoredGithubTriageCase,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn put_github_index_target(&mut self, _: &StoredGithubIndexTarget) -> Result<(), StorageError> {
         unmodelled()
     }

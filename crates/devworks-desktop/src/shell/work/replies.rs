@@ -494,6 +494,69 @@ impl WorkCtl<'_, '_> {
                 self.inspect(&id);
                 self.load_work();
             }
+            (WorkSlot::GithubIssuePublish(issue_id), Reply::Command(c)) => {
+                use devworks_core::protocol::{
+                    CommandReply,
+                    records::GithubIssueLinkResult,
+                    results::{DomainDecision, OperationResult},
+                };
+                if let Ok(CommandReply::Recorded { receipt, .. }) = &c
+                    && matches!(receipt.decision, DomainDecision::Accepted { .. })
+                {
+                    self.work.message =
+                        Some((Tone::Accent, "GitHub issue publication queued.".into()));
+                } else {
+                    match ops::command_result(c) {
+                        Ok(OperationResult::IssuesPublish {
+                            value: GithubIssueLinkResult::Current(link),
+                        }) => {
+                            self.work.github_links.insert(issue_id, link);
+                            self.work.message =
+                                Some((Tone::Good, "Published issue to GitHub.".into()));
+                            self.load_work();
+                        }
+                        Err(e) => self.work_failure("Publishing issue to GitHub", e),
+                        _ => {}
+                    }
+                }
+            }
+            (WorkSlot::GithubIssueLink(issue_id), Reply::Command(c)) => {
+                use devworks_core::protocol::{
+                    records::GithubIssueLinkResult, results::OperationResult,
+                };
+                match ops::command_result(c) {
+                    Ok(OperationResult::IssuesLink {
+                        value: GithubIssueLinkResult::Current(link),
+                    }) => {
+                        self.work.github_link_number_drafts.remove(&issue_id);
+                        self.work.github_links.insert(issue_id, link);
+                        self.work.message = Some((Tone::Good, "Linked GitHub issue.".into()));
+                        self.load_work();
+                    }
+                    Err(e) => self.work_failure("Linking GitHub issue", e),
+                    _ => {}
+                }
+            }
+            (WorkSlot::GithubPullChecks(pr_url), Reply::Query(q)) => {
+                use devworks_core::protocol::results::OperationResult;
+                match ops::query_result(q).map(|(r, _)| r) {
+                    Ok(OperationResult::GithubChecks { value }) => {
+                        self.work.github_pr_checks.insert(pr_url, value.items.0);
+                    }
+                    Err(e) => self.work.message = Some((Tone::Bad, e.describe())),
+                    _ => {}
+                }
+            }
+            (WorkSlot::GithubPullReviews(pr_url), Reply::Query(q)) => {
+                use devworks_core::protocol::results::OperationResult;
+                match ops::query_result(q).map(|(r, _)| r) {
+                    Ok(OperationResult::GithubReviews { value }) => {
+                        self.work.github_pr_reviews.insert(pr_url, value.items.0);
+                    }
+                    Err(e) => self.work.message = Some((Tone::Bad, e.describe())),
+                    _ => {}
+                }
+            }
             (slot, reply) => return Some((slot, reply)),
         }
         None

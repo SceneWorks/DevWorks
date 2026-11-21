@@ -139,6 +139,31 @@ impl GitHubClient {
         )
     }
 
+    /// Executes a bound mutation document. Only journaled owners select the document and
+    /// supply the exact saved resource IDs; an ambiguous transport result is never retried here.
+    pub(super) fn graphql_mutation(
+        &self,
+        token: Secret,
+        document: &'static str,
+        input: Value,
+    ) -> Result<Value, Fault> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "query": document,
+            "variables": {"input":input},
+        }))
+        .map_err(|_| Fault::InvalidResponse)?;
+        let mut request =
+            HttpRequest::post("https://api.github.com/graphql", "application/json", body)
+                .secret_header("Authorization", token);
+        request.timeout_ms = 15_000;
+        request.max_response_bytes = 524_288;
+        let response = self.http.send(&request).map_err(|_| Fault::Ambiguous)?;
+        if !response.success() {
+            return Err(Fault::Rejected(response.status));
+        }
+        serde_json::from_slice(&response.body).map_err(|_| Fault::Ambiguous)
+    }
+
     pub(super) fn observe_sign_in(
         &self,
         store: &dyn ApplicationStore,

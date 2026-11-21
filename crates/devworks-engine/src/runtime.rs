@@ -571,6 +571,7 @@ struct Engine {
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
     github: Option<Arc<devworks_core::services::github::GitHubService>>,
+    github_triage: Option<Arc<crate::github_triage::TriageWorker>>,
     browser: Option<Arc<BrowserService>>,
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     watchers: Option<Arc<crate::watch::WatchSupervisor>>,
@@ -888,7 +889,6 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(service) = &github {
         use_cases = use_cases.with_github(service.clone());
         consumers.push(crate::github::consumer(service.clone()));
-        consumers.push(crate::github::notice_consumer());
     }
     if let Some(b) = &browser {
         use_cases = use_cases.with_browser(b.clone());
@@ -936,8 +936,15 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let use_cases = use_cases
         .with_evals(eval_service.clone())
         .with_projects(Arc::new(projects))
-        .with_work(work)
+        .with_work(work.clone())
         .with_repositories(Arc::new(RepositoryService::new(ids.clone())));
+    if github.is_some() {
+        consumers.push(crate::github::notice_consumer_with_services(
+            store.clone(),
+            artifacts.clone(),
+            work.clone(),
+        ));
+    }
     let conventions = Arc::new(
         devworks_core::services::conventions::ConventionService::new(
             store.clone(),
@@ -1084,8 +1091,36 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         ));
         IndexSupervisor::new(worker, ix.config)
     });
-    if let (Some(_), Some(index)) = (&github, &index_supervisor) {
+    let git_helpers_for_triage = index_supervisor.as_ref().map(|ix| {
+        (
+            ix.env().helpers.clone(),
+            ix.env().settings.git_program.clone(),
+        )
+    });
+    let github_triage = github
+        .as_ref()
+        .zip(config.providers.as_ref())
+        .map(|(github, _)| {
+            crate::github_triage::TriageWorker::new(
+                github.clone(),
+                work.clone(),
+                git_helpers_for_triage,
+            )
+        });
+    if let Some(worker) = &github_triage {
+        consumers.push(worker.consumer());
+    }
+    if let (Some(gh), Some(index)) = (&github, &index_supervisor) {
         consumers.push(crate::github::index_consumer(index.env().clone()));
+        if github_triage.is_some() {
+            consumers.push(crate::github_verify::Verifier::consumer(
+                gh.clone(),
+                store.clone(),
+                index.env().helpers.clone(),
+                control.clone(),
+                index.env().settings.git_program.clone(),
+            ));
+        }
     }
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
@@ -1414,6 +1449,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         containers,
         git,
         github,
+        github_triage,
         browser,
         desktop,
         watchers,
@@ -1524,6 +1560,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         containers,
         git,
         github,
+        github_triage,
         browser,
         desktop,
         watchers,
@@ -1762,6 +1799,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         commits: turn_commits,
     });
     if let Some(worker) = &workspace_replies {
+        worker.bind(&turn);
+    }
+    if let Some(worker) = &github_triage {
         worker.bind(&turn);
     }
     let commits = {
@@ -2010,6 +2050,23 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             Arc::new(
                 Loop::new("git", |stopped| {
                     crate::git::run(service.clone(), stopped, commits("git"))
+                })
+                .on_stop(move || stop.stop()),
+            ),
+        );
+    }
+    if let Some(worker) = github_triage {
+        let stop = worker.clone();
+        workers.start(
+            StopAt::Work,
+            None,
+            Arc::new(
+                Loop::new("GitHub issue triage", |stopped| {
+                    crate::github_triage::run(
+                        worker.clone(),
+                        stopped,
+                        commits("GitHub issue triage"),
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),

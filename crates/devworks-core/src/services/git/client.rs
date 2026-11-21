@@ -331,6 +331,53 @@ mod process_argument_tests {
 }
 
 impl Git<'_> {
+    /// Captures tracked bytes of an immutable commit for an isolated verifier. A Git archive
+    /// carries no shared Git directory, configuration or working-copy changes.
+    pub fn archive_commit(
+        &self,
+        dir: &Path,
+        oid: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(oid)
+            || self
+                .resolve(dir, oid)?
+                .is_none_or(|(current, _)| current != oid)
+        {
+            return Err(GitFault::Malformed(
+                "verification commit is unavailable".into(),
+            ));
+        }
+        self.run(dir, &["archive", "--format=tar", oid], max_bytes)
+    }
+
+    /// Reads one committed file blob at `oid:path` without touching the working tree.
+    pub fn show_blob(
+        &self,
+        dir: &Path,
+        oid: &str,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, GitFault> {
+        if !oid_ok(oid)
+            || path.is_empty()
+            || path.starts_with('/')
+            || path.contains("..")
+            || path.contains('\0')
+            || self
+                .resolve(dir, oid)?
+                .is_none_or(|(current, _)| current != oid)
+        {
+            return Ok(None);
+        }
+        let spec = format!("{oid}:{path}");
+        match self.run(dir, &["show", &spec], max_bytes) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(GitFault::Helper(HelperFault::Failed { .. })) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
     pub fn version(&self, dir: &Path) -> Result<String, GitFault> {
         self.line(dir, &["version"])?
             .ok_or_else(|| GitFault::Malformed("Git version unavailable".into()))

@@ -3959,11 +3959,11 @@ impl Check for GithubIssueLink {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
-#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 2}))]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 3}))]
 pub enum GithubIssueLinkResult {
-    #[schemars(extend("x-until" = 2))]
+    #[schemars(extend("x-until" = 3))]
     Legacy(GitLink),
-    #[schemars(extend("x-since" = 2))]
+    #[schemars(extend("x-since" = 3))]
     Current(GithubIssueLink),
 }
 impl Check for GithubIssueLinkResult {
@@ -3978,10 +3978,10 @@ impl Revisioned for GithubIssueLinkResult {
     fn retain_revision(&mut self, _revision: u32) {}
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
-            Self::Legacy(_) if revision >= 2 => {
+            Self::Legacy(_) if revision >= 3 => {
                 Err("legacy result requires its recorded revision".into())
             }
-            Self::Current(_) if revision < 2 => {
+            Self::Current(_) if revision < 3 => {
                 Err("current result cannot be represented at this revision".into())
             }
             _ => Ok(()),
@@ -4048,10 +4048,31 @@ impl Check for GithubIssueIntakeView {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueIntakePage {
+    pub items: Rows<GithubIssueIntakeView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for GithubIssueIntakePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        crate::protocol::rules::record(
+            "GithubIssueIntakePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GithubPollStatusView {
     pub repository_id: Id,
     pub endpoints: Items<GithubPollEndpoint>,
-    pub intake: Page<GithubIssueIntakeView>,
+    pub intake: GithubIssueIntakePage,
     pub interval_seconds: PositiveCounter,
     pub next_admission_at_ms: Counter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4075,11 +4096,11 @@ impl Check for GithubPollStatusView {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
-#[schemars(extend("x-earlier" = {"name": "Page", "before": 2}))]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
 pub enum GithubPollStatusResult {
-    #[schemars(extend("x-until" = 2))]
+    #[schemars(extend("x-until" = 3))]
     Legacy(Page<GithubObservation>),
-    #[schemars(extend("x-since" = 2))]
+    #[schemars(extend("x-since" = 3))]
     Current(GithubPollStatusView),
 }
 impl Check for GithubPollStatusResult {
@@ -4094,10 +4115,10 @@ impl Revisioned for GithubPollStatusResult {
     fn retain_revision(&mut self, _revision: u32) {}
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
-            Self::Legacy(_) if revision >= 2 => {
+            Self::Legacy(_) if revision >= 3 => {
                 Err("legacy result requires its recorded revision".into())
             }
-            Self::Current(_) if revision < 2 => {
+            Self::Current(_) if revision < 3 => {
                 Err("current result cannot be represented at this revision".into())
             }
             _ => Ok(()),
@@ -8596,35 +8617,35 @@ pub struct GithubAccountState {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Label", extend("x-since" = 2))]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub api_host: Option<Label>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Label", extend("x-since" = 2))]
+    #[schemars(with = "Label", extend("x-since" = 3))]
     pub authorization_state: Option<Label>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Revision", extend("x-since" = 2))]
+    #[schemars(with = "Revision", extend("x-since" = 3))]
     pub permission_revision: Option<Revision>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Items<Label>", extend("x-since" = 2))]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
     pub granted_scopes: Option<Items<Label>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Text", extend("x-since" = 2))]
+    #[schemars(with = "Text", extend("x-since" = 3))]
     pub failure: Option<Text>,
 }
 impl Check for GithubAccountState {
@@ -8647,19 +8668,19 @@ impl Check for GithubAccountState {
 
 impl Revisioned for GithubAccountState {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 3 {
             self.api_host = None;
         }
-        if revision < 2 {
+        if revision < 3 {
             self.authorization_state = None;
         }
-        if revision < 2 {
+        if revision < 3 {
             self.permission_revision = None;
         }
-        if revision < 2 {
+        if revision < 3 {
             self.granted_scopes = None;
         }
-        if revision < 2 {
+        if revision < 3 {
             self.failure = None;
         }
     }

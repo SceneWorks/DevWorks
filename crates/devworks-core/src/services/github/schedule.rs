@@ -104,6 +104,34 @@ impl GitHubService {
                     defer_until_ms: Some(next_due_at_ms),
                 });
             }
+            if row.policy.changes
+                && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
+                    self.poll_pull_requests(&row.local)
+            {
+                return Ok(PollPass {
+                    after,
+                    defer_until_ms: Some(next_due_at_ms),
+                });
+            }
+            if row.policy.sync
+                && let Ok(Some(until)) = self.poll_scheduled_comments(&row.local)
+            {
+                return Ok(PollPass {
+                    after,
+                    defer_until_ms: Some(until),
+                });
+            }
+            if row.policy.changes
+                && let Ok(Some(until)) = self.poll_scheduled_evidence(&row.local)
+            {
+                return Ok(PollPass {
+                    after,
+                    defer_until_ms: Some(until),
+                });
+            }
+            if row.policy.sync {
+                self.queue_one_resolution(&row.local)?;
+            }
         }
         Ok(PollPass {
             after: next,

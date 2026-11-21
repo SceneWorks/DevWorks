@@ -27,7 +27,7 @@ pub(crate) fn message_board(
     for message in &board.inbox {
         ui.group(|ui| {
             ui.label(format!("{:?} · {}", message.kind, message.from.name.0));
-            ui.label(&message.body.0);
+            widgets::text_with_github_links(ui, &message.body.0);
             if let Some(item) = &message.item_id {
                 widgets::caption(ui, format!("Work: {}", item.0.as_str()));
             }
@@ -79,7 +79,7 @@ pub(crate) fn message_board(
     for message in &board.history.items {
         ui.group(|ui| {
             ui.label(format!("{:?} · {}", message.kind, message.from.name.0));
-            ui.label(&message.body.0);
+            widgets::text_with_github_links(ui, &message.body.0);
             let mut meta = Vec::new();
             if let Some(item) = &message.item_id {
                 meta.push(format!("work {}", item.0.as_str()));

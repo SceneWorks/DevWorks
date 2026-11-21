@@ -100,7 +100,10 @@ impl GitHubService {
             if self.is_stopped() {
                 break;
             }
-            if self.poll_evidence_endpoint(&target, &pull, *endpoint)? {
+            if self
+                .poll_evidence_endpoint(&target, &pull, *endpoint)?
+                .is_some()
+            {
                 break;
             }
         }
@@ -152,12 +155,99 @@ impl GitHubService {
         Ok(value["head"]["sha"].as_str().map(str::to_owned))
     }
 
+    /// Reconcile one known open pull per pass, including when the pull list returned 304.
+    pub(super) fn poll_scheduled_evidence(
+        &self,
+        registration: &Id,
+    ) -> Result<Option<i64>, Failure> {
+        const KEY: &str = "pull-evidence";
+        let now = self.clock.now_ms().get();
+        let selected = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+            let Some(target) = issue_poll::target(snapshot, registration)? else {
+                return Ok(None);
+            };
+            let cursor = snapshot
+                .github()
+                .github_poll_cursor(&target.repository.id, KEY)?;
+            if cursor.as_ref().is_some_and(|row| row.next_poll_at_ms > now) {
+                return Ok(None);
+            }
+            let after = cursor
+                .as_ref()
+                .and_then(|row| row.watermark.as_ref())
+                .filter(|v| {
+                    v["permissionRevision"].as_i64() == Some(target.account.permission_revision)
+                })
+                .and_then(|v| v["after"].as_i64())
+                .unwrap_or(0);
+            let pull = snapshot
+                .github()
+                .github_open_pulls(&target.repository.id, after, 1)?
+                .into_iter()
+                .next();
+            Ok(Some((target, cursor, pull)))
+        })?;
+        let Some((target, cursor, pull)) = selected else {
+            return Ok(None);
+        };
+        let mut after = 0;
+        if let Some(pull) = pull {
+            let number = &pull.subject_id;
+            let head = pull
+                .head
+                .as_deref()
+                .ok_or_else(|| StorageError::InvalidRecord("Missing pull request head".into()))?;
+            let selected = Pull { number, head };
+            let kinds = [
+                Evidence::CheckRun,
+                Evidence::CheckSuite,
+                Evidence::WorkflowRun,
+                Evidence::Status,
+                Evidence::Review,
+                Evidence::ReviewComment,
+            ];
+            for kind in kinds {
+                if self.is_stopped() {
+                    return Ok(None);
+                }
+                if let Some(until) = self.poll_evidence_endpoint(&target, &selected, kind)? {
+                    return Ok(Some(until));
+                }
+            }
+            after = number
+                .parse::<i64>()
+                .map_err(|_| StorageError::InvalidRecord("Invalid pull request number".into()))?;
+        }
+        run_write(&*self.store, WriteOptions::observed(), move |tx| {
+            issue_poll::ensure_target(tx, &target)?;
+            let revision = cursor.as_ref().map(|row| row.revision);
+            let cursor = StoredGithubPollCursor {
+                repository_id: target.repository.id.clone(),
+                endpoint: KEY.into(),
+                revision: revision.unwrap_or(0) + 1,
+                etag: None,
+                last_modified: None,
+                next_page: None,
+                bootstrap_complete: true,
+                next_poll_at_ms: now.saturating_add(if after == 0 { INTERVAL_MS } else { 1000 }),
+                last_polled_at_ms: Some(now),
+                failure_count: 0,
+                last_error: None,
+                watermark: Some(
+                    json!({"after":after,"permissionRevision":target.account.permission_revision}),
+                ),
+            };
+            tx.github().put_github_poll_cursor(&cursor, revision)
+        })?;
+        Ok(None)
+    }
+
     fn poll_evidence_endpoint(
         &self,
         target: &PollTarget,
         pull: &Pull<'_>,
         kind: Evidence,
-    ) -> Result<bool, Failure> {
+    ) -> Result<Option<i64>, Failure> {
         let key = format!("pull:{}:{}:{}", pull.number, pull.head, kind.kind());
         let current = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             snapshot
@@ -169,7 +259,7 @@ impl GitHubService {
             .as_ref()
             .is_some_and(|row| row.next_poll_at_ms > now)
         {
-            return Ok(false);
+            return Ok(None);
         }
         let (suffix, container) = kind.endpoint(pull.number, pull.head);
         let path = suffix
@@ -281,7 +371,7 @@ impl GitHubService {
                 }
             }
             tx.github().put_github_poll_cursor(&row, revision)?;
-            Ok(throttle)
+            Ok(throttle.then_some(row.next_poll_at_ms))
         })
         .map_err(Into::into)
     }
@@ -364,16 +454,16 @@ fn evidence_rows(
     Ok(out)
 }
 
-fn publish_observation(
+pub(super) fn publish_observation(
     tx: &mut dyn WriteTransaction,
     native: &Id,
     mut observation: StoredGithubObservation,
     notify: bool,
-) -> Result<(), StorageError> {
+) -> Result<bool, StorageError> {
     observation.id = tx.new_id(IdKind::Event);
     let stored = tx.github().append_github_observation(&observation)?;
     if stored.id != observation.id || !notify {
-        return Ok(());
+        return Ok(stored.id == observation.id);
     }
     let event = EventId(tx.new_id(IdKind::Event));
     let payload = json!({
@@ -392,7 +482,12 @@ fn publish_observation(
         aggregate_kind: "github_observation".into(),
         aggregate_id: stored.id.as_str().into(),
         aggregate_revision: 1,
-        kind: "GithubPullEvidenceChanged".into(),
+        kind: if stored.kind == "PullRequest" {
+            "GithubPullRequestChanged"
+        } else {
+            "GithubPullEvidenceChanged"
+        }
+        .into(),
         payload: payload.clone(),
     })?;
     super::references::enqueue(
@@ -401,5 +496,6 @@ fn publish_observation(
         native,
         super::references::NOTICE_CONSUMER,
         payload,
-    )
+    )?;
+    Ok(true)
 }

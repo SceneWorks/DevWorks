@@ -9,7 +9,6 @@ use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::gateway::AdmittedCommand;
 use crate::operations::issues::PublishInput;
-use crate::ports::http::HttpRequest;
 use crate::ports::storage::{
     DesiredExecution, GithubIssueKey, NewEvent, NewOperation, NewQueueEntry, OperationRecord,
     ReadOptions, ReadSnapshot, StorageError, WriteOptions, WriteTransaction, read_snapshot,
@@ -219,7 +218,7 @@ pub(super) fn admit(
         event_id: event,
         root_id: Some(input.issue_id.clone()),
         operation_id: Some(id.clone()),
-        partition: Some(target.repository.id.as_str().into()),
+        partition: Some(format!("publication:{logical_key}")),
         priority: 0,
         ready_at_ms: now,
         payload: json!({}),
@@ -356,28 +355,11 @@ impl GitHubService {
         let token = self
             .client
             .token_for_account(&*self.store, &target.account)?;
-        let body = serde_json::to_vec(&json!({
-            "query": "mutation PublishIssue($input:CreateIssueInput!){createIssue(input:$input){clientMutationId issue{id number repository{id}}}}",
-            "variables":{"input":{
-                "repositoryId":job.github_node_id, "title":job.title, "body":job.body,
-                "clientMutationId":job.marker,
-            }}
-        })).map_err(|_| Fault::InvalidResponse)?;
-        let mut request =
-            HttpRequest::post("https://api.github.com/graphql", "application/json", body)
-                .secret_header("Authorization", token);
-        request.timeout_ms = 15_000;
-        request.max_response_bytes = 524_288;
-        let response = self
-            .client
-            .http
-            .send(&request)
-            .map_err(|_| Fault::Ambiguous)?;
-        if !response.success() {
-            return Err(Fault::Rejected(response.status));
-        }
-        let document: Value =
-            serde_json::from_slice(&response.body).map_err(|_| Fault::Ambiguous)?;
+        let document = self.client.graphql_mutation(
+            token,
+            "mutation PublishIssue($input:CreateIssueInput!){createIssue(input:$input){clientMutationId issue{id number repository{id}}}}",
+            json!({"repositoryId":job.github_node_id, "title":job.title, "body":job.body, "clientMutationId":job.marker}),
+        )?;
         let result = &document["data"]["createIssue"];
         if result["clientMutationId"].as_str() != Some(&job.marker)
             || result["issue"]["repository"]["id"].as_str() != Some(&job.github_node_id)

@@ -6956,7 +6956,7 @@
         },
         "apiHost": {
           "$ref": "#/$defs/Text1To256",
-          "x-since": 2
+          "x-since": 3
         },
         "authFlowId": {
           "anyOf": [
@@ -6970,19 +6970,19 @@
         },
         "authorizationState": {
           "$ref": "#/$defs/Text1To256",
-          "x-since": 2
+          "x-since": 3
         },
         "failure": {
           "$ref": "#/$defs/Text1To4096",
-          "x-since": 2
+          "x-since": 3
         },
         "grantedScopes": {
           "$ref": "#/$defs/List_Text1To256_0_128",
-          "x-since": 2
+          "x-since": 3
         },
         "permissionRevision": {
           "$ref": "#/$defs/Revision",
-          "x-since": 2
+          "x-since": 3
         },
         "state": {
           "$ref": "#/$defs/ItemState"
@@ -6990,6 +6990,32 @@
       },
       "required": [
         "state"
+      ],
+      "type": "object"
+    },
+    "GithubIssueIntakePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_GithubIssueIntakeView_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
       ],
       "type": "object"
     },
@@ -7096,7 +7122,7 @@
     },
     "GithubIssueLinkResult": {
       "$ref": "#/$defs/GithubIssueLink",
-      "x-since": 2
+      "x-since": 3
     },
     "GithubIssueTracking": {
       "additionalProperties": false,
@@ -7240,7 +7266,7 @@
     },
     "GithubPollStatusResult": {
       "$ref": "#/$defs/GithubPollStatusView",
-      "x-since": 2
+      "x-since": 3
     },
     "GithubPollStatusView": {
       "additionalProperties": false,
@@ -7249,7 +7275,7 @@
           "$ref": "#/$defs/List_GithubPollEndpoint_0_128"
         },
         "intake": {
-          "$ref": "#/$defs/Page29"
+          "$ref": "#/$defs/GithubIssueIntakePage"
         },
         "intervalSeconds": {
           "$ref": "#/$defs/PositiveCounter"
@@ -15280,7 +15306,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page30"
+              "$ref": "#/$defs/Page29"
             }
           },
           "required": [
@@ -15348,7 +15374,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page31"
+              "$ref": "#/$defs/Page30"
             }
           },
           "required": [
@@ -15365,7 +15391,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page31"
+              "$ref": "#/$defs/Page30"
             }
           },
           "required": [
@@ -15382,7 +15408,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page32"
+              "$ref": "#/$defs/Page31"
             }
           },
           "required": [
@@ -15484,7 +15510,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page33"
+              "$ref": "#/$defs/Page32"
             }
           },
           "required": [
@@ -15501,7 +15527,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page33"
+              "$ref": "#/$defs/Page32"
             }
           },
           "required": [
@@ -15688,7 +15714,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page34"
+              "$ref": "#/$defs/Page33"
             }
           },
           "required": [
@@ -15722,7 +15748,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page35"
+              "$ref": "#/$defs/Page34"
             }
           },
           "required": [
@@ -15875,7 +15901,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page35"
             }
           },
           "required": [
@@ -16028,7 +16054,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page37"
+              "$ref": "#/$defs/Page36"
             }
           },
           "required": [
@@ -16062,7 +16088,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page37"
+              "$ref": "#/$defs/Page36"
             }
           },
           "required": [
@@ -16079,7 +16105,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page37"
+              "$ref": "#/$defs/Page36"
             }
           },
           "required": [
@@ -16096,7 +16122,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page38"
+              "$ref": "#/$defs/Page37"
             }
           },
           "required": [
@@ -16113,7 +16139,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page39"
+              "$ref": "#/$defs/Page38"
             }
           },
           "required": [
@@ -16283,7 +16309,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page41"
+              "$ref": "#/$defs/Page40"
             }
           },
           "required": [
@@ -16317,7 +16343,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page42"
+              "$ref": "#/$defs/Page41"
             }
           },
           "required": [
@@ -16368,7 +16394,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page43"
+              "$ref": "#/$defs/Page42"
             }
           },
           "required": [
@@ -16402,7 +16428,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page44"
+              "$ref": "#/$defs/Page43"
             }
           },
           "required": [
@@ -16419,7 +16445,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page45"
+              "$ref": "#/$defs/Page44"
             }
           },
           "required": [
@@ -16436,7 +16462,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page43"
+              "$ref": "#/$defs/Page42"
             }
           },
           "required": [
@@ -16453,7 +16479,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page45"
             }
           },
           "required": [
@@ -16708,7 +16734,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page48"
+              "$ref": "#/$defs/Page47"
             }
           },
           "required": [
@@ -16861,7 +16887,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page49"
+              "$ref": "#/$defs/Page48"
             }
           },
           "required": [
@@ -16997,7 +17023,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page50"
+              "$ref": "#/$defs/Page49"
             }
           },
           "required": [
@@ -17150,7 +17176,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page51"
+              "$ref": "#/$defs/Page50"
             }
           },
           "required": [
@@ -17460,7 +17486,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page52"
+              "$ref": "#/$defs/Page51"
             }
           },
           "required": [
@@ -17783,7 +17809,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page53"
+              "$ref": "#/$defs/Page52"
             }
           },
           "required": [
@@ -19282,7 +19308,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_GithubIssueIntakeView_0_500"
+          "$ref": "#/$defs/List_ResourceRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19334,7 +19360,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ResourceRecord_0_500"
+          "$ref": "#/$defs/List_LeaseRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19360,7 +19386,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_LeaseRecord_0_500"
+          "$ref": "#/$defs/List_BrowserSession_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19386,7 +19412,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_BrowserSession_0_500"
+          "$ref": "#/$defs/List_BrowserObservation_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19412,7 +19438,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_BrowserObservation_0_500"
+          "$ref": "#/$defs/List_WebResult_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19438,7 +19464,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_WebResult_0_500"
+          "$ref": "#/$defs/List_ContainerCapability_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19464,7 +19490,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ContainerCapability_0_500"
+          "$ref": "#/$defs/List_JobRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19490,7 +19516,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_JobRecord_0_500"
+          "$ref": "#/$defs/List_SettingEntry_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19516,32 +19542,6 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SettingEntry_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page38": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
           "$ref": "#/$defs/List_RouteCatalogModel_0_500"
         },
         "nextCursor": {
@@ -19561,7 +19561,7 @@
       ],
       "type": "object"
     },
-    "Page39": {
+    "Page38": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19613,7 +19613,7 @@
       ],
       "type": "object"
     },
-    "Page41": {
+    "Page40": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19639,7 +19639,7 @@
       ],
       "type": "object"
     },
-    "Page42": {
+    "Page41": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19665,7 +19665,7 @@
       ],
       "type": "object"
     },
-    "Page43": {
+    "Page42": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19691,7 +19691,7 @@
       ],
       "type": "object"
     },
-    "Page44": {
+    "Page43": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19717,7 +19717,7 @@
       ],
       "type": "object"
     },
-    "Page45": {
+    "Page44": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19743,7 +19743,7 @@
       ],
       "type": "object"
     },
-    "Page46": {
+    "Page45": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19769,7 +19769,7 @@
       ],
       "type": "object"
     },
-    "Page48": {
+    "Page47": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19795,7 +19795,7 @@
       ],
       "type": "object"
     },
-    "Page49": {
+    "Page48": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -19803,6 +19803,32 @@
         },
         "items": {
           "$ref": "#/$defs/List_QueueDelivery_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "Page49": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_ImportRun_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -19854,32 +19880,6 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ImportRun_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page51": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
           "$ref": "#/$defs/List_McpClientAccess_0_500"
         },
         "nextCursor": {
@@ -19899,7 +19899,7 @@
       ],
       "type": "object"
     },
-    "Page52": {
+    "Page51": {
       "additionalProperties": false,
       "properties": {
         "checkpoint": {
@@ -19930,7 +19930,7 @@
       ],
       "type": "object"
     },
-    "Page53": {
+    "Page52": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {

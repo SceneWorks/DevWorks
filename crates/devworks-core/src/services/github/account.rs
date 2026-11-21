@@ -292,7 +292,7 @@ impl CommandHandler for GitHubService {
             };
         }
         if let OperationInput::Issues(IssuesInput::Publish(input)) = command.input() {
-            if command.schema_revision().0 < 2 {
+            if command.schema_revision().0 < 3 {
                 return Ok(None);
             }
             return match publish::prepare(ctx, input, env) {
@@ -301,7 +301,7 @@ impl CommandHandler for GitHubService {
             };
         }
         if let OperationInput::Issues(IssuesInput::Link(input)) = command.input() {
-            if command.schema_revision().0 < 2 {
+            if command.schema_revision().0 < 3 {
                 return Ok(None);
             }
             return match self.prepare_link(ctx, input, env) {
@@ -371,6 +371,9 @@ impl CommandHandler for GitHubService {
             };
         }
         if let OperationInput::Issues(IssuesInput::Publish(input)) = command.input() {
+            if command.schema_revision().0 < 3 {
+                return decided(tx, Err(refusal(DomainErrorCode::SchemaMismatch).into()));
+            }
             let outcome = match command.prepared::<Result<publish::PreparedPublish, Failure>>() {
                 Some(Ok(prepared)) => publish::admit(ctx, command, tx, input, prepared),
                 Some(Err(Failure::Refused(refusal))) => Err(refusal.clone().into()),
@@ -382,6 +385,9 @@ impl CommandHandler for GitHubService {
             };
         }
         if let OperationInput::Issues(IssuesInput::Link(input)) = command.input() {
+            if command.schema_revision().0 < 3 {
+                return decided(tx, Err(refusal(DomainErrorCode::SchemaMismatch).into()));
+            }
             let outcome = match command.prepared::<Result<issues::CheckedLink, Failure>>() {
                 Some(Ok(checked)) => issues::link(input, checked, tx),
                 Some(Err(Failure::Refused(refusal))) => Err(refusal.clone().into()),

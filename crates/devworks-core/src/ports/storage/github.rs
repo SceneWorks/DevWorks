@@ -185,6 +185,21 @@ pub struct StoredGithubObligationRetirement {
     pub adjudication_ref: Value,
     pub created_at_ms: i64,
 }
+/// A project-owned investigation of one inbound issue, retained across source updates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredGithubTriageCase {
+    pub id: Id,
+    pub revision: i64,
+    pub key: GithubIssueKey,
+    pub project_id: ProjectId,
+    pub work_id: RootId,
+    pub source_revision: String,
+    pub triage_operation_id: OperationId,
+    pub state: String,
+    pub evidence: Option<Value>,
+}
+
 /// Source requested by a committed GitHub ref event for one native indexing run.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,6 +215,12 @@ pub struct StoredGithubIndexTarget {
 }
 
 pub trait GithubRead {
+    fn github_triage_case(
+        &self,
+        key: &GithubIssueKey,
+        project: &ProjectId,
+    ) -> Result<Option<StoredGithubTriageCase>, StorageError>;
+
     fn github_index_target(
         &self,
         run: &Id,
@@ -275,6 +296,13 @@ pub trait GithubRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredGithubObservation>, StorageError>;
+    /// Latest open pull requests of an already-authorized canonical repository, by number.
+    fn github_open_pulls(
+        &self,
+        repository: &Id,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<StoredGithubObservation>, StorageError>;
     fn github_poll_cursor(
         &self,
         repository: &Id,
@@ -324,6 +352,12 @@ pub trait GithubRead {
     ) -> Result<Vec<StoredGithubResolutionWitness>, StorageError>;
 }
 pub trait GithubRepository: GithubRead {
+    fn put_github_triage_case(
+        &mut self,
+        case: &StoredGithubTriageCase,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError>;
+
     fn put_github_index_target(
         &mut self,
         target: &StoredGithubIndexTarget,

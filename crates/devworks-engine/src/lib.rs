@@ -221,6 +221,8 @@ pub mod effect_consumer;
 pub mod evals;
 pub mod git;
 pub mod github;
+pub mod github_triage;
+pub mod github_verify;
 pub mod help;
 pub mod indexing;
 mod instruction_guard;

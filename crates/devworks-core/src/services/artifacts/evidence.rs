@@ -280,6 +280,7 @@ fn commit(
             "recordedBy": host.0.as_str(),
             "sourceKind": e.source.get("kind"),
             "source": e.source,
+            "derived": e.source,
         }),
     };
     tx.artifacts().insert_artifact(&artifact)?;

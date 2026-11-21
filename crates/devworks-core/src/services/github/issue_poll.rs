@@ -44,7 +44,7 @@ pub(super) struct PollTarget {
 pub(super) struct IssueObservation {
     pub(super) number: i64,
     updated_at_ms: i64,
-    url: String,
+    pub(super) url: String,
     pub(super) payload: Value,
 }
 
@@ -608,11 +608,12 @@ pub(super) fn capture(
     row.remote_revision = observation.id.as_str().into();
     row.observation_id = observation.id;
     tx.github().put_github_issue(&row, revision)?;
-    if previous.is_some()
-        && !tx
+    if let Some(prev) = &previous
+        && (!tx
             .github()
             .github_work_links(&row.key, None, None, 1)?
             .is_empty()
+            || row.state == "AwaitingDecision")
     {
         let event = EventId(tx.new_id(IdKind::Event));
         let actor = tx.store().host_actor.clone();
@@ -621,6 +622,7 @@ pub(super) fn capture(
             "githubRepositoryId": row.key.repository_id,
             "issueNumber": row.key.number,
             "observationId": row.observation_id,
+            "previousObservationId": prev.id,
             "url": observation.url,
             "repositoryUrl": target.repository.url,
             "state": observation.payload["state"],

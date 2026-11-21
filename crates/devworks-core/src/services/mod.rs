@@ -233,10 +233,10 @@ impl UseCases {
             "github.checks",
             "github.reviews",
         ] {
-            self.register(op, None, Some(service.clone()));
+            self.register(op, Some(service.clone()), None);
         }
         for op in ["github.issue_sync", "issues.link", "issues.publish"] {
-            self.register(op, Some(service.clone()), None);
+            self.register(op, None, Some(service.clone()));
         }
         self
     }

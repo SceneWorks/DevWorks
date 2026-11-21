@@ -1542,7 +1542,7 @@
       "kind": "versioned",
       "legacy": "GitLink",
       "current": "GithubIssueLink",
-      "revision": 2,
+      "revision": 3,
       "projection": "none"
     },
     "GithubPollEndpoint": {
@@ -1567,12 +1567,20 @@
         "close_state": "?OperationState"
       }
     },
+    "GithubIssueIntakePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<GithubIssueIntakeView>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
     "GithubPollStatusView": {
       "kind": "record",
       "fields": {
         "repository_id": "Id",
         "endpoints": "Items<GithubPollEndpoint>",
-        "intake": "Page<GithubIssueIntakeView>",
+        "intake": "GithubIssueIntakePage",
         "interval_seconds": "PositiveCounter",
         "next_admission_at_ms": "Counter",
         "last_admitted_at_ms": "?Counter"
@@ -1582,7 +1590,7 @@
       "kind": "versioned",
       "legacy": "Page<GithubObservation>",
       "current": "GithubPollStatusView",
-      "revision": 2,
+      "revision": 3,
       "projection": "none",
       "earlierName": "Page"
     },
@@ -2988,7 +2996,7 @@
         "granted_scopes": "?Items<Label>",
         "failure": "?Text"
       },
-      "since": {"api_host": 2, "authorization_state": 2, "permission_revision": 2, "granted_scopes": 2, "failure": 2}
+      "since": {"api_host": 3, "authorization_state": 3, "permission_revision": 3, "granted_scopes": 3, "failure": 3}
     },
     "EvidenceKind": {
       "kind": "enum",
@@ -7201,7 +7209,7 @@
       "result": "GithubIssueLinkResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Reconcile saved remote identity after an uncertain create without duplicate publication. The native operation requires revision 2 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
+      "rules": "Reconcile saved remote identity after an uncertain create without duplicate publication. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "issues.link": {
       "operation": "issues.link",
@@ -7215,7 +7223,7 @@
       "result": "GithubIssueLinkResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Link an existing authenticated issue to this local work and preserve both identities. The native operation requires revision 2 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
+      "rules": "Link an existing authenticated issue to this local work and preserve both identities. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "tasks.move": {
       "operation": "tasks.move",
@@ -9616,7 +9624,7 @@
         "repository_id": "Id",
         "page": "?PageRequest"
       },
-      "since": {"page": 2},
+      "since": {"page": 3},
       "result": "GithubPollStatusResult",
       "effect": "Local",
       "authority": "Scoped",
@@ -11710,10 +11718,10 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
-    "issues.publish": [1, 2],
-    "issues.link": [1, 2],
-    "github.account": [1, 2],
-    "github.poll_status": [1, 2],
+    "issues.publish": [1, 3],
+    "issues.link": [1, 3],
+    "github.account": [1, 3],
+    "github.poll_status": [1, 3],
     "artifacts.save": [
       1,
       2,

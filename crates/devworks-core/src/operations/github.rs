@@ -84,7 +84,7 @@ pub struct PollStatusInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "PageRequest", extend("x-since" = 2))]
+    #[schemars(with = "PageRequest", extend("x-since" = 3))]
     pub page: Option<PageRequest>,
 }
 impl Check for PollStatusInput {
@@ -96,7 +96,7 @@ impl Check for PollStatusInput {
 }
 impl Revisioned for PollStatusInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 3 {
             self.page = None;
         }
     }

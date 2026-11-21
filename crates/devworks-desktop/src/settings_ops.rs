@@ -9,6 +9,7 @@ pub enum SettingsSlot {
     SettingsRead,
     GithubAccount,
     GithubAccountChange,
+    GithubRepositories,
     ContainerCapabilities,
     SettingsValidate,
     SettingsHealth,
