@@ -94,6 +94,7 @@ async fn scenario(fx: &Fx) -> (Arc<Runtime>, UnboundedReceiver<Request>) {
     let work = fx.h.root.join("watch-turn-work");
     std::fs::create_dir_all(work.join("work")).unwrap();
     let (mut composed, _) = watch_composition(fx, &work.canonicalize().unwrap());
+    composed.application.sessions = Some(devworks_engine::SessionPorts::default());
     composed.process_host = Arc::new(crate::compaction::StoppingHost::default());
     let (send, receive) = unbounded_channel();
     composed.config.providers = Some(
