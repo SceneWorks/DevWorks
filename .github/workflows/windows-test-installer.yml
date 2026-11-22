@@ -57,7 +57,9 @@ jobs:
           . ./tools/ci/windows-test-installer.ps1
           $payload = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'fixture')
           New-TestLauncher $env:GITHUB_WORKSPACE $payload.FullName
-          $probe = Join-Path $env:RUNNER_TEMP 'launcher_probe.rs'
+          $probeBuild = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'probe-build')
+          $probe = Join-Path $probeBuild.FullName 'launcher_probe.rs'
+          $probeExe = Join-Path $probeBuild.FullName 'devworks-desktop.exe'
           $desktop = Join-Path $payload.FullName 'devworks-desktop.exe'
           $worker = Join-Path $payload.FullName 'devworks-pdf-worker.exe'
           @'
@@ -75,8 +77,9 @@ jobs:
               std::fs::write(profile.join("launcher-probe.txt"), "passed").unwrap();
           }
           '@ | Set-Content -LiteralPath $probe -Encoding utf8NoBOM
-          rustc --edition 2024 --target x86_64-pc-windows-msvc -D warnings -O -C strip=symbols $probe -o $desktop
-          if ($LASTEXITCODE -ne 0 -or (Get-X64PeSubsystem $desktop) -ne 3) { throw 'Console probe build failed' }
+          rustc --edition 2024 --target x86_64-pc-windows-msvc -D warnings -O -C strip=symbols $probe -o $probeExe
+          if ($LASTEXITCODE -ne 0 -or (Get-X64PeSubsystem $probeExe) -ne 3) { throw 'Console probe build failed' }
+          Copy-Item -LiteralPath $probeExe -Destination $desktop
           Copy-Item -LiteralPath "$env:SystemRoot\System32\where.exe" -Destination $worker
           foreach ($exe in @($desktop, $worker)) {
             $file = [IO.File]::OpenWrite($exe)

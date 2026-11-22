@@ -76,11 +76,14 @@ function Assert-UnsignedX64([string]$Path) {
 }
 
 function New-TestLauncher([string]$Root, [string]$Payload) {
-    $launcher = Join-Path $Payload 'devworks-test-launcher.exe'
+    # MSVC can emit side files. Stage only the executable in the sealed payload.
+    $build = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'launcher-build')
+    $launcher = Join-Path $build.FullName 'devworks-test-launcher.exe'
     rustc --edition 2024 --target x86_64-pc-windows-msvc -D warnings -O -C strip=symbols `
         (Join-Path $Root 'packaging/windows/devworks-test-launcher.rs') -o $launcher
     if ($LASTEXITCODE -ne 0) { throw 'Windows Start launcher build failed' }
     Assert-UnsignedX64 $launcher
+    Copy-Item -LiteralPath $launcher -Destination $Payload
 }
 
 function Get-VerifiedTestSignature([string]$Path) {
