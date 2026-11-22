@@ -2,8 +2,7 @@
 //!
 //! Installed as `cargo` (a link or copy of `dev-host` placed ahead of the real cargo on
 //! `PATH`), or run as `dev-host cargo -- <args>`. It refuses when `check` fails or when
-//! `CARGO_TARGET_DIR` or a `--target-dir` argument points outside the root or into another
-//! host's folder, fills `CARGO_TARGET_DIR` in when unset, and then
+//! `CARGO_TARGET_DIR` or a `--target-dir` argument points outside this host's folder, fills `CARGO_TARGET_DIR` in when unset, and then
 //! runs the real cargo: `DEV_HOST_REAL_CARGO` if set, else the first `cargo` on `PATH` that is
 //! not this program, else `rustup which cargo`.
 

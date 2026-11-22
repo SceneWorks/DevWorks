@@ -55,8 +55,10 @@ impl Host {
         self.dir().join(LOCKS_DIR)
     }
 
-    /// Accepts a caller-chosen build folder (`CARGO_TARGET_DIR`, `--target-dir`) only under the
-    /// root and outside every other host's folder, so two hosts never build into one folder.
+    /// Accepts a caller-chosen build folder (`CARGO_TARGET_DIR`, `--target-dir`) only inside this
+    /// host's folder: anywhere else on a shared root (another host's folder, or a top-level
+    /// folder such as a 0.1 `build/`) another host may build into it too, and cleanup never
+    /// reclaims it.
     /// `what` names the setting in the error. Returns the resolved path.
     pub fn allow_build_dir(&self, what: &str, path: &Path, cwd: &Path) -> Result<PathBuf, String> {
         if !is_under(path, &self.root, cwd) {
@@ -67,7 +69,7 @@ impl Host {
                 self.root.display()
             ));
         }
-        if is_under(path, &self.root.join(HOSTS_DIR), cwd) && !is_under(path, &self.dir(), cwd) {
+        if !is_under(path, &self.dir(), cwd) {
             return Err(format!(
                 "{what} {} is not inside this host's folder {}, and another host may be \
                  using it; drop it so dev-host assigns a slot",
@@ -209,14 +211,14 @@ mod tests {
             host.allow_build_dir("X", &host.dir().join("build/c"), cwd)
                 .is_ok()
         );
-        assert!(
-            host.allow_build_dir("X", &root.join("build/legacy"), cwd)
-                .is_ok()
-        );
-        let other = host
-            .allow_build_dir("X", &root.join("hosts/mac-b/build/c"), cwd)
-            .unwrap_err();
-        assert!(other.contains("another host"), "{other}");
+        for shared in [
+            root.join("hosts/mac-b/build/c"),
+            root.join("build/legacy"),
+            root.clone(),
+        ] {
+            let err = host.allow_build_dir("X", &shared, cwd).unwrap_err();
+            assert!(err.contains("another host"), "{}: {err}", shared.display());
+        }
         let outside = host
             .allow_build_dir("X", &scratch.path().join("target"), cwd)
             .unwrap_err();

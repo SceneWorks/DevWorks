@@ -196,8 +196,8 @@ fn now() -> u64 {
 
 /// The build folder for this worktree.
 ///
-/// A caller-set `CARGO_TARGET_DIR` under the root is kept; one outside the root or inside
-/// another host's folder is an error ([`Host::allow_build_dir`]).
+/// A caller-set `CARGO_TARGET_DIR` inside this host's folder is kept; any other one is an error
+/// ([`Host::allow_build_dir`]).
 pub fn target_dir(host: &Host, vars: &Vars, cwd: &Path, req: &Request) -> Result<PathBuf, String> {
     if let Some(set) = vars.get("CARGO_TARGET_DIR") {
         return host.allow_build_dir("CARGO_TARGET_DIR", Path::new(set), cwd);
