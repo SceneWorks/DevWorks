@@ -1,18 +1,26 @@
 //! `dev-host` verifies a host's dev-host root and decides where Rust builds and temp files go.
 //!
 //! Every self-hosted runner and agent session keeps its disposable state under one root,
-//! named by `DEV_HOST_ROOT`, on dedicated storage. The root holds a fixed layout
-//! (`build/`, `t/`, `locks/`, `cache/`, ...) and a `.dev-host-root` marker written once at
-//! setup. The tool never creates the root itself.
+//! named by `DEV_HOST_ROOT`, on dedicated storage, which several hosts may share (an SMB
+//! share mounted on two Macs, say). The root holds a `.dev-host-root` marker written once at
+//! setup, the shared `weights/`, `cache/` and `campaigns/<project>/<id>/evidence/`, and one
+//! folder per host, `hosts/<host>/` ([`host`]), for everything a host writes and decides about
+//! alone: `locks/`, `build/`, `t/`, `cache/` (caches updated in place),
+//! `campaigns/<project>/<id>/work/`, `runner/` and `docker/`. `<host>` is the name the OS
+//! reports, never a variable. The tool never creates the root; only `init-host` creates a
+//! host's folder.
 //!
 //! Subcommands:
-//! - `check`: verifies the root is set, on its own volume and marked ([`check`]).
-//! - `env`: prints `CARGO_TARGET_DIR` (a sticky build slot, [`plan`], [`slots`]) and the temp
-//!   folder variables for the current worktree.
+//! - `check`: verifies the root is set, on its own volume and marked, that this host's folder
+//!   exists, and that every `required_mount` is mounted ([`check`]).
+//! - `init-host`: creates this host's folder and its `locks/`, once per host.
+//! - `lock-dir`: prints this host's lock folder.
+//! - `env`: prints `CARGO_TARGET_DIR` (a sticky build slot in this host's folder, [`plan`],
+//!   [`slots`]) and the temp folder variables for the current worktree.
 //! - `cargo`: a backstop shim that refuses unsafe builds and fills in `CARGO_TARGET_DIR`
 //!   ([`shim`]).
-//! - `cleanup`: deletes idle and over-budget entries under the root, never anything in use
-//!   ([`cleanup`]).
+//! - `cleanup`: deletes idle and over-budget entries in this host's folder, never anything in
+//!   use and never another host's ([`cleanup`]).
 //! - `guard`: fails on new hardcoded machine paths and on agent docs that lack the dev-host
 //!   items ([`guard`]).
 //! - `install`: installs a released binary at a pinned version, checksum- and
@@ -26,6 +34,7 @@ pub mod cleanup;
 pub mod config;
 pub mod disk_budget;
 pub mod guard;
+pub mod host;
 pub mod install;
 pub mod plan;
 pub mod shim;

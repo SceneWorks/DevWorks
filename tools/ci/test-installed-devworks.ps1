@@ -28,6 +28,27 @@ foreach ($name in $script:payloadNames) {
     if ($hash -cne $signed.payload[$name].sha256) { throw "Installed bytes differ for $name" }
 }
 $desktop = Join-Path $layout.installed 'devworks-desktop.exe'
+$launcher = Join-Path $layout.installed 'devworks-test-launcher.exe'
+if ((Get-X64PeSubsystem $launcher) -ne 2 -or (Get-X64PeSubsystem $desktop) -ne 3) {
+    throw 'Expected a GUI Start launcher and a console-capable desktop for diagnostics'
+}
+
+Start-Process -FilePath $layout.shortcut
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$shortcutDesktop = $null
+while ($clock.Elapsed.TotalSeconds -lt 90) {
+    $shortcutDesktop = Get-Process -Name 'devworks-desktop' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $desktop -and $_.MainWindowTitle -eq 'DevWorks' } |
+        Select-Object -First 1
+    if ($shortcutDesktop) { break }
+    Start-Sleep -Milliseconds 250
+}
+if (-not $shortcutDesktop) { throw 'The installed Start shortcut did not open DevWorks' }
+$null = $shortcutDesktop.Handle
+if (-not $shortcutDesktop.CloseMainWindow() -or -not $shortcutDesktop.WaitForExit(30000) -or
+    $shortcutDesktop.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $profile 'workspace.sqlite'))) {
+    throw 'The Start shortcut did not start and close cleanly in the isolated test profile'
+}
 
 $png = Join-Path $work 'first-frame.png'
 $stderr = Join-Path $work 'app.stderr'
@@ -39,7 +60,8 @@ if (-not $process.WaitForExit(120000)) {
 }
 Get-Content -LiteralPath $stderr | Write-Host
 if ($process.ExitCode -ne 0 -or (Get-Item -LiteralPath $png).Length -le 64 -or
-    (Get-Content -LiteralPath $stderr -Raw) -notmatch 'devworks: runtime booted') {
+    (Get-Content -LiteralPath $stderr -Raw) -notmatch 'devworks: runtime booted' -or
+    (Get-Content -LiteralPath $stderr -Raw) -notmatch 'devworks: window closed') {
     throw 'The installed desktop did not boot the real runtime and render a frame'
 }
 $evidenceText = & $desktop --release-evidence
@@ -63,7 +85,9 @@ assert database.execute("PRAGMA user_version").fetchone() == (76,)
 assert database.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall() == [
     (row["version"], row["checksum"]) for row in expected
 ]
-assert database.execute("SELECT shutdown_state FROM app_boots ORDER BY started_at DESC LIMIT 1").fetchone() == ("Clean",)
+assert database.execute("SELECT shutdown_state FROM app_boots ORDER BY started_at DESC LIMIT 2").fetchall() == [
+    ("Clean",), ("Clean",)
+]
 '@ | python -I - $profile $releaseJson
 if ($LASTEXITCODE -ne 0) { throw 'Installed profile or boot evidence did not verify' }
 
@@ -95,6 +119,8 @@ $signed.qualification = [ordered]@{
     architecture = 'x64'
     scope = 'per-user'
     schemaVersion = 76
+    startShortcutOpenedAndClosedCleanly = $true
+    startLauncherSubsystem = 'Windows GUI'
     renderedAndClosedCleanly = $true
     installedPdfWorker = 'passed'
     installedDocuments = 'passed'

@@ -14,12 +14,26 @@ use dev_host::{Vars, check, install, shim};
 const USAGE: &str = "\
 usage:
   dev-host check
-      Verify DEV_HOST_ROOT: set, on its own volume, with the .dev-host-root marker.
+      Verify DEV_HOST_ROOT (set, on its own volume, with the .dev-host-root marker), that
+      this host's folder <root>/hosts/<host>/ exists, and that every required_mount in
+      <root>/dev-host.conf is mounted. <host> is the name the OS reports (macOS
+      LocalHostName, Windows computer name, else gethostname), kept to [A-Za-z0-9._-].
+      Fails within 10 s, naming each missing piece.
+  dev-host init-host
+      Create this host's folder <root>/hosts/<host>/ and its locks/ (nothing else), once
+      per host. Refuses unless the root and every required_mount pass the check.
+  dev-host lock-dir
+      Run the check, then print this host's lock folder <root>/hosts/<host>/locks.
   dev-host env [--format sh|github|powershell] [--project NAME] [--worktree PATH]
-               [--target TRIPLE] [--session ID] [--slots N] [--warm]
-      Print CARGO_TARGET_DIR (sticky build slot) and TMPDIR (TEMP/TMP on Windows).
+               [--target TRIPLE] [--session ID] [--slots N] [--warm] [--local-build]
+      Print CARGO_TARGET_DIR (a sticky build slot,
+      <root>/hosts/<host>/build/<project>/<key>/slot-<n>) and TMPDIR (TEMP/TMP on Windows,
+      <root>/hosts/<host>/t/<8-char id>).
       --warm marks this worktree's slot warm: reassigned and evicted last (the 7-day idle
       rule still applies).
+      --local-build points both at a new folder (mode 0700) in the system drive's temp
+      location instead, outside DEV_HOST_ROOT, with no build slot and nothing from the
+      share: for release signing builds. Each call makes a new folder; delete it after.
         sh          eval \"$(dev-host env)\"
         github      dev-host env --format github >> \"$GITHUB_ENV\"
         powershell  dev-host env --format powershell | Out-String | Invoke-Expression
@@ -29,10 +43,12 @@ usage:
       Run the real cargo after the checks. Installing dev-host under the name `cargo`
       ahead of the real one on PATH does the same.
   dev-host cleanup [--dry-run]
-      Delete build slots whose stamp is older than age_days, and t/<id> and
-      campaigns/*/*/work entries whose newest file is older than age_days; then, while
-      build/ or t/ is over budget, delete their least recently used idle entries (warm
-      slots last). Never touches campaigns/*/*/evidence, weights/ or locks/, and never
+      Clean this host's folder <root>/hosts/<host>/ only, never another host's: delete
+      build slots whose stamp is older than age_days, and t/<id> and campaigns/*/*/work
+      entries whose newest file is older than age_days; then, while this host's build/ or
+      t/ is over budget, delete their least recently used idle entries (warm slots last).
+      Only measures this host's locks/ and cache/ and the shared weights/, cache/ and
+      campaigns/*/*/evidence at the root. Never
       deletes an entry whose cargo lock is held or that a live process has open or as its
       working folder (macOS: lsof, Linux: /proc, Windows: handle table and modules). On
       Windows run cleanup elevated: an unelevated cleanup cannot see elevated processes
@@ -40,9 +56,12 @@ usage:
       privileges (schtasks /Create ... /RL HIGHEST /TR 'powershell -NoProfile -File
       C:\\path\\cleanup.ps1', a wrapper script that runs dev-host cleanup). Prints what
       it removed and the size of each
-      top-level folder. Settings in <root>/dev-host.conf (key = value):
-        age_days (default 7), build_budget_gb, t_budget_gb, cache_budget_gb,
-        campaigns_work_budget_gb, docker_budget_gb (GB = 10^9 bytes; unset = no budget)
+      top-level folder. Settings in <root>/dev-host.conf (key = value), the budgets
+      applying to each host's own folder:
+        age_days (default 7), build_budget_gb, t_budget_gb, cache_budget_gb (shared
+        cache/ plus this host's cache/, reported only), campaigns_work_budget_gb,
+        docker_budget_gb (GB = 10^9 bytes; unset = no budget);
+        required_mount = PATH (repeatable; see check)
   dev-host cleanup --migrate PATH [--dry-run]
       Delete an old copy outside the root under the same liveness checks. Refuses a
       symlink, a filesystem root, $HOME or a folder containing it, the root, a folder
@@ -98,10 +117,31 @@ fn main() -> ExitCode {
     };
     match command {
         "check" if rest.len() == 1 => match check::check_host(&vars) {
-            Ok(root) => {
-                println!("dev-host root ok: {}", root.display());
+            Ok(host) => {
+                println!(
+                    "dev-host root ok: {} (host folder {})",
+                    host.root().display(),
+                    host.dir().display()
+                );
                 ExitCode::SUCCESS
             }
+            Err(e) => fail(&format!("dev-host check failed: {e}")),
+        },
+        "lock-dir" if rest.len() == 1 => match check::check_host(&vars) {
+            Ok(host) => {
+                println!("{}", host.locks().display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => fail(&format!("dev-host check failed: {e}")),
+        },
+        "init-host" if rest.len() == 1 => match check::check_host_root(&vars) {
+            Ok(host) => match check::init_host(&host) {
+                Ok(dir) => {
+                    println!("dev-host init-host: {} is ready", dir.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(&format!("dev-host init-host: {e}")),
+            },
             Err(e) => fail(&format!("dev-host check failed: {e}")),
         },
         "env" => run_env(&vars, &rest[1..]),
@@ -144,11 +184,16 @@ fn current_dir() -> Result<PathBuf, String> {
 fn run_env(vars: &Vars, args: &[OsString]) -> ExitCode {
     let mut format = Format::default_for_platform();
     let mut req = Request::default();
+    let mut local_build = false;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let flag = flag.to_string_lossy();
         if flag == "--warm" {
             req.warm = true;
+            continue;
+        }
+        if flag == "--local-build" {
+            local_build = true;
             continue;
         }
         let Some(value) = it.next().map(|v| v.to_string_lossy().into_owned()) else {
@@ -180,12 +225,22 @@ fn run_env(vars: &Vars, args: &[OsString]) -> ExitCode {
             }
         }
     }
-    let root = match check::check_host(vars) {
-        Ok(root) => root,
+    let host = match check::check_host(vars) {
+        Ok(host) => host,
         Err(e) => return fail(&format!("dev-host check failed: {e}")),
     };
+    if local_build && (req.warm || req.slots.is_some()) {
+        return usage_error("--local-build uses no build slot; drop --warm and --slots");
+    }
     let result = current_dir()
-        .and_then(|cwd| plan::assignments(&root, vars, &cwd, &req))
+        .and_then(|cwd| {
+            if local_build {
+                plan::local_temp_base()
+                    .and_then(|base| plan::local_build_assignments(&host, &base, &cwd))
+            } else {
+                plan::assignments(&host, vars, &cwd, &req)
+            }
+        })
         .and_then(|a| plan::render(&a, format));
     match result {
         Ok(text) => {
@@ -230,11 +285,11 @@ fn run_cleanup(vars: &Vars, args: &[OsString]) -> ExitCode {
             other => return usage_error(&format!("unknown option {other}")),
         }
     }
-    let root = match check::check_host(vars) {
-        Ok(root) => root,
+    let host = match check::check_host(vars) {
+        Ok(host) => host,
         Err(e) => return fail(&format!("dev-host check failed: {e}")),
     };
-    let budgets = match config::read(&root).and_then(|c| Budgets::from_config(&c)) {
+    let budgets = match config::read(host.root()).and_then(|c| Budgets::from_config(&c.values)) {
         Ok(budgets) => budgets,
         Err(e) => return fail(&format!("dev-host cleanup: {e}")),
     };
@@ -246,7 +301,7 @@ fn run_cleanup(vars: &Vars, args: &[OsString]) -> ExitCode {
                 .map(PathBuf::from);
             current_dir().and_then(|cwd| {
                 cleanup::migrate(
-                    &root,
+                    host.root(),
                     &path,
                     home.as_deref(),
                     &cwd,
@@ -257,7 +312,7 @@ fn run_cleanup(vars: &Vars, args: &[OsString]) -> ExitCode {
             })
         }
         None => cleanup::run(
-            &root,
+            &host,
             &budgets,
             dry_run,
             std::time::SystemTime::now(),
