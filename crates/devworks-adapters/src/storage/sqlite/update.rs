@@ -324,6 +324,7 @@ mod tests {
         );
         let store = super::super::SqliteStore::open(config.clone()).unwrap();
         let migrations = shipped_witness();
+        let profile_schema = migrations.last().unwrap().version;
         let info = store.info();
         let hash = "a".repeat(64);
         let digest = devworks_core::ports::storage::FileDigest {
@@ -367,8 +368,8 @@ mod tests {
             old_build: "b".repeat(40),
             old_binary_digest: hash.clone(),
             old_version: "1.8.0".into(),
-            old_schema_capability: 70,
-            profile_schema: migrations.last().unwrap().version,
+            old_schema_capability: profile_schema,
+            profile_schema,
             profile_migrations: migrations,
             stage,
         };
@@ -460,9 +461,9 @@ mod tests {
     #[test]
     fn a_newer_verifier_cannot_substitute_its_own_writer_capability() {
         let (root, _, mut approval) = approved_profile("predecessor-writer-capability");
-        // This test binary supports schema 70, while recovery must evaluate the actual
-        // predecessor recorded in the receipt. SQLite remains untouched.
-        approval.old_schema_capability = 69;
+        // Recovery evaluates the predecessor recorded in the receipt, while this binary
+        // knows the newer profile schema. SQLite remains untouched during that check.
+        approval.old_schema_capability = approval.profile_schema - 1;
         let db = Connection::open(root.join(DATABASE_FILE)).unwrap();
         db.execute(
             "UPDATE app_update_state SET record_json=json_set(record_json,'$.approval',json(?1))",
