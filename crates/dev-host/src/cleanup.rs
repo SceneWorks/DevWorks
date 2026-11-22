@@ -1435,7 +1435,7 @@ mod tests {
         // A copy of a shared library this test binary uses, preloaded into a child: the loader
         // maps it and closes its descriptor, so only /proc/<pid>/maps shows it.
         let scratch = Scratch::new("cleanup-maps");
-        let (host, own) = host(&scratch);
+        let (_, own) = host(&scratch);
         let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
         let Some(lib) = mapped_paths(&maps).find(|p| {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
