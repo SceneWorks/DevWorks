@@ -297,6 +297,9 @@ pub trait ReleaseSource: Send + Sync {
         progress: &(dyn Fn(u64, u64) + Sync),
     ) -> Result<StagedRelease, ReleaseError>;
 
+    /// Retire private archived stages not referenced by the durable update state.
+    fn retain(&self, _stages: &[&str]) {}
+
     /// Reopen the actual staged bytes under the pinned release trust.
     fn verify(&self, stage: &StagedRelease, cancel: &Cancellation) -> Result<(), ReleaseError>;
 }
@@ -327,6 +330,7 @@ pub struct InstallApproval {
     pub old_build: String,
     pub old_binary_digest: String,
     pub old_version: String,
+    pub old_schema_capability: i64,
     pub profile_schema: i64,
     pub profile_migrations: Vec<MigrationWitness>,
     pub stage: StagedRelease,

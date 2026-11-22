@@ -48,11 +48,12 @@ impl eframe::App for App {
                 ctx.request_repaint_after(at.saturating_duration_since(Instant::now()));
             }
         }
-        if let Some(candidate) = self.candidate.take() {
+        if let Some(mut candidate) = self.candidate.take() {
             let approval = candidate.approval().clone();
-            match candidate.ready() {
-                Ok(gate) => {
-                    self.install_gate = Some(gate);
+            let healthy = candidate.healthy();
+            self.install_gate = candidate.take_gate();
+            match healthy {
+                Ok(()) => {
                     if let Some(service) = self.update_service.take() {
                         let _ = service.finish(&approval, InstallOutcome::Installed, "The signed build started with matching offline Help. Held work needs Continue.");
                     }
@@ -117,13 +118,19 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let startup = app_updates::enter_application();
-    let (gate, candidate, install_error) = match startup {
-        Ok(startup) => (startup.gate, startup.candidate, None),
-        Err(error) => (None, None, Some(error)),
+    let (gate, mut candidate, recovery_profile, install_error) = match startup {
+        Ok(startup) => (
+            startup.gate,
+            startup.candidate,
+            startup.recovery_profile,
+            None,
+        ),
+        Err(error) => (None, None, None, Some(error)),
     };
     let data_root = candidate
         .as_ref()
         .map(|candidate| candidate.profile().to_owned())
+        .or(recovery_profile)
         .or_else(|| arg("--data-dir").map(PathBuf::from))
         .or_else(default_data_root);
     let close_at = arg("--close-after-secs")
@@ -136,54 +143,68 @@ fn main() -> eframe::Result {
             (Err(error), None, None)
         } else {
             match &data_root {
-        None => (
-            Err(
-                "no home directory is known, so there is no data root; set DEVWORKS_DATA_DIR."
-                    .to_owned(),
+            None => (
+                Err(
+                    "no home directory is known, so there is no data root; set DEVWORKS_DATA_DIR."
+                        .to_owned(),
+                ),
+                None,
+                None,
             ),
-            None,
-            None,
-        ),
-        Some(root) => {
-            let started = Instant::now();
-            let mut config = DesktopConfig::new(root);
-            if let Some(candidate) = &candidate {
-                config.app_update = Some(candidate.approval().clone());
-            }
-            match Engine::start(config) {
-                Ok(engine) => {
-                    if candidate.is_some() {
-                        update_service = Some(engine.host().updates().clone());
-                    }
-                    let r = engine.host().report();
-                    eprintln!(
-                        "devworks: runtime booted in {} ms at {} (recovery: {} queue claims \
+            Some(root) => {
+                let started = Instant::now();
+                let mut config = DesktopConfig::new(root);
+                let guarded = candidate.take().map(|candidate| {
+                    config.app_update = Some(candidate.approval().clone());
+                    let guarded = Arc::new(std::sync::Mutex::new(Some(candidate)));
+                    let current = guarded.clone();
+                    config.startup_admission =
+                        Some(devworks_engine::runtime::StartupAdmission::new(move || {
+                            current
+                                .lock()
+                                .map_err(|_| "The update startup owner was interrupted.")?
+                                .as_mut()
+                                .ok_or("The update startup owner is missing.")?
+                                .admit()
+                        }));
+                    guarded
+                });
+                let started_engine = Engine::start(config);
+                candidate = guarded.and_then(|holder| holder.lock().ok()?.take());
+                match started_engine {
+                    Ok(engine) => {
+                        if candidate.is_some() {
+                            update_service = Some(engine.host().updates().clone());
+                        }
+                        let r = engine.host().report();
+                        eprintln!(
+                            "devworks: runtime booted in {} ms at {} (recovery: {} queue claims \
                             requeued, {} held; {} staging operations completed, {} failed; \
                             keep-awake {:?})",
-                        started.elapsed().as_millis(),
-                        root.display(),
-                        r.queue.requeued.len(),
-                        r.queue.held.len(),
-                        r.artifacts.completed.len(),
-                        r.artifacts.failed.len(),
-                        r.keep_awake,
-                    );
-                    (
-                        Ok(engine.backend()),
-                        Some(Box::new(engine) as Box<dyn HostControl>),
-                        Some(root.join(memory::FILE)),
-                    )
-                }
-                Err(e) => {
-                    eprintln!("devworks: runtime did not start: {e}");
-                    if candidate.is_some() {
-                        return Ok(());
+                            started.elapsed().as_millis(),
+                            root.display(),
+                            r.queue.requeued.len(),
+                            r.queue.held.len(),
+                            r.artifacts.completed.len(),
+                            r.artifacts.failed.len(),
+                            r.keep_awake,
+                        );
+                        (
+                            Ok(engine.backend()),
+                            Some(Box::new(engine) as Box<dyn HostControl>),
+                            Some(root.join(memory::FILE)),
+                        )
                     }
-                    (Err(e.to_string()), None, None)
+                    Err(e) => {
+                        eprintln!("devworks: runtime did not start: {e}");
+                        if candidate.is_some() {
+                            return Ok(());
+                        }
+                        (Err(e.to_string()), None, None)
+                    }
                 }
             }
         }
-    }
         };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

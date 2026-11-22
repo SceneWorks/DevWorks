@@ -263,6 +263,42 @@ impl ReleaseSource for NativeReleaseSource {
         Ok(staged)
     }
 
+    fn retain(&self, keep: &[&str]) {
+        let Ok(root) =
+            ArchiveDirectory::open(&self.root, None).and_then(|profile| profile.child(STAGING))
+        else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(root.location()) else {
+            return;
+        };
+        for entry in entries.take(256).flatten() {
+            let name = entry.file_name();
+            let Some(key) = name
+                .to_str()
+                .filter(|name| is_sha256_hex(name) && !keep.contains(name))
+            else {
+                continue;
+            };
+            let Ok(stage) = root.child(key) else { continue };
+            let valid = read_member(&stage, MANIFEST, MAX_MANIFEST_BYTES as u64)
+                .and_then(|document| {
+                    let signature = read_member(&stage, SIGNATURE, 64)?;
+                    verify_manifest(&document, &signature, &self.trust)
+                })
+                .is_ok_and(|found| found.manifest_digest == key);
+            if valid
+                && root
+                    .child(key)
+                    .is_ok_and(|current| current.identity() == stage.identity())
+            {
+                drop(stage);
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        let _ = root.flush();
+    }
+
     fn verify(
         &self,
         expected: &StagedRelease,

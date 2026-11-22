@@ -111,6 +111,13 @@ impl Dialogs for NativeDialogs {
 
 /// The engine's bounded shutdown, driven by the close lifecycle.
 pub trait HostControl {
+    fn can_cancel_update(&self) -> bool {
+        false
+    }
+    fn cancel_update(&mut self) -> bool {
+        false
+    }
+
     /// The Quiescing seam (AD 20 step 1): asked once when the close starts, while the shell
     /// stops admitting new requests. The engine starts its shutdown here, whose run-control
     /// step holds every active work root for manual Continue before anything is persisted.
@@ -1965,6 +1972,17 @@ impl Shell {
             egui::Modal::new(egui::Id::unique("closing")).show(ctx, |ui| {
                 ui.set_width(380.0);
                 ui.heading("Closing DevWorks");
+                if let Some(control) = &mut self.control
+                    && control.can_cancel_update()
+                    && ui.button("Cancel update and close").clicked()
+                    && control.cancel_update()
+                {
+                    self.status = Some(
+                        "The update was cancelled. DevWorks will close with the current version."
+                            .into(),
+                    );
+                }
+
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new());
                     ui.label(step);

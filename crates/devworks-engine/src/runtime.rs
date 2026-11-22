@@ -313,8 +313,26 @@ impl std::fmt::Debug for WorkspaceArchiveComposition {
     }
 }
 
+/// A native startup owner can hold all runtime effects until an already-open store and
+/// the composed engine have been admitted. Normal runtime boots proceed immediately.
+#[derive(Clone)]
+pub struct StartupAdmission(Arc<dyn Fn() -> Result<(), String> + Send + Sync>);
+
+impl StartupAdmission {
+    pub fn new(admit: impl Fn() -> Result<(), String> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(admit))
+    }
+}
+
+impl std::fmt::Debug for StartupAdmission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StartupAdmission")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
+    pub startup_admission: Option<StartupAdmission>,
     /// The native desktop adapter. It remains registered when an OS permission is missing so
     /// inspect can report the actual capability state.
     pub desktop: Option<DesktopComposition>,
@@ -405,6 +423,7 @@ impl RuntimeConfig {
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
             workspace_archives: None,
+            startup_admission: None,
             process_tools: None,
             mcp: None,
             containers: None,
@@ -1632,6 +1651,12 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         core.web.clone(),
         core.connections.clone(),
     );
+    if let Some(admission) = config.startup_admission.clone() {
+        tokio::task::spawn_blocking(move || (admission.0)())
+            .await
+            .unwrap_or_else(|_| Err("Native startup admission failed.".into()))
+            .map_err(|error| failed(BootError::Composition(StorageError::InvalidRecord(error))))?;
+    }
     if let Some(coordinator) = workspace_coordinator {
         let info = store.info();
         let host = devworks_core::context::HostIngress::new(store.as_ref()).context(

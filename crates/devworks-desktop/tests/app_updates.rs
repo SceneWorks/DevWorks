@@ -15,12 +15,13 @@ use egui_kittest::kittest::Queryable;
 use serde_json::json;
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 struct Feed {
     checks: AtomicUsize,
     downloads: AtomicUsize,
+    asset_offline: AtomicBool,
     manifest: ReleaseManifest,
     release: Release,
 }
@@ -80,6 +81,7 @@ impl Feed {
             Arc::new(Self {
                 checks: AtomicUsize::default(),
                 downloads: AtomicUsize::default(),
+                asset_offline: AtomicBool::default(),
                 manifest,
                 release,
             }),
@@ -110,6 +112,9 @@ impl ReleaseSource for Feed {
         progress: &(dyn Fn(u64, u64) + Sync),
     ) -> Result<StagedRelease, ReleaseError> {
         self.downloads.fetch_add(1, Ordering::SeqCst);
+        if self.asset_offline.load(Ordering::SeqCst) {
+            return Err(ReleaseError::rejected("The fixture archive is offline."));
+        }
         self.manifest.check(release, target)?;
         progress(1, 2);
         progress(2, 2);
@@ -259,6 +264,67 @@ fn generic_and_stale_approval_fail_exact_native_approval_replays_without_a_secon
             .pending_approval()
             .unwrap()
             .is_none()
+    );
+    assert!(reopened.shutdown().is_some());
+}
+
+#[test]
+fn asset_failure_keeps_the_verified_stage_and_cancellation_settles_before_dispatch() {
+    use devworks_core::protocol::OperationState;
+    use devworks_desktop::shell::HostControl;
+    let _case = native_runtime_case();
+    let root = Root::new("app-update-cancellation");
+    let (feed, running) = Feed::new();
+    let mut settings = config(&root.0);
+    settings.update_fixture = Some((feed.clone(), running));
+    let mut engine = Engine::start(settings.clone()).unwrap();
+    let backend = engine.backend();
+    backend.poll_updates(false).unwrap();
+    let installed = backend.update_status().unwrap();
+    feed.asset_offline.store(true, Ordering::SeqCst);
+    backend.poll_updates(true).unwrap();
+    let offline = backend.update_status().unwrap();
+    assert_eq!(offline.checked_at_ms, installed.checked_at_ms);
+    assert_eq!(
+        offline.current.as_ref().unwrap().record.id,
+        installed.current.as_ref().unwrap().record.id
+    );
+    assert!(offline.issue.is_some() && !offline.can_install);
+    // An explicit channel change clears the failed fetch backoff and the old proposal.
+    feed.asset_offline.store(false, Ordering::SeqCst);
+    backend
+        .set_update_channel(
+            devworks_core::protocol::records::UpdateChannel::Prerelease,
+            backend.control_epoch(),
+        )
+        .unwrap();
+    backend.poll_updates(false).unwrap();
+    let (request, proposal) = frame(&*backend);
+    backend
+        .approve_app_update(&request, &proposal, backend.control_epoch())
+        .unwrap();
+    assert!(engine.can_cancel_update());
+    assert!(engine.cancel_update());
+    drop(backend);
+    assert!(engine.shutdown().is_some());
+    let reopened = Engine::start(settings).unwrap();
+    assert!(
+        reopened
+            .host()
+            .updates()
+            .pending_approval()
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        reopened
+            .backend()
+            .update_status()
+            .unwrap()
+            .last
+            .unwrap()
+            .state,
+        OperationState::CancelledBeforeDispatch
     );
     assert!(reopened.shutdown().is_some());
 }

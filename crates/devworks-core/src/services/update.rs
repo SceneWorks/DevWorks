@@ -229,6 +229,20 @@ impl UpdateService {
         };
         let result = self.refresh(&state, &cancel);
         let committed = self.commit_poll(state.generation, result, &cancel);
+        if committed.is_ok()
+            && let Ok(state) = self.state()
+        {
+            let keep = state
+                .update
+                .as_ref()
+                .map(|update| update.stage.manifest_digest.as_str());
+            let approval = state
+                .approval
+                .as_ref()
+                .map(|approval| approval.stage.manifest_digest.as_str());
+            let retained: Vec<_> = keep.into_iter().chain(approval).collect();
+            self.source.retain(&retained);
+        }
         let mut poll = self.poll.locked();
         poll.progress = Progress::Idle;
         poll.cancellation = None;
@@ -276,10 +290,7 @@ impl UpdateService {
                         }
                         Some(stage)
                     }
-                    Err(error) => {
-                        issue = Some(error);
-                        None
-                    }
+                    Err(error) => return Err(error),
                 }
             }
         };
@@ -463,10 +474,13 @@ impl UpdateService {
                 .ok_or(StorageError::ViewUnavailable)?
                 .record
                 .clone();
+            let no_attempt = op.latest_attempt().is_none();
             let terminal = match outcome {
                 InstallOutcome::Installed => OperationState::ObservedComplete,
                 InstallOutcome::NotStarted => OperationState::Failed,
+                InstallOutcome::Cancelled => OperationState::CancelledBeforeDispatch,
                 InstallOutcome::Failed => OperationState::Failed,
+                InstallOutcome::Uncertain if no_attempt => OperationState::Failed,
                 InstallOutcome::Uncertain => OperationState::OutcomeUnknown,
             };
             record.revision = rev(record.revision.get() + 1);
@@ -482,12 +496,16 @@ impl UpdateService {
                     op.revision,
                     op.latest_attempt().map(|attempt| attempt.fence()).as_ref(),
                     terminal,
-                    Some(observation),
+                    (!no_attempt).then_some(observation),
                 )?;
             }
             state.last_detail = Some(detail);
-            state.last = Some(record);
-            if !matches!(outcome, InstallOutcome::Uncertain) {
+            if terminal == OperationState::OutcomeUnknown {
+                if let Some(active) = &mut state.update {
+                    active.record = record;
+                }
+            } else {
+                state.last = Some(record);
                 state.approval = None;
                 state.update = None;
                 state.checked_at_ms = None;
@@ -574,6 +592,12 @@ impl UpdateService {
                 .clone()
                 .ok_or(StorageError::ScopeDenied)?,
             old_version: self.running.version.to_string(),
+            old_schema_capability: self
+                .running
+                .migrations
+                .last()
+                .ok_or(StorageError::ViewUnavailable)?
+                .version,
             profile_schema: profile.schema,
             profile_migrations: source_migrations.to_vec(),
             stage: current.stage.clone(),
@@ -604,6 +628,7 @@ impl UpdateService {
 pub enum InstallOutcome {
     Installed,
     NotStarted,
+    Cancelled,
     Failed,
     Uncertain,
 }

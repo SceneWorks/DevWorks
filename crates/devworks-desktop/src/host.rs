@@ -111,6 +111,7 @@ pub struct DesktopConfig {
     pub app_build: String,
     /// A candidate opened by the one-shot, verified installed-app update handshake.
     pub app_update: Option<InstallApproval>,
+    pub startup_admission: Option<devworks_engine::runtime::StartupAdmission>,
     #[cfg(feature = "test-support")]
     pub update_fixture: Option<(Arc<dyn ReleaseSource>, RunningApplication)>,
     /// Shared bound of the owned-process stop at shutdown (AD20 default 30 s).
@@ -175,6 +176,7 @@ impl DesktopConfig {
             user_name: user_display_name(),
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
             app_update: None,
+            startup_admission: None,
             #[cfg(feature = "test-support")]
             update_fixture: None,
             shutdown_bound: Duration::from_secs(30),
@@ -294,6 +296,7 @@ pub struct Host {
 enum Restart {
     Restore(Id),
     Update(Box<InstallApproval>),
+    CancelledUpdate(Box<InstallApproval>),
 }
 
 impl Host {
@@ -484,6 +487,7 @@ async fn compose(
         .with_store(&*store),
     );
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
+    runtime_config.startup_admission = config.startup_admission.clone();
     runtime_config.workspace_archives =
         Some(devworks_engine::runtime::WorkspaceArchiveComposition {
             storage: sqlite.clone(),
@@ -993,6 +997,13 @@ impl Engine {
                         entry.target_id = Some(proposal.clone());
                         let _ = host.runtime.diagnostics().log(entry);
                     }
+                    if let Some(Restart::CancelledUpdate(approval)) = restart.as_ref() {
+                        let _ = host.updates.finish(
+                            approval,
+                            InstallOutcome::Cancelled,
+                            "DevWorks closed without installing the cancelled update.",
+                        );
+                    }
                     if let Some(Restart::Update(approval)) = restart {
                         let prepared = if host.runtime.archive_shutdown_verified() {
                             host.updates
@@ -1091,6 +1102,21 @@ impl Drop for Engine {
 /// shutdown path); the shell persists once that quiesce stage has passed, then waits for the
 /// rest of the same shutdown (delivery, collection, owned trees), whose stages it shows.
 impl crate::shell::HostControl for Engine {
+    fn can_cancel_update(&self) -> bool {
+        matches!(&*self.host.restart.locked(), Some(Restart::Update(_)))
+    }
+
+    fn cancel_update(&mut self) -> bool {
+        let mut restart = self.host.restart.locked();
+        if matches!(&*restart, Some(Restart::Update(_)))
+            && let Some(Restart::Update(approval)) = restart.take()
+        {
+            *restart = Some(Restart::CancelledUpdate(approval));
+            return true;
+        }
+        false
+    }
+
     fn begin_quiesce(&mut self) {
         Engine::begin_shutdown(self);
     }

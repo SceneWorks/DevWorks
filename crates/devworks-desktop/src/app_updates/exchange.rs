@@ -68,6 +68,49 @@ pub(super) fn rollback(install: &Installation, journal: &Journal) -> Result<(), 
     }
 }
 
+/// The old normal address was verified. Retire only this transaction's prepared
+/// candidate and only when its main executable still matches the signed stage.
+pub(super) fn remove_unused(install: &Installation, journal: &Journal) {
+    let prepared = install.prepared_root(&journal.transaction);
+    let candidate = prepared.join(install.owner.entrypoint());
+    if super::private_to_owner(&prepared, true).unwrap_or(false)
+        && digest_executable(&candidate).is_ok_and(|actual| {
+            actual == journal.approval.stage.manifest.entrypoint().content.sha256
+        })
+    {
+        let _ = std::fs::remove_dir_all(&prepared);
+        let _ = sync_directory(&install.control);
+    }
+}
+
+pub(super) fn retire_previous(install: &Installation, journal: &Journal) {
+    if journal.stage != super::Stage::Healthy {
+        remove_unused(install, journal);
+        return;
+    }
+    let retired = match install.owner {
+        InstallOwner::WindowsPerUser
+            if devworks_core::fingerprint::is_sha256_hex(&journal.old_pointer) =>
+        {
+            install.root.join("versions").join(&journal.old_pointer)
+        }
+        InstallOwner::WindowsPerUser => return,
+        _ => install.prepared_root(&journal.transaction),
+    };
+    let entry = retired.join(install.owner.entrypoint());
+    if install
+        .canonical_entry()
+        .is_ok_and(|current| current != entry)
+        && super::private_to_owner(&retired, true).unwrap_or(false)
+        && digest_executable(&entry).is_ok_and(|digest| digest == journal.old_digest)
+    {
+        let _ = std::fs::remove_dir_all(&retired);
+        if let Some(parent) = retired.parent() {
+            let _ = sync_directory(parent);
+        }
+    }
+}
+
 fn verify_predecessor(owner: InstallOwner, path: &Path, digest: &str) -> Result<(), String> {
     if digest_executable(&path.join(owner.entrypoint()))? != digest {
         return Err(

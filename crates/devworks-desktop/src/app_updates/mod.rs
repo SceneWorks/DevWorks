@@ -5,7 +5,7 @@ mod startup;
 pub use startup::{Candidate, enter_application, run_internal};
 
 use devworks_adapters::app_updates::{NativeReleaseSource, random_token};
-use devworks_core::fingerprint::{is_lower_hex, is_sha256_hex};
+use devworks_core::fingerprint::{is_lower_hex, is_sha256_hex, sha256_hex};
 use devworks_core::ports::storage::Cancellation;
 use devworks_core::ports::update::{InstallApproval, InstallOwner, RunningApplication};
 use devworks_core::services::update::InstallOutcome;
@@ -14,7 +14,7 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
-const JOURNAL: &str = "journal.json";
+const ACTIVE_TRANSACTION: &str = "active-transaction";
 const MAX_JOURNAL_BYTES: u64 = 3 * 1024 * 1024;
 const BUILD: Option<&str> = option_env!("DEVWORKS_RELEASE_BUILD");
 const TRUST: Option<&str> = option_env!("DEVWORKS_RELEASE_PUBLIC_KEYS");
@@ -76,7 +76,7 @@ struct Installation {
 }
 
 impl Installation {
-    fn locate() -> Result<Self, String> {
+    fn configured_root() -> Result<(InstallOwner, PathBuf), String> {
         if !BUILD.is_some_and(|build| is_lower_hex(build, 40))
             || !TRUST.is_some_and(|keys| {
                 !keys.is_empty() && keys.split(',').all(|key| decode_key(key).is_some())
@@ -119,7 +119,32 @@ impl Installation {
             InstallOwner::WindowsPerUser => user("LOCALAPPDATA")?.join("Programs/DevWorks"),
             InstallOwner::LinuxStandalone => user("HOME")?.join(".local/opt/devworks"),
         };
-        Self::at(owner, &path)
+        Ok((owner, path))
+    }
+
+    fn locate() -> Result<Self, String> {
+        let (owner, root) = Self::configured_root()?;
+        Self::at(owner, &root)
+    }
+
+    /// A provisioned binary outside the managed owner can run with updates unavailable.
+    /// Errors within the installed location have to keep that location's gate closed.
+    fn normal_entry() -> Result<Option<Self>, String> {
+        let Ok((owner, path)) = Self::configured_root() else {
+            return Ok(None);
+        };
+        let executable = std::env::current_exe().map_err(native_error)?;
+        let belongs = executable.starts_with(&path)
+            || path.canonicalize().is_ok_and(|root| {
+                executable
+                    .canonicalize()
+                    .is_ok_and(|entry| entry.starts_with(&root))
+            });
+        if belongs {
+            Self::at(owner, &path).map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     fn at(owner: InstallOwner, path: &Path) -> Result<Self, String> {
@@ -208,16 +233,38 @@ impl Installation {
             .join(format!("candidate-{transaction}{suffix}"))
     }
 
+    fn admission(&self) -> Result<File, String> {
+        let lock = lock_file(&self.control.join("update-admission.lock")).map_err(native_error)?;
+        lock.try_lock().map_err(startup::gate_error)?;
+        Ok(lock)
+    }
+
     fn journal(&self) -> Result<Option<Journal>, String> {
-        match fs::symlink_metadata(self.control.join(JOURNAL)) {
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(native_error(error)),
+        let path = self.control.join(ACTIVE_TRANSACTION);
+        if !present(&path)? {
+            return Ok(None);
         }
-        let bytes = read_small(&self.control.join(JOURNAL), MAX_JOURNAL_BYTES)?;
+        let bytes = read_small(&path, 64)?;
+        let key = std::str::from_utf8(&bytes)
+            .map_err(|_| "The active update transaction pointer is invalid.")?;
+        if !is_sha256_hex(key) {
+            return Err("The active update transaction pointer is invalid.".into());
+        }
+        self.read_journal(key)?
+            .map(Some)
+            .ok_or_else(|| "The active update transaction has no journal.".into())
+    }
+
+    fn read_journal(&self, key: &str) -> Result<Option<Journal>, String> {
+        let path = self.control.join(format!("update-{key}.json"));
+        if !present(&path)? {
+            return Ok(None);
+        }
+        let bytes = read_small(&path, MAX_JOURNAL_BYTES)?;
         let journal: Journal =
             serde_json::from_slice(&bytes).map_err(|_| "The installer journal is unreadable.")?;
         if journal.format != 1
+            || journal.approval_key() != key
             || !is_lower_hex(&journal.transaction, 32)
             || !is_sha256_hex(&journal.old_digest)
             || !is_sha256_hex(&journal.approval.stage.manifest_digest)
@@ -235,7 +282,20 @@ impl Installation {
         if bytes.len() as u64 > MAX_JOURNAL_BYTES {
             return Err("The installer journal exceeds its size limit.".into());
         }
-        self.replace_private(&self.control, JOURNAL, &bytes)
+        self.replace_private(
+            &self.control,
+            &format!("update-{}.json", journal.approval_key()),
+            &bytes,
+        )
+    }
+
+    fn publish(&self, journal: &Journal) -> Result<(), String> {
+        self.save(journal)?;
+        self.replace_private(
+            &self.control,
+            ACTIVE_TRANSACTION,
+            journal.approval_key().as_bytes(),
+        )
     }
 
     fn replace_private(&self, parent: &Path, name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -259,8 +319,10 @@ enum Stage {
     ReplaceIntent,
     LaunchIntent,
     StoreStartupIntent,
+    ActivationAllowed,
     Healthy,
     RolledBack,
+    Recovered,
     Unchanged,
     RecoveryRequired,
 }
@@ -269,7 +331,7 @@ impl Stage {
     fn outcome(self) -> Option<InstallOutcome> {
         match self {
             Self::Healthy => Some(InstallOutcome::Installed),
-            Self::RolledBack => Some(InstallOutcome::Failed),
+            Self::RolledBack | Self::Recovered => Some(InstallOutcome::Failed),
             Self::Unchanged => Some(InstallOutcome::NotStarted),
             Self::RecoveryRequired => Some(InstallOutcome::Uncertain),
             _ => None,
@@ -286,18 +348,34 @@ struct Journal {
     profile: PathBuf,
     parent: u32,
     parent_birth: String,
+    helper_cookie_digest: String,
+    candidate_cookie_digest: Option<String>,
+    installer_pid: Option<u32>,
+    installer_birth: Option<String>,
     old_pointer: String,
     old_digest: String,
     stage: Stage,
     detail: String,
 }
 
+fn approval_key(approval: &InstallApproval) -> String {
+    let store = approval.store.0.as_str();
+    let epoch = approval.epoch;
+    let operation = approval.operation.0.as_str();
+    sha256_hex(format!("{store}\n{epoch}\n{operation}").as_bytes())
+}
+
 impl Journal {
+    fn approval_key(&self) -> String {
+        approval_key(&self.approval)
+    }
+
     fn new(
         profile: PathBuf,
         approval: InstallApproval,
         old_digest: String,
         old_pointer: String,
+        helper_cookie_digest: String,
     ) -> Result<Self, String> {
         use devworks_core::ports::process::ProcessHost;
         let parent = devworks_adapters::process::NativeProcessHost
@@ -310,6 +388,10 @@ impl Journal {
             profile,
             parent: parent.pid,
             parent_birth: parent.birth,
+            helper_cookie_digest,
+            candidate_cookie_digest: None,
+            installer_pid: None,
+            installer_birth: None,
             old_pointer,
             old_digest,
             stage: Stage::ApprovedShutdown,
@@ -329,6 +411,7 @@ impl Journal {
 
 pub fn launch_helper(profile: &Path, approval: InstallApproval) -> Result<(), String> {
     let install = Installation::locate()?;
+    let _admission = install.admission()?;
     let entry = install.verify_running()?;
     if BUILD != Some(&approval.old_build) || crate::VERSION != approval.old_version {
         return Err("The installed application build changed since approval.".into());
@@ -344,13 +427,21 @@ pub fn launch_helper(profile: &Path, approval: InstallApproval) -> Result<(), St
     } else {
         String::new()
     };
-    let journal = Journal::new(profile, approval, old_digest, old_pointer)?;
-    if install.journal()?.is_some_and(|other| {
-        other.stage.outcome().is_none() || other.stage == Stage::RecoveryRequired
-    }) {
-        return Err("Resolve the previous installation before starting a new update.".into());
+    let cookie = random_token().map_err(|error| error.message)?;
+    let journal = Journal::new(
+        profile,
+        approval,
+        old_digest,
+        old_pointer,
+        sha256_hex(cookie.as_bytes()),
+    )?;
+    if let Some(previous) = install.journal()? {
+        if previous.stage.outcome().is_none() || previous.stage == Stage::RecoveryRequired {
+            return Err("Resolve the previous installation before starting a new update.".into());
+        }
+        exchange::retire_previous(&install, &previous);
     }
-    startup::spawn_helper(&install, &journal, &entry)
+    startup::spawn_helper(&install, journal, &entry, &cookie)
 }
 
 pub fn previous_outcome(
@@ -358,7 +449,7 @@ pub fn previous_outcome(
     approval: &InstallApproval,
 ) -> Result<(InstallOutcome, String), String> {
     let install = Installation::locate()?;
-    let Some(journal) = install.journal()? else {
+    let Some(journal) = install.read_journal(&approval_key(approval))? else {
         return Ok((
             InstallOutcome::NotStarted,
             "The approved update did not reach installation.".into(),
@@ -373,19 +464,6 @@ pub fn previous_outcome(
         ));
     }
     if let Some(outcome) = journal.stage.outcome() {
-        let expected = if journal.stage == Stage::Healthy {
-            &approval.stage.manifest.entrypoint().content.sha256
-        } else {
-            &approval.old_binary_digest
-        };
-        if journal.stage != Stage::RecoveryRequired
-            && digest_executable(&install.canonical_entry()?)? != *expected
-        {
-            return Ok((
-                InstallOutcome::Uncertain,
-                "The installed app no longer matches its last update outcome.".into(),
-            ));
-        }
         Ok((outcome, journal.detail))
     } else {
         Ok((
@@ -444,6 +522,14 @@ fn regular(meta: &fs::Metadata) -> bool {
         }
     }
     true
+}
+
+fn present(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(native_error(error)),
+    }
 }
 
 fn read_small(path: &Path, limit: u64) -> Result<Vec<u8>, String> {

@@ -217,6 +217,28 @@ fn approved_prefix(compiled: &[MigrationWitness], approval: &InstallApproval) ->
             .starts_with(&approval.profile_migrations)
 }
 
+/// A person can explicitly open the existing profile with a different compatible build.
+pub fn verify_recovery_store(
+    root: &Path,
+    approval: &InstallApproval,
+) -> Result<File, StorageError> {
+    let lock = try_profile_lock(root)?;
+    super::workspace_archive::require_no_armed_restore(root)?;
+    let conn = super::conn::open_probe(&root.join(DATABASE_FILE))?;
+    let (meta, access) = migrations::check(&conn, MIGRATIONS)?
+        .ok_or_else(|| invalid("The recovery profile has no application store."))?;
+    if !matches!(access, AccessMode::ReadWrite)
+        || meta.store_id != approval.store.0.as_str()
+        || meta.restore_epoch != approval.epoch
+        || read(&conn)?.approval.as_ref() != Some(approval)
+    {
+        return Err(invalid(
+            "This build cannot safely open the original approved workspace.",
+        ));
+    }
+    Ok(lock)
+}
+
 /// Rollback restores only an authenticated predecessor. Calls are serialized before
 /// candidate UI admission. The stopped-store lock must cover this check and the exchange.
 pub fn compatible_predecessor(
@@ -235,6 +257,8 @@ pub fn compatible_predecessor(
     if !matches!(access, AccessMode::ReadWrite)
         || meta.store_id != approval.store.0.as_str()
         || meta.restore_epoch != approval.epoch
+        || approval.old_schema_capability < meta.minimum_reader
+        || approval.old_schema_capability < meta.minimum_writer
         || meta.schema_version < approval.profile_schema
         || witness.is_none_or(|m| {
             m.minimum_reader != meta.minimum_reader || m.minimum_writer != meta.minimum_writer
@@ -343,6 +367,7 @@ mod tests {
             old_build: "b".repeat(40),
             old_binary_digest: hash.clone(),
             old_version: "1.8.0".into(),
+            old_schema_capability: 70,
             profile_schema: migrations.last().unwrap().version,
             profile_migrations: migrations,
             stage,
@@ -430,6 +455,23 @@ mod tests {
         assert_ne!(opened.info().boot_id, Some(approval.approved_boot.clone()));
         drop(opened);
         assert!(compatible_predecessor(root.path(), &approval).is_ok());
+    }
+
+    #[test]
+    fn a_newer_verifier_cannot_substitute_its_own_writer_capability() {
+        let (root, _, mut approval) = approved_profile("predecessor-writer-capability");
+        // This test binary supports schema 70, while recovery must evaluate the actual
+        // predecessor recorded in the receipt. SQLite remains untouched.
+        approval.old_schema_capability = 69;
+        let db = Connection::open(root.join(DATABASE_FILE)).unwrap();
+        db.execute(
+            "UPDATE app_update_state SET record_json=json_set(record_json,'$.approval',json(?1))",
+            [serde_json::to_string(&approval).unwrap()],
+        )
+        .unwrap();
+        drop(db);
+        assert!(compatible_predecessor(root.path(), &approval).is_err());
+        assert!(verify_recovery_store(root.path(), &approval).is_ok());
     }
 
     #[test]
