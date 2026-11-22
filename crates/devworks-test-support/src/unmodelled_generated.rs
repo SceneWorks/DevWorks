@@ -7,6 +7,7 @@ use crate::{Unmodelled, unmodelled};
 use devworks_core::ports::GrantUse;
 use devworks_core::ports::storage::AgentMessageHistoryFilter;
 use devworks_core::ports::storage::AttemptFence;
+use devworks_core::ports::storage::Cancellation;
 use devworks_core::ports::storage::ConfigScope;
 use devworks_core::ports::storage::EventRecord;
 use devworks_core::ports::storage::KnowledgeScope;
@@ -32,6 +33,7 @@ use devworks_core::protocol::RootId;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
 use serde_json::Value;
+use std::path::Path;
 
 impl ArtifactRead for Unmodelled {
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
@@ -4040,6 +4042,141 @@ impl WorkRepository for Unmodelled {
         unmodelled()
     }
     fn put_readiness(&mut self, _: &StoredReadiness, _: Option<i64>) -> Result<(), StorageError> {
+        unmodelled()
+    }
+}
+impl WorkspaceArchiveRead for Unmodelled {
+    fn backup_folder(&self, _: &Id) -> Result<Option<StoredBackupFolder>, StorageError> {
+        unmodelled()
+    }
+    fn workspace_archive(&self, _: &Id) -> Result<Option<StoredWorkspaceArchive>, StorageError> {
+        unmodelled()
+    }
+    fn workspace_archive_for_operation(
+        &self,
+        _: &OperationId,
+    ) -> Result<Option<StoredWorkspaceArchive>, StorageError> {
+        unmodelled()
+    }
+    fn workspace_migration_plan(
+        &self,
+        _: &Id,
+    ) -> Result<Option<StoredWorkspaceArchive>, StorageError> {
+        unmodelled()
+    }
+    fn latest_workspace_archive(
+        &self,
+        _: &ActorId,
+        _: i64,
+    ) -> Result<Option<StoredWorkspaceArchive>, StorageError> {
+        unmodelled()
+    }
+    fn latest_workspace_restore(&self, _: i64) -> Result<Option<RestoredWorkspace>, StorageError> {
+        unmodelled()
+    }
+    fn archived_restore_receipt(
+        &self,
+        _: &ArchivedRestoreKey<'_>,
+    ) -> Result<
+        Option<devworks_core::protocol::Receipt<devworks_core::protocol::results::DomainDecision>>,
+        StorageError,
+    > {
+        unmodelled()
+    }
+    fn unresolved_restore_effects(
+        &self,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<(i64, RestoredEffect)>, StorageError> {
+        unmodelled()
+    }
+    fn restore_effect(&self, _: i64, _: i64) -> Result<Option<RestoredEffect>, StorageError> {
+        unmodelled()
+    }
+    fn restore_effect_held(
+        &self,
+        _: Option<&devworks_core::protocol::RootId>,
+        _: Option<&str>,
+    ) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn restore_awaiting_restart(&self) -> Result<Option<StoredWorkspaceArchive>, StorageError> {
+        unmodelled()
+    }
+}
+impl WorkspaceArchiveRepository for Unmodelled {
+    fn record_restored_completion(
+        &mut self,
+        _: i64,
+        _: &OperationId,
+        _: &devworks_core::protocol::results::OperationCompletion,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn record_restored_observation(
+        &mut self,
+        _: &RestoredEffect,
+        _: &serde_json::Value,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn register_backup_folder(&mut self, _: &StoredBackupFolder) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn redeem_backup_folder(&mut self, _: &Id, _: &OperationId) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_workspace_archive(
+        &mut self,
+        _: &StoredWorkspaceArchive,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+}
+impl WorkspaceArchiveStorage for Unmodelled {
+    fn capture_checkpoint(
+        &self,
+        _: i64,
+        _: &Path,
+        _: &Cancellation,
+    ) -> Result<Option<WorkspaceCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn inspect_checkpoint(&self, _: &Path, _: i64) -> Result<WorkspaceCheckpoint, StorageError> {
+        unmodelled()
+    }
+    fn migrate_checkpoint(
+        &self,
+        _: &Path,
+        _: &WorkspaceArchive,
+        _: &Path,
+        _: &str,
+        _: &Cancellation,
+    ) -> Result<WorkspaceCheckpoint, StorageError> {
+        unmodelled()
+    }
+    fn active_checkpoint(&self) -> Result<WorkspaceCheckpoint, StorageError> {
+        unmodelled()
+    }
+    fn archived_backup_intent(
+        &self,
+        _: &Path,
+        _: &WorkspaceArchive,
+        _: &RestoredEffect,
+    ) -> Result<StoredWorkspaceArchive, StorageError> {
+        unmodelled()
+    }
+    fn archived_effect_operation(
+        &self,
+        _: &Path,
+        _: &WorkspaceArchive,
+        _: &RestoredEffect,
+    ) -> Result<devworks_core::ports::storage::OperationRecord, StorageError> {
+        unmodelled()
+    }
+    fn shipped_migrations(&self) -> Result<Vec<MigrationWitness>, StorageError> {
         unmodelled()
     }
 }

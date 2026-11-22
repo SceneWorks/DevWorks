@@ -1876,7 +1876,10 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::WorkImportReport(_)
                         | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
-                        | TaskOutput::RepositoryDeleted(_),
+                        | TaskOutput::RepositoryDeleted(_)
+                        | TaskOutput::WorkspaceArchive(_)
+                        | TaskOutput::WorkspaceBackupFolder(_, _)
+                        | TaskOutput::WorkspaceEffectObserved(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -1950,7 +1953,10 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::WorkImportReport(_)
                             | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
-                            | TaskOutput::RepositoryDeleted(_),
+                            | TaskOutput::RepositoryDeleted(_)
+                            | TaskOutput::WorkspaceArchive(_)
+                            | TaskOutput::WorkspaceBackupFolder(_, _)
+                            | TaskOutput::WorkspaceEffectObserved(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }

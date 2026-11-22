@@ -6,8 +6,10 @@ Artifact content lives under managed artifact/staging locations, with metadata a
 
 ## Backup and restore
 
-Backup policy is manual; there is no automatic backup promise. Use the native backup/restore capability only when available and follow its required ownership/quiescence procedure. A database file copied without its referenced artifact generations is not necessarily a complete backup. Keep backups outside the active data root and verify the app's result.
+Open **Settings → Storage & import → Workspace backup and restore**. Choose a destination outside the active data root, review the checkpoint number, and select **Create workspace backup**. The folder DevWorks creates contains the SQLite checkpoint, its managed artifact and installed package files, and the verification manifest. Keep the entire folder together. Backups run only when you request them.
 
-Restore changes the store epoch. Old credentials, cursors, grants, leases, or in-flight effects cannot simply become current. Reauthenticate when required, inspect unresolved operations and restored work, then explicitly resume only what you intend. Restoring an archived project does not restart its jobs or keep-working mode.
+Choose that folder when restoring. Review the checkpoint and file count. If DevWorks asks you to migrate an older checkpoint, select **Migrate the staged backup**. This applies the app’s verified migrations to a separate copy. Approve the restore, select **Close DevWorks to restore**, then reopen the app. DevWorks verifies the saved result in the same Settings panel and keeps the stopped local workspace as recovery evidence.
+
+Restore advances the workspace epoch. Reconnect external accounts when DevWorks asks. Re-enable the scheduled jobs you want to use. Review the original signed bundle through the package update action before enabling an installed package. Select **Continue** on each eligible work item you want to resume. Unresolved external effects can hold the work they affect. Keep-working starts off.
 
 Logs and ended index overlay records have bounded retention; their linked artifacts follow artifact retention separately. Project deletion preserves repository files and shared referenced artifacts. See [Recovery](help:recovery), [Diagnostics](help:diagnostics), and [Settings](help:settings-Storage).

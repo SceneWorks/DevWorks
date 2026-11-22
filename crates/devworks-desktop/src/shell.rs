@@ -678,6 +678,7 @@ impl Shell {
                 Effect::RepositoryList(result) => self.repositories_listed(result),
                 Effect::ProjectMembers(project, result) => self.members_listed(project, result),
                 Effect::ConfirmPurge => self.confirm_purge(),
+                Effect::CloseForWorkspaceRestore => self.request_close(),
             }
         }
     }

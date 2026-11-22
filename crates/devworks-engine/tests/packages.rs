@@ -4885,3 +4885,29 @@ mod artifact_io;
 
 #[path = "packages/person_and_event_dispatch.rs"]
 mod person_and_event_dispatch;
+
+#[test]
+fn restored_package_requires_reverification_of_its_exact_signed_bundle_before_enable() {
+    let _s = serial();
+    let a = App::new();
+    let spec = Spec::new("restored-pack", "1.0.0");
+    let installed = package(a.install(&a.user, &spec));
+    a.ready("restored-pack");
+    package(a.simple(&a.user, "addons.disable", "Disable", "restored-pack"));
+    let digest = installed.digest.as_str().to_owned();
+    // The stopped-store restore barrier keeps installed bytes but clears older approvals.
+    write(&*a.store, move |tx| {
+        tx.packages()
+            .update_version("restored-pack", &digest, VersionPhase::Installed, &[], None)
+    })
+    .unwrap();
+    assert_eq!(
+        refused(a.simple(&a.user, "addons.enable", "Enable", "restored-pack")).0,
+        DomainErrorCode::ApprovalRequired,
+    );
+    let reapproved = package(a.update(&a.user, &spec));
+    assert!(!reapproved.enabled);
+    let enabled = package(a.simple(&a.user, "addons.enable", "Enable", "restored-pack"));
+    assert!(enabled.enabled);
+    a.ready("restored-pack");
+}

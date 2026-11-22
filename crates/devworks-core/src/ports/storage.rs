@@ -111,6 +111,7 @@ mod usage;
 mod watchers;
 mod work;
 mod work_imports;
+mod workspace_archive;
 pub use agents::*;
 pub use artifacts::*;
 pub use authority::*;
@@ -142,6 +143,7 @@ pub use usage::*;
 pub use watchers::*;
 pub use work::*;
 pub use work_imports::*;
+pub use workspace_archive::*;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -795,6 +797,23 @@ pub trait WriteTransaction {
     /// The artifact repository. Inside a use case (the gateway's handler view) backup pins,
     /// physical-removal claims and receipt reply records are refused.
     fn artifacts(&mut self) -> &mut dyn ArtifactRepository;
+    /// Narrow delegation from the artifact owner for transactionally admitted archive pins.
+    fn archive_pin(
+        &mut self,
+        _authority: &crate::services::artifacts::ArchivePinAuthority,
+        holder: &Id,
+        digest: &str,
+    ) -> Result<(), StorageError> {
+        self.artifacts().pin(holder, digest)
+    }
+    fn archive_release_pins(
+        &mut self,
+        _authority: &crate::services::artifacts::ArchivePinAuthority,
+        holder: &Id,
+    ) -> Result<i64, StorageError> {
+        self.artifacts().release_pins(holder)
+    }
+
     fn sessions(&mut self) -> &mut dyn SessionRepository;
     fn resources(&mut self) -> &mut dyn ResourceRepository;
     fn runs(&mut self) -> &mut dyn RunRepository;
@@ -817,6 +836,9 @@ pub trait WriteTransaction {
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
     fn retention(&mut self) -> Result<&mut dyn RetentionRepository, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
+    fn workspace_archives(&mut self) -> Result<&mut dyn WorkspaceArchiveRepository, StorageError> {
         Err(StorageError::ViewUnavailable)
     }
     fn work_imports(&mut self) -> Result<&mut dyn WorkImportRepository, StorageError> {
@@ -886,6 +908,9 @@ pub trait ReadSnapshot {
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
     fn retention(&self) -> Result<&dyn RetentionRead, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
+    fn workspace_archives(&self) -> Result<&dyn WorkspaceArchiveRead, StorageError> {
         Err(StorageError::ViewUnavailable)
     }
     fn work_imports(&self) -> Result<&dyn WorkImportRead, StorageError> {

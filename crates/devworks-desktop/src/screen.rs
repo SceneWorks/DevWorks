@@ -163,6 +163,7 @@ pub enum Effect {
     ProjectMembers(String, Result<Page<RepositoryRecord>, String>),
     /// Publishes the client state the purge reviews, then submits the confirmed purge.
     ConfirmPurge,
+    CloseForWorkspaceRestore,
 }
 
 /// What the coordinator is told about the visible screen.

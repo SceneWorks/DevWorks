@@ -1,6 +1,10 @@
 # Storage, quotas, logs, and import settings
 
-Artifact location and explicit-deletion retention are harness-enforced. Per-project quota defaults to 0 (unlimited); reaching a configured limit refuses new saves rather than deleting existing originals. The single-file read limit is separate. Logs and ended overlay records have their own bounded retention. Backup policy is manual; a setting does not imply an automatic backup service. Inspect current native import/restore availability and preserve referenced artifact generations.
+Artifact location and explicit-deletion retention are harness-enforced. Per-project quota defaults to 0 (unlimited); reaching a configured limit refuses new saves rather than deleting existing originals. The single-file read limit is separate. Logs and ended overlay records have their own bounded retention.
+
+## Back up, restore, or verify the workspace
+
+Open **Workspace backup and restore** to create a verified manual backup or review a backup before restoring it. Select **Verify current migration ledger** to check the active store against the versions and checksums shipped with DevWorks. See [Data roots, retention, backup, and restore](help:storage-lifecycle) for the restore and reactivation steps.
 
 ## Review operational retention
 

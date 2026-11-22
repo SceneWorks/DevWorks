@@ -769,6 +769,14 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "9cf44f5dc2de0ab5b235807f1abedca2866b83b2b1724729bd120bebe0c6548a",
         rebuilds_tables: false,
     },
+    Migration {
+        version: 69,
+        minimum_reader: 68,
+        minimum_writer: 69,
+        sql: include_str!("migrations/0069_workspace_archive.sql"),
+        expected_sha256: "3ad54635795a03becf530b43aa795441931dbfdfb39bd35d3971bb00d54526ef",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -889,7 +897,7 @@ fn user_tables(conn: &Connection) -> Result<i64, StorageError> {
     ))
 }
 
-fn verify_after(conn: &Connection) -> Result<(), StorageError> {
+pub(super) fn verify_after(conn: &Connection) -> Result<(), StorageError> {
     let fk: i64 = db(
         conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
             r.get(0)

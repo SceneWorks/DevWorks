@@ -480,13 +480,14 @@ impl CoreServices {
 pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'static str)> {
     use devworks_core::services::{
         AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, packages, resources,
-        router, runs, sessions, web,
+        router, runs, sessions, web, workspace_archive,
     };
-    let families: [(&'static str, &[&str]); 15] = [
+    let families: [(&'static str, &[&str]); 16] = [
         ("artifacts", &artifacts::OPERATIONS),
         ("resources", &resources::OPERATIONS),
         ("runs", &runs::OPERATIONS),
         ("diagnostics", &diagnostics::OPERATIONS),
+        ("workspace archive", &workspace_archive::OPERATIONS),
         ("knowledge", &knowledge::OPERATIONS),
         ("agents", &AGENT_OPERATIONS),
         ("web", &web::OPERATIONS),

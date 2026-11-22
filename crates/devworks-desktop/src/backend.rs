@@ -94,6 +94,68 @@ pub trait Backend: Send + Sync {
     > {
         Ok(None)
     }
+    fn workspace_archive_command(
+        &self,
+        operation: &str,
+        frame: &[u8],
+        _received: ControlEpoch,
+    ) -> CommandOutcome {
+        self.command(operation, frame)
+    }
+    fn workspace_backup_folder(
+        &self,
+        _path: &Path,
+        _received: ControlEpoch,
+    ) -> Result<(Id, i64), String> {
+        Err("Workspace backup is unavailable.".into())
+    }
+    fn workspace_restore_plan(
+        &self,
+        _path: &Path,
+        _received: ControlEpoch,
+        _cancel: &devworks_core::ports::storage::Cancellation,
+    ) -> Result<devworks_core::ports::storage::StoredWorkspaceArchive, String> {
+        Err("Workspace restore is unavailable.".into())
+    }
+    fn workspace_migration_plan(
+        &self,
+        _received: ControlEpoch,
+    ) -> Result<devworks_core::ports::storage::StoredWorkspaceArchive, String> {
+        Err("Workspace migration check is unavailable.".into())
+    }
+    fn cancel_workspace_archive(
+        &self,
+        _id: &Id,
+        _revision: i64,
+        _received: ControlEpoch,
+    ) -> Result<(), String> {
+        Err("Workspace archive cancellation is unavailable.".into())
+    }
+    fn observe_archived_workspace_git(
+        &self,
+        _id: i64,
+        _received: ControlEpoch,
+    ) -> Result<bool, String> {
+        Err("Archived Git observation is unavailable.".into())
+    }
+    fn observe_archived_workspace_export(
+        &self,
+        _id: i64,
+        _path: &Path,
+        _received: ControlEpoch,
+    ) -> Result<bool, String> {
+        Err("Archived export observation is unavailable.".into())
+    }
+    fn workspace_archive_status(&self) -> Result<crate::settings_screen::archives::Status, String> {
+        Err("Workspace archive status is unavailable.".into())
+    }
+    fn request_workspace_restore_shutdown(
+        &self,
+        _proposal: &Id,
+        _received: ControlEpoch,
+    ) -> Result<(), String> {
+        Err("Workspace restore is unavailable.".into())
+    }
     /// Scoped completion of a journaled desktop input; injection alone is not a test assertion.
     fn desktop_completion(
         &self,
@@ -414,6 +476,9 @@ pub enum TaskOutput {
         key: String,
         value: serde_json::Value,
     },
+    WorkspaceArchive(Box<crate::settings_screen::archives::Status>),
+    WorkspaceBackupFolder(Id, i64),
+    WorkspaceEffectObserved(bool),
     /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared {
         frame: Vec<u8>,
@@ -492,6 +557,9 @@ fn resolve_dispatched(
         CommandDispatch::Generic => backend.command(operation, frame),
         CommandDispatch::HumanDecision => backend.human_decision(frame, received),
         CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame, received),
+        CommandDispatch::WorkspaceArchive => {
+            backend.workspace_archive_command(operation, frame, received)
+        }
     };
     let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
@@ -566,6 +634,7 @@ pub enum CommandDispatch {
     Generic,
     HumanDecision,
     ProjectPurge,
+    WorkspaceArchive,
 }
 
 struct PendingQuery {
@@ -635,7 +704,10 @@ impl Unresolved {
         // Restored disk state can resolve an existing receipt, but cannot create
         // a new native Human confirmation. A missing original receipt requires
         // another explicit review; a dispatch flag is never consent.
-        let dispatch = if dispatch == CommandDispatch::ProjectPurge {
+        let dispatch = if matches!(
+            dispatch,
+            CommandDispatch::ProjectPurge | CommandDispatch::WorkspaceArchive
+        ) {
             CommandDispatch::Generic
         } else {
             dispatch
@@ -950,6 +1022,22 @@ impl Client {
             "projects.purge",
             frame,
             CommandDispatch::ProjectPurge,
+        )
+    }
+
+    pub fn workspace_archive(
+        &mut self,
+        slot: Slot,
+        label: &str,
+        operation: &'static str,
+        frame: Vec<u8>,
+    ) -> bool {
+        self.dispatched_command(
+            slot,
+            label,
+            operation,
+            frame,
+            CommandDispatch::WorkspaceArchive,
         )
     }
 

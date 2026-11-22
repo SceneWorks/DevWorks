@@ -98,6 +98,11 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema68-operational-retention-extension.json"
     ),
+    policy_document!(
+        "workspaceArchiveExtension",
+        Tables,
+        "schema69-workspace-archive-extension.json"
+    ),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {

@@ -15,6 +15,7 @@ use devworks_adapters::diagnostics::DiagnosticExports;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
 use devworks_adapters::fs::sources::{HostArtifactSources, IssueRefusal};
+use devworks_adapters::fs::workspace_archive::NativeWorkspaceArchives;
 use devworks_adapters::index::NativeSourceTree;
 use devworks_adapters::index::treesitter::TreeSitterParser;
 use devworks_adapters::mcp::NativeMcpClients;
@@ -276,6 +277,7 @@ pub struct Host {
     web: Arc<WebService>,
     /// The native outgoing MCP client the runtime installed at boot.
     mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>>,
+    restore_shutdown: Mutex<Option<Id>>,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
@@ -299,6 +301,7 @@ impl Host {
 async fn compose(
     config: &DesktopConfig,
     sqlite: Arc<SqliteStore>,
+    archive_files: Arc<NativeWorkspaceArchives>,
     clock: Arc<dyn Clock>,
     ids: Arc<HostIds>,
 ) -> Result<Host, StartError> {
@@ -374,7 +377,7 @@ async fn compose(
     });
     // Diagnostics read the store's own health probes; exports are staged as the user's uploads.
     let diagnostic_ports = DiagnosticComposition {
-        storage: Some(sqlite as Arc<dyn StorageHealthProbe>),
+        storage: Some(sqlite.clone() as Arc<dyn StorageHealthProbe>),
         export_staging: Some(Arc::new(
             DiagnosticExports::new(
                 config.data_root.join("diagnostics").join("exports"),
@@ -440,6 +443,12 @@ async fn compose(
         .with_store(&*store),
     );
     let mut runtime_config = RuntimeConfig::new(ids.next_id(IdKind::Boot));
+    runtime_config.workspace_archives =
+        Some(devworks_engine::runtime::WorkspaceArchiveComposition {
+            storage: sqlite.clone(),
+            files: archive_files,
+            app_build: config.app_build.clone(),
+        });
     let import_root = config.data_root.join("work-imports");
     std::fs::create_dir_all(&import_root)
         .map_err(|e| StartError::Thread(format!("could not prepare work import folder: {e}")))?;
@@ -762,6 +771,7 @@ async fn compose(
         switchable,
         web,
         mcp_clients,
+        restore_shutdown: Mutex::new(None),
     })
 }
 
@@ -811,6 +821,34 @@ fn start_connection_ticker(host: Arc<Host>, every: Duration) -> mpsc::Sender<()>
     stop_tx
 }
 
+fn arm_workspace_restore(host: &Host, id: &Id) -> Result<(), StorageError> {
+    let service = host
+        .runtime
+        .workspace_archives()
+        .ok_or(StorageError::ViewUnavailable)?;
+    let record = service
+        .inspect_workspace_archive(&host.ctx, id)?
+        .filter(|value| value.phase == devworks_core::ports::storage::ArchivePhase::AwaitingRestart)
+        .ok_or(StorageError::ScopeDenied)?;
+    if !host.runtime.archive_shutdown_verified() {
+        return Err(StorageError::InvalidRecord(
+            "DevWorks could not verify shutdown of all local work. Restore was not armed.".into(),
+        ));
+    }
+    let boot = host
+        .runtime
+        .store()
+        .info()
+        .boot_id
+        .ok_or(StorageError::ViewUnavailable)?;
+    devworks_adapters::storage::sqlite::workspace_archive::arm_restore(
+        &host.data_root,
+        &record,
+        &boot,
+        &host.ids.next_id(IdKind::Operation),
+    )
+}
+
 impl Engine {
     /// Opens the store and boots on a dedicated engine thread; returns once recovery finished
     /// and the runtime admits requests (or why it could not).
@@ -840,6 +878,15 @@ impl Engine {
                         ActorId(Id::new(HOST_ACTOR).expect("valid actor")),
                     );
                     sqlite.app_build = config.app_build.clone();
+                    let archive_files = Arc::new(NativeWorkspaceArchives::new(
+                        config.data_root.clone(),
+                        Arc::new(NativeArtifactFiles::new(
+                            &config.data_root,
+                            config.data_root.join("cache"),
+                        )),
+                        Arc::new(NativePackageFiles::new(config.data_root.join("packages"))),
+                    ));
+                    sqlite.workspace_archives = Some(archive_files.clone());
                     let opened = tokio::task::spawn_blocking(move || SqliteStore::open(sqlite))
                         .await
                         .map_err(|e| StartError::Thread(e.to_string()))
@@ -851,7 +898,7 @@ impl Engine {
                             return;
                         }
                     };
-                    let host = match compose(&config, store, clock, ids).await {
+                    let host = match compose(&config, store, archive_files, clock, ids).await {
                         Ok(h) => Arc::new(h),
                         Err(e) => {
                             let _ = booted_tx.send(Err(e));
@@ -873,6 +920,26 @@ impl Engine {
                     let _ = stop_rx.await;
                     let processes = host.runtime.shutdown().await;
                     forward.abort();
+                    if let Some(proposal) = host.restore_shutdown.locked().take()
+                        && let Err(error) = arm_workspace_restore(&host, &proposal)
+                    {
+                        if let Some(service) = host.runtime.workspace_archives() {
+                            let _ = service.note_shutdown_failure(
+                                &host.ctx,
+                                &proposal,
+                                &error.to_string(),
+                            );
+                        }
+                        let mut entry = devworks_core::services::diagnostics::LogEntry::new(
+                            "workspace-archive",
+                            "restore-shutdown",
+                            devworks_core::protocol::records::Severity::Error,
+                            error.to_string(),
+                        );
+                        entry.operation = Some("workspace.restore".into());
+                        entry.target_id = Some(proposal);
+                        let _ = host.runtime.diagnostics().log(entry);
+                    }
                     let _ = done_tx.send(ShutdownSummary { processes });
                 });
             })
@@ -993,7 +1060,138 @@ impl crate::shell::HostControl for Engine {
 pub struct DesktopBackend {
     host: Arc<Host>,
 }
+impl DesktopBackend {
+    fn archive_service(
+        &self,
+        received: ControlEpoch,
+    ) -> Result<&devworks_core::services::workspace_archive::WorkspaceArchiveService, String> {
+        if !self.host.runtime.control_quiet_since(received) {
+            return Err("Workspace archive actions require direct desktop input.".into());
+        }
+        self.host
+            .runtime
+            .workspace_archives()
+            .map(AsRef::as_ref)
+            .ok_or_else(|| "Workspace archive service is unavailable.".into())
+    }
+}
+
 impl Backend for DesktopBackend {
+    fn workspace_archive_command(
+        &self,
+        operation: &str,
+        frame: &[u8],
+        received: ControlEpoch,
+    ) -> CommandOutcome {
+        self.host
+            .runtime
+            .workspace_archive_received(&self.host.ctx, operation, frame, received)
+    }
+
+    fn workspace_backup_folder(
+        &self,
+        path: &Path,
+        received: ControlEpoch,
+    ) -> Result<(Id, i64), String> {
+        self.archive_service(received)?
+            .register_folder(&self.host.ctx, path)
+            .map_err(|error| error.to_string())
+    }
+
+    fn workspace_restore_plan(
+        &self,
+        path: &Path,
+        received: ControlEpoch,
+        cancel: &devworks_core::ports::storage::Cancellation,
+    ) -> Result<devworks_core::ports::storage::StoredWorkspaceArchive, String> {
+        self.archive_service(received)?
+            .prepare_restore(&self.host.ctx, path, cancel)
+            .map_err(|error| error.to_string())
+    }
+
+    fn workspace_migration_plan(
+        &self,
+        received: ControlEpoch,
+    ) -> Result<devworks_core::ports::storage::StoredWorkspaceArchive, String> {
+        self.archive_service(received)?
+            .prepare_active_migration_check(&self.host.ctx)
+            .map_err(|error| error.to_string())
+    }
+
+    fn cancel_workspace_archive(
+        &self,
+        id: &Id,
+        revision: i64,
+        received: ControlEpoch,
+    ) -> Result<(), String> {
+        self.archive_service(received)?
+            .cancel_archive(&self.host.ctx, id, revision)
+            .map_err(|error| error.to_string())
+    }
+
+    fn observe_archived_workspace_git(
+        &self,
+        id: i64,
+        received: ControlEpoch,
+    ) -> Result<bool, String> {
+        let git = self
+            .host
+            .runtime
+            .git()
+            .ok_or("Git observation is unavailable.")?;
+        self.archive_service(received)?
+            .observe_restored_git(&self.host.ctx, id, git)
+            .map_err(|error| error.to_string())
+    }
+
+    fn observe_archived_workspace_export(
+        &self,
+        id: i64,
+        path: &Path,
+        received: ControlEpoch,
+    ) -> Result<bool, String> {
+        self.archive_service(received)?
+            .observe_restored_export(&self.host.ctx, id, path)
+            .map_err(|error| error.to_string())
+    }
+
+    fn workspace_archive_status(&self) -> Result<crate::settings_screen::archives::Status, String> {
+        let service = self
+            .host
+            .runtime
+            .workspace_archives()
+            .ok_or("Workspace archive service is unavailable.")?;
+        let (current, restored) = service
+            .status(&self.host.ctx)
+            .map_err(|error| error.to_string())?;
+        Ok(crate::settings_screen::archives::Status {
+            current,
+            restored,
+            shipped_schema: service.shipped_schema().map_err(|e| e.to_string())?,
+            unresolved: service
+                .unresolved_effects(&self.host.ctx, 0)
+                .map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn request_workspace_restore_shutdown(
+        &self,
+        proposal: &Id,
+        received: ControlEpoch,
+    ) -> Result<(), String> {
+        let record = self
+            .archive_service(received)?
+            .inspect_workspace_archive(&self.host.ctx, proposal)
+            .map_err(|error| error.to_string())?;
+        if !record.is_some_and(|value| {
+            value.phase == devworks_core::ports::storage::ArchivePhase::AwaitingRestart
+        }) {
+            return Err("The selected restore no longer waits for restart.".into());
+        }
+        *self.host.restore_shutdown.locked() = Some(proposal.clone());
+        Ok(())
+    }
+
     fn publish_current_screen(
         &self,
         screen: Option<(Id, devworks_core::protocol::records::ScreenContext)>,

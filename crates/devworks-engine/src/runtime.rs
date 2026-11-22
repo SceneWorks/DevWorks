@@ -300,12 +300,26 @@ impl std::fmt::Debug for McpComposition {
     }
 }
 
+#[derive(Clone)]
+pub struct WorkspaceArchiveComposition {
+    pub storage: Arc<dyn devworks_core::ports::storage::WorkspaceArchiveStorage>,
+    pub files: Arc<dyn devworks_core::ports::workspace_archive::WorkspaceArchiveFiles>,
+    pub app_build: String,
+}
+impl std::fmt::Debug for WorkspaceArchiveComposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceArchiveComposition")
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
     /// The native desktop adapter. It remains registered when an OS permission is missing so
     /// inspect can report the actual capability state.
     pub desktop: Option<DesktopComposition>,
     pub purge: Option<PurgeComposition>,
+    pub workspace_archives: Option<WorkspaceArchiveComposition>,
     /// Process tools are offered only when a host supplies owned executable/root and secret
     /// bindings. Missing qualification leaves the family unregistered.
     pub process_tools: Option<ProcessToolComposition>,
@@ -390,6 +404,7 @@ impl RuntimeConfig {
             desktop: None,
             dispatcher: DispatcherConfig::new(owner),
             purge: None,
+            workspace_archives: None,
             process_tools: None,
             mcp: None,
             containers: None,
@@ -512,6 +527,7 @@ pub struct Runtime {
     /// The shutdown stage ([`ShutdownStage`] as a byte) for the progress surface; the fence
     /// itself is `admission_closed`.
     stage: std::sync::atomic::AtomicU8,
+    archive_shutdown_verified: std::sync::atomic::AtomicBool,
     /// The admission fence: ordinary commands hold it through admission and commit. A retained
     /// receive waits outside it with a registered shutdown token, then holds it for its final
     /// decision. Shutdown closes it exclusively and cancels waiting receives; no command commits
@@ -537,6 +553,9 @@ pub struct Runtime {
     desktop: Option<Arc<devworks_core::services::desktop::DesktopService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
     packages: Option<Arc<PackageHost>>,
+    workspace_archives:
+        Option<Arc<devworks_core::services::workspace_archive::WorkspaceArchiveService>>,
+
     shutdown_grace: Duration,
     shutdown_bound: Duration,
     report: BootReport,
@@ -578,6 +597,9 @@ struct Engine {
     prices: Option<Arc<crate::prices::PriceSupervisor>>,
     price_service: Arc<devworks_core::services::prices::PriceService>,
     purge_worker: Option<Arc<devworks_core::services::projects::purge::PurgeWorker>>,
+    workspace_archives:
+        Option<Arc<devworks_core::services::workspace_archive::WorkspaceArchiveService>>,
+
     conventions: Arc<devworks_core::services::conventions::ConventionService>,
     schemas: Option<Arc<devworks_core::services::schemas::SchemaService>>,
     help: Option<Arc<devworks_core::services::help::HelpService>>,
@@ -970,6 +992,38 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         Some(1),
     ));
     let use_cases = use_cases.with_maintenance(maintenance);
+    use devworks_core::services::workspace_archive as archive;
+    let workspace_archives = match (&config.workspace_archives, package_service.as_ref()) {
+        (Some(ports), Some(packages)) => Some(Arc::new(archive::WorkspaceArchiveService::new(
+            store.clone(),
+            archive::ArchivePorts {
+                storage: ports.storage.clone(),
+                files: ports.files.clone(),
+                app_build: ports.app_build.clone(),
+            },
+            artifacts.clone(),
+            packages.clone(),
+            ids.clone(),
+            clock.clone(),
+        ))),
+        (None, _) => None,
+        _ => return Err(BootError::Composition(StorageError::ViewUnavailable)),
+    };
+    let use_cases = if let Some(service) = &workspace_archives {
+        consumers.push(crate::effect_consumer::effect_consumer(
+            archive::EFFECT_CONSUMER,
+            service.clone(),
+            crate::effect_consumer::PanicReasons {
+                execute: "Workspace archive copy stopped unexpectedly",
+                observe: "Workspace archive observation stopped unexpectedly",
+            },
+            crate::effect_consumer::STANDARD_RETRY,
+            Some(1),
+        ));
+        use_cases.with_workspace_archives(service.clone())
+    } else {
+        use_cases
+    };
     let schemas = config.schemas.as_ref().map(|ports| {
         Arc::new(
             devworks_core::services::schemas::SchemaService::new(ids.clone(), clock.clone())
@@ -1434,6 +1488,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         prices,
         price_service,
         purge_worker,
+        workspace_archives,
         conventions,
         schemas,
         help,
@@ -1543,6 +1598,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         prices,
         price_service,
         purge_worker,
+        workspace_archives,
         conventions,
         schemas,
         help,
@@ -1621,6 +1677,13 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         .unwrap_or_else(|_| Err(panicked("artifact recovery")))
         .map_err(BootError::Artifacts)
         .map_err(failed)?;
+    if let Some(service) = workspace_archives.clone() {
+        tokio::task::spawn_blocking(move || service.complete_restored_workspace())
+            .await
+            .unwrap_or_else(|_| Err(panicked("workspace restore completion")))
+            .map_err(BootError::Composition)
+            .map_err(failed)?;
+    }
     let booted_at_ms = clock.now_ms().get();
     let recovered_resources = housekeeper
         .boot(config.machine_resources.clone())
@@ -2315,6 +2378,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         instructions,
         schemas,
         stage: std::sync::atomic::AtomicU8::new(ShutdownStage::Open as u8),
+        archive_shutdown_verified: std::sync::atomic::AtomicBool::new(false),
         admission_closed,
         admitter,
         jobs,
@@ -2337,6 +2401,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         shutdown_bound: config.shutdown_bound,
         report,
         packages: package_host,
+        workspace_archives,
         indexing: index_supervisor,
         workers,
         usage_drain,
@@ -2477,6 +2542,11 @@ impl Runtime {
     /// streams are opened through it).
     pub fn artifacts(&self) -> &Arc<ArtifactService> {
         &self.artifacts
+    }
+    pub fn workspace_archives(
+        &self,
+    ) -> Option<&Arc<devworks_core::services::workspace_archive::WorkspaceArchiveService>> {
+        self.workspace_archives.as_ref()
     }
     /// The resource service the `resources.*` use cases and dispatch-time checks share.
     /// The run root control service the engine built and registered for the `runs.*` use cases.
@@ -2928,6 +2998,12 @@ impl Runtime {
     }
 
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
+        if operation == devworks_core::services::workspace_archive::RESTORE_OPERATION
+            && let Some(archives) = &self.workspace_archives
+            && let Ok(Some(reply)) = archives.replay_prior_restore(ctx, raw)
+        {
+            return Ok(reply);
+        }
         self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 
@@ -3036,6 +3112,31 @@ impl Runtime {
             return self.command(&bound, OPERATION, frame);
         }
         self.command(ctx, OPERATION, frame)
+    }
+
+    /// Dedicated native input for whole-workspace archive operations. Receipt replay remains
+    /// available through normal command ingress without recreating trusted consent.
+    pub fn workspace_archive_received(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        frame: &[u8],
+        received: ControlEpoch,
+    ) -> CommandOutcome {
+        if self.control_quiet_since(received)
+            && let Ok(decoded) = devworks_core::admission::decode(
+                devworks_core::admission::Selection {
+                    operation,
+                    mode: devworks_core::registry::Mode::Command,
+                },
+                frame,
+            )
+            && let Some(bound) = devworks_core::context::HostIngress::new(&*self.store)
+                .workspace_archive_context(ctx, &decoded.input)
+        {
+            return self.command(&bound, operation, frame);
+        }
+        self.command(ctx, operation, frame)
     }
 
     /// The desktop control state now: a human-only confirmation captures it when the UI
@@ -3229,7 +3330,11 @@ impl Runtime {
         // No blocking evaluator job may outlive the runtime: drain its local write fence.
         self.workers.drain(DrainAt::AfterFence, deadline).await;
         self.enter(ShutdownStage::Quiescing);
-        let _ = self.runs.quiesce(self.shutdown_grace.min(left())).await;
+        let quiesced = self
+            .runs
+            .quiesce(self.shutdown_grace.min(left()))
+            .await
+            .is_ok();
         self.enter(ShutdownStage::StoppingWork);
         self.stop();
         // Every boot-started task (delivery, collection, housekeeping, the monitor pass in
@@ -3239,16 +3344,20 @@ impl Runtime {
         // alone, a claim's lease expires into recovery, an interrupted operation is classified.
         // Supervision admits no further root stop once stopping; one it is executing ends
         // within its own bound, and the owned-tree stop below covers its trees.
-        let _ = self.workers.join(deadline).await;
+        let loops_stopped = self.workers.join(deadline).await.is_empty();
         // In-flight deliveries.
         self.workers.drain(DrainAt::AfterJoin, deadline).await;
         // Browser sessions close through the process owner (their records settle and profiles
         // are removed) before the remaining owned trees are stopped. Like every wait above, it
         // starts only after the run-control hold committed and is abandoned at the one deadline:
         // a close that does not return in time leaves its trees to the owned-tree stop below.
+        let mut owners_closed = true;
         if let Some(b) = self.browser.clone() {
             let closing = tokio::task::spawn_blocking(move || b.shutdown());
-            let _ = dispatch::first(tokio::time::sleep_until(deadline), closing).await;
+            owners_closed &= matches!(
+                dispatch::first(tokio::time::sleep_until(deadline), closing).await,
+                dispatch::Either::Right(Ok(_))
+            );
         }
         // Package helpers get their cooperative shutdown (cancel in-flight invocations,
         // host.shutdown) after the hold above and within what is left of the same bound: the
@@ -3257,7 +3366,10 @@ impl Runtime {
         if let Some(host) = self.packages.clone() {
             let bound = left();
             let stopping = tokio::task::spawn_blocking(move || host.shutdown(bound));
-            let _ = dispatch::first(tokio::time::sleep_until(deadline), stopping).await;
+            owners_closed &= matches!(
+                dispatch::first(tokio::time::sleep_until(deadline), stopping).await,
+                dispatch::Either::Right(Ok(_))
+            );
         }
         // Index runs, then scheduled runs, are waited for within the same deadline; their trees
         // are owned trees, so the stop below kills any that remain.
@@ -3320,8 +3432,10 @@ impl Runtime {
             }
             _ => {}
         }
+        let mut inference_closed = false;
         match inference_shutdown {
             Ok(drain) => {
+                inference_closed = drain.unclosed.is_empty() && drain.pending_preparations == 0;
                 stopped.unclosed_inference_attempts = drain.unclosed;
                 if !stopped.unclosed_inference_attempts.is_empty() || drain.pending_preparations > 0
                 {
@@ -3346,10 +3460,43 @@ impl Runtime {
             }
         }
         // AD20 step 4: final known activation state.
-        let _ = self.runs.finish().await;
+        let runs_closed = self.runs.finish().await.is_ok();
         self.keep_awake.apply(false);
+        let resources_closed = stopped
+            .reconciliation
+            .as_ref()
+            .is_ok_and(|r| r.uncertain == 0 && r.unreachable == 0);
+        let local_processes_closed = stopped.stopped.iter().all(|(_, result)| {
+            matches!(
+                result,
+                Ok(devworks_core::services::process::StopOutcome::Reaped { .. })
+            )
+        });
+        let containers_closed = stopped
+            .containers
+            .as_ref()
+            .is_none_or(|r| r.read_error.is_none() && r.uncertain.is_empty());
+        self.archive_shutdown_verified.store(
+            self.workspace_archives.is_some()
+                && quiesced
+                && loops_stopped
+                && owners_closed
+                && inference_closed
+                && runs_closed
+                && resources_closed
+                && local_processes_closed
+                && containers_closed
+                && !left().is_zero(),
+            std::sync::atomic::Ordering::Release,
+        );
         self.enter(ShutdownStage::Done);
         stopped
+    }
+
+    /// The native archive boundary requires a completed, verified shutdown before arming.
+    pub fn archive_shutdown_verified(&self) -> bool {
+        self.archive_shutdown_verified
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Signals every registered worker (each loop then ends, so shutdown can join it) and

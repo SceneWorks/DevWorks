@@ -1,10 +1,7 @@
 //! Reject unreviewed persistent owning shapes before preparing any deletion authority.
-use super::super::conn::db;
-use devworks_core::fingerprint::sha256_hex;
+use super::super::workspace_archive::schema_digest;
 use devworks_core::ports::storage::StorageError;
 use rusqlite::Connection;
-
-type Definitions = Vec<(String, String, String, Option<String>)>;
 
 /// SHA-256 of the persistent schema (every `main.sqlite_schema` row) whose ownership the project
 /// purge policy documents under `docs/architecture/validation/project-purge/` were reviewed
@@ -64,26 +61,10 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// Migration 68 adds workspace-owned retention receipts containing opaque record witnesses,
 /// a diagnostics retention generation, and lookup indexes. Only workspace operations can own
 /// the new records. Retention adds no project ownership edge.
+/// Migration 69 records workspace archive grants, proposals and distinct restore histories.
+/// Effect provenance is historical evidence with no foreign key to active project rows.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "13e91fc815b2889f2ff60dd7aa71d94c3e5bc82bd2708635de8c5f2f96f83df2";
-
-fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
-    let mut statement = db(conn.prepare(
-        "SELECT type,name,tbl_name,sql FROM main.sqlite_schema WHERE name NOT LIKE 'sqlite_stat%' \
-         ORDER BY type,name,tbl_name",
-    ))?;
-    db(statement.query_map([], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-    }))?
-    .map(db)
-    .collect()
-}
-
-fn schema_digest(conn: &Connection) -> Result<String, StorageError> {
-    let encoded = serde_json::to_string(&definitions(conn)?)
-        .map_err(|_| StorageError::IncompatibleSchema("cannot encode the store schema".into()))?;
-    Ok(sha256_hex(encoded.as_bytes()))
-}
+    "e18f5353a2ec8fa48b62d75ec448a2ed715a47651ae64e388a1ee2a60ec62d9e";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

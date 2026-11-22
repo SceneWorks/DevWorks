@@ -115,7 +115,7 @@ pub(super) fn op_of(conn: &Connection, raw: OpRaw) -> Result<OperationRecord, St
     })
 }
 
-pub(super) fn operation(
+pub(in crate::storage::sqlite) fn operation(
     conn: &Connection,
     id: &OperationId,
 ) -> Result<Option<OperationRecord>, StorageError> {

@@ -47,7 +47,7 @@ pub(crate) fn db<T>(r: rusqlite::Result<T>) -> Result<T, StorageError> {
 /// Registers the bundled sqlite-vec functions on one connection. Per-connection registration
 /// avoids the process-global `sqlite3_auto_extension` table (no global mutable state); user
 /// extensions are never loaded into the internal store.
-fn register_vec(conn: &Connection) -> Result<(), StorageError> {
+pub(super) fn register_vec(conn: &Connection) -> Result<(), StorageError> {
     type Init = unsafe extern "C" fn(
         *mut ffi::sqlite3,
         *mut *mut c_char,

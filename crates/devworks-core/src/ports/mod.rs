@@ -26,6 +26,7 @@ pub mod skill_files;
 pub mod storage;
 pub mod usage;
 pub mod web;
+pub mod workspace_archive;
 
 use crate::context::InvocationContext;
 use crate::fingerprint::Fingerprint;

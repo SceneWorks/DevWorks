@@ -229,6 +229,12 @@ impl Registry<'_> {
                 "The package is not installed".into(),
             );
         };
+        if v.approval.is_none() {
+            return (
+                PackageAvailability::Disabled,
+                "Review the verified package bundle before enabling this installation".into(),
+            );
+        }
         if !p.enabled {
             return (
                 PackageAvailability::Disabled,
