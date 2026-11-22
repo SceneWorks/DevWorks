@@ -4894,7 +4894,7 @@ fn restored_package_requires_reverification_of_its_exact_signed_bundle_before_en
     let installed = package(a.install(&a.user, &spec));
     a.ready("restored-pack");
     package(a.simple(&a.user, "addons.disable", "Disable", "restored-pack"));
-    let digest = installed.digest.0;
+    let digest = installed.digest.as_str().to_owned();
     // The stopped-store restore barrier keeps installed bytes but clears older approvals.
     write(&*a.store, move |tx| {
         tx.packages()
