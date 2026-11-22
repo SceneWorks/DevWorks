@@ -42,6 +42,9 @@ usage:
   dev-host cargo [--] ARGS...
       Run the real cargo after the checks. Installing dev-host under the name `cargo`
       ahead of the real one on PATH does the same.
+  dev-host disk-budget [provision SETTINGS.json --drained | serve | status | runner PROFILE |
+                        grow PROFILE | run PROFILE -- COMMAND [ARGS...]]
+      Windows only. Use a single machine-provisioned build volume reservation.
   dev-host cleanup [--dry-run]
       Clean this host's folder <root>/hosts/<host>/ only, never another host's: delete
       build slots whose stamp is older than age_days, and t/<id> and campaigns/*/*/work
@@ -149,11 +152,6 @@ fn main() -> ExitCode {
         "disk-budget" => match dev_host::windows_disk_budget::command(&vars, &rest[1..]) {
             Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
             Err(error) => fail(&format!("dev-host disk budget: {error}")),
-        },
-        #[cfg(windows)]
-        "__disk-budget-keeper" => match dev_host::windows_disk_budget::keeper(&vars, &rest[1..]) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => fail(&format!("dev-host disk budget keeper: {error}")),
         },
         "cleanup" => run_cleanup(&vars, &rest[1..]),
         "guard" => run_guard(&rest[1..]),
@@ -269,18 +267,14 @@ fn run_shim(vars: &Vars, args: &[OsString]) -> ExitCode {
             shim::prepare(vars, &cwd, &exe, args, |vars| {
                 let host = shim::host_check(vars)?;
                 #[cfg(windows)]
-                dev_host::windows_disk_budget::verify_local_host(&host)?;
+                dev_host::windows_disk_budget::local(&host)
+                    .map_err(|error| format!("disk budget: {error}"))?;
                 Ok(host)
             })
         });
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return fail(&format!("dev-host cargo shim: refusing to run cargo: {e}")),
-    };
-    #[cfg(windows)]
-    let _disk_budget = match dev_host::windows_disk_budget::local(vars) {
-        Ok(keeper) => keeper,
-        Err(error) => return fail(&format!("dev-host cargo disk budget: {error}")),
     };
     match shim::run(&launch, args) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),

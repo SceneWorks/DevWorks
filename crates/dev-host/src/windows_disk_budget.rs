@@ -1,38 +1,43 @@
 //! One administrator-provisioned Windows disk budget for this host. Each
 //! reservation follows a non-breakaway Win32 Job through its last writer.
+//! The LocalSystem broker is the only ordinary writer of the reservation state.
 
+mod broker;
 mod native;
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
-use std::os::windows::io::AsRawHandle;
-use std::os::windows::process::CommandExt;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Stdio};
+use std::process::Command;
 use std::ptr::{null, null_mut};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
-use windows_sys::Win32::System::Registry::{
-    HKEY, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, KEY_WOW64_64KEY, REG_OPTION_NON_VOLATILE, REG_SZ,
-    RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegCloseKey, RegCreateKeyExW, RegGetValueW,
-    RegSetValueExW,
+use windows_sys::Win32::Security::Cryptography::{
+    BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
 };
-use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS};
+use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_LOCAL_MACHINE, KEY_SET_VALUE, KEY_WOW64_64KEY, REG_CREATED_NEW_KEY,
+    REG_OPTION_NON_VOLATILE, REG_OPTION_VOLATILE, REG_SZ, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY,
+    RegCloseKey, RegCreateKeyExW, RegGetValueW, RegSetValueExW,
+};
 
-use crate::disk_budget::{Admission, DiskBudget, Owner, Policy, Reservation, Writers};
+use crate::disk_budget::{DiskBudget, Owner, Policy, Reservation};
 use crate::host::Host;
 use crate::{Vars, check, digest};
-use native::{Anchor, Job, Process, anchor, free_bytes, wide};
+use broker::{Request, Response};
+use native::{Anchor, SecurityDescriptor, anchor, checked, wide};
 
 const POLICY_KEY: &str = r"SOFTWARE\SceneWorks\DevHost";
 const POLICY_VALUE: &str = "DiskBudget";
+const BOOT_KEY: &str = r"SOFTWARE\SceneWorks\DevHost\Boot";
+const BOOT_VALUE: &str = "Id";
 const LOCK_WAIT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_secs(2);
-const KEEPER: &str = "__disk-budget-keeper";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,9 +79,7 @@ impl MachinePolicy {
         let encoded =
             read_policy()?.ok_or_else(|| failure("Windows disk budget is not provisioned"))?;
         let policy: Self = serde_json::from_str(&encoded).map_err(io::Error::other)?;
-        if host.root().canonicalize()? != policy.root
-            || host.locks().join("disk-budget").canonicalize()? != policy.directory
-        {
+        if host.root().canonicalize()? != policy.root {
             return Err(failure(
                 "DEV_HOST_ROOT does not match the provisioned disk budget",
             ));
@@ -102,80 +105,41 @@ impl MachinePolicy {
         )
     }
 
-    fn job_name(&self, owner: &Owner) -> String {
+    fn reservation_id(&self, boot: &str, owner: &Owner) -> String {
         let identity = digest(&[
             &self.anchor.volume,
             &self.generation,
             &owner.pid.to_string(),
             &owner.creation_time.to_string(),
         ]);
-        format!(r"Global\DevHostDiskBudget-{identity}")
+        format!("{boot}:{identity}")
     }
 
-    fn request(&self, owner: Owner, profile: &str) -> io::Result<Reservation> {
-        let bytes = *self.profiles.get(profile).ok_or_else(|| {
-            failure(format!(
-                "disk budget profile {profile:?} is not provisioned"
-            ))
-        })?;
-        Ok(Reservation {
-            id: self.job_name(&owner),
-            owner,
-            bytes,
+    fn previously_booted(&self, boot: &str, lease: &Reservation) -> bool {
+        lease.id.split_once(':').is_some_and(|(previous, _)| {
+            previous != boot
+                && valid_boot_id(previous)
+                && self.reservation_id(previous, &lease.owner) == lease.id
         })
     }
 
-    fn admit(&self, request: Reservation) -> io::Result<()> {
-        let ledger = self.ledger();
-        let deadline = Instant::now() + Duration::from_secs(u64::from(self.wait_seconds));
-        let mut reported_wait = false;
-        loop {
-            match ledger.reserve(request.clone(), || free_bytes(&self.anchor.volume))? {
-                Admission::Granted(grant) => {
-                    eprintln!(
-                        "dev-host disk budget reserved {} bytes for PID {}",
-                        grant.bytes, grant.owner.pid
-                    );
-                    return Ok(());
-                }
-                Admission::Wait {
-                    available_bytes,
-                    required_bytes,
-                } => {
-                    if Instant::now() >= deadline {
-                        return Err(failure(format!(
-                            "disk budget wait expired with {available_bytes} bytes free and {required_bytes} bytes required"
-                        )));
-                    }
-                    if !reported_wait {
-                        eprintln!(
-                            "dev-host disk budget waiting with {available_bytes} bytes free and {required_bytes} bytes required"
-                        );
-                        reported_wait = true;
-                    }
-                    std::thread::sleep(
-                        POLL.min(deadline.saturating_duration_since(Instant::now())),
-                    );
-                }
-            }
-        }
+    fn profile(&self, name: &str) -> io::Result<u64> {
+        self.profiles
+            .get(name)
+            .copied()
+            .ok_or_else(|| failure(format!("disk budget profile {name:?} is not provisioned")))
     }
 
-    fn enclosing_job(&self, process: &Process) -> io::Result<Option<Reservation>> {
-        for lease in self.ledger().reservations()? {
-            if lease.id != self.job_name(&lease.owner) {
-                return Err(failure("disk budget has an invalid Windows job identity"));
-            }
-            // An uninspectable job cannot authorize an inherited reservation.
-            if let Ok(job) = Job::open(&lease.id)
-                && let Ok(owner) = Process::verified(&lease.owner)
-                && job.contains(&owner)?
-                && job.contains(process)?
-            {
-                return Ok(Some(lease));
-            }
-        }
-        Ok(None)
+    fn request(&self, boot: &str, owner: Owner, profile: &str) -> io::Result<Reservation> {
+        Ok(Reservation {
+            id: self.reservation_id(boot, &owner),
+            owner,
+            bytes: self.profile(profile)?,
+        })
+    }
+
+    fn wait(&self) -> Duration {
+        Duration::from_secs(u64::from(self.wait_seconds))
     }
 }
 
@@ -187,9 +151,9 @@ fn registry_result(status: WIN32_ERROR) -> io::Result<()> {
     }
 }
 
-fn read_policy() -> io::Result<Option<String>> {
-    let key = wide(OsStr::new(POLICY_KEY));
-    let value = wide(OsStr::new(POLICY_VALUE));
+fn read_registry(key: &str, value: &str) -> io::Result<Option<String>> {
+    let key = wide(OsStr::new(key));
+    let value = wide(OsStr::new(value));
     let mut size = 0;
     let flags = RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY;
     // SAFETY: the two UTF-16 strings are terminated; this call obtains the byte count.
@@ -238,31 +202,31 @@ fn read_policy() -> io::Result<Option<String>> {
 struct RegistryKey(HKEY);
 
 impl RegistryKey {
-    fn for_provisioning() -> io::Result<Self> {
-        let key = wide(OsStr::new(POLICY_KEY));
+    fn create(path: &str, options: u32) -> io::Result<(Self, bool)> {
+        let key = wide(OsStr::new(path));
         let mut handle = null_mut();
-        // SAFETY: key is terminated and handle points to a writable HKEY.
+        let mut disposition = 0;
+        let acl = SecurityDescriptor::new("D:P(A;;KA;;;SY)(A;;KA;;;BA)(A;;KR;;;AU)")?;
+        // SAFETY: the UTF-16 key and attributes are valid and both outputs are writable.
         registry_result(unsafe {
             RegCreateKeyExW(
                 HKEY_LOCAL_MACHINE,
                 key.as_ptr(),
                 0,
                 null(),
-                REG_OPTION_NON_VOLATILE,
+                options,
                 KEY_WOW64_64KEY | KEY_SET_VALUE,
-                null(),
+                &acl.attributes(),
                 &mut handle,
-                null_mut(),
+                &mut disposition,
             )
         })?;
-        Ok(Self(handle))
+        Ok((Self(handle), disposition == REG_CREATED_NEW_KEY))
     }
 
-    fn set_policy(&self, policy: &MachinePolicy) -> io::Result<()> {
-        let value = wide(OsStr::new(POLICY_VALUE));
-        let encoded = wide(OsStr::new(
-            &serde_json::to_string(policy).map_err(io::Error::other)?,
-        ));
+    fn set(&self, value: &str, text: &str) -> io::Result<()> {
+        let value = wide(OsStr::new(value));
+        let encoded = wide(OsStr::new(text));
         let bytes = u32::try_from(encoded.len() * 2).map_err(io::Error::other)?;
         if bytes > 64 * 1024 {
             return Err(failure("Windows disk budget policy is too large"));
@@ -288,21 +252,52 @@ impl Drop for RegistryKey {
     }
 }
 
-fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
-    let key = RegistryKey::for_provisioning()?;
-    if read_policy()?.is_some() {
-        return Err(failure("Windows disk budget is already provisioned"));
+fn valid_boot_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn boot_id() -> io::Result<String> {
+    let (key, fresh) = RegistryKey::create(BOOT_KEY, REG_OPTION_VOLATILE)?;
+    if !fresh {
+        let id = read_registry(BOOT_KEY, BOOT_VALUE)?
+            .filter(|value| valid_boot_id(value))
+            .ok_or_else(|| failure("Windows disk budget boot marker is unreadable"))?;
+        return Ok(id);
     }
+    // A volatile HKLM key survives broker restarts and disappears only when
+    // Windows fully shuts down, so every writer from the former boot is gone.
+    let mut random = [0u8; 16];
+    // SAFETY: Windows fills this buffer from the system-preferred RNG.
+    let status = unsafe {
+        BCryptGenRandom(
+            null_mut(),
+            random.as_mut_ptr(),
+            random.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status < 0 {
+        return Err(failure(format!(
+            "Windows disk budget could not generate a boot marker ({status:#x})"
+        )));
+    }
+    let id: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    key.set(BOOT_VALUE, &id)?;
+    Ok(id)
+}
+
+fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
     let settings: Settings =
         serde_json::from_slice(&std::fs::read(settings_path)?).map_err(io::Error::other)?;
     if settings.generation.trim().is_empty()
         || settings.minimum_free_bytes == 0
         || settings.wait_seconds == 0
         || !settings.profiles.contains_key("local")
+        || !settings.profiles.contains_key("runner")
         || settings.profiles.values().any(|&bytes| bytes == 0)
     {
         return Err(failure(
-            "disk budget requires a generation, positive sizes and wait, and a local profile",
+            "disk budget requires a generation, positive sizes and wait, and local and runner profiles",
         ));
     }
     let root = host.root().canonicalize()?;
@@ -323,8 +318,21 @@ fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
             "each worker image must be an installed Runner.Worker.exe",
         ));
     }
-    // The operator pre-creates the ACL-protected directory and attests the entire
-    // host is drained before invoking this command. Pin the directory's volume.
+    // Atomically claim the single registry key across roots. Only System and
+    // administrators can write it or the ledger. Keep interrupted setup closed.
+    let (key, fresh) = RegistryKey::create(POLICY_KEY, REG_OPTION_NON_VOLATILE)?;
+    if !fresh {
+        return Err(failure(
+            "Windows disk budget policy already exists or provisioning was interrupted",
+        ));
+    }
+    let sddl = SecurityDescriptor::new("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")?;
+    let path = wide(directory.as_os_str());
+    // SAFETY: path is terminated and the security attributes are valid.
+    checked(unsafe { CreateDirectoryW(path.as_ptr(), &sddl.attributes()) })?;
+
+    // The host operator first drains all runners and local writers. Pin the
+    // native volume and the lock opened by the initialization transaction.
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
     let folder = std::fs::OpenOptions::new()
@@ -349,7 +357,7 @@ fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
             "the disk budget anchor moved to another volume during provisioning",
         ));
     }
-    key.set_policy(&MachinePolicy {
+    let policy = MachinePolicy {
         root,
         directory,
         anchor,
@@ -358,127 +366,68 @@ fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
         wait_seconds: settings.wait_seconds,
         profiles: settings.profiles,
         worker_images,
-    })
+    };
+    key.set(
+        POLICY_VALUE,
+        &serde_json::to_string(&policy).map_err(io::Error::other)?,
+    )
 }
 
 fn checked_host(vars: &Vars) -> io::Result<Host> {
     check::check_host(vars).map_err(failure)
 }
 
-fn begin(policy: &MachinePolicy, process: &Process, profile: &str) -> io::Result<ChildStdin> {
-    let request = policy.request(process.owner.clone(), profile)?;
-    let job = Job::create(&request.id)?;
-    let mut keeper = Command::new(std::env::current_exe()?)
-        .args([
-            KEEPER,
-            &request.owner.pid.to_string(),
-            &request.owner.creation_time.to_string(),
-        ])
-        .env_remove("RUNNER_TRACKING_ID")
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let mut pipe = keeper.stdin.take().expect("piped stdin");
-    job.assign(process)?;
-    let duplicated = job.duplicate_into(keeper.as_raw_handle())?;
-    pipe.write_all(&duplicated.to_ne_bytes())?;
-    let mut ready = String::new();
-    BufReader::new(keeper.stdout.take().expect("piped stdout")).read_line(&mut ready)?;
-    if ready != "ready\n" {
-        return Err(failure(
-            "the disk budget keeper could not hold the Windows Job",
-        ));
-    }
-    policy.admit(request)?;
-    Ok(pipe)
-}
-
-fn reap(policy: &MachinePolicy, owner: &Owner) -> io::Result<()> {
-    let id = policy.job_name(owner);
-    // The creator duplicates the held handle into the keeper. A later object
-    // with the same name and a missing name are both inadequate drain proof.
-    let mut pipe = io::stdin().lock();
-    let mut raw = [0; std::mem::size_of::<usize>()];
-    pipe.read_exact(&mut raw)?;
-    let job = Job::from_duplicate(usize::from_ne_bytes(raw))?;
-    if !job.contains(&Process::verified(owner)?)? {
-        return Err(failure(
-            "disk budget keeper received a Job without its verified owner",
-        ));
-    }
-    println!("ready");
-    io::stdout().flush()?;
-    io::copy(&mut pipe, &mut io::sink())?;
-    let ledger = policy.ledger();
-    loop {
-        match ledger.release(&id, owner, |_| job.writers()) {
-            Ok(_) => return Ok(()),
-            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                std::thread::sleep(POLL);
-            }
-            Err(error) => return Err(error),
+fn grant(request: Request) -> io::Result<()> {
+    match broker::client(request)? {
+        Response::Granted(reservation) => {
+            eprintln!(
+                "dev-host disk budget reserved {} bytes for PID {}",
+                reservation.bytes, reservation.owner.pid
+            );
+            Ok(())
         }
+        _ => Err(failure(
+            "disk budget broker returned an unexpected response",
+        )),
     }
 }
 
-/// Verify the machine policy before the cargo shim creates any managed build paths.
-pub fn verify_local_host(host: &Host) -> Result<(), String> {
-    MachinePolicy::open(host)
-        .and_then(|policy| policy.ledger().reservations())
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
-/// Admit this shim invocation, or confirm it is already covered by a parent Job.
-pub fn local(vars: &Vars) -> io::Result<Option<ChildStdin>> {
-    let policy = MachinePolicy::open(&checked_host(vars)?)?;
-    let process = Process::current()?;
-    if policy.enclosing_job(&process)?.is_some() {
-        Ok(None)
-    } else {
-        begin(&policy, &process, "local").map(Some)
-    }
+/// Admit this shim invocation, or confirm that its encompassing Job already holds a lease.
+pub fn local(host: &Host) -> io::Result<()> {
+    MachinePolicy::open(host)?;
+    grant(Request::Local)
 }
 
 pub fn command(vars: &Vars, args: &[OsString]) -> io::Result<i32> {
     let host = checked_host(vars)?;
+    if let [command, path, drained] = args
+        && command == "provision"
+        && drained == "--drained"
+    {
+        provision(&host, Path::new(path))?;
+        return Ok(0);
+    }
+
+    let policy = MachinePolicy::open(&host)?;
     match args {
-        [command, path, drained] if command == "provision" && drained == "--drained" => {
-            provision(&host, Path::new(path))?;
-        }
+        [command] if command == "serve" => broker::serve(policy)?,
         [command] if command == "status" => {
-            let policy = MachinePolicy::open(&host)?;
-            let reservations = policy.ledger().reservations()?;
+            let response = broker::client(Request::Status)?;
             println!(
                 "{}",
-                serde_json::to_string(&reservations).map_err(io::Error::other)?
+                serde_json::to_string(&response).map_err(io::Error::other)?
             );
         }
         [command, profile] if command == "runner" => {
-            let policy = MachinePolicy::open(&host)?;
-            let worker = Process::current()?.runner_ancestor(&policy.worker_images)?;
-            begin(&policy, &worker, text(profile)?)?;
+            grant(Request::Runner(text(profile)?.to_owned()))?;
         }
         [command, profile] if command == "grow" => {
-            let policy = MachinePolicy::open(&host)?;
-            let lease = policy
-                .enclosing_job(&Process::current()?)?
-                .ok_or_else(|| failure("disk budget top-up requires a live admitted Job"))?;
-            policy.admit(policy.request(lease.owner, text(profile)?)?)?;
+            grant(Request::Grow(text(profile)?.to_owned()))?;
         }
         [command, profile, separator, executable, tail @ ..]
             if command == "run" && separator == "--" =>
         {
-            let policy = MachinePolicy::open(&host)?;
-            let process = Process::current()?;
-            let _keeper = if let Some(lease) = policy.enclosing_job(&process)? {
-                policy.admit(policy.request(lease.owner, text(profile)?)?)?;
-                None
-            } else {
-                Some(begin(&policy, &process, text(profile)?)?)
-            };
+            grant(Request::Run(text(profile)?.to_owned()))?;
             return Ok(Command::new(executable)
                 .args(tail)
                 .status()?
@@ -487,22 +436,11 @@ pub fn command(vars: &Vars, args: &[OsString]) -> io::Result<i32> {
         }
         _ => {
             return Err(failure(
-                "usage: dev-host disk-budget provision SETTINGS.json --drained | status | runner PROFILE | grow PROFILE | run PROFILE -- COMMAND [ARGS...]",
+                "usage: dev-host disk-budget provision SETTINGS.json --drained | serve | status | runner PROFILE | grow PROFILE | run PROFILE -- COMMAND [ARGS...]",
             ));
         }
     }
     Ok(0)
-}
-
-pub fn keeper(vars: &Vars, args: &[OsString]) -> io::Result<()> {
-    let [pid, creation_time] = args else {
-        return Err(failure("invalid disk budget keeper identity"));
-    };
-    let owner = Owner {
-        pid: text(pid)?.parse().map_err(io::Error::other)?,
-        creation_time: text(creation_time)?.parse().map_err(io::Error::other)?,
-    };
-    reap(&MachinePolicy::open(&checked_host(vars)?)?, &owner)
 }
 
 fn text(value: &OsStr) -> io::Result<&str> {
@@ -514,9 +452,14 @@ fn text(value: &OsStr) -> io::Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disk_budget::{Admission, Writers};
     use crate::testutil::Scratch;
+    use io::ErrorKind;
+    use native::{Job, Process, free_bytes};
     use std::fs;
     use std::process::{Child, ExitStatus};
+
+    const BOOT: &str = "11111111111111111111111111111111";
 
     const CHILD_TEST: &str = "windows_disk_budget::tests::writer_fixture";
     const FIXTURE: &str = "DEV_HOST_TEST_DISK_BUDGET_WRITER";
@@ -608,9 +551,11 @@ mod tests {
         let scratch = Scratch::new("budget-job");
         let policy = test_policy(&scratch, 10);
         let mut fixture = Fixture::launch(scratch.path(), "owner");
-        let process = Process::open_for_test(fixture.0.id()).unwrap();
-        let request = policy.request(process.owner.clone(), "local").unwrap();
-        let job = Job::create(&request.id).unwrap();
+        let process = Process::open(fixture.0.id(), true).unwrap();
+        let request = policy
+            .request(BOOT, process.owner.clone(), "local")
+            .unwrap();
+        let job = Job::create().unwrap();
         job.assign(&process).unwrap();
         assert!(job.contains(&process).unwrap());
 
@@ -618,7 +563,7 @@ mod tests {
         let admit = |lease| ledger.reserve(lease, || Ok(211)).unwrap();
         assert!(matches!(admit(request.clone()), Admission::Granted(_)));
         let next = policy
-            .request(Process::current().unwrap().owner, "local")
+            .request(BOOT, Process::current().unwrap().owner, "local")
             .unwrap();
         assert!(matches!(admit(next.clone()), Admission::Granted(_)));
         assert!(
@@ -666,6 +611,21 @@ mod tests {
     }
 
     #[test]
+    fn admits_recovery_only_for_an_authenticated_previous_boot_identity() {
+        let scratch = Scratch::new("budget-boot");
+        let policy = test_policy(&scratch, 1);
+        let previous_boot = "22222222222222222222222222222222";
+        let process = Process::current().unwrap();
+        let mut lease = policy
+            .request(previous_boot, process.owner, "local")
+            .unwrap();
+        assert!(!policy.previously_booted(previous_boot, &lease));
+        assert!(policy.previously_booted(BOOT, &lease));
+        lease.owner.creation_time += 1;
+        assert!(!policy.previously_booted(BOOT, &lease));
+    }
+
+    #[test]
     fn verifies_native_volume_and_refuses_stale_state_or_replacement_anchor() {
         let scratch = Scratch::new("budget-anchor");
         let policy = test_policy(&scratch, 1);
@@ -673,7 +633,7 @@ mod tests {
         let state = scratch.path().join("disk-budget.json");
         let stale = fs::read(&state).unwrap();
         let lease = policy
-            .request(Process::current().unwrap().owner, "local")
+            .request(BOOT, Process::current().unwrap().owner, "local")
             .unwrap();
         assert!(matches!(
             ledger
