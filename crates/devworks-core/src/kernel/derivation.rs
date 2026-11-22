@@ -16,6 +16,10 @@ pub enum DerivedKind {
     ConventionImport,
     EmbeddingProbeInput,
     ConventionEmbeddingInput,
+    DocumentEmbeddingInput,
+    DocumentEmbeddingOutput,
+    DocumentVisionInput,
+    DocumentVisionOutput,
     ProviderNativeContinuation,
 }
 
@@ -30,6 +34,10 @@ impl DerivedKind {
             Self::ConventionImport => "ConventionImport",
             Self::EmbeddingProbeInput => "EmbeddingProbeInput",
             Self::ConventionEmbeddingInput => "ConventionEmbeddingInput",
+            Self::DocumentEmbeddingInput => "DocumentEmbeddingInput",
+            Self::DocumentEmbeddingOutput => "DocumentEmbeddingOutput",
+            Self::DocumentVisionInput => "DocumentVisionInput",
+            Self::DocumentVisionOutput => "DocumentVisionOutput",
             Self::ProviderNativeContinuation => "ProviderNativeContinuation",
         }
     }
@@ -43,6 +51,10 @@ impl DerivedKind {
             Self::ConventionImport,
             Self::EmbeddingProbeInput,
             Self::ConventionEmbeddingInput,
+            Self::DocumentEmbeddingInput,
+            Self::DocumentEmbeddingOutput,
+            Self::DocumentVisionInput,
+            Self::DocumentVisionOutput,
             Self::ProviderNativeContinuation,
         ]
         .into_iter()
@@ -71,6 +83,17 @@ impl DerivedKind {
     /// refers to.
     pub fn is_help_evidence(self) -> bool {
         matches!(self, Self::HelpTopic | Self::Instruction)
+    }
+
+    /// Native inference material tied to an exact managed document version.
+    pub fn is_document_custody(self) -> bool {
+        matches!(
+            self,
+            Self::DocumentEmbeddingInput
+                | Self::DocumentEmbeddingOutput
+                | Self::DocumentVisionInput
+                | Self::DocumentVisionOutput
+        )
     }
 
     /// A convention derivative (text, resource or embedding input).

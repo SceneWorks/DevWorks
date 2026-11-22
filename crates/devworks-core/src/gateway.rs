@@ -364,18 +364,45 @@ impl Gateway<'_> {
         });
         // Publication point: authority that was revoked or narrowed while the answer was being
         // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
-        if matches!(answered, Ok(Some((Ok(_), _))))
-            && (!authorization.fences().is_empty() || !authorization.authority_grants().is_empty())
+        let recheck = handler.publication_check(&admitted);
+        if let Ok(Some((Ok(answer), _))) = &answered
+            && (recheck.is_some()
+                || !authorization.fences().is_empty()
+                || !authorization.authority_grants().is_empty())
         {
-            let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
-                crate::authority::authorization_holds(s, &authorization)
+            let fresh = if recheck.is_some() {
+                read_options.clone()
+            } else {
+                ReadOptions::default()
+            };
+            let holds = read_snapshot(self.store, &fresh, |s| {
+                if !crate::authority::authorization_holds(s, &authorization)? {
+                    return Ok((false, None));
+                }
+                recheck
+                    .map_or(Ok(None), |check| check(ctx, &admitted, answer, s))
+                    .map(|refusal| (true, refusal))
             });
-            if !matches!(holds, Ok(true)) {
-                return Ok(self.query_fault(
-                    admitted.query_id,
-                    DomainErrorCode::PermissionDenied,
-                    RetryAdvice::Never,
-                ));
+            match holds {
+                Ok((true, None)) => {}
+                Ok((true, Some(refusal))) => {
+                    return Ok(DomainQueryReply::Rejected {
+                        protocol: Protocol::Draft1,
+                        query_id: admitted.query_id,
+                        fault: refusal.fault(self.correlation()),
+                    });
+                }
+                Err(error) if recheck.is_some() => {
+                    let (code, retry) = storage_fault(&error);
+                    return Ok(self.query_fault(admitted.query_id, code, retry));
+                }
+                _ => {
+                    return Ok(self.query_fault(
+                        admitted.query_id,
+                        DomainErrorCode::PermissionDenied,
+                        RetryAdvice::Never,
+                    ));
+                }
             }
         }
         let reply = match answered {
@@ -1431,8 +1458,8 @@ impl HistoryLog for HandlerTx<'_> {
 // on its own transaction) are refused, so a use case can neither block collection, remove a
 // file, nor create, replace or retire a receipt's reply.
 use crate::ports::storage::{
-    ArtifactLink, ArtifactRead, ArtifactRetention, BlobRecord, BlobState, ListPosition,
-    StoredArtifact, StoredVersion, SubjectKey,
+    ArtifactLink, ArtifactRead, ArtifactRetention, ArtifactScope, BlobRecord, BlobState,
+    ListPosition, StoredArtifact, StoredVersion, SubjectKey,
 };
 use crate::protocol::{OperationId, ProjectId};
 fn artifact_owned() -> StorageError {
@@ -1474,6 +1501,24 @@ impl ArtifactRead for HandlerTx<'_> {
     fn versions(&self, artifact: &Id) -> Result<Vec<StoredVersion>, StorageError> {
         self.inner.borrow_mut().artifacts().versions(artifact)
     }
+    fn version_history(
+        &self,
+        artifact: &Id,
+        before: Option<i64>,
+        live_only: bool,
+        limit: u16,
+    ) -> Result<Vec<StoredVersion>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .version_history(artifact, before, live_only, limit)
+    }
+    fn retained_version_count(&self, artifact: &Id) -> Result<i64, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .retained_version_count(artifact)
+    }
     fn version_by_operation(
         &self,
         operation: &OperationId,
@@ -1507,6 +1552,19 @@ impl ArtifactRead for HandlerTx<'_> {
             .borrow_mut()
             .artifacts()
             .list_workspace(owner, tags, after, limit)
+    }
+    fn document_artifacts(
+        &self,
+        scope: &ArtifactScope,
+        actor: Option<&ActorId>,
+        filter: crate::ports::storage::DocumentListFilter,
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .document_artifacts(scope, actor, filter, after, limit)
     }
     fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
         self.inner.borrow_mut().artifacts().tags(artifact)
@@ -1983,6 +2041,14 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn schemas(&mut self) -> &mut dyn crate::ports::storage::SchemaRepository {
         self.inner.get_mut().schemas()
+    }
+    fn documents(&mut self) -> &mut dyn crate::ports::storage::DocumentRepository {
+        self.inner.get_mut().documents()
+    }
+    fn dreaming(
+        &mut self,
+    ) -> Result<&mut dyn crate::ports::storage::DreamingRepository, StorageError> {
+        self.inner.get_mut().dreaming()
     }
     fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
         self.inner.get_mut().help()

@@ -730,6 +730,25 @@ fn write_batch(
                     called_at_ms: call_entry.created_at_ms,
                     responded_at_ms: now,
                 });
+                let mut history = json!({"sessionId": session.id.as_str(), "sequence": sequence,
+                    "callSequence": recorded.call_sequence, "outcome": name,
+                    "operationId": operation.map(|o| o.0.as_str())});
+                if let ToolOutcome::Completed { artifacts } = outcome
+                    && let Some(evidence) = batch
+                        .context_sources
+                        .iter()
+                        .filter(|source| {
+                            source.kind == crate::services::documents::evidence::CONTEXT_SOURCE_KIND
+                        })
+                        .filter_map(|source| source.artifact.as_ref())
+                        .find(|source| {
+                            artifacts
+                                .iter()
+                                .any(|result| result.version_id == source.version_id)
+                        })
+                {
+                    history["documentEvidence"] = json!(evidence);
+                }
                 pending_links.push((
                     "tool_response",
                     entry.entry_id.clone(),
@@ -737,9 +756,7 @@ fn write_batch(
                         "{name} response to {} (ordinal {}) at transcript {sequence}",
                         recorded.capability_id, recorded.ordinal
                     ),
-                    json!({"sessionId": session.id.as_str(), "sequence": sequence,
-                        "callSequence": recorded.call_sequence, "outcome": name,
-                        "operationId": operation.map(|o| o.0.as_str())}),
+                    history,
                 ));
             }
             TranscriptBody::ContextEpochChanged {

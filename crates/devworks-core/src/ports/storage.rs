@@ -88,6 +88,8 @@ mod configuration;
 mod conventions;
 mod decisions;
 mod diagnostics;
+mod documents;
+mod dreaming;
 mod embedding;
 mod evals;
 mod git;
@@ -120,6 +122,8 @@ pub use configuration::*;
 pub use conventions::*;
 pub use decisions::*;
 pub use diagnostics::*;
+pub use documents::*;
+pub use dreaming::*;
 pub use embedding::*;
 pub use evals::*;
 pub use git::*;
@@ -818,6 +822,10 @@ pub trait WriteTransaction {
     fn resources(&mut self) -> &mut dyn ResourceRepository;
     fn runs(&mut self) -> &mut dyn RunRepository;
     fn diagnostics(&mut self) -> &mut dyn DiagnosticRepository;
+    fn documents(&mut self) -> &mut dyn DocumentRepository;
+    fn dreaming(&mut self) -> Result<&mut dyn DreamingRepository, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
     fn browser(&mut self) -> &mut dyn BrowserRepository;
     fn evals(&mut self) -> &mut dyn EvalRepository;
     fn watchers(&mut self) -> &mut dyn WatcherRepository;
@@ -893,6 +901,10 @@ pub trait ReadSnapshot {
     fn resources(&self) -> &dyn ResourceRead;
     fn runs(&self) -> &dyn RunRead;
     fn diagnostics(&self) -> &dyn DiagnosticRead;
+    fn documents(&self) -> &dyn DocumentRead;
+    fn dreaming(&self) -> Result<&dyn DreamingRead, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
     fn browser(&self) -> &dyn BrowserRead;
     fn evals(&self) -> &dyn EvalRead;
     fn watchers(&self) -> &dyn WatcherRead;

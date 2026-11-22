@@ -23,6 +23,12 @@ pub enum EmbeddingOrigin {
         source_digest: String,
         first_chunk: i64,
     },
+    DocumentIndex {
+        run_id: Id,
+        extraction_id: Id,
+        source: ArtifactRef,
+        first_block: Id,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct EmbeddingRequest {

@@ -1317,7 +1317,42 @@
         "state": "OperationState",
         "checkpoint": "?ArtifactRef",
         "report": "?ArtifactRef",
-        "proposal_ids": "Items<Id>"
+        "proposal_ids": "Items<Id>",
+        "detail": "?DreamRunDetail"
+      },
+      "since": {"detail": 9}
+    },
+    "DreamRunStatus": {
+      "kind": "enum",
+      "values": ["Queued", "Running", "Disabled", "Busy", "TooSoon", "NoSignal", "Blocked",
+        "BudgetExhausted", "Partial", "Failed", "Cancelled", "OutcomeUnknown", "ScheduledFanout", "Completed"]
+    },
+    "DreamRunTrigger": {
+      "kind": "enum",
+      "values": ["Manual", "Scheduled", "Resume"]
+    },
+    "DreamRunDetail": {
+      "kind": "record",
+      "fields": {
+        "status": "DreamRunStatus",
+        "trigger": "DreamRunTrigger",
+        "initiator": "ActorId",
+        "started_at_ms": "Counter",
+        "ended_at_ms": "?Counter",
+        "settings_revision": "Revision",
+        "base_instruction_revision": "?Revision",
+        "project_instruction_revision": "?Revision",
+        "model_id": "?Id",
+        "connection_id": "?Id",
+        "input_tokens": "Counter",
+        "output_tokens": "Counter",
+        "cost_micro_usd": "Counter",
+        "usage_uncertain": "bool",
+        "continued_from": "?Id",
+        "can_continue": "bool",
+        "reason": "?Label",
+        "journal_digest": "?Digest",
+        "evidence": "?ArtifactRef"
       }
     },
     "DreamConfig": {
@@ -1326,8 +1361,66 @@
         "enabled": "bool",
         "instructions": "ArtifactRef",
         "schedule_id": "?Id",
-        "batch_limit": "Limit"
+        "batch_limit": "Limit",
+        "model_id": "?Id",
+        "effort": "?EffortName",
+        "minimum_interval_ms": "?Counter",
+        "max_turns": "?PositiveCounter",
+        "max_tokens": "?PositiveCounter",
+        "max_elapsed_ms": "?PositiveCounter",
+        "max_micro_usd": "?Counter"
+      },
+      "since": {"model_id": 9, "effort": 9, "minimum_interval_ms": 9, "max_turns": 9,
+        "max_tokens": 9, "max_elapsed_ms": 9, "max_micro_usd": 9}
+    },
+    "DreamEvidenceKind": {
+      "kind": "enum",
+      "values": ["Knowledge", "Lesson", "Review", "RepositorySource", "Graph", "Work", "PriorAction"]
+    },
+    "DreamEvidenceReference": {
+      "kind": "record",
+      "fields": {
+        "kind": "DreamEvidenceKind",
+        "reference": "Text",
+        "fingerprint": "Digest",
+        "summary": "Content"
       }
+    },
+    "DreamProposalChange": {
+      "kind": "union",
+      "variants": {
+        "Retract": {},
+        "Supersede": {"replacement": "ClaimDraft"},
+        "Merge": {"other": "RevisionedRef"},
+        "SkillDraft": {},
+        "HookDraft": {},
+        "TestDraft": {}
+      }
+    },
+    "DreamRevertOutcome": {
+      "kind": "record",
+      "fields": {
+        "run_id": "Id",
+        "applied": "Rows<Id>",
+        "conflicts": "Rows<DreamRevertConflict>",
+        "remaining": "Counter"
+      }
+    },
+    "DreamRevertConflict": {
+      "kind": "record",
+      "fields": {
+        "action_id": "Id",
+        "target_id": "Id",
+        "expected_revision": "Revision",
+        "current_revision": "?Revision"
+      }
+    },
+    "DreamRevertResult": {
+      "kind": "versioned",
+      "legacy": "KnowledgeWriteReceipt",
+      "current": "DreamRevertOutcome",
+      "revision": 9,
+      "projection": "none"
     },
     "DocumentRecord": {
       "kind": "record",
@@ -1341,6 +1434,111 @@
         "retrieval_enabled": "bool",
         "extraction_state": "ItemState",
         "coverage": "Coverage"
+      }
+    },
+    "DocumentIndexAttempt": {
+      "kind": "record",
+      "fields": {
+        "attempt_id": "Id",
+        "project_id": "?ProjectId",
+        "purpose": "Id",
+        "model_id": "Id",
+        "connection_id": "Id",
+        "endpoint_profile": "Id",
+        "provider_model": "?Label",
+        "input_tokens": "?Counter",
+        "output_tokens": "?Counter",
+        "priced_micro_usd": "?Counter",
+        "pricing_classification": "Id",
+        "monetary_complete": "bool",
+        "state": "Id"
+      }
+    },
+    "DocumentIndexActivity": {
+      "kind": "record",
+      "fields": {
+        "run_id": "Id",
+        "stage": "Id",
+        "indexed_at_ms": "?Counter",
+        "chunk_count": "?Counter",
+        "attempts": "Items<DocumentIndexAttempt>",
+        "more_attempts": "bool"
+      }
+    },
+    "DocumentVisionOccurrence": {
+      "kind": "record",
+      "fields": {"location": "Label", "status": "Id"}
+    },
+    "DocumentInspection": {
+      "kind": "record",
+      "fields": {
+        "original_name": "?Label",
+        "original_source": "?Label",
+        "tags": "ArtifactTags",
+        "shares": "Items<ProjectId>",
+        "more_shares": "bool",
+        "vision_status": "Id",
+        "vision_model": "?Id",
+        "vision_connection": "?Id",
+        "vision_occurrences": "Items<DocumentVisionOccurrence>",
+        "more_vision_occurrences": "bool"
+      }
+    },
+    "DocumentDetail": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "scope_revision": "Revision",
+        "reference_revision": "Revision",
+        "scope": "DataScope",
+        "title": "Label",
+        "current_version": "?ArtifactRef",
+        "selected_version": "?ArtifactRef",
+        "deleted_selected_version_id": "?Id",
+        "deleted_selected_at_ms": "?Counter",
+        "deleted_current_version_id": "?Id",
+        "deleted_current_at_ms": "?Counter",
+        "retained_versions": "Rows<ArtifactRef>",
+        "retained_version_count": "Counter",
+        "next_version_cursor": "?Cursor",
+        "retrieval_enabled": "bool",
+        "extraction_state": "ItemState",
+        "coverage": "Coverage",
+        "index_activity": "?DocumentIndexActivity",
+        "inspection": "?DocumentInspection"
+      },
+      "since": {"index_activity": 13, "inspection": 13}
+    },
+    "DocumentLibraryPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<DocumentDetail>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "snapshot_revision": "Revision"
+      }
+    },
+    "DocumentResult": {
+      "kind": "versioned",
+      "legacy": "DocumentRecord",
+      "current": "DocumentDetail",
+      "revision": 10,
+      "projection": "none"
+    },
+    "DocumentListResult": {
+      "kind": "versioned",
+      "legacy": "Page<DocumentRecord>",
+      "current": "DocumentLibraryPage",
+      "revision": 10,
+      "projection": "none",
+      "earlierName": "Page"
+    },
+    "ResolvedDocumentCitation": {
+      "kind": "record",
+      "fields": {
+        "citation": "Citation",
+        "text": "Text"
       }
     },
     "InstructionRecord": {
@@ -8731,8 +8929,10 @@
       "fields": {
         "scope": "DataScope",
         "expected_settings_revision": "Revision",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "cancel_run_id": "?Id"
       },
+      "since": {"cancel_run_id": 9},
       "result": "DreamRun",
       "effect": "Inference",
       "authority": "Scoped",
@@ -8785,13 +8985,15 @@
       "authority": "Scoped",
       "rules": "",
       "queryFields": {
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "page": "?PageRequest"
       },
       "commandFields": {
         "scope": "DataScope",
         "expected_revision": "Revision",
         "content": "ArtifactRef"
-      }
+      },
+      "since": {"page": 9}
     },
     "dreaming.propose": {
       "operation": "dreaming.propose",
@@ -8800,8 +9002,13 @@
         "run_id": "Id",
         "expected_revision": "Revision",
         "claim_ids": "NonEmpty<RevisionedRef>",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "change": "?DreamProposalChange",
+        "evidence": "?NonEmpty<DreamEvidenceReference>",
+        "rationale": "?Content",
+        "prevalence": "?Content"
       },
+      "since": {"change": 9, "evidence": 9, "rationale": 9, "prevalence": 9},
       "result": "ProposalRecord",
       "effect": "Local",
       "authority": "Scoped",
@@ -8813,10 +9020,18 @@
       "fields": {
         "run_id": "Id",
         "expected_revision": "Revision",
-        "proposal_id": "Id",
-        "expected_change_digest": "Digest"
+        "proposal_id": "?Id",
+        "expected_change_digest": "Digest",
+        "all_changes": "?bool"
       },
-      "result": "KnowledgeWriteReceipt",
+      "since": {"all_changes": 9},
+      "fieldSchema": {"all_changes": {"const": true}},
+      "inputAlternatives": [
+        {"members": ["proposal_id"], "until": 9},
+        {"members": ["proposal_id"], "since": 9, "forbid": ["all_changes"]},
+        {"members": ["all_changes"], "since": 9, "forbid": ["proposal_id"]}
+      ],
+      "result": "DreamRevertResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Revert only attributable unchanged effects; intervening user edits require conflict handling, never destructive restore."
@@ -8845,7 +9060,7 @@
         "replace_document_id": "?Id",
         "expected_revision": "?Revision"
       },
-      "result": "DocumentRecord",
+      "result": "DocumentResult",
       "effect": "Journaled",
       "authority": "Scoped",
       "rules": "Replacement names target/revision and creates immutable retained version; native PDF/MD/text/DOCX only. Exact source pin, extraction diagnostics and bounded outputs."
@@ -8858,10 +9073,22 @@
         "page": "PageRequest",
         "retrieval_enabled": "?bool"
       },
-      "result": "Page<DocumentRecord>",
+      "result": "DocumentListResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
+    },
+    "documents.resolve_citation": {
+      "operation": "documents.resolve_citation",
+      "mode": "Query",
+      "fields": {
+        "citation": "Citation"
+      },
+      "result": "ResolvedDocumentCitation",
+      "effect": "ReadOnly",
+      "authority": "Scoped",
+      "rules": "Resolve a managed citation only under current artifact authority. Require the exact retained version, source digest and length, extraction revision, block identity, locator and passage digest.",
+      "introducedRevision": 11
     },
     "documents.index": {
       "operation": "documents.index",
@@ -8869,12 +9096,14 @@
       "fields": {
         "document_id": "Id",
         "version_id": "Id",
-        "expected_revision": "Revision"
+        "expected_revision": "Revision",
+        "reextract": "?bool"
       },
       "result": "IndexRunRecord",
       "effect": "Inference",
       "authority": "Scoped",
-      "rules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Failed/canceled old version cannot publish current results."
+      "rules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Matching extraction is reused unless reextract is explicitly true. Unsettled previous attempts keep their original custody. Failed/canceled old version cannot publish current results.",
+      "since": {"reextract": 12}
     },
     "documents.retry": {
       "operation": "documents.retry",
@@ -11796,13 +12025,13 @@
     "code.set_trust": "MutationSummary",
     "indexing.refresh_overlay": "IndexRunRecord",
     "indexing.cancel": "IndexRunRecord",
-    "documents.share": "DocumentRecord",
-    "documents.move": "DocumentRecord",
-    "documents.disable_retrieval": "DocumentRecord",
-    "documents.remove_index": "DocumentRecord",
+    "documents.share": "DocumentResult",
+    "documents.move": "DocumentResult",
+    "documents.disable_retrieval": "DocumentResult",
+    "documents.remove_index": "DocumentResult",
     "artifacts.save": "ArtifactRecord",
     "artifacts.reference": "MutationSummary",
-    "documents.read": "DocumentRecord",
+    "documents.read": "DocumentResult",
     "artifacts.list": "Page<ArtifactRecord>",
     "artifacts.read": "ArtifactReadContent",
     "artifacts.preview": "ArtifactPreview",
@@ -11837,6 +12066,15 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "documents.import": [1, 10, 13],
+    "documents.list": [1, 10, 13],
+    "documents.read": [1, 10, 13],
+    "documents.share": [1, 10, 13],
+    "documents.move": [1, 10, 13],
+    "documents.disable_retrieval": [1, 10, 13],
+    "documents.remove_index": [1, 10, 13],
+    "documents.resolve_citation": [11],
+    "documents.index": [1, 12],
     "artifacts.save": [
       1,
       2,
@@ -12027,10 +12265,7 @@
     "skills.set_enabled": [
       8
     ],
-    "dreaming.instructions": [
-      1,
-      8
-    ],
+    "dreaming.instructions": [1, 8, 9],
     "skills.discover": [
       1,
       8
@@ -12244,10 +12479,13 @@
       1,
       2
     ],
-    "dreaming.revert": [
-      1,
-      2
-    ],
+    "dreaming.run": [1, 9],
+    "dreaming.runs": [1, 9],
+    "dreaming.report": [1, 9],
+    "dreaming.settings": [1, 9],
+    "dreaming.propose": [1, 9],
+    "dreaming.revert": [1, 2, 9],
+    "dreaming.review": [1, 9],
     "features.get": [
       1,
       2,
@@ -13043,6 +13281,7 @@
     "documents.import": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.resolve_citation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.share": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.move": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

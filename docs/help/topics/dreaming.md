@@ -1,9 +1,9 @@
 # Dreaming and knowledge consolidation
 
-Dreaming is the destination for scheduled knowledge consolidation. Its presence does not mean a Dreaming engine is installed or that an arbitrary proposed operation will run. When the current build reports this capability unavailable, no consolidation execution is being promised.
+Open Dreaming to run or inspect consolidation for your workspace or a selected project. Set the cadence and budgets, edit the instructions, and choose Run now. New work uses the configured inference route and appears in [Usage](help:usage). Dreaming can skip an interval when it finds no new evidence.
 
-The intended inputs are current scoped evidence and checkpointed progress. Any available implementation must use ordinary router, permission, control, resource, and budget admission. Suggested lessons or contradictions remain attributable proposals; they cannot silently change user requirements, create approval authority for rules, or make an autonomous decision require acknowledgment.
+Open a run to see its status, measured usage, and report. Use Resume when the run saved a checkpoint. If a provider outcome is unknown, Dreaming waits for the original request to settle. It keeps that scope reserved while the outcome is unresolved.
 
-Use the working [Knowledge](help:knowledge) tools to record and inspect evidence now. Existing lessons, challenges, recurrence rules, and decision history do not depend on a Dreaming run. A scheduled job is runnable only when its actual native operation or inference runtime is qualified. Saving a job definition is not proof that the operation exists.
+Review proposed changes in [Decisions](help:approvals). Dreaming can apply verified, nonconflicting changes to [Knowledge](help:knowledge) and records its evidence. Use Revert to undo the run's eligible changes. The revert report identifies edits it preserved because their current revision differed from the run's recorded history.
 
-If a job waits or refuses, inspect its real run, diagnostics, and supported operation list. Do not repeatedly schedule an unavailable capability. See [Jobs](help:jobs), [Permissions](help:permissions), and [Capability reference](help:capability-reference).
+The nightly project sweep appears in [Jobs](help:jobs). Each eligible project gets its own run under its current settings and budgets.

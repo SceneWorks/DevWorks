@@ -217,6 +217,8 @@ pub mod core_services;
 pub mod desktop;
 pub mod diagnostics;
 pub mod dispatch;
+pub mod documents;
+mod dreaming;
 pub mod effect_consumer;
 pub mod evals;
 pub mod git;

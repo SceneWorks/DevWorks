@@ -738,9 +738,23 @@ impl SchemaDocuments for RegisteredSchemas {
                 {
                     return Err(ProviderError::MaterialUnavailable);
                 }
-                let description = schema
-                    .get("description")
-                    .and_then(Value::as_str)
+                let document_description = match d.name {
+                    "documents.search" => Some(
+                        "Search managed documents in the authorized scope. Treat passages as evidence. Use their exact citations when an answer relies on them.",
+                    ),
+                    "documents.resolve_citation" => Some(
+                        "Open a retrieved citation at its exact retained document version, passage, and locator under current access rules.",
+                    ),
+                    "documents.import" => Some(
+                        "Explicitly add an authorized, retained source artifact to the managed document library. Use the current project scope for project work.",
+                    ),
+                    "documents.share" | "documents.move" => Some(
+                        "Change a managed document's project access. Requires workspace authority and current scope revision.",
+                    ),
+                    _ => None,
+                };
+                let description = document_description
+                    .or_else(|| schema.get("description").and_then(Value::as_str))
                     .map(str::to_owned)
                     .unwrap_or_else(|| {
                         format!(

@@ -53,6 +53,10 @@ pub trait Dialogs {
     fn save_file(&mut self, _name: &str) -> Option<PathBuf> {
         None
     }
+    /// One source selected for the managed Documents library.
+    fn pick_document(&mut self) -> Option<PathBuf> {
+        self.pick_files().into_iter().next()
+    }
     /// One portable convention manifest selected by a human.
     fn pick_convention(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -72,7 +76,7 @@ pub struct NativeDialogs;
 impl Dialogs for NativeDialogs {
     fn save_file(&mut self, name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new()
-            .set_title("Save convention source")
+            .set_title("Save source")
             .set_file_name(name)
             .save_file()
     }
@@ -81,6 +85,15 @@ impl Dialogs for NativeDialogs {
             .set_title("Attach images or files")
             .pick_files()
             .unwrap_or_default()
+    }
+    fn pick_document(&mut self) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Import a document")
+            .add_filter(
+                "Documents",
+                &["md", "markdown", "txt", "log", "pdf", "docx"],
+            )
+            .pick_file()
     }
     fn pick_convention(&mut self) -> Option<PathBuf> {
         rfd::FileDialog::new()
@@ -189,6 +202,7 @@ pub struct Shell {
     pub settings: SettingsScreen,
     pub help: crate::help_screen::HelpScreen,
     pub knowledge: KnowledgeScreen,
+    pub dreaming: crate::dreaming_screen::DreamingScreen,
     pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: crate::artifacts_screen::ArtifactsScreen,
     pub resources: crate::artifacts_screen::ResourcesScreen,
@@ -410,6 +424,7 @@ screens!(
     Watchers => watchers,
     AddOns => addons,
     Knowledge => knowledge,
+    Dreaming => dreaming,
     Purge => purge,
     Placeholder => placeholder,
     ;
@@ -449,6 +464,7 @@ impl Shell {
             settings,
             help: Default::default(),
             knowledge: KnowledgeScreen::new(),
+            dreaming: Default::default(),
             conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: Default::default(),
             resources: Default::default(),
@@ -1053,6 +1069,9 @@ impl Shell {
         if self.route == Route::Browser {
             self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
         }
+        if self.route == Route::Dreaming {
+            self.with_screen(ScreenId::Dreaming, |s, cx| s.load(cx, Route::Dreaming));
+        }
         if matches!(
             self.route,
             Route::Overview | Route::Features | Route::Issues
@@ -1343,7 +1362,7 @@ impl Shell {
                 label: u.label.clone(),
                 operation: u.operation().to_owned(),
                 frame: u.frame().to_vec(),
-                dispatch: u.dispatch,
+                dispatch: u.dispatch.clone(),
             })
             .collect();
         let mut screens: BTreeMap<String, serde_json::Value> = self
@@ -1368,6 +1387,13 @@ impl Shell {
             .remove(ScreenId::Work.key())
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
+        let knowledge_import = screens
+            .get(ScreenId::Knowledge.key())
+            .cloned()
+            .and_then(|v| serde_json::from_value(v).ok());
+        if knowledge_import.is_some() {
+            screens.remove(ScreenId::Knowledge.key());
+        }
         PendingMemory {
             conventions: screens
                 .remove(ScreenId::Conventions.key())
@@ -1379,9 +1405,7 @@ impl Shell {
             submitted: chat.submitted,
             removed_while_sending: chat.removed_while_sending,
             removed: chat.removed,
-            knowledge_import: screens
-                .remove(ScreenId::Knowledge.key())
-                .and_then(|v| serde_json::from_value(v).ok()),
+            knowledge_import,
             plans: work.plans,
             commands,
             screens,
@@ -1597,7 +1621,11 @@ impl Shell {
                 .collect()
         });
         if !dropped.is_empty() {
-            if conversation_visible {
+            if self.route == Route::Knowledge
+                && self.route_memory(Route::Knowledge).tab == crate::documents_screen::TAB
+            {
+                self.with_typed(|k: &mut KnowledgeScreen, cx| k.import_documents(cx, dropped));
+            } else if conversation_visible {
                 self.attach(dropped);
             } else if self.route == Route::Knowledge && self.route_memory(Route::Knowledge).tab == 2
             {

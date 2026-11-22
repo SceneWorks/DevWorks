@@ -27,17 +27,29 @@ pub struct RunInput {
     pub expected_settings_revision: Revision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 9))]
+    pub cancel_run_id: Option<Id>,
 }
 impl Check for RunInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
         self.expected_settings_revision.check()?;
         self.resume_run_id.check()?;
+        self.cancel_run_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for RunInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.cancel_run_id = None;
+        }
+    }
 }
 
 /// `dreaming.runs` Query input.
@@ -107,7 +119,9 @@ impl Check for SettingsCommandInput {
     }
 }
 impl Revisioned for SettingsCommandInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        self.config.retain_revision(revision);
+    }
 }
 
 /// `dreaming.instructions` Query input.
@@ -115,15 +129,27 @@ impl Revisioned for SettingsCommandInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstructionsQueryInput {
     pub scope: DataScope,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PageRequest", extend("x-since" = 9))]
+    pub page: Option<PageRequest>,
 }
 impl Check for InstructionsQueryInput {
     fn check(&self) -> Result<(), String> {
         self.scope.check()?;
+        self.page.check()?;
         Ok(())
     }
 }
 impl Revisioned for InstructionsQueryInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.page = None;
+        }
+    }
 }
 
 /// `dreaming.instructions` Command input.
@@ -154,6 +180,34 @@ pub struct ProposeInput {
     pub expected_revision: Revision,
     pub claim_ids: NonEmpty<RevisionedRef>,
     pub content: ArtifactRef,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DreamProposalChange", extend("x-since" = 9))]
+    pub change: Option<DreamProposalChange>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "NonEmpty<DreamEvidenceReference>", extend("x-since" = 9))]
+    pub evidence: Option<NonEmpty<DreamEvidenceReference>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 9))]
+    pub rationale: Option<Content>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Content", extend("x-since" = 9))]
+    pub prevalence: Option<Content>,
 }
 impl Check for ProposeInput {
     fn check(&self) -> Result<(), String> {
@@ -161,21 +215,54 @@ impl Check for ProposeInput {
         self.expected_revision.check()?;
         self.claim_ids.check()?;
         self.content.check()?;
+        self.change.check()?;
+        self.evidence.check()?;
+        self.rationale.check()?;
+        self.prevalence.check()?;
         Ok(())
     }
 }
 impl Revisioned for ProposeInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.change = None;
+        } else {
+            self.change.retain_revision(revision);
+        }
+        if revision < 9 {
+            self.evidence = None;
+        }
+        if revision < 9 {
+            self.rationale = None;
+        }
+        if revision < 9 {
+            self.prevalence = None;
+        }
+    }
 }
 
 /// `dreaming.revert` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["runId", "expectedRevision", "proposalId", "expectedChangeDigest"], "x-until": 9}, {"required": ["runId", "expectedRevision", "proposalId", "expectedChangeDigest"], "not": {"anyOf": [{"required": ["allChanges"]}]}, "x-since": 9}, {"required": ["runId", "expectedRevision", "expectedChangeDigest", "allChanges"], "not": {"anyOf": [{"required": ["proposalId"]}]}, "x-since": 9}]))]
 pub struct RevertInput {
     pub run_id: Id,
     pub expected_revision: Revision,
-    pub proposal_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id")]
+    pub proposal_id: Option<Id>,
     pub expected_change_digest: Digest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 9, "const" = true))]
+    pub all_changes: Option<bool>,
 }
 impl Check for RevertInput {
     fn check(&self) -> Result<(), String> {
@@ -183,11 +270,16 @@ impl Check for RevertInput {
         self.expected_revision.check()?;
         self.proposal_id.check()?;
         self.expected_change_digest.check()?;
+        self.all_changes.check()?;
         Ok(())
     }
 }
 impl Revisioned for RevertInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.all_changes = None;
+        }
+    }
 }
 
 /// `dreaming.review` Command input.

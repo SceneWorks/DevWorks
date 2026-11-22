@@ -386,6 +386,9 @@ impl ReadSnapshot for MemSnapshot {
     fn schemas(&self) -> &dyn SchemaRead {
         &self.unsupported
     }
+    fn documents(&self) -> &dyn DocumentRead {
+        &self.unsupported
+    }
     fn help(&self) -> &dyn HelpRead {
         &self.unsupported
     }
@@ -532,6 +535,9 @@ impl WriteTransaction for MemTx<'_> {
         &mut self.unsupported
     }
     fn schemas(&mut self) -> &mut dyn SchemaRepository {
+        &mut self.unsupported
+    }
+    fn documents(&mut self) -> &mut dyn DocumentRepository {
         &mut self.unsupported
     }
     fn help(&mut self) -> &mut dyn HelpRepository {

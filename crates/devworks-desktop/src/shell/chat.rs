@@ -1869,9 +1869,12 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::PackagePrepared { .. }
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
+                        | TaskOutput::DocumentSource(_)
+                        | TaskOutput::DocumentAccess(_)
                         | TaskOutput::WorkspaceReplyStatus(_)
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
+                        | TaskOutput::DreamingReport(_)
                         | TaskOutput::McpContent(_)
                         | TaskOutput::WorkImportReport(_)
                         | TaskOutput::SystemOneCompletion(_)
@@ -1947,9 +1950,12 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::PackagePrepared { .. }
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
+                            | TaskOutput::DocumentSource(_)
+                            | TaskOutput::DocumentAccess(_)
                             | TaskOutput::WorkspaceReplyStatus(_)
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
+                            | TaskOutput::DreamingReport(_)
                             | TaskOutput::McpContent(_)
                             | TaskOutput::WorkImportReport(_)
                             | TaskOutput::SystemOneCompletion(_)

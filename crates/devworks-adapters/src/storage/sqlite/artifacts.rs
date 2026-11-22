@@ -47,6 +47,14 @@ const HELP_KIND: &str =
     devworks_core::services::artifacts::derivation::DerivedKind::HelpTopic.as_str();
 const INSTRUCTION_KIND: &str =
     devworks_core::services::artifacts::derivation::DerivedKind::Instruction.as_str();
+const DOCUMENT_EMBEDDING_INPUT_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::DocumentEmbeddingInput.as_str();
+const DOCUMENT_EMBEDDING_OUTPUT_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::DocumentEmbeddingOutput.as_str();
+const DOCUMENT_VISION_INPUT_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::DocumentVisionInput.as_str();
+const DOCUMENT_VISION_OUTPUT_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::DocumentVisionOutput.as_str();
 const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,\
     scope_revision,reference_revision,current_version_id,state,created_at,\
     provenance_json,scope_kind,owner_actor_id,retention";
@@ -248,6 +256,28 @@ fn versions(conn: &Connection, artifact: &Id) -> Result<Vec<StoredVersion>, Stor
             .collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter().map(version_of).collect()
 }
+fn version_history(
+    conn: &Connection,
+    artifact: &Id,
+    before: Option<i64>,
+    live_only: bool,
+    limit: u16,
+) -> Result<Vec<StoredVersion>, StorageError> {
+    if !(1..=501).contains(&limit) {
+        return Err(invalid("version history limit must be 1..=501"));
+    }
+    let mut statement = db(conn.prepare_cached(&format!(
+        "SELECT {VERSION_COLUMNS} FROM artifact_versions v JOIN blobs b ON b.digest=v.blob_digest
+            WHERE v.artifact_id=?1 AND (?2 IS NULL OR v.version_no<?2)
+              AND (NOT ?3 OR v.deleted_at IS NULL)
+            ORDER BY v.version_no DESC LIMIT ?4"
+    )))?;
+    let rows = db(statement.query_map(
+        params![artifact.as_str(), before, live_only, limit],
+        version_row,
+    ))?;
+    rows.map(|row| db(row).and_then(version_of)).collect()
+}
 fn version_by_operation(
     conn: &Connection,
     op: &OperationId,
@@ -295,7 +325,11 @@ fn list(
             ?7
                     AND (json_extract(a.provenance_json,\
             '$.derived.kind') IS '{HELP_KIND}' OR json_extract(a.provenance_json,\
-            '$.derived.kind') IS '{INSTRUCTION_KIND}'))
+            '$.derived.kind') IS '{INSTRUCTION_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_EMBEDDING_INPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_EMBEDDING_OUTPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_VISION_INPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_VISION_OUTPUT_KIND}'))
            AND \
             (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND \
             a.id<?3))
@@ -321,6 +355,45 @@ fn list(
     ))?
     .collect::<rusqlite::Result<Vec<_>>>())?;
     rows.into_iter().map(artifact_of).collect()
+}
+fn document_artifacts(
+    conn: &Connection,
+    scope: &ArtifactScope,
+    actor: Option<&ActorId>,
+    filter: DocumentListFilter,
+    after: Option<&ListPosition>,
+    limit: u16,
+) -> Result<Vec<StoredArtifact>, StorageError> {
+    let limit = bounded(limit)?;
+    let mut statement = db(conn.prepare_cached(&format!(
+        "SELECT {ARTIFACT_COLUMNS} FROM artifacts a
+           WHERE a.state='Live' AND a.retention='Explicit'
+             AND json_extract(a.provenance_json,'$.managedDocument')=1
+             AND ((?1 IS NULL AND a.scope_kind='Workspace' AND (?2 IS NULL OR a.owner_actor_id=?2))
+                 OR (?1 IS NOT NULL AND (a.current_project_id=?1 OR EXISTS(
+                    SELECT 1 FROM artifact_shares s WHERE s.artifact_id=a.id AND s.project_id=?1))
+                    AND (?2 IS NULL OR a.scope_kind='Workspace' OR a.owner_actor_id IS NULL
+                         OR a.owner_actor_id=?2)))
+             AND (?3 IS NULL OR (a.current_version_id IS NOT NULL AND
+                 COALESCE((SELECT p.enabled FROM document_retrieval_preferences p
+                           WHERE p.artifact_id=a.id),1))=?3)
+             AND (NOT ?7 OR a.current_version_id IS NOT NULL)
+             AND (?4 IS NULL OR a.created_at<?4 OR (a.created_at=?4 AND a.id<?5))
+           ORDER BY a.created_at DESC,a.id DESC LIMIT ?6"
+    )))?;
+    let rows = db(statement.query_map(
+        params![
+            scope.project().map(|value| value.0.as_str()),
+            actor.map(|value| value.0.as_str()),
+            filter.retrieval_enabled,
+            after.map(|value| value.created_at_ms),
+            after.map(|value| value.id.as_str()),
+            limit,
+            filter.current_only,
+        ],
+        artifact_row,
+    ))?;
+    rows.map(|row| db(row).and_then(artifact_of)).collect()
 }
 fn list_workspace(
     conn: &Connection,
@@ -350,7 +423,11 @@ fn list_workspace(
             ?7
                     AND (json_extract(a.provenance_json,\
             '$.derived.kind') IS '{HELP_KIND}' OR json_extract(a.provenance_json,\
-            '$.derived.kind') IS '{INSTRUCTION_KIND}'))
+            '$.derived.kind') IS '{INSTRUCTION_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_EMBEDDING_INPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_EMBEDDING_OUTPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_VISION_INPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{DOCUMENT_VISION_OUTPUT_KIND}'))
            AND \
             (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND \
             a.id<?3))
@@ -511,6 +588,17 @@ macro_rules! artifact_reads {
             fn versions(&self, artifact: &Id) -> Result<Vec<StoredVersion>, StorageError> {
                 versions(self.conn, artifact)
             }
+            fn version_history(
+                &self, artifact: &Id, before: Option<i64>, live_only: bool, limit: u16,
+            ) -> Result<Vec<StoredVersion>, StorageError> {
+                version_history(self.conn, artifact, before, live_only, limit)
+            }
+            fn retained_version_count(&self, artifact: &Id) -> Result<i64, StorageError> {
+                db(self.conn.query_row(
+                    "SELECT COUNT(*) FROM artifact_versions WHERE artifact_id=?1 AND deleted_at IS NULL",
+                    [artifact.as_str()], |row| row.get(0),
+                ))
+            }
             fn version_by_operation(
                 &self,
                 op: &OperationId,
@@ -535,6 +623,16 @@ macro_rules! artifact_reads {
                 limit: u16,
             ) -> Result<Vec<StoredArtifact>, StorageError> {
                 list_workspace(self.conn, self.artifact_host_actor(), owner, tags, after, limit)
+            }
+            fn document_artifacts(
+                &self,
+                scope: &ArtifactScope,
+                actor: Option<&ActorId>,
+                filter: DocumentListFilter,
+                after: Option<&ListPosition>,
+                limit: u16,
+            ) -> Result<Vec<StoredArtifact>, StorageError> {
+                document_artifacts(self.conn, scope, actor, filter, after, limit)
             }
             fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
                 tags(self.conn, artifact)
@@ -839,6 +937,9 @@ impl ArtifactRepository for Unit<'_> {
         let n = db(db(self.conn.prepare_cached(
             "UPDATE artifacts SET title=?1,revision=?2,current_project_id=?3,\
                 scope_revision=?4,reference_revision=?5,current_version_id=?6,state=?7,\
+                owner_actor_id=CASE WHEN scope_kind='Workspace' AND ?9='Project'
+                    AND json_extract(provenance_json,'$.managedDocument')=1
+                    THEN NULL ELSE owner_actor_id END,
                 scope_kind=?9 WHERE id=?8",
         ))?
         .execute(params![

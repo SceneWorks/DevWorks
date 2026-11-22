@@ -371,29 +371,32 @@ pub enum OperationResult {
     #[serde(rename = "dreaming.propose")]
     DreamingPropose { value: ProposalRecord },
     #[serde(rename = "dreaming.revert")]
-    DreamingRevert { value: KnowledgeWriteReceipt },
+    DreamingRevert { value: DreamRevertResult },
     #[serde(rename = "dreaming.review")]
     DreamingReview { value: ProposalRecord },
     #[serde(rename = "documents.import")]
-    DocumentsImport { value: DocumentRecord },
+    DocumentsImport { value: DocumentResult },
     #[serde(rename = "documents.list")]
-    DocumentsList { value: Page<DocumentRecord> },
+    DocumentsList { value: DocumentListResult },
     #[serde(rename = "documents.read")]
-    DocumentsRead { value: DocumentRecord },
+    DocumentsRead { value: DocumentResult },
     #[serde(rename = "documents.search")]
     DocumentsSearch { value: RetrievalPage },
     #[serde(rename = "documents.share")]
-    DocumentsShare { value: DocumentRecord },
+    DocumentsShare { value: DocumentResult },
     #[serde(rename = "documents.move")]
-    DocumentsMove { value: DocumentRecord },
+    DocumentsMove { value: DocumentResult },
     #[serde(rename = "documents.index")]
     DocumentsIndex { value: IndexRunRecord },
     #[serde(rename = "documents.retry")]
     DocumentsRetry { value: IndexRunRecord },
     #[serde(rename = "documents.disable_retrieval")]
-    DocumentsDisableRetrieval { value: DocumentRecord },
+    DocumentsDisableRetrieval { value: DocumentResult },
     #[serde(rename = "documents.remove_index")]
-    DocumentsRemoveIndex { value: DocumentRecord },
+    DocumentsRemoveIndex { value: DocumentResult },
+    #[schemars(extend("x-since" = 11))]
+    #[serde(rename = "documents.resolve_citation")]
+    DocumentsResolveCitation { value: ResolvedDocumentCitation },
     #[serde(rename = "artifacts.save")]
     ArtifactsSave { value: ArtifactRecord },
     #[serde(rename = "artifacts.list")]
@@ -1006,6 +1009,7 @@ impl OperationResult {
             Self::DocumentsRetry { .. } => "documents.retry",
             Self::DocumentsDisableRetrieval { .. } => "documents.disable_retrieval",
             Self::DocumentsRemoveIndex { .. } => "documents.remove_index",
+            Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
             Self::ArtifactsSave { .. } => "artifacts.save",
             Self::ArtifactsList { .. } => "artifacts.list",
             Self::ArtifactsRead { .. } => "artifacts.read",
@@ -1401,6 +1405,7 @@ impl Check for OperationResult {
             Self::DocumentsRetry { value } => value.check()?,
             Self::DocumentsDisableRetrieval { value } => value.check()?,
             Self::DocumentsRemoveIndex { value } => value.check()?,
+            Self::DocumentsResolveCitation { value } => value.check()?,
             Self::ArtifactsSave { value } => value.check()?,
             Self::ArtifactsList { value } => value.check()?,
             Self::ArtifactsRead { value } => value.check()?,
@@ -1701,8 +1706,19 @@ impl Revisioned for OperationResult {
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeChallenge { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingRun { value } => value.retain_revision(revision),
+            Self::DreamingRuns { value } => value.retain_revision(revision),
+            Self::DreamingReport { value } => value.retain_revision(revision),
+            Self::DreamingSettings { value } => value.retain_revision(revision),
             Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
+            Self::DocumentsImport { value } => value.retain_revision(revision),
+            Self::DocumentsList { value } => value.retain_revision(revision),
+            Self::DocumentsRead { value } => value.retain_revision(revision),
+            Self::DocumentsShare { value } => value.retain_revision(revision),
+            Self::DocumentsMove { value } => value.retain_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.retain_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
@@ -1848,6 +1864,9 @@ impl Revisioned for OperationResult {
             Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::DocumentsResolveCitation { .. } if revision < 11 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
@@ -1907,6 +1926,14 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::DreamingRevert { value } => value.check_revision(revision),
+            Self::DocumentsImport { value } => value.check_revision(revision),
+            Self::DocumentsList { value } => value.check_revision(revision),
+            Self::DocumentsRead { value } => value.check_revision(revision),
+            Self::DocumentsShare { value } => value.check_revision(revision),
+            Self::DocumentsMove { value } => value.check_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.check_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.check_revision(revision),
             Self::ConventionsList { value } => value.check_revision(revision),
             Self::ConventionsRead { value } => value.check_revision(revision),
             Self::ConventionsEdit { value } => value.check_revision(revision),

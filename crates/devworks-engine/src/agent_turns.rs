@@ -1370,12 +1370,23 @@ fn measure(
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
     let blocks = || context.messages.iter().flat_map(|message| &message.content);
     let referenced = blocks()
-        .filter_map(|block| match block {
-            ContentBlock::ToolCall { arguments, .. } => Some(arguments.byte_length.get()),
-            ContentBlock::Native { artifact, .. } => Some(artifact.byte_length.get()),
-            _ => None,
+        .try_fold(0i64, |total, block| match block {
+            ContentBlock::ToolCall { arguments, .. } => {
+                total.checked_add(arguments.byte_length.get())
+            }
+            ContentBlock::Native { artifact, .. } => total.checked_add(artifact.byte_length.get()),
+            ContentBlock::ToolResult { content, .. } => {
+                content
+                    .iter()
+                    .try_fold(total, |bytes, result| match result {
+                        ResultBlock::DocumentEvidence { artifact } => {
+                            bytes.checked_add(artifact.byte_length.get())
+                        }
+                        _ => Some(bytes),
+                    })
+            }
+            _ => Some(total),
         })
-        .try_fold(0i64, i64::checked_add)
         .ok_or(StorageError::ScopeDenied)?;
     let natives = blocks()
         .filter(|block| matches!(block, ContentBlock::Native { .. }))

@@ -8818,6 +8818,8 @@ mod mcp_agent_tool;
 
 #[path = "runs/approval_wait.rs"]
 mod approval_wait;
+#[path = "runs/document_tools.rs"]
+mod document_tools;
 
 #[path = "runs/compaction.rs"]
 mod compaction;
@@ -8831,3 +8833,6 @@ mod failure_notifications;
 mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
 mod review_capacity_tests;
+
+#[path = "runs/dreaming.rs"]
+mod dreaming;

@@ -161,6 +161,18 @@ impl IndexService {
         origin: &EmbeddingOrigin,
         configuration_source_digest: &str,
     ) -> Result<(), StorageError> {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+            self.validate_query_custody_in(read, ctx, origin, configuration_source_digest)
+        })
+    }
+
+    pub(crate) fn validate_query_custody_in(
+        &self,
+        read: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        origin: &EmbeddingOrigin,
+        configuration_source_digest: &str,
+    ) -> Result<(), StorageError> {
         let EmbeddingOrigin::Query {
             query_id,
             fingerprint,
@@ -173,19 +185,17 @@ impl IndexService {
             "context": stable_context(ctx)?,
             "configuration": configuration_source_digest
         }))?;
-        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
-            let Some(op) = self.query_preparation(read, ctx, query_id, fingerprint)? else {
-                return Ok(());
-            };
-            if op.payload["origin"]["scopeDigest"] != scope_digest.as_str()
-                || op.payload["contextDigest"] != context_digest
-                || op.payload["requestId"]
-                    != json!(identity("cemb_", &query_key(ctx, query_id, fingerprint)?))
-            {
-                return Err(StorageError::CursorExpired);
-            }
-            Ok(())
-        })
+        let Some(op) = self.query_preparation(read, ctx, query_id, fingerprint)? else {
+            return Ok(());
+        };
+        if op.payload["origin"]["scopeDigest"] != scope_digest.as_str()
+            || op.payload["contextDigest"] != context_digest
+            || op.payload["requestId"]
+                != json!(identity("cemb_", &query_key(ctx, query_id, fingerprint)?))
+        {
+            return Err(StorageError::CursorExpired);
+        }
+        Ok(())
     }
     /// Exact winner refs are reused across retries; concurrent losing files never become
     /// artifact rows. No source/provider bytes are read inside the publishing transaction.
@@ -253,7 +263,11 @@ impl IndexService {
                 fingerprint,
                 ..
             } => Some(query_key(context, query_id, fingerprint)?),
-            EmbeddingOrigin::Index { .. } => None,
+            EmbeddingOrigin::Index { .. } | EmbeddingOrigin::DocumentIndex { .. } => None,
+        };
+        let document_source = match origin {
+            EmbeddingOrigin::DocumentIndex { source, .. } => Some(source.clone()),
+            _ => None,
         };
         let origin = match origin {
             EmbeddingOrigin::Query {
@@ -282,6 +296,18 @@ impl IndexService {
                     "firstChunk": first_chunk
                 })
             }
+            EmbeddingOrigin::DocumentIndex {
+                run_id,
+                extraction_id,
+                source,
+                first_block,
+            } => json!({
+                "kind": "DocumentIndex",
+                "runId": run_id,
+                "extractionId": extraction_id,
+                "source": source,
+                "firstBlockId": first_block
+            }),
         };
         let args_digest = digest(&json!({
             "origin": origin,
@@ -318,7 +344,12 @@ impl IndexService {
             source,
             cancellation.clone(),
         );
-        let prior = self.write(move |tx| {
+        let options = WriteOptions {
+            cancellation: Some(cancellation.clone()),
+            deadline_ms,
+            ..WriteOptions::host_state()
+        };
+        let prior = self.write_options(options.clone(), move |tx| {
             if cancelled.is_cancelled() || deadline_ms.is_some_and(|d| tx.now_ms() >= d) {
                 return Err(StorageError::Cancelled);
             }
@@ -406,8 +437,18 @@ impl IndexService {
         if let Some(prior) = prior {
             return Ok(prior);
         }
-        let input_kind =
-            crate::services::artifacts::derivation::DerivedKind::ConventionEmbeddingInput.as_str();
+        use crate::services::artifacts::derivation::DerivedKind;
+        let (input_kind, input_title) = if document_source.is_some() {
+            (
+                DerivedKind::DocumentEmbeddingInput.as_str(),
+                "Document embedding input",
+            )
+        } else {
+            (
+                DerivedKind::ConventionEmbeddingInput.as_str(),
+                "Convention embedding input",
+            )
+        };
         let mut staged = Vec::with_capacity(texts.len());
         let stage_result = self.publication(|| {
             for (index, text) in texts.iter().enumerate() {
@@ -461,7 +502,7 @@ impl IndexService {
             cancellation.clone(),
         );
         let now = self.clock.now_ms().get();
-        let result = self.write(move |tx| {
+        let result = self.write_options(options, move |tx| {
             if cancellation.is_cancelled() || deadline_ms.is_some_and(|d| tx.now_ms() >= d) {
                 return Err(StorageError::Cancelled);
             }
@@ -471,25 +512,29 @@ impl IndexService {
             }
             let mut refs = Vec::with_capacity(files.len());
             for (index, file) in files.iter().enumerate() {
+                let mut provenance = json!({
+                    "kind": input_kind,
+                    "requestId": request,
+                    "contextDigest": context_hash,
+                    "embeddingSpace": space,
+                    "inputDigest": input_hash,
+                    "inputIndex": index
+                });
+                if let Some(source) = &document_source {
+                    provenance["documentSource"] = json!(source);
+                }
                 let version = artifacts.commit_host_bytes_in_scope(
                     tx,
                     file,
                     HostArtifactPublication {
-                        title: "Convention embedding input",
+                        title: input_title,
                         media_type: "text/plain; charset=utf-8",
                         scope: ctx
                             .project_id()
                             .cloned()
                             .map_or(ArtifactScope::Workspace, ArtifactScope::Project),
                         owner: ctx.principal().clone(),
-                        provenance: json!({
-                            "kind": input_kind,
-                            "requestId": request,
-                            "contextDigest": context_hash,
-                            "embeddingSpace": space,
-                            "inputDigest": input_hash,
-                            "inputIndex": index
-                        }),
+                        provenance,
                     },
                 )?;
                 refs.push(

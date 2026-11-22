@@ -206,6 +206,20 @@ impl HostIngress {
         Some(bound)
     }
 
+    /// The desktop's explicit human interaction binds the exact reviewed proposal revision.
+    pub fn dreaming_review_context(
+        &self,
+        context: &InvocationContext,
+        input: &crate::operations::dreaming::ReviewInput,
+    ) -> Option<InvocationContext> {
+        if context.store_id != self.store_id || context.principal_kind != PrincipalKind::Human {
+            return None;
+        }
+        let mut bound = context.clone();
+        bound.human_decision = Some(dreaming_review_digest(input)?);
+        Some(bound)
+    }
+
     /// Dedicated native confirmation of one exact reviewed project purge. This
     /// private marker is never a wire argument, approval grant or agent capability.
     pub fn project_purge_context(
@@ -339,6 +353,15 @@ impl InvocationContext {
             && self.human_decision == decision_digest(decision)
     }
 
+    pub fn human_dreaming_review_matches(
+        &self,
+        input: &crate::operations::dreaming::ReviewInput,
+    ) -> bool {
+        self.principal_kind == PrincipalKind::Human
+            && self.human_decision.is_some()
+            && self.human_decision == dreaming_review_digest(input)
+    }
+
     pub fn project_purge_matches(&self, input: &crate::operations::projects::PurgeInput) -> bool {
         self.principal_kind == PrincipalKind::Human
             && self.human_project_purge.is_some()
@@ -383,6 +406,10 @@ impl InvocationContext {
 
     pub(crate) fn with_job_run(mut self, run_id: Id) -> Self {
         self.job_run_id = Some(run_id);
+        self
+    }
+    pub(crate) fn without_job_run(mut self) -> Self {
+        self.job_run_id = None;
         self
     }
     /// Original scheduled occurrence; this is provenance, never permission or a dispatch grant.
@@ -510,6 +537,15 @@ impl InvocationContext {
     pub fn authority_sources(&self) -> &[Id] {
         &self.authority_sources
     }
+}
+
+fn dreaming_review_digest(input: &crate::operations::dreaming::ReviewInput) -> Option<String> {
+    let value = serde_json::to_value(input).ok()?;
+    let material = crate::jcs::canonicalize(&value).ok()?;
+    Some(format!(
+        "dreaming:{}",
+        crate::fingerprint::sha256_hex(material.as_bytes())
+    ))
 }
 
 fn decision_digest(

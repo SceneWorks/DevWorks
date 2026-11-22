@@ -64,6 +64,21 @@ use rusqlite::Connection;
 /// Migration 69 records workspace archive grants, proposals and distinct restore histories.
 /// Effect provenance is historical evidence with no foreign key to active project rows.
 /// Migration 70 records workspace-wide update discovery and approval with no project ownership edge.
+/// Migration 71 adds retrieval preferences and three per-version document index tables. The
+/// document lineage propagates from the managed artifact version to its extraction and text.
+/// Explicit version tombstones remove derived rows, and project purge classifies each row.
+/// Migration 72 adds a published lexical row per extracted block. It is classified through
+/// that block's retained version. FTS5 segments follow the projection and are maintained
+/// by the virtual table when a canonical lexical row changes.
+/// Migrations 73 and 74 add derivative embedding runs, vectors, and vision units and keys.
+/// Each follows its exact extraction or version and has a separate ownership entry.
+/// Migration 75 indexes existing embedding preparation rows and keeps the publication time on
+/// the exact document index version. Both tables retain their existing purge policies, so a
+/// retained document keeps its publication time after its previous owner's events are purged.
+/// Migration 76 adds scoped Dreaming settings, immutable instruction revisions and run and
+/// action records, plus scoped source observations. A project's settings and runs belong to
+/// that project; action evidence follows
+/// its parent run. Workspace/base records remain independent.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
     "0b51d4371a8fe2f807721dab088f945c091928c0846eebdee4497fac63c6254e";
 

@@ -120,6 +120,7 @@
 pub(crate) mod convention_import;
 mod convention_source;
 pub mod derivation;
+pub(crate) mod documents;
 pub mod evidence;
 pub mod host;
 mod index_source;
@@ -311,7 +312,7 @@ impl<'a> Viewer<'a> {
     }
     /// The workspace-level audience of what `owner` owns: the owner itself, the user, the host
     /// and the unconfined workspace coordinator.
-    fn sees_owned(&self, owner: Option<&crate::protocol::ActorId>) -> bool {
+    pub(crate) fn sees_owned(&self, owner: Option<&crate::protocol::ActorId>) -> bool {
         matches!(
             self.ctx.principal_kind(),
             PrincipalKind::Human | PrincipalKind::Host
@@ -347,6 +348,47 @@ pub(crate) fn visible_in(
     artifact: &StoredArtifact,
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
+    // Purge can keep a shared document's owner tombstone for lineage. Only a surviving
+    // project may use that ownership or a share to read its retained source.
+    if documents::is_document(artifact)
+        && let Some(project) = project
+        && !read.project_exists(project)?
+    {
+        return Ok(false);
+    }
+    if artifact.provenance["principalKind"] == "Host"
+        && let Some(kind) =
+            DerivedKind::of(&artifact.provenance).filter(|kind| kind.is_document_custody())
+    {
+        let Ok(source) = serde_json::from_value::<ArtifactRef>(
+            artifact.provenance["derived"]["documentSource"].clone(),
+        ) else {
+            return Ok(false);
+        };
+        let Some(document) = read.artifact(&source.artifact_id)?.filter(|document| {
+            document.state == ArtifactState::Live
+                && document.provenance["managedDocument"].as_bool() == Some(true)
+                && !DerivedKind::of(&document.provenance)
+                    .is_some_and(DerivedKind::is_document_custody)
+        }) else {
+            return Ok(false);
+        };
+        let source_owned = matches!(
+            kind,
+            DerivedKind::DocumentVisionInput | DerivedKind::DocumentVisionOutput
+        );
+        let entitled = viewer.authorized.is_some()
+            && (source_owned || viewer.sees_owned(artifact.owner.as_ref()));
+        return Ok(entitled
+            && visible_in(read, viewer, &document, project)?
+            && read.version(&source.version_id)?.is_some_and(|version| {
+                version.live()
+                    && version.artifact_id == document.id
+                    && version.blob_digest == source.sha256.as_str()
+                    && version.byte_count == source.byte_length.get()
+                    && version.media_type == source.media_type
+            }));
+    }
     if artifact.retention == ArtifactRetention::Receipt {
         if !viewer.sees_owned(artifact.owner.as_ref()) {
             return Ok(false);
@@ -377,7 +419,7 @@ pub(crate) fn visible_in(
     {
         return Ok(false);
     }
-    Ok(match (project, &artifact.scope) {
+    let visible = match (project, &artifact.scope) {
         (None, ArtifactScope::Project(_)) => true,
         (None, ArtifactScope::Workspace) => viewer.sees_owned(artifact.owner.as_ref()),
         (Some(p), ArtifactScope::Project(owner)) => {
@@ -389,7 +431,14 @@ pub(crate) fn visible_in(
             read.shares(&artifact.id)?.contains(p)
                 || read.repository_text_readers(&artifact.id)?.contains(p)
         }
-    })
+    };
+    if visible
+        && let Some(evidence) =
+            crate::services::documents::evidence::DocumentEvidence::of_artifact(artifact)?
+    {
+        return evidence.visible_to(read, viewer);
+    }
+    Ok(visible)
 }
 
 /// A skill/role version captured by the host for the instruction owner.
@@ -536,7 +585,7 @@ pub(crate) fn retained_convention(
         DerivedKind::EmbeddingProbeInput => {
             id("candidateId") && id("operationId") && id("requestId") && id("admissionKey")
         }
-        DerivedKind::ConventionEmbeddingInput => {
+        DerivedKind::ConventionEmbeddingInput | DerivedKind::DocumentEmbeddingInput => {
             id("requestId")
                 && digest("contextDigest")
                 && digest("inputDigest")
@@ -544,6 +593,15 @@ pub(crate) fn retained_convention(
                     .as_str()
                     .is_some_and(|s| !s.is_empty())
                 && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
+        }
+        DerivedKind::DocumentEmbeddingOutput | DerivedKind::DocumentVisionOutput => {
+            id("requestId")
+                && id("attemptId")
+                && serde_json::from_value::<ArtifactRef>(derived["documentSource"].clone()).is_ok()
+        }
+        DerivedKind::DocumentVisionInput => {
+            id("requestId")
+                && serde_json::from_value::<ArtifactRef>(derived["documentSource"].clone()).is_ok()
         }
         DerivedKind::HelpTopic
         | DerivedKind::Instruction
@@ -805,7 +863,7 @@ fn event(
         "ArtifactReferenced" | "ArtifactProjectDetached" => {
             (REFERENCES_AGGREGATE, artifact.reference_revision)
         }
-        "ArtifactShared" => (SCOPE_AGGREGATE, artifact.scope_revision),
+        "ArtifactShared" | "ArtifactMoved" => (SCOPE_AGGREGATE, artifact.scope_revision),
         // An export changes no artifact revision: its own aggregate orders by commit.
         "ArtifactExported" => (EXPORT_AGGREGATE, tx.committed_sequence()? + 1),
         _ => (ARTIFACT_AGGREGATE, artifact.revision),

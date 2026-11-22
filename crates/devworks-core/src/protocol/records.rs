@@ -3298,6 +3298,13 @@ pub struct DreamRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<ArtifactRef>,
     pub proposal_ids: Items<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DreamRunDetail", extend("x-since" = 9))]
+    pub detail: Option<DreamRunDetail>,
 }
 impl Check for DreamRun {
     fn check(&self) -> Result<(), String> {
@@ -3308,8 +3315,113 @@ impl Check for DreamRun {
         self.checkpoint.check()?;
         self.report.check()?;
         self.proposal_ids.check()?;
+        self.detail.check()?;
         crate::protocol::rules::record(
             "DreamRun",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DreamRun {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.detail = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DreamRunStatus {
+    Queued,
+    Running,
+    Disabled,
+    Busy,
+    TooSoon,
+    NoSignal,
+    Blocked,
+    BudgetExhausted,
+    Partial,
+    Failed,
+    Cancelled,
+    OutcomeUnknown,
+    ScheduledFanout,
+    Completed,
+}
+impl Check for DreamRunStatus {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DreamRunTrigger {
+    Manual,
+    Scheduled,
+    Resume,
+}
+impl Check for DreamRunTrigger {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamRunDetail {
+    pub status: DreamRunStatus,
+    pub trigger: DreamRunTrigger,
+    pub initiator: ActorId,
+    pub started_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<Counter>,
+    pub settings_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_instruction_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_instruction_revision: Option<Revision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Id>,
+    pub input_tokens: Counter,
+    pub output_tokens: Counter,
+    pub cost_micro_usd: Counter,
+    pub usage_uncertain: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_from: Option<Id>,
+    pub can_continue: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_digest: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<ArtifactRef>,
+}
+impl Check for DreamRunDetail {
+    fn check(&self) -> Result<(), String> {
+        self.status.check()?;
+        self.trigger.check()?;
+        self.initiator.check()?;
+        self.started_at_ms.check()?;
+        self.ended_at_ms.check()?;
+        self.settings_revision.check()?;
+        self.base_instruction_revision.check()?;
+        self.project_instruction_revision.check()?;
+        self.model_id.check()?;
+        self.connection_id.check()?;
+        self.input_tokens.check()?;
+        self.output_tokens.check()?;
+        self.cost_micro_usd.check()?;
+        self.usage_uncertain.check()?;
+        self.continued_from.check()?;
+        self.can_continue.check()?;
+        self.reason.check()?;
+        self.journal_digest.check()?;
+        self.evidence.check()?;
+        crate::protocol::rules::record(
+            "DreamRunDetail",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -3324,6 +3436,55 @@ pub struct DreamConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<Id>,
     pub batch_limit: Limit,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 9))]
+    pub model_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "EffortName", extend("x-since" = 9))]
+    pub effort: Option<EffortName>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 9))]
+    pub minimum_interval_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 9))]
+    pub max_turns: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 9))]
+    pub max_tokens: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "PositiveCounter", extend("x-since" = 9))]
+    pub max_elapsed_ms: Option<PositiveCounter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 9))]
+    pub max_micro_usd: Option<Counter>,
 }
 impl Check for DreamConfig {
     fn check(&self) -> Result<(), String> {
@@ -3331,11 +3492,195 @@ impl Check for DreamConfig {
         self.instructions.check()?;
         self.schedule_id.check()?;
         self.batch_limit.check()?;
+        self.model_id.check()?;
+        self.effort.check()?;
+        self.minimum_interval_ms.check()?;
+        self.max_turns.check()?;
+        self.max_tokens.check()?;
+        self.max_elapsed_ms.check()?;
+        self.max_micro_usd.check()?;
         crate::protocol::rules::record(
             "DreamConfig",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DreamConfig {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.model_id = None;
+        }
+        if revision < 9 {
+            self.effort = None;
+        }
+        if revision < 9 {
+            self.minimum_interval_ms = None;
+        }
+        if revision < 9 {
+            self.max_turns = None;
+        }
+        if revision < 9 {
+            self.max_tokens = None;
+        }
+        if revision < 9 {
+            self.max_elapsed_ms = None;
+        }
+        if revision < 9 {
+            self.max_micro_usd = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DreamEvidenceKind {
+    Knowledge,
+    Lesson,
+    Review,
+    RepositorySource,
+    Graph,
+    Work,
+    PriorAction,
+}
+impl Check for DreamEvidenceKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamEvidenceReference {
+    pub kind: DreamEvidenceKind,
+    pub reference: Text,
+    pub fingerprint: Digest,
+    pub summary: Content,
+}
+impl Check for DreamEvidenceReference {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.reference.check()?;
+        self.fingerprint.check()?;
+        self.summary.check()?;
+        crate::protocol::rules::record(
+            "DreamEvidenceReference",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DreamProposalChange {
+    Retract {},
+    Supersede { replacement: ClaimDraft },
+    Merge { other: RevisionedRef },
+    SkillDraft {},
+    HookDraft {},
+    TestDraft {},
+}
+impl Check for DreamProposalChange {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Retract {} => {}
+            Self::Supersede { replacement } => {
+                replacement.check()?;
+            }
+            Self::Merge { other } => {
+                other.check()?;
+            }
+            Self::SkillDraft {} => {}
+            Self::HookDraft {} => {}
+            Self::TestDraft {} => {}
+        }
+        Ok(())
+    }
+}
+
+impl Revisioned for DreamProposalChange {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Supersede { replacement, .. } = self {
+            replacement.retain_revision(revision);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamRevertOutcome {
+    pub run_id: Id,
+    pub applied: Rows<Id>,
+    pub conflicts: Rows<DreamRevertConflict>,
+    pub remaining: Counter,
+}
+impl Check for DreamRevertOutcome {
+    fn check(&self) -> Result<(), String> {
+        self.run_id.check()?;
+        self.applied.check()?;
+        self.conflicts.check()?;
+        self.remaining.check()?;
+        crate::protocol::rules::record(
+            "DreamRevertOutcome",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DreamRevertConflict {
+    pub action_id: Id,
+    pub target_id: Id,
+    pub expected_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_revision: Option<Revision>,
+}
+impl Check for DreamRevertConflict {
+    fn check(&self) -> Result<(), String> {
+        self.action_id.check()?;
+        self.target_id.check()?;
+        self.expected_revision.check()?;
+        self.current_revision.check()?;
+        crate::protocol::rules::record(
+            "DreamRevertConflict",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "KnowledgeWriteReceipt", "before": 9}))]
+pub enum DreamRevertResult {
+    #[schemars(extend("x-until" = 9))]
+    Legacy(KnowledgeWriteReceipt),
+    #[schemars(extend("x-since" = 9))]
+    Current(DreamRevertOutcome),
+}
+impl Check for DreamRevertResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for DreamRevertResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 9 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 9 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -3365,6 +3710,338 @@ impl Check for DocumentRecord {
         self.coverage.check()?;
         crate::protocol::rules::record(
             "DocumentRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentIndexAttempt {
+    pub attempt_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
+    pub purpose: Id,
+    pub model_id: Id,
+    pub connection_id: Id,
+    pub endpoint_profile: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_model: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priced_micro_usd: Option<Counter>,
+    pub pricing_classification: Id,
+    pub monetary_complete: bool,
+    pub state: Id,
+}
+impl Check for DocumentIndexAttempt {
+    fn check(&self) -> Result<(), String> {
+        self.attempt_id.check()?;
+        self.project_id.check()?;
+        self.purpose.check()?;
+        self.model_id.check()?;
+        self.connection_id.check()?;
+        self.endpoint_profile.check()?;
+        self.provider_model.check()?;
+        self.input_tokens.check()?;
+        self.output_tokens.check()?;
+        self.priced_micro_usd.check()?;
+        self.pricing_classification.check()?;
+        self.monetary_complete.check()?;
+        self.state.check()?;
+        crate::protocol::rules::record(
+            "DocumentIndexAttempt",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentIndexActivity {
+    pub run_id: Id,
+    pub stage: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_count: Option<Counter>,
+    pub attempts: Items<DocumentIndexAttempt>,
+    pub more_attempts: bool,
+}
+impl Check for DocumentIndexActivity {
+    fn check(&self) -> Result<(), String> {
+        self.run_id.check()?;
+        self.stage.check()?;
+        self.indexed_at_ms.check()?;
+        self.chunk_count.check()?;
+        self.attempts.check()?;
+        self.more_attempts.check()?;
+        crate::protocol::rules::record(
+            "DocumentIndexActivity",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentVisionOccurrence {
+    pub location: Label,
+    pub status: Id,
+}
+impl Check for DocumentVisionOccurrence {
+    fn check(&self) -> Result<(), String> {
+        self.location.check()?;
+        self.status.check()?;
+        crate::protocol::rules::record(
+            "DocumentVisionOccurrence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentInspection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_source: Option<Label>,
+    pub tags: ArtifactTags,
+    pub shares: Items<ProjectId>,
+    pub more_shares: bool,
+    pub vision_status: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_model: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_connection: Option<Id>,
+    pub vision_occurrences: Items<DocumentVisionOccurrence>,
+    pub more_vision_occurrences: bool,
+}
+impl Check for DocumentInspection {
+    fn check(&self) -> Result<(), String> {
+        self.original_name.check()?;
+        self.original_source.check()?;
+        self.tags.check()?;
+        self.shares.check()?;
+        self.more_shares.check()?;
+        self.vision_status.check()?;
+        self.vision_model.check()?;
+        self.vision_connection.check()?;
+        self.vision_occurrences.check()?;
+        self.more_vision_occurrences.check()?;
+        crate::protocol::rules::record(
+            "DocumentInspection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentDetail {
+    pub id: Id,
+    pub revision: Revision,
+    pub scope_revision: Revision,
+    pub reference_revision: Revision,
+    pub scope: DataScope,
+    pub title: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_version: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_version: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_selected_version_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_selected_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_current_version_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_current_at_ms: Option<Counter>,
+    pub retained_versions: Rows<ArtifactRef>,
+    pub retained_version_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_version_cursor: Option<Cursor>,
+    pub retrieval_enabled: bool,
+    pub extraction_state: ItemState,
+    pub coverage: Coverage,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DocumentIndexActivity", extend("x-since" = 13))]
+    pub index_activity: Option<DocumentIndexActivity>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DocumentInspection", extend("x-since" = 13))]
+    pub inspection: Option<DocumentInspection>,
+}
+impl Check for DocumentDetail {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.scope_revision.check()?;
+        self.reference_revision.check()?;
+        self.scope.check()?;
+        self.title.check()?;
+        self.current_version.check()?;
+        self.selected_version.check()?;
+        self.deleted_selected_version_id.check()?;
+        self.deleted_selected_at_ms.check()?;
+        self.deleted_current_version_id.check()?;
+        self.deleted_current_at_ms.check()?;
+        self.retained_versions.check()?;
+        self.retained_version_count.check()?;
+        self.next_version_cursor.check()?;
+        self.retrieval_enabled.check()?;
+        self.extraction_state.check()?;
+        self.coverage.check()?;
+        self.index_activity.check()?;
+        self.inspection.check()?;
+        crate::protocol::rules::record(
+            "DocumentDetail",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DocumentDetail {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 13 {
+            self.index_activity = None;
+        }
+        if revision < 13 {
+            self.inspection = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentLibraryPage {
+    pub items: Rows<DocumentDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub snapshot_revision: Revision,
+}
+impl Check for DocumentLibraryPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.snapshot_revision.check()?;
+        crate::protocol::rules::record(
+            "DocumentLibraryPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DocumentLibraryPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "DocumentRecord", "before": 10}))]
+pub enum DocumentResult {
+    #[schemars(extend("x-until" = 10))]
+    Legacy(DocumentRecord),
+    #[schemars(extend("x-since" = 10))]
+    Current(DocumentDetail),
+}
+impl Check for DocumentResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for DocumentResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 10 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 10 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 10}))]
+pub enum DocumentListResult {
+    #[schemars(extend("x-until" = 10))]
+    Legacy(Page<DocumentRecord>),
+    #[schemars(extend("x-since" = 10))]
+    Current(DocumentLibraryPage),
+}
+impl Check for DocumentListResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for DocumentListResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 10 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 10 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolvedDocumentCitation {
+    pub citation: Citation,
+    pub text: Text,
+}
+impl Check for ResolvedDocumentCitation {
+    fn check(&self) -> Result<(), String> {
+        self.citation.check()?;
+        self.text.check()?;
+        crate::protocol::rules::record(
+            "ResolvedDocumentCitation",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
@@ -9249,6 +9926,12 @@ impl Check for DreamSettingsRecord {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DreamSettingsRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        self.config.retain_revision(revision);
     }
 }
 

@@ -64,17 +64,13 @@ pub(super) fn schema_digest(conn: &Connection) -> Result<String, StorageError> {
     Ok(devworks_core::fingerprint::sha256_hex(&encoded))
 }
 
-fn expected_digest(version: i64) -> Result<String, StorageError> {
-    let count = MIGRATIONS
-        .iter()
-        .position(|entry| entry.version == version)
-        .map(|index| index + 1)
-        .ok_or_else(|| invalid("unsupported checkpoint schema"))?;
+fn expected_digest(catalogue: &[migrations::Migration]) -> Result<String, StorageError> {
     let expected = conn::db(Connection::open_in_memory())?;
     conn::db(expected.pragma_update(None, "foreign_keys", true))?;
+    conn::register_vec(&expected)?;
     migrations::prepare(
         &expected,
-        &MIGRATIONS[..count],
+        catalogue,
         || "checkpoint-schema".into(),
         0,
         "checkpoint",
@@ -201,8 +197,8 @@ fn packages(conn: &Connection, version: i64) -> Result<Vec<PackageWitness>, Stor
     Ok(entries)
 }
 
-fn catalog() -> Vec<MigrationWitness> {
-    MIGRATIONS
+fn catalog(migrations: &[migrations::Migration]) -> Vec<MigrationWitness> {
+    migrations
         .iter()
         .map(|migration| MigrationWitness {
             version: migration.version,
@@ -216,28 +212,9 @@ fn catalog() -> Vec<MigrationWitness> {
 fn checkpoint(
     connection: &Connection,
     capture_time: i64,
+    meta: migrations::Meta,
+    catalogue: &[migrations::Migration],
 ) -> Result<WorkspaceCheckpoint, StorageError> {
-    let (meta, _) = migrations::check(connection, MIGRATIONS)?
-        .ok_or_else(|| invalid("the checkpoint has no workspace store metadata"))?;
-    let shipped = catalog();
-    let ledger = migrations::ledger(connection)?;
-    let migrations = shipped
-        .iter()
-        .filter(|entry| entry.version <= meta.schema_version)
-        .cloned()
-        .collect::<Vec<_>>();
-    if ledger.len() != migrations.len()
-        || !ledger.iter().zip(&migrations).all(|(record, entry)| {
-            record.version == entry.version && record.checksum == entry.checksum
-        })
-        || migrations.last().is_none_or(|last| {
-            last.minimum_reader != meta.minimum_reader || last.minimum_writer != meta.minimum_writer
-        })
-    {
-        return Err(invalid(
-            "checkpoint ledger differs from the shipped migration range",
-        ));
-    }
     Ok(WorkspaceCheckpoint {
         store_id: StoreId(identifier(meta.store_id)?),
         restore_epoch: meta.restore_epoch,
@@ -246,7 +223,7 @@ fn checkpoint(
         schema_version: meta.schema_version,
         minimum_reader: meta.minimum_reader,
         minimum_writer: meta.minimum_writer,
-        migrations,
+        migrations: catalog(catalogue),
         schema_digest: schema_digest(connection)?,
         blobs: blobs(connection, meta.schema_version)?,
         packages: packages(connection, meta.schema_version)?,
@@ -322,8 +299,8 @@ fn inspect(source: &Path, captured_at_ms: i64) -> Result<WorkspaceCheckpoint, St
     conn::db(probe.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false))?;
     conn::db(probe.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true))?;
     conn::db(probe.pragma_update(None, "query_only", true))?;
-    let version: i64 = conn::db(probe.pragma_query_value(None, "user_version", |r| r.get(0)))?;
-    if schema_digest(&probe)? != expected_digest(version)? {
+    let (meta, catalogue) = migrations::checkpoint_catalogue(&probe, MIGRATIONS)?;
+    if schema_digest(&probe)? != expected_digest(&catalogue)? {
         return Err(invalid(
             "checkpoint schema differs from the shipped catalogue",
         ));
@@ -331,11 +308,7 @@ fn inspect(source: &Path, captured_at_ms: i64) -> Result<WorkspaceCheckpoint, St
     // Only the app's built-in vector module is made available after verifying the schema.
     conn::register_vec(&probe)?;
     migrations::verify_after(&probe)?;
-    let result = checkpoint(&probe, captured_at_ms)?;
-    if result.schema_version != version {
-        return Err(invalid("checkpoint schema revisions differ"));
-    }
-    Ok(result)
+    checkpoint(&probe, captured_at_ms, meta, &catalogue)
 }
 
 mod recovery;
@@ -380,7 +353,8 @@ impl WorkspaceArchiveStorage for SqliteStore {
         if actual != expected_sequence {
             return Ok(None);
         }
-        let metadata = checkpoint(source, self.clock.now_ms().get())?;
+        let (meta, catalogue) = migrations::checkpoint_catalogue(source, MIGRATIONS)?;
+        let metadata = checkpoint(source, self.clock.now_ms().get(), meta, &catalogue)?;
         copy_database(source, destination, cancellation)?;
         drop(lease);
         match self.inspect_checkpoint(destination, metadata.captured_at_ms) {
@@ -478,8 +452,9 @@ impl WorkspaceArchiveStorage for SqliteStore {
         let lease = self.lease(None)?;
         let source = lease.conn.as_ref().expect("checked out");
         conn::db(source.execute_batch("BEGIN"))?;
-        let active = checkpoint(source, self.clock.now_ms().get())?;
-        if active.schema_digest != expected_digest(active.schema_version)? {
+        let (meta, catalogue) = migrations::checkpoint_catalogue(source, MIGRATIONS)?;
+        let active = checkpoint(source, self.clock.now_ms().get(), meta, &catalogue)?;
+        if active.schema_digest != expected_digest(&catalogue)? {
             return Err(invalid(
                 "the active workspace schema differs from the shipped catalogue",
             ));
@@ -522,7 +497,7 @@ impl WorkspaceArchiveStorage for SqliteStore {
     }
 
     fn shipped_migrations(&self) -> Result<Vec<MigrationWitness>, StorageError> {
-        Ok(catalog())
+        Ok(catalog(MIGRATIONS))
     }
 }
 
@@ -576,47 +551,58 @@ mod tests {
         use crate::fs::workspace_archive::digest_private_file;
         use devworks_core::ports::storage::{ARCHIVE_FORMAT, ARCHIVE_REVISION};
 
-        let harness = Harness::new();
-        let store = harness.store();
-        let root = store.database_path().parent().unwrap();
-        let source = root.join("older-checkpoint.sqlite");
-        let migrated = root.join("migrated-checkpoint.sqlite");
-        let cancel = Cancellation::default();
-        let through = MIGRATIONS.len() - 1;
-        {
-            let connection = Connection::open(&source).unwrap();
-            connection
-                .pragma_update(None, "foreign_keys", true)
+        use crate::storage::sqlite::tests::feature_document_migrations;
+
+        // DW-F8 exposed a database profile, before the archive producer shipped. Seal an
+        // exact copy of that schema as a fixture alongside the application's F12 catalogue.
+        for history in [
+            MIGRATIONS[..70].to_vec(),
+            feature_document_migrations(63, 5),
+            feature_document_migrations(66, 6),
+        ] {
+            let harness = Harness::new();
+            let store = harness.store();
+            let root = store.database_path().parent().unwrap();
+            let source = root.join("older-checkpoint.sqlite");
+            let migrated = root.join("migrated-checkpoint.sqlite");
+            let cancel = Cancellation::default();
+            {
+                let connection = Connection::open(&source).unwrap();
+                connection
+                    .pragma_update(None, "foreign_keys", true)
+                    .unwrap();
+                migrations::prepare(
+                    &connection,
+                    &history,
+                    || "fixture-store".into(),
+                    harness.now(),
+                    "fixture",
+                )
                 .unwrap();
-            migrations::prepare(
-                &connection,
-                &MIGRATIONS[..through],
-                || "fixture-store".into(),
-                harness.now(),
-                "fixture",
-            )
-            .unwrap();
+            }
+            let checkpoint = store.inspect_checkpoint(&source, harness.now()).unwrap();
+            assert_eq!(checkpoint.migrations, catalog(&history));
+            assert_eq!(checkpoint.schema_digest, expected_digest(&history).unwrap());
+            let manifest = WorkspaceArchive {
+                format: ARCHIVE_FORMAT.into(),
+                revision: ARCHIVE_REVISION,
+                operation_id: Id::new("archived-operation").unwrap(),
+                app_build: "fixture".into(),
+                checkpoint,
+                database: digest_private_file(&source, u64::MAX, &cancel).unwrap(),
+            };
+            let after = store
+                .migrate_checkpoint(&source, &manifest, &migrated, "test-build", &cancel)
+                .unwrap();
+            assert_eq!(after.schema_version, MIGRATIONS.last().unwrap().version);
+            assert_eq!(after.migrations, store.shipped_migrations().unwrap());
+            assert_eq!(after.store_id, manifest.checkpoint.store_id);
+            assert_eq!(
+                digest_private_file(&source, u64::MAX, &cancel).unwrap(),
+                manifest.database
+            );
+            assert!(store.database_path().is_file());
         }
-        let checkpoint = store.inspect_checkpoint(&source, harness.now()).unwrap();
-        let manifest = WorkspaceArchive {
-            format: ARCHIVE_FORMAT.into(),
-            revision: ARCHIVE_REVISION,
-            operation_id: Id::new("archived-operation").unwrap(),
-            app_build: "fixture".into(),
-            checkpoint,
-            database: digest_private_file(&source, u64::MAX, &cancel).unwrap(),
-        };
-        let after = store
-            .migrate_checkpoint(&source, &manifest, &migrated, "test-build", &cancel)
-            .unwrap();
-        assert_eq!(after.schema_version, MIGRATIONS.last().unwrap().version);
-        assert_eq!(after.migrations, store.shipped_migrations().unwrap());
-        assert_eq!(after.store_id, manifest.checkpoint.store_id);
-        assert_eq!(
-            digest_private_file(&source, u64::MAX, &cancel).unwrap(),
-            manifest.database
-        );
-        assert!(store.database_path().is_file());
     }
 
     #[test]

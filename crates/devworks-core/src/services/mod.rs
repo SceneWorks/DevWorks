@@ -14,6 +14,8 @@ pub mod conventions;
 pub mod cursor;
 pub mod desktop;
 pub mod diagnostics;
+pub mod documents;
+pub mod dreaming;
 pub mod effect;
 pub(crate) mod effect_job;
 pub mod evals;
@@ -122,6 +124,7 @@ pub fn queue_service() -> queue::QueueService {
         Arc::new(imports::QueueHook),
         Arc::new(maintenance::QueueHook),
         Arc::new(workspace_archive::QueueHook),
+        Arc::new(documents::indexing::QueueHook),
     ])
 }
 
@@ -231,6 +234,25 @@ impl UseCases {
     pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
         for op in artifacts::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Attaches the document library handlers to a selected gateway composition.
+    pub fn with_document_library(mut self, service: Arc<documents::DocumentLibrary>) -> Self {
+        for operation in documents::LIBRARY_OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        if service.has_indexer() {
+            for operation in documents::INDEX_OPERATIONS {
+                self.register(operation, None, Some(service.clone()));
+            }
+            for operation in documents::RETRIEVAL_OPERATIONS {
+                self.register(operation, Some(service.clone()), None);
+            }
+            if !self.has_command("indexing.cancel") {
+                self.register("indexing.cancel", None, Some(service));
+            }
         }
         self
     }
@@ -387,6 +409,14 @@ impl UseCases {
                 Some(service.clone()),
                 Some(service.clone()),
             );
+        }
+        self
+    }
+
+    /// Registers the one Dreaming service when the native sweep owner is composed.
+    pub fn with_dreaming(mut self, service: Arc<dreaming::DreamingService>) -> Self {
+        for operation in dreaming::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }

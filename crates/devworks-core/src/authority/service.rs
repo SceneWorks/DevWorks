@@ -1033,6 +1033,23 @@ pub fn fences_hold(
     tx: &mut dyn WriteTransaction,
     fences: &[AuthorityFence],
 ) -> Result<bool, StorageError> {
+    fences_hold_with_context(tx, None, fences)
+}
+
+/// Checks the exact qualified embedding choice in the real native invocation context.
+pub fn inference_fences_hold(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    fences: &[AuthorityFence],
+) -> Result<bool, StorageError> {
+    fences_hold_with_context(tx, Some(ctx), fences)
+}
+
+fn fences_hold_with_context(
+    tx: &mut dyn WriteTransaction,
+    ctx: Option<&InvocationContext>,
+    fences: &[AuthorityFence],
+) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
             AuthorityFence::GitWorktree { id, digest } => {
@@ -1040,6 +1057,25 @@ pub fn fences_hold(
             }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(tx.authority(), actor, *revision)?
+            }
+            AuthorityFence::DocumentIndex { run, generation } => {
+                crate::services::documents::indexing::embedding_source_in(tx, run, *generation)?
+                    .is_some()
+            }
+            AuthorityFence::DreamingSweep {
+                run,
+                generation,
+                request,
+            } => crate::services::dreaming::inference_fence_in(tx, run, *generation, request)?,
+            AuthorityFence::QualifiedEmbedding { source_digest } => {
+                let Some(ctx) = ctx else { return Ok(false) };
+                let current =
+                    crate::services::router::embedding_spaces::resolve_selected_in(tx, ctx)?;
+                current.binding().is_some() && current.source_digest() == source_digest
+            }
+            AuthorityFence::DocumentVision { settings_witness } => {
+                let current = crate::services::documents::vision::policy(tx.configuration())?;
+                current.enabled && current.witness == *settings_witness
             }
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(tx.configuration(), project_id.as_ref(), digest)?
@@ -1092,6 +1128,15 @@ pub fn authorization_holds(
             }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(s.authority(), actor, *revision)?
+            }
+            AuthorityFence::DocumentIndex { run, generation } => {
+                crate::services::documents::indexing::embedding_fence_read(s, run, *generation)?
+            }
+            AuthorityFence::DreamingSweep { .. } => false,
+            AuthorityFence::QualifiedEmbedding { .. } => false,
+            AuthorityFence::DocumentVision { settings_witness } => {
+                let current = crate::services::documents::vision::policy(s.configuration())?;
+                current.enabled && current.witness == *settings_witness
             }
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(s.configuration(), project_id.as_ref(), digest)?

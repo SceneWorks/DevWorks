@@ -6,6 +6,7 @@
 use crate::{Unmodelled, unmodelled};
 use devworks_core::ports::GrantUse;
 use devworks_core::ports::storage::AgentMessageHistoryFilter;
+use devworks_core::ports::storage::ArtifactScope;
 use devworks_core::ports::storage::AttemptFence;
 use devworks_core::ports::storage::Cancellation;
 use devworks_core::ports::storage::ConfigScope;
@@ -29,9 +30,14 @@ use devworks_core::protocol::Id;
 use devworks_core::protocol::OperationId;
 use devworks_core::protocol::OperationState;
 use devworks_core::protocol::ProjectId;
+use devworks_core::protocol::Revision;
 use devworks_core::protocol::RootId;
+use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
+use devworks_core::services::documents::extraction::ExtractedBlock;
+use devworks_core::services::documents::vision::VisionTarget;
+use devworks_core::services::documents::vision::VisionUnit;
 use serde_json::Value;
 use std::path::Path;
 
@@ -51,6 +57,18 @@ impl ArtifactRead for Unmodelled {
     fn versions(&self, _: &Id) -> Result<Vec<StoredVersion>, StorageError> {
         unmodelled()
     }
+    fn version_history(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: bool,
+        _: u16,
+    ) -> Result<Vec<StoredVersion>, StorageError> {
+        unmodelled()
+    }
+    fn retained_version_count(&self, _: &Id) -> Result<i64, StorageError> {
+        unmodelled()
+    }
     fn version_by_operation(&self, _: &OperationId) -> Result<Option<StoredVersion>, StorageError> {
         unmodelled()
     }
@@ -68,6 +86,16 @@ impl ArtifactRead for Unmodelled {
         &self,
         _: Option<&ActorId>,
         _: &[String],
+        _: Option<&ListPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        unmodelled()
+    }
+    fn document_artifacts(
+        &self,
+        _: &ArtifactScope,
+        _: Option<&ActorId>,
+        _: devworks_core::ports::storage::DocumentListFilter,
         _: Option<&ListPosition>,
         _: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError> {
@@ -845,6 +873,278 @@ impl DiagnosticRepository for Unmodelled {
         unmodelled()
     }
     fn prune_diagnostics(&mut self, _: i64, _: i64) -> Result<PrunedDiagnostics, StorageError> {
+        unmodelled()
+    }
+}
+impl DocumentRead for Unmodelled {
+    fn document_corpus_digest(
+        &self,
+        _: &ArtifactScope,
+        _: Option<&ActorId>,
+        _: Option<&[Id]>,
+    ) -> Result<String, StorageError> {
+        unmodelled()
+    }
+    fn document_retrieval_enabled(&self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn document_index(&self, _: &Id) -> Result<Option<DocumentIndexVersion>, StorageError> {
+        unmodelled()
+    }
+    fn document_vision_occurrences(
+        &self,
+        _: &Id,
+        _: usize,
+    ) -> Result<Vec<(VisionTarget, Option<VisionUnit>)>, StorageError> {
+        unmodelled()
+    }
+    fn document_version_attempts(
+        &self,
+        _: &Id,
+        _: Option<&ProjectId>,
+        _: u16,
+    ) -> Result<Vec<Id>, StorageError> {
+        unmodelled()
+    }
+    fn document_checkpoint(
+        &self,
+        _: &Id,
+        _: &Revision,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn latest_document_checkpoint(
+        &self,
+        _: &Id,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn document_passage(&self, _: &Id, _: &Id) -> Result<Option<ExtractedBlock>, StorageError> {
+        unmodelled()
+    }
+    fn document_blocks(&self, _: &Id) -> Result<Vec<ExtractedBlock>, StorageError> {
+        unmodelled()
+    }
+    fn has_document_vectors(
+        &self,
+        _: &ArtifactScope,
+        _: Option<&ActorId>,
+        _: Option<&[Id]>,
+        _: &Id,
+    ) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn rank_document_blocks(
+        &self,
+        _: &DocumentRankingQuery<'_>,
+    ) -> Result<DocumentRankingBatch, StorageError> {
+        unmodelled()
+    }
+}
+impl DocumentRepository for Unmodelled {
+    fn document_extraction_by_key(
+        &self,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn latest_document_direct_extraction(
+        &self,
+        _: &Id,
+        _: &Revision,
+    ) -> Result<Option<DocumentCheckpoint>, StorageError> {
+        unmodelled()
+    }
+    fn document_vision_targets(&self, _: &Id) -> Result<Vec<VisionTarget>, StorageError> {
+        unmodelled()
+    }
+    fn next_document_extraction_revision(&self, _: &Id) -> Result<Revision, StorageError> {
+        unmodelled()
+    }
+    fn bind_document_extraction(
+        &mut self,
+        _: &Id,
+        _: &str,
+        _: &[VisionTarget],
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn document_vision_unit(&self, _: &Id, _: &Id) -> Result<Option<VisionUnit>, StorageError> {
+        unmodelled()
+    }
+    fn put_document_vision_unit(&mut self, _: &VisionUnit) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn insert_document_embedding_run(
+        &mut self,
+        _: &DocumentEmbeddingRun,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn document_embedding_run(&self, _: &Id) -> Result<Option<DocumentEmbeddingRun>, StorageError> {
+        unmodelled()
+    }
+    fn pending_document_vectors(
+        &self,
+        _: &DocumentEmbeddingRun,
+        _: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError> {
+        unmodelled()
+    }
+    fn insert_document_vectors(
+        &mut self,
+        _: &DocumentEmbeddingRun,
+        _: &[(Id, Vec<f32>)],
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn complete_document_vectors(&mut self, _: &DocumentEmbeddingRun) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn set_document_retrieval(&mut self, _: &Id, _: bool) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_document_index(&mut self, _: &DocumentIndexVersion) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn remove_document_index(&mut self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn insert_document_checkpoint(
+        &mut self,
+        _: &DocumentCheckpoint,
+        _: &[ExtractedBlock],
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+}
+impl DreamingRead for Unmodelled {
+    fn dream_trail(&self, _: &DreamTrailQuery<'_>) -> Result<Vec<DreamTrailRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_scope(&self, _: &KnowledgeScope) -> Result<DreamScopeState, StorageError> {
+        unmodelled()
+    }
+    fn dream_cutoffs(&self, _: &KnowledgeScope) -> Result<DreamCutoffs, StorageError> {
+        unmodelled()
+    }
+    fn dream_signals(
+        &self,
+        _: &KnowledgeScope,
+        _: DreamStream,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<DreamSignal>, StorageError> {
+        unmodelled()
+    }
+    fn dream_claim_refs(
+        &self,
+        _: &DreamClaimWindow<'_>,
+    ) -> Result<Vec<DreamClaimRef>, StorageError> {
+        unmodelled()
+    }
+    fn dream_prior_proposal(
+        &self,
+        _: &KnowledgeScope,
+        _: &Id,
+        _: &str,
+    ) -> Result<Option<Id>, StorageError> {
+        unmodelled()
+    }
+    fn dream_lesson_recurred_while_served(&self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn dream_instructions(
+        &self,
+        _: &KnowledgeScope,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<DreamInstruction>, StorageError> {
+        unmodelled()
+    }
+    fn dream_run(&self, _: &Id) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_live_run(&self, _: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_resumable_run(&self, _: &KnowledgeScope) -> Result<Option<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_continuation_used(&self, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn dream_runs(
+        &self,
+        _: &KnowledgeScope,
+        _: Option<(i64, &Id)>,
+        _: u16,
+    ) -> Result<Vec<DreamRunRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_action(&self, _: &Id, _: &Id) -> Result<Option<DreamActionRow>, StorageError> {
+        unmodelled()
+    }
+    fn dream_reversion(&self, _: &Id, _: &Id) -> Result<Option<Value>, StorageError> {
+        unmodelled()
+    }
+    fn dream_actions(
+        &self,
+        _: &Id,
+        _: Option<i64>,
+        _: u16,
+    ) -> Result<Vec<DreamActionRow>, StorageError> {
+        unmodelled()
+    }
+}
+impl DreamingRepository for Unmodelled {
+    fn set_dream_policy(
+        &mut self,
+        _: &KnowledgeScope,
+        _: i64,
+        _: &DreamPolicy,
+    ) -> Result<DreamScopeState, StorageError> {
+        unmodelled()
+    }
+    fn add_dream_instruction(
+        &mut self,
+        _: &KnowledgeScope,
+        _: i64,
+        _: &ArtifactRef,
+        _: &ActorId,
+    ) -> Result<DreamInstruction, StorageError> {
+        unmodelled()
+    }
+    fn insert_dream_run(&mut self, _: &DreamRunRow) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn advance_dream_run(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: &DreamProgress,
+    ) -> Result<DreamRunRow, StorageError> {
+        unmodelled()
+    }
+    fn put_dream_action(
+        &mut self,
+        _: &Id,
+        _: i64,
+        _: &Id,
+        _: &Value,
+    ) -> Result<DreamActionRow, StorageError> {
+        unmodelled()
+    }
+    fn put_dream_reversion(
+        &mut self,
+        _: &Id,
+        _: &Id,
+        _: &ActorId,
+        _: &Value,
+    ) -> Result<(), StorageError> {
         unmodelled()
     }
 }

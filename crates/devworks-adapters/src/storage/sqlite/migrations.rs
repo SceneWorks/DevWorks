@@ -750,7 +750,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 66,
         minimum_writer: 66,
         sql: include_str!("migrations/0066_auto_routing.sql"),
-        expected_sha256: "ff33a5f40322cc4f8524b653d2e2418531fabcbaba261311a6bcfd25829da83f",
+        expected_sha256: AUTO_ROUTING_0066_SHA256,
         rebuilds_tables: false,
     },
     Migration {
@@ -783,6 +783,54 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 70,
         sql: include_str!("migrations/0070_app_updates.sql"),
         expected_sha256: "d1ebef486a64086c5867aee1e1e62bdda234bfc91a5306b0565e01cb9401a945",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 71,
+        minimum_reader: 68,
+        minimum_writer: 71,
+        sql: include_str!("migrations/0071_document_index.sql"),
+        expected_sha256: "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 72,
+        minimum_reader: 68,
+        minimum_writer: 72,
+        sql: include_str!("migrations/0072_document_lexical.sql"),
+        expected_sha256: "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 73,
+        minimum_reader: 68,
+        minimum_writer: 73,
+        sql: include_str!("migrations/0073_document_vectors.sql"),
+        expected_sha256: "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 74,
+        minimum_reader: 68,
+        minimum_writer: 74,
+        sql: include_str!("migrations/0074_document_vision.sql"),
+        expected_sha256: "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 75,
+        minimum_reader: 68,
+        minimum_writer: 75,
+        sql: include_str!("migrations/0075_document_activity.sql"),
+        expected_sha256: "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 76,
+        minimum_reader: 68,
+        minimum_writer: 76,
+        sql: include_str!("migrations/0076_dreaming.sql"),
+        expected_sha256: "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
         rebuilds_tables: false,
     },
 ];
@@ -965,27 +1013,21 @@ fn apply_in_transaction(
         db(conn.execute_batch(m.sql))?;
         let latest = already_applied.unwrap_or(m);
         match bootstrap_store_id {
-            Some(store_id) => db(conn.execute(
-                "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,\
+            Some(store_id) => {
+                db(conn.execute(
+                    "INSERT INTO store_meta(singleton,store_id,schema_version,minimum_reader,\
                     minimum_writer,restore_epoch) VALUES(1,?1,?2,?3,?4,0)",
-                params![
-                    store_id,
-                    latest.version,
-                    latest.minimum_reader,
-                    latest.minimum_writer
-                ],
-            ))?,
-            None => db(conn.execute(
-                "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,\
-                    minimum_writer=?3 WHERE singleton=1",
-                params![latest.version, latest.minimum_reader, latest.minimum_writer],
-            ))?,
+                    params![
+                        store_id,
+                        latest.version,
+                        latest.minimum_reader,
+                        latest.minimum_writer
+                    ],
+                ))?;
+            }
+            None => update_schema_meta(conn, latest)?,
         };
-        db(conn.execute(
-            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) \
-                VALUES(?1,?2,?3,?4)",
-            params![m.version, m.checksum(), now_ms, app_build],
-        ))?;
+        record_applied(conn, m, now_ms, app_build)?;
         db(conn.pragma_update(None, "user_version", latest.version))?;
         // Validate inside the transaction: a migration that breaks foreign keys or integrity is
         // never committed.
@@ -998,6 +1040,27 @@ fn apply_in_transaction(
             Err(e)
         }
     }
+}
+
+fn record_applied(
+    conn: &Connection,
+    migration: &Migration,
+    now_ms: i64,
+    app_build: &str,
+) -> Result<(), StorageError> {
+    db(conn.execute(
+        "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+        params![migration.version, migration.checksum(), now_ms, app_build],
+    ))?;
+    Ok(())
+}
+
+fn update_schema_meta(conn: &Connection, latest: &Migration) -> Result<(), StorageError> {
+    db(conn.execute(
+        "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+        params![latest.version, latest.minimum_reader, latest.minimum_writer],
+    ))?;
+    Ok(())
 }
 
 /// DW-F4/F5 published the keep-working SQL at version 64 before DW-F6 combined it with
@@ -1024,6 +1087,195 @@ fn split_migration<'a>(
         .then_some((systemone, keep_working))
 }
 
+const AUTO_ROUTING_0066_SHA256: &str =
+    "ff33a5f40322cc4f8524b653d2e2418531fabcbaba261311a6bcfd25829da83f";
+const APP_OPERATIONS_VERSION: usize = 70;
+const FEATURE_DOCUMENT_DIGESTS: [&str; 6] = [
+    "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+    "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+    "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+    "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+    "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
+    "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
+];
+const COMBINED_VERSION: usize = APP_OPERATIONS_VERSION + FEATURE_DOCUMENT_DIGESTS.len();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DocumentLineage {
+    prefix: usize,
+    count: usize,
+    minimum_reader: i64,
+}
+
+fn documents(migrations: &[Migration]) -> Option<&[Migration]> {
+    let documents = migrations.get(APP_OPERATIONS_VERSION..COMBINED_VERSION)?;
+    documents
+        .iter()
+        .zip(FEATURE_DOCUMENT_DIGESTS)
+        .enumerate()
+        .all(|(index, (migration, digest))| {
+            migration.version == (APP_OPERATIONS_VERSION + index + 1) as i64
+                && !migration.rebuilds_tables
+                && migration.checksum() == digest
+        })
+        .then_some(documents)
+}
+
+fn matches_catalogue(applied: &[AppliedMigration], migrations: &[Migration]) -> bool {
+    applied.len() == migrations.len()
+        && applied.iter().zip(migrations).all(|(saved, expected)| {
+            saved.version == expected.version && saved.checksum == expected.checksum()
+        })
+}
+
+fn user_version(conn: &Connection) -> Result<i64, StorageError> {
+    db(conn.pragma_query_value(None, "user_version", |row| row.get(0)))
+}
+
+/// The Documents feature published two exact aliases for the shared SQL suffix. A profile
+/// with gaps, mixed suffixes or mismatched SQLite version witnesses matches neither alias.
+fn document_lineage(
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+    sqlite_version: i64,
+) -> Option<DocumentLineage> {
+    if meta.schema_version != sqlite_version || meta.minimum_writer != sqlite_version {
+        return None;
+    }
+    let version = usize::try_from(sqlite_version).ok()?;
+    if applied.len() != version {
+        return None;
+    }
+    let (prefix, limit, minimum_reader) = match meta.minimum_reader {
+        57 => (63, 5, 57),
+        66 => (66, FEATURE_DOCUMENT_DIGESTS.len(), 66),
+        _ => return None,
+    };
+    let count = version.checked_sub(prefix)?;
+    if !(1..=limit).contains(&count)
+        || !matches_catalogue(&applied[..prefix], &migrations[..prefix])
+        || !applied[prefix..]
+            .iter()
+            .zip(FEATURE_DOCUMENT_DIGESTS)
+            .enumerate()
+            .all(|(index, (saved, digest))| {
+                saved.version == (prefix + index + 1) as i64 && saved.checksum == digest
+            })
+    {
+        return None;
+    }
+    documents(migrations)?;
+    Some(DocumentLineage {
+        prefix,
+        count,
+        minimum_reader,
+    })
+}
+
+/// Source catalogues are retained for archive attestation. Replaying one in a separate
+/// empty reference database never changes the source or authorizes a migration.
+pub(super) fn checkpoint_catalogue(
+    conn: &Connection,
+    migrations: &[Migration],
+) -> Result<(Meta, Vec<Migration>), StorageError> {
+    let (meta, _) = check(conn, migrations)?.ok_or_else(|| {
+        StorageError::IncompatibleSchema("the checkpoint has no workspace store metadata".into())
+    })?;
+    let applied = ledger(conn)?;
+    let sqlite_version = user_version(conn)?;
+    if let Some(lineage) = document_lineage(migrations, &meta, &applied, sqlite_version) {
+        let mut source = migrations[..lineage.prefix].to_vec();
+        source.extend(
+            migrations[APP_OPERATIONS_VERSION..APP_OPERATIONS_VERSION + lineage.count]
+                .iter()
+                .enumerate()
+                .map(|(index, migration)| {
+                    let version = (lineage.prefix + index + 1) as i64;
+                    Migration {
+                        version,
+                        minimum_reader: lineage.minimum_reader,
+                        minimum_writer: version,
+                        ..*migration
+                    }
+                }),
+        );
+        return Ok((meta, source));
+    }
+    let known = migrations.get(..usize::try_from(meta.schema_version).unwrap_or(usize::MAX));
+    if let Some(known) = known
+        && sqlite_version == meta.schema_version
+        && known.last().is_some_and(|last| {
+            last.version == meta.schema_version
+                && last.minimum_reader == meta.minimum_reader
+                && last.minimum_writer == meta.minimum_writer
+        })
+        && matches_catalogue(&applied, known)
+    {
+        return Ok((meta, known.to_vec()));
+    }
+    Err(StorageError::IncompatibleSchema(
+        "checkpoint ledger differs from the shipped migration catalogue".into(),
+    ))
+}
+
+/// Rekey the admitted historical document rows and apply the independent missing suffix
+/// within one transaction. Preserve original recorded checksums, timestamps and builds.
+fn reconcile_documents(
+    conn: &Connection,
+    migrations: &[Migration],
+    lineage: DocumentLineage,
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    let tx = db(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    ))?;
+    let current = read_meta(&tx)?.ok_or_else(document_lineage_changed)?;
+    if document_lineage(migrations, &current, &ledger(&tx)?, user_version(&tx)?) != Some(lineage) {
+        return Err(document_lineage_changed());
+    }
+    let (common, documents) = migrations[..COMBINED_VERSION].split_at(APP_OPERATIONS_VERSION);
+    let missing = common[lineage.prefix..]
+        .iter()
+        .chain(&documents[lineage.count..]);
+    if missing.clone().any(|entry| entry.rebuilds_tables) {
+        return Err(document_lineage_changed());
+    }
+    // Move high keys first because the source and canonical document ranges can overlap.
+    for (index, destination) in documents[..lineage.count].iter().enumerate().rev() {
+        let old_version = (lineage.prefix + index + 1) as i64;
+        let updated = db(tx.execute(
+            "UPDATE schema_migrations SET version=?1 WHERE version=?2 AND checksum=?3",
+            params![
+                destination.version,
+                old_version,
+                FEATURE_DOCUMENT_DIGESTS[index]
+            ],
+        ))?;
+        if updated != 1 {
+            return Err(document_lineage_changed());
+        }
+    }
+    for migration in missing {
+        db(tx.execute_batch(migration.sql))?;
+        record_applied(&tx, migration, now_ms, app_build)?;
+    }
+    let current = &migrations[COMBINED_VERSION - 1];
+    update_schema_meta(&tx, current)?;
+    db(tx.pragma_update(None, "user_version", current.version))?;
+    verify_after(&tx)?;
+    db(tx.commit())?;
+    Ok(current.version)
+}
+
+fn document_lineage_changed() -> StorageError {
+    StorageError::IncompatibleSchema(
+        "document migration lineage changed before reconciliation".into(),
+    )
+}
+
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
 /// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
 pub(crate) fn check(
@@ -1047,6 +1299,18 @@ pub(crate) fn check(
         )));
     }
     let applied = ledger(conn)?;
+    if let Some(last) = applied.last()
+        && last.version > meta.schema_version
+    {
+        return Err(StorageError::IncompatibleSchema(format!(
+            "migration {} is recorded above store schema {}",
+            last.version, meta.schema_version
+        )));
+    }
+    let sqlite_version = user_version(conn)?;
+    if document_lineage(migrations, &meta, &applied, sqlite_version).is_some() {
+        return Ok(Some((meta, AccessMode::ReadWrite)));
+    }
     for m in migrations
         .iter()
         .filter(|m| m.version <= meta.schema_version)
@@ -1068,6 +1332,25 @@ pub(crate) fn check(
                     m.version
                 )));
             }
+        }
+    }
+    // The colliding versions must identify exactly one published schema. For later builds,
+    // retain the forward compatibility rules after the known prefix has passed verification.
+    if ((APP_OPERATIONS_VERSION - 3) as i64..=build).contains(&meta.schema_version) {
+        let exact = migrations.get(..meta.schema_version as usize);
+        if sqlite_version != meta.schema_version
+            || exact.is_none_or(|exact| {
+                !matches_catalogue(&applied, exact)
+                    || exact.last().is_none_or(|last| {
+                        last.version != meta.schema_version
+                            || last.minimum_reader != meta.minimum_reader
+                            || last.minimum_writer != meta.minimum_writer
+                    })
+            })
+        {
+            return Err(StorageError::IncompatibleSchema(
+                "store version witnesses differ from the known migration catalogue".into(),
+            ));
         }
     }
     let access = if meta.minimum_writer > build {
@@ -1108,9 +1391,12 @@ pub(crate) fn prepare(
     if let AccessMode::ReadOnly { .. } = access {
         return Ok((meta, access));
     }
+    let applied = ledger(conn)?;
     let mut version = meta.schema_version;
-    if version == 64
-        && let Some((systemone, keep_working)) = ledger(conn)?
+    if let Some(lineage) = document_lineage(migrations, &meta, &applied, user_version(conn)?) {
+        version = reconcile_documents(conn, migrations, lineage, now_ms, app_build)?;
+    } else if version == 64
+        && let Some((systemone, keep_working)) = applied
             .iter()
             .find_map(|applied| split_migration(migrations, &meta, applied))
     {

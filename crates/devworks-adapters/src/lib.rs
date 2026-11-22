@@ -5,6 +5,7 @@ pub mod containers;
 pub mod database;
 pub mod desktop;
 pub mod diagnostics;
+pub mod documents;
 pub mod fs;
 pub mod git_transport;
 pub mod http;
