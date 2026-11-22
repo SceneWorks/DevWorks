@@ -350,6 +350,16 @@ fn fence_candidate(
           detail='Prior workspace browser custody was not transferred by restore'
           WHERE state NOT IN ('Failed','Closed');"
     ))?;
+    // Keep the historical checkpoint and report, but never resume a provider request from
+    // the discarded epoch. The archived operations and receipts retain outcome evidence.
+    conn::db(transaction.execute(
+        "UPDATE dreaming_runs SET state='Failed',revision=revision+1,
+         ended_at=coalesce(ended_at,max(started_at,?1)),
+         report_json=json_object('reason','WorkspaceRestoreInterrupted',
+           'archivedPhase',state,'archivedReport',json(report_json))
+         WHERE state IN ('Queued','Running','OutcomeUnknown')",
+        [now],
+    ))?;
     conn::db(transaction.execute(
         "UPDATE resource_leases SET state='Released',ended_at=max(requested_at,?1),
          end_reason='Cancelled',revision=revision+1 WHERE state<>'Released'",
@@ -866,6 +876,7 @@ mod tests {
     }
 
     fn test_cutover(cutover: Cutover) {
+        use devworks_core::ports::storage::{DreamCheckpoint, DreamCutoffs, DreamPolicy};
         let root = TempRoot::new("devworks-restore-publish").created();
         let setup = config(&root);
         let archives = setup.workspace_archives.clone().unwrap();
@@ -917,6 +928,26 @@ mod tests {
         ))).unwrap();
         store
             .with_writer_connection(add_effect("source-fingerprint"))
+            .unwrap();
+        store
+            .with_writer_connection(|db| {
+                conn::db(db.execute(
+                    "INSERT INTO dreaming_runs
+                     (id,scope_key,initiator_id,trigger,revision,generation,state,
+                      settings_revision,settings_json,cutoffs_json,started_at,checkpoint_json,report_json)
+                     VALUES('restored-dream','workspace','archive-author','Manual',2,1,'Running',
+                      1,?1,?2,0,?3,json_object('summary','Previous progress'))",
+                    params![
+                        super::super::encode(&DreamPolicy::default())?,
+                        super::super::encode(&DreamCutoffs::default())?,
+                        super::super::encode(&DreamCheckpoint {
+                            turn: 2,
+                            ..DreamCheckpoint::default()
+                        })?,
+                    ],
+                ))?;
+                Ok(())
+            })
             .unwrap();
         let checkpoint = store
             .capture_checkpoint(0, &path, &Cancellation::default())
@@ -1085,7 +1116,33 @@ mod tests {
             )
         );
         devworks_core::ports::storage::read_snapshot(&reopened, &Default::default(), |snapshot| {
+            use devworks_core::ports::storage::{DreamPhase, KnowledgeScope};
             use devworks_core::protocol::RootId;
+            let dreaming = snapshot.dreaming()?;
+            let run = dreaming
+                .dream_run(&Id::new("restored-dream").unwrap())?
+                .unwrap();
+            assert_eq!(run.phase, DreamPhase::Failed);
+            assert_eq!(run.ended_at_ms, Some(T0));
+            assert_eq!(run.checkpoint.unwrap().turn, 2);
+            assert_eq!(
+                run.report.unwrap(),
+                serde_json::json!({
+                    "reason": "WorkspaceRestoreInterrupted",
+                    "archivedPhase": "Running",
+                    "archivedReport": {"summary": "Previous progress"}
+                })
+            );
+            assert!(
+                dreaming
+                    .dream_live_run(&KnowledgeScope::Workspace)?
+                    .is_none()
+            );
+            assert!(
+                dreaming
+                    .dream_resumable_run(&KnowledgeScope::Workspace)?
+                    .is_none()
+            );
             let archives = snapshot.workspace_archives()?;
             let root = |id| RootId(Id::new(id).unwrap());
             assert!(archives.restore_effect_held(Some(&root("affected")), None)?);

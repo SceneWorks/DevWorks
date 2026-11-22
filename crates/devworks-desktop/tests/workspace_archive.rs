@@ -207,24 +207,32 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         .unwrap_err();
     assert!(rejected.contains("schema"), "{rejected}");
 
-    // Create an exact schema-68 bundle using the captured current file and the previously
-    // shipped ledger entry. The user-facing migration can only restore the compiled 69th step.
+    // Preserve the captured authored data in an exact schema-75 bundle so restore must
+    // obtain separate approval to run the compiled Dreaming migration.
     {
         let external = Connection::open(bundle.join("workspace.sqlite")).unwrap();
         external
             .execute_batch(
                 "DROP VIEW unexpected_archive_view;
-             DROP TABLE workspace_archived_restore_receipts;
-             DROP TABLE workspace_restore_effects;
-             DROP TABLE workspace_restore_history;
-             DROP TABLE workspace_archive_runs;
-             DROP TABLE workspace_backup_folders;
-             DELETE FROM schema_migrations WHERE version=69;
-             PRAGMA user_version=68;",
+             DROP TRIGGER dreaming_source_observed;
+             DROP TRIGGER dreaming_source_replaced;
+             DROP TRIGGER dreaming_repository_published;
+             DROP INDEX dreaming_knowledge_events;
+             DROP INDEX dreaming_review_events;
+             DROP INDEX dreaming_claim_scope;
+             DROP INDEX dreaming_proposal_target;
+             DROP TABLE dreaming_reversions;
+             DROP TABLE dreaming_actions;
+             DROP TABLE dreaming_runs;
+             DROP TABLE dreaming_source_changes;
+             DROP TABLE dreaming_instruction_revisions;
+             DROP TABLE dreaming_scope_state;
+             DELETE FROM schema_migrations WHERE version=76;
+             PRAGMA user_version=75;",
             )
             .unwrap();
         let latest = metadata.checkpoint.migrations.pop().unwrap();
-        assert_eq!(latest.version, 69);
+        assert_eq!(latest.version, 76);
         let previous = metadata.checkpoint.migrations.last().unwrap();
         metadata.checkpoint.schema_version = previous.version;
         metadata.checkpoint.minimum_reader = previous.minimum_reader;
@@ -360,7 +368,7 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         .expect("qualified native restore result");
     assert!(matches!(completion, OperationCompletion::Succeeded {
         result: OperationResult::WorkspaceRestore { value }, ..
-    } if value.schema_version.get() == 69 && value.id == proposal.id));
+    } if value.schema_version.get() == 76 && value.id == proposal.id));
     assert_eq!(storage_title(&root), "Checkpoint authorship");
     let prior = root
         .0
