@@ -36,12 +36,27 @@ CREATE TABLE workspace_restore_effects (
     timeline TEXT NOT NULL CHECK(timeline IN ('source','destination')),
     origin_store TEXT NOT NULL,
     origin_epoch INTEGER NOT NULL CHECK(origin_epoch>=0),
+    origin_stage TEXT NOT NULL,
     operation TEXT NOT NULL,
     capability TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
     root TEXT,
     state TEXT NOT NULL,
     unresolved INTEGER NOT NULL CHECK(unresolved IN (0,1)),
-    PRIMARY KEY(epoch,timeline,operation)
+    evidence_json TEXT CHECK(evidence_json IS NULL OR json_valid(evidence_json)),
+    PRIMARY KEY(epoch,timeline,origin_store,origin_epoch,operation,capability,fingerprint)
 ) STRICT;
 CREATE INDEX workspace_restore_effect_scope ON workspace_restore_effects(root,capability) WHERE unresolved=1;
+
+-- Only the stopped local destination can contribute historical receipt replay authority.
+-- Imported receipts remain available as evidence in the sealed source and its copied history.
+CREATE TABLE workspace_archived_restore_receipts (
+    owner TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    request TEXT NOT NULL,
+    proposal TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+    PRIMARY KEY(owner,scope,request)
+) STRICT;

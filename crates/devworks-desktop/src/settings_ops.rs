@@ -16,6 +16,7 @@ pub enum SettingsSlot {
     WorkspaceReview,
     WorkspaceMigrationPlan,
     WorkspaceCancel,
+    WorkspaceObserve,
     WorkspaceCommand,
     WorkspaceClose,
     ContainerCapabilities,

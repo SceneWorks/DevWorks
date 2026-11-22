@@ -175,7 +175,7 @@ impl WorkspaceArchiveService {
             }
             if tx.store().store_id != job.store_id
                 || tx.store().restore_epoch != job.restore_epoch
-                || current.phase != ArchivePhase::Queued
+                || !matches!(current.phase, ArchivePhase::Queued | ArchivePhase::Unknown)
             {
                 return Err(StorageError::ScopeDenied);
             }
@@ -187,6 +187,7 @@ impl WorkspaceArchiveService {
             })?;
             current.manifest = Some(artifact_ref(version));
             current.phase = ArchivePhase::Published;
+            current.detail = None;
             let previous = current.revision;
             current.revision += 1;
             crate::services::artifacts::release_checkpoint_blobs(tx, &operation.id.0)?;
@@ -347,7 +348,7 @@ impl JournaledEffect for WorkspaceArchiveService {
         };
         let observed = (|| -> Result<EffectOutcome, StorageError> {
             let saved = self.backup_record(operation, &job)?;
-            if saved.phase != ArchivePhase::Queued {
+            if !matches!(saved.phase, ArchivePhase::Queued | ArchivePhase::Unknown) {
                 return Ok(result(&saved));
             }
             let ArchiveAction::Backup {
@@ -374,6 +375,9 @@ impl JournaledEffect for WorkspaceArchiveService {
                 Err(StorageError::NotFound { .. }) => {}
                 _ => return Err(StorageError::ScopeDenied),
             }
+            if saved.phase == ArchivePhase::Unknown {
+                return Ok(result(&saved));
+            }
             let cancelled = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
                 let entry = read
                     .queue()
@@ -398,10 +402,29 @@ impl JournaledEffect for WorkspaceArchiveService {
                 "The original workspace archive was not published".into(),
             ))
         })();
-        observed.unwrap_or_else(|_| {
-            EffectOutcome::Unknown(
-                "The workspace backup destination could not be reconciled".into(),
-            )
+        observed.unwrap_or_else(|error| {
+            let detail = format!("The original workspace export could not be verified. {error}");
+            let operation = operation.clone();
+            let reason = detail.clone();
+            let _ = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+                effect_job::attempt_holds(tx, &operation, EFFECT_CONSUMER)?;
+                let Some(mut row) = tx
+                    .workspace_archives()?
+                    .workspace_archive_for_operation(&operation.id)?
+                    .filter(|row| {
+                        row.phase == ArchivePhase::Queued && bound(row, &operation, &job)
+                    })
+                else {
+                    return Ok(());
+                };
+                let revision = row.revision;
+                row.revision += 1;
+                row.phase = ArchivePhase::Unknown;
+                row.detail = Some(reason.chars().take(1024).collect());
+                tx.workspace_archives()?
+                    .put_workspace_archive(&row, Some(revision))
+            });
+            EffectOutcome::Unknown(detail)
         })
     }
 }

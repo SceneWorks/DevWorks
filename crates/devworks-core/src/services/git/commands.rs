@@ -1321,20 +1321,92 @@ impl GitService {
         let Some(ctx) = job.context(self, &operation.id) else {
             return denied("invalid principal kind");
         };
+        self.observe_transition(job, operation, &ctx, true)
+    }
+
+    /// Explicit restore inspection of an archived local Git effect. The saved payload does
+    /// not authorize a helper, and the active profile must prove the same current physical
+    /// worktree before any readback. Foreign or network-owned effects remain held.
+    pub(crate) fn observe_archived_local(
+        &self,
+        ctx: &InvocationContext,
+        operation: &OperationRecord,
+    ) -> Option<Value> {
+        if ctx.principal_kind() != PrincipalKind::Human
+            || !matches!(operation.capability.as_str(), "git.commit" | "git.worktree")
+        {
+            return None;
+        }
+        let job = self.job(operation).ok()?;
+        match (operation.capability.as_str(), &job.action) {
+            ("git.commit", Action::Commit { expected, .. }) => {
+                crate::protocol::Check::check(expected).ok()?;
+            }
+            ("git.worktree", Action::Create) => {}
+            _ => return None,
+        }
+        let current = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let tree = read.git().git_worktree(&job.tree.id)?;
+            let repository = read.projects().repository(&job.tree.repository_id)?;
+            Ok(tree.zip(repository))
+        })
+        .ok()
+        .flatten()?;
+        let (tree, repository) = current;
+        if tree.path != job.tree.path
+            || tree.branch != job.tree.branch
+            || tree.repository_id != job.tree.repository_id
+            || tree.location.is_none()
+            || tree.location != job.tree.location
+            || tree.registered_root_id != job.tree.registered_root_id
+        {
+            return None;
+        }
+        let ctx = ctx
+            .clone()
+            .with_lineage(Some(job.project.clone()), None, None);
+        let git = Git {
+            runner: &*self.helpers,
+            ctx: &ctx,
+            program: &self.config.program,
+            deadline: self.config.deadline,
+            stop: &|| false,
+        };
+        let target = Target {
+            repository,
+            worktree: Some(tree),
+        };
+        self.verify_target(&git, &target).ok()?;
+        let EffectOutcome::Completed(evidence) =
+            self.observe_transition(&job, operation, &ctx, false)
+        else {
+            return None;
+        };
+        self.verify_target(&git, &target).ok()?;
+        Some(evidence)
+    }
+
+    fn observe_transition(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        ctx: &InvocationContext,
+        settle: bool,
+    ) -> EffectOutcome {
         let stop = || false; // observation is permitted while the originating work is paused
         let helpers = crate::services::git::helper::RecordedHelpers {
             inner: &*self.helpers,
             operation: &operation.id,
         };
         let git = Git {
-            runner: &helpers,
-            ctx: &ctx,
+            runner: if settle { &helpers } else { &*self.helpers },
+            ctx,
             program: &self.config.program,
             deadline: self.config.deadline,
             stop: &stop,
         };
         let path = Path::new(&job.tree.path);
-        if !matches!(job.action, Action::Create) {
+        if settle && !matches!(job.action, Action::Create) {
             let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
                 s.projects().repository(&job.tree.repository_id)
             });
@@ -1400,7 +1472,7 @@ impl GitService {
             Action::Inspect => true,
             Action::Commit { message, expected } => {
                 if observed.head == expected.hex {
-                    !observed.dirty && job.reviewed_binding.is_none()
+                    settle && !observed.dirty && job.reviewed_binding.is_none()
                 } else {
                     git.commit_parents(path, &observed.head).ok().as_deref()
                         == Some(std::slice::from_ref(&expected.hex))
@@ -1452,8 +1524,11 @@ impl GitService {
             }
             Action::PullRequest { .. } => unreachable!("handled above"),
         };
-        if verified {
+        if verified && settle {
             self.finish_git(job, &operation.id, observed)
+        } else if verified {
+            EffectOutcome::Completed(json!({ "kind":"VerifiedGitWorktree", "head":observed.head,
+                "branch":observed.branch }))
         } else {
             EffectOutcome::Unknown(
                 "Git postcondition has not been established; no write was repeated".into(),

@@ -131,6 +131,21 @@ pub trait Backend: Send + Sync {
     ) -> Result<(), String> {
         Err("Workspace archive cancellation is unavailable.".into())
     }
+    fn observe_archived_workspace_git(
+        &self,
+        _id: i64,
+        _received: ControlEpoch,
+    ) -> Result<bool, String> {
+        Err("Archived Git observation is unavailable.".into())
+    }
+    fn observe_archived_workspace_export(
+        &self,
+        _id: i64,
+        _path: &Path,
+        _received: ControlEpoch,
+    ) -> Result<bool, String> {
+        Err("Archived export observation is unavailable.".into())
+    }
     fn workspace_archive_status(&self) -> Result<crate::settings_screen::archives::Status, String> {
         Err("Workspace archive status is unavailable.".into())
     }
@@ -463,6 +478,7 @@ pub enum TaskOutput {
     },
     WorkspaceArchive(Box<crate::settings_screen::archives::Status>),
     WorkspaceBackupFolder(Id, i64),
+    WorkspaceEffectObserved(bool),
     /// A prepared command frame (attachment, provider or package), not admitted yet.
     Prepared {
         frame: Vec<u8>,

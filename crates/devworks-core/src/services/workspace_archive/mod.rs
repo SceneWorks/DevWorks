@@ -29,6 +29,12 @@ pub const BACKUP_OPERATION: &str = "workspace.backup";
 pub const OPERATIONS: [&str; 3] = [BACKUP_OPERATION, RESTORE_OPERATION, MIGRATE_OPERATION];
 const FOLDER_GRANT_MS: i64 = 30 * 60 * 1_000;
 
+pub struct ArchivePorts {
+    pub storage: Arc<dyn WorkspaceArchiveStorage>,
+    pub files: Arc<dyn WorkspaceArchiveFiles>,
+    pub app_build: String,
+}
+
 pub struct WorkspaceArchiveService {
     pub(super) store: Arc<dyn ApplicationStore>,
     storage: Arc<dyn WorkspaceArchiveStorage>,
@@ -43,23 +49,21 @@ pub struct WorkspaceArchiveService {
 impl WorkspaceArchiveService {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
-        storage: Arc<dyn WorkspaceArchiveStorage>,
-        files: Arc<dyn WorkspaceArchiveFiles>,
+        ports: ArchivePorts,
         artifacts: Arc<ArtifactService>,
         packages: Arc<PackageService>,
         ids: Arc<dyn IdSource>,
         clock: Arc<dyn Clock>,
-        app_build: String,
     ) -> Self {
         Self {
             store,
-            storage,
-            files,
+            storage: ports.storage,
+            files: ports.files,
             artifacts,
             packages,
             ids,
             clock,
-            app_build,
+            app_build: ports.app_build,
         }
     }
 
@@ -239,6 +243,7 @@ impl WorkspaceArchiveService {
             operation: Some(operation.clone()),
             manifest: None,
             migration_manifest: None,
+            completion: None,
             detail: None,
         };
         tx.workspace_archives()?

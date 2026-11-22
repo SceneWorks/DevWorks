@@ -187,8 +187,13 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         b.command("workspace.backup", &backup),
         Ok(CommandReply::Recorded { replayed: true, .. })
     ));
-    let bundle = destination.join(format!("devworks-backup-{}", op.0.as_str()));
-    assert!(bundle.join("manifest.json").is_file());
+    let published = destination.join(format!("devworks-backup-{}", op.0.as_str()));
+    assert!(published.join("manifest.json").is_file());
+    let bundle = root.dir("transferred-bundle");
+    for child in std::fs::read_dir(&published).unwrap() {
+        let child = child.unwrap();
+        std::fs::copy(child.path(), bundle.join(child.file_name())).unwrap();
+    }
     let mut metadata = read_manifest(&bundle);
     {
         let external = Connection::open(bundle.join("workspace.sqlite")).unwrap();
@@ -209,6 +214,7 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         external
             .execute_batch(
                 "DROP VIEW unexpected_archive_view;
+             DROP TABLE workspace_archived_restore_receipts;
              DROP TABLE workspace_restore_effects;
              DROP TABLE workspace_restore_history;
              DROP TABLE workspace_archive_runs;
@@ -239,6 +245,13 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         .execute(
             "UPDATE projects SET title='Edit after backup' WHERE id='archive-project'",
             [],
+        )
+        .unwrap();
+    // Lost settlement after publication leaves a real, exact export on disk.
+    connection
+        .execute(
+            "UPDATE operations SET state='OutcomeUnknown' WHERE id=?1",
+            [op.0.as_str()],
         )
         .unwrap();
     drop(connection);
@@ -311,7 +324,32 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         "successful close arms restore"
     );
     let reopened = start(&root);
-    let status = reopened.backend().workspace_archive_status().unwrap();
+    let backend = reopened.backend();
+    let status = backend.workspace_archive_status().unwrap();
+    assert!(matches!(
+        backend.command("workspace.restore", &confirm),
+        Ok(CommandReply::Recorded { replayed: true, .. })
+    ));
+    let (export, effect) = status
+        .unresolved
+        .iter()
+        .find(|(_, effect)| effect.operation == op)
+        .expect("the prior destination export remains unresolved");
+    assert_eq!(effect.timeline, "destination");
+    let wrong = root.dir("wrong-export");
+    assert!(
+        backend
+            .observe_archived_workspace_export(*export, &wrong, backend.control_epoch())
+            .is_err()
+    );
+    assert!(
+        backend
+            .workspace_archive_status()
+            .unwrap()
+            .unresolved
+            .iter()
+            .any(|(_, effect)| effect.operation == op)
+    );
     let restored = status
         .restored
         .expect("verify restored workspace in Settings");
@@ -349,17 +387,70 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         )
         .unwrap();
     assert_eq!(bytes, b"These are the saved bytes.");
+    drop(backend);
     drop(reopened);
     let again = start(&root);
-    assert_eq!(
-        again
-            .backend()
+    let backend = again.backend();
+    let status = backend.workspace_archive_status().unwrap();
+    assert!(
+        status
+            .unresolved
+            .iter()
+            .any(|(_, effect)| effect.operation == op)
+    );
+    let next = backend
+        .workspace_restore_plan(
+            &published,
+            backend.control_epoch(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+    let second = fixture::command(
+        backend.as_ref(),
+        "workspace.restore",
+        json!({
+            "backup":next.manifest,"expectedStoreId":next.store,
+            "expectedRestoreEpoch":next.epoch.to_string(),"proposalId":next.id,
+        }),
+    );
+    ops::accepted_decision(archive_command(
+        backend.as_ref(),
+        "workspace.restore",
+        &second,
+    ))
+    .unwrap();
+    backend
+        .request_workspace_restore_shutdown(&next.id, backend.control_epoch())
+        .unwrap();
+    drop(backend);
+    assert!(again.shutdown().is_some());
+
+    let second_app = start(&root);
+    let backend = second_app.backend();
+    let status = backend.workspace_archive_status().unwrap();
+    assert_eq!(status.restored.unwrap().epoch, restored.epoch + 1);
+    assert!(matches!(
+        backend.command("workspace.restore", &confirm),
+        Ok(CommandReply::Recorded { replayed: true, .. })
+    ));
+    let (export, effect) = status
+        .unresolved
+        .iter()
+        .find(|(_, effect)| effect.operation == op)
+        .expect("a second restore from the older bundle retained the original unresolved effect");
+    assert_eq!(effect.origin_epoch, proposal.epoch);
+    assert!(
+        backend
+            .observe_archived_workspace_export(*export, &destination, backend.control_epoch())
+            .unwrap()
+    );
+    assert!(
+        !backend
             .workspace_archive_status()
             .unwrap()
-            .restored
-            .unwrap()
-            .epoch,
-        restored.epoch
+            .unresolved
+            .iter()
+            .any(|(_, effect)| effect.operation == op)
     );
 }
 
@@ -397,4 +488,112 @@ fn active_migration_has_an_exact_no_change_receipt_and_native_settings_entry() {
     click(&mut h, Role::Button, "Workspace backup and restore");
     assert!(has_text(&h, "Verify current migration ledger"));
     assert!(has_text(&h, "Choose backup to restore"));
+}
+
+#[test]
+fn cross_profile_restore_installs_graph_capture_without_an_artifact_version() {
+    use devworks_adapters::fs::artifacts::NativeArtifactFiles;
+    use devworks_core::ports::files::ArtifactFiles;
+
+    let _case = native_runtime_case();
+    let source = Root::new("workspace-archive-graph-source");
+    let app = start(&source);
+    let bytes = b"graph-owned source bytes";
+    let digest = devworks_core::fingerprint::sha256_hex(bytes);
+    let generation = "graph-fixture-generation";
+    let files = NativeArtifactFiles::new(&source.0, source.0.join("cache"));
+    let stored = files
+        .publish(
+            "graph-fixture-staging",
+            &mut bytes.as_slice(),
+            &digest,
+            bytes.len() as u64,
+            None,
+            generation,
+        )
+        .unwrap();
+    let db = Connection::open(source.0.join("workspace.sqlite")).unwrap();
+    db.busy_timeout(Duration::from_secs(5)).unwrap();
+    db.execute(
+        "INSERT INTO repositories(id,canonical_location,revision)
+        VALUES('archive-graph-repo','fixture://isolated/archive-graph',1)",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO blobs(digest,relative_path,byte_count,state,generation)
+         VALUES(?1,?2,?3,'Present',?4)",
+        rusqlite::params![digest, stored.relative_path, bytes.len() as i64, generation],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO graph_source_captures(id,repository_id,unit_key,source_digest,blob_digest,blob_generation,byte_count,created_at)
+         VALUES('archive-only-capture','archive-graph-repo','file.rs',?1,?1,?2,?3,1)",
+        rusqlite::params![digest,generation,bytes.len() as i64],
+    ).unwrap();
+    drop(db);
+    await_quiet(&app, &source);
+    let export = source.dir("export");
+    let backend = app.backend();
+    let (op, _) = accepted_backup(backend.as_ref(), &export);
+    let bundle = export.join(format!("devworks-backup-{}", op.0.as_str()));
+    let end = Instant::now() + SETTLE_BOUND;
+    while !bundle.join("manifest.json").exists() {
+        assert!(Instant::now() < end, "graph snapshot did not publish");
+        std::thread::sleep(Duration::from_millis(35));
+    }
+    assert!(
+        read_manifest(&bundle)
+            .checkpoint
+            .blobs
+            .iter()
+            .any(|blob| blob.content.sha256 == digest && blob.generation.as_str() == generation)
+    );
+    drop(backend);
+    drop(app);
+
+    let target = Root::new("workspace-archive-graph-target");
+    let app = start(&target);
+    let backend = app.backend();
+    let restore = backend
+        .workspace_restore_plan(&bundle, backend.control_epoch(), &Cancellation::default())
+        .unwrap();
+    let confirm = fixture::command(
+        backend.as_ref(),
+        "workspace.restore",
+        json!({
+            "backup":restore.manifest,"expectedStoreId":restore.store,
+            "expectedRestoreEpoch":restore.epoch.to_string(),"proposalId":restore.id,
+        }),
+    );
+    ops::accepted_decision(archive_command(
+        backend.as_ref(),
+        "workspace.restore",
+        &confirm,
+    ))
+    .unwrap();
+    backend
+        .request_workspace_restore_shutdown(&restore.id, backend.control_epoch())
+        .unwrap();
+    drop(backend);
+    assert!(app.shutdown().is_some());
+
+    let reopened = start(&target);
+    let store = reopened.host().runtime().store();
+    let capture =
+        devworks_core::ports::storage::read_snapshot(store.as_ref(), &Default::default(), |db| {
+            db.graph().graph_source_capture(
+                &devworks_core::protocol::Id::new("archive-only-capture").unwrap(),
+            )
+        })
+        .unwrap()
+        .expect("restored graph capture");
+    assert_eq!(capture.blob_digest, digest);
+    let files = NativeArtifactFiles::new(&target.0, target.0.join("cache"));
+    let mut reader = files
+        .open_controlled(&digest, generation, bytes.len() as u64, &mut || false)
+        .unwrap();
+    let mut actual = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut actual).unwrap();
+    assert_eq!(actual, bytes);
 }

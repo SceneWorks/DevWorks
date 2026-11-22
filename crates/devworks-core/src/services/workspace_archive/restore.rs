@@ -161,6 +161,7 @@ impl WorkspaceArchiveService {
                 operation: None,
                 manifest: Some(manifest),
                 migration_manifest: Some(migration_manifest),
+                completion: None,
                 detail: None,
             };
             tx.workspace_archives()?
@@ -236,6 +237,7 @@ impl WorkspaceArchiveService {
                 operation: None,
                 manifest: None,
                 detail: None,
+                completion: None,
                 migration_manifest: Some(super::worker::artifact_ref(version)),
             };
             tx.workspace_archives()?
@@ -313,6 +315,205 @@ impl WorkspaceArchiveService {
                 },
                 archives.latest_workspace_restore(stamp.restore_epoch)?,
             ))
+        })
+    }
+
+    pub fn replay_prior_restore(
+        &self,
+        ctx: &InvocationContext,
+        frame: &[u8],
+    ) -> Result<Option<crate::protocol::results::DomainCommandReply>, StorageError> {
+        use crate::admission::{CallerKey, Selection, decode};
+        use crate::operations::{OperationInput, workspace};
+        use crate::ports::storage::ArchivedRestoreKey;
+        if human(ctx).is_err() {
+            return Ok(None);
+        }
+        let Ok(decoded) = decode(
+            Selection {
+                operation: RESTORE_OPERATION,
+                mode: crate::registry::Mode::Command,
+            },
+            frame,
+        ) else {
+            return Ok(None);
+        };
+        let (
+            CallerKey::Command(request_key),
+            OperationInput::Workspace(workspace::Input::Restore(input)),
+        ) = (decoded.key, decoded.input)
+        else {
+            return Ok(None);
+        };
+        if input.expected_store_id != *ctx.store_id() {
+            return Ok(None);
+        }
+        let Some(scope) = ctx.historical_workspace_scope(&input.expected_restore_epoch) else {
+            return Ok(None);
+        };
+        let result = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let stamp = read.stamp();
+            if stamp.store_id != *ctx.store_id()
+                || stamp.restore_epoch != ctx.restore_epoch().get()
+                || read.actors().actor_kind(ctx.principal())?
+                    != Some(crate::context::PrincipalKind::Human)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            read.workspace_archives()?
+                .archived_restore_receipt(&ArchivedRestoreKey {
+                    owner: ctx.principal(),
+                    scope: scope.as_str(),
+                    request_key: &request_key,
+                    proposal: &input.proposal_id,
+                    fingerprint: decoded.fingerprint.as_str(),
+                    revision: decoded.revision,
+                })
+        })?
+        .map(|receipt| crate::protocol::CommandReply::Recorded {
+            protocol: crate::protocol::Protocol::Draft1,
+            receipt,
+            replayed: true,
+        });
+        if let Some(reply) = &result {
+            crate::protocol::results::validate_command_reply(reply)
+                .map_err(StorageError::InvalidRecord)?;
+        }
+        Ok(result)
+    }
+
+    pub fn unresolved_effects(
+        &self,
+        ctx: &InvocationContext,
+        after: i64,
+    ) -> Result<Vec<(i64, crate::ports::storage::RestoredEffect)>, StorageError> {
+        human(ctx)?;
+        read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let stamp = read.stamp();
+            if stamp.store_id != *ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            read.workspace_archives()?
+                .unresolved_restore_effects(stamp.restore_epoch, after, 25)
+        })
+    }
+
+    pub fn observe_restored_git(
+        &self,
+        ctx: &InvocationContext,
+        id: i64,
+        git: &crate::services::git::GitService,
+    ) -> Result<bool, StorageError> {
+        human(ctx)?;
+        let effect = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let stamp = read.stamp();
+            if stamp.store_id != *ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            read.workspace_archives()?
+                .restore_effect(stamp.restore_epoch, id)?
+                .filter(|effect| effect.capability.starts_with("git."))
+                .ok_or(StorageError::ScopeDenied)
+        })?;
+        let manifest = self.files.read_stage(&effect.origin_stage)?;
+        let source = self.files.staged_database(&effect.origin_stage)?;
+        let original = self
+            .storage
+            .archived_effect_operation(&source, &manifest, &effect)?;
+        let Some(proof) = git.observe_archived_local(ctx, &original) else {
+            return Ok(false);
+        };
+        let ctx = ctx.clone();
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            authority_in(tx, &ctx)?;
+            if tx
+                .workspace_archives()?
+                .restore_effect(effect.epoch, id)?
+                .as_ref()
+                != Some(&effect)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            tx.workspace_archives()?
+                .record_restored_observation(&effect, &proof)?;
+            Ok(true)
+        })
+    }
+
+    /// The backup owner can re-observe a published export without dispatching an archived
+    /// command. Both the immutable original intent and the original sealed bytes must match.
+    pub fn observe_restored_export(
+        &self,
+        ctx: &InvocationContext,
+        id: i64,
+        chosen_parent: &Path,
+    ) -> Result<bool, StorageError> {
+        human(ctx)?;
+        let effect = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            let stamp = read.stamp();
+            if stamp.store_id != *ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            read.workspace_archives()?
+                .restore_effect(stamp.restore_epoch, id)?
+                .filter(|saved| saved.capability == super::BACKUP_OPERATION)
+                .ok_or(StorageError::ScopeDenied)
+        })?;
+        let manifest = self.files.read_stage(&effect.origin_stage)?;
+        let image = self.files.staged_database(&effect.origin_stage)?;
+        let original = self
+            .storage
+            .archived_backup_intent(&image, &manifest, &effect)?;
+        let ArchiveAction::Backup {
+            checkpoint,
+            destination,
+        } = &original.action
+        else {
+            return Err(StorageError::ScopeDenied);
+        };
+        let actual = self.files.bind_external_folder(chosen_parent)?;
+        if original.owner != *ctx.principal() || actual != *destination {
+            return Err(StorageError::ScopeDenied);
+        }
+        let source = self.files.read_stage(&original.stage_id)?;
+        if source.operation_id != original.id || source.checkpoint != *checkpoint {
+            return Err(StorageError::ScopeDenied);
+        }
+        if !self.files.observe_publication(
+            &actual,
+            &original.id,
+            &source,
+            &Cancellation::default(),
+        )? {
+            return Ok(false);
+        }
+        let ctx = ctx.clone();
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            authority_in(tx, &ctx)?;
+            if tx
+                .workspace_archives()?
+                .restore_effect(effect.epoch, id)?
+                .as_ref()
+                != Some(&effect)
+            {
+                return Err(StorageError::ScopeDenied);
+            }
+            tx.workspace_archives()?.record_restored_observation(
+                &effect, &json!({
+                    "kind":"ObservedWorkspaceBackup", "operation": original.id, "database":source.database,
+                }),
+            )?;
+            let event = EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {
+                id:event,actor:ctx.principal().clone(),project_id:None,root_id:None,operation_id:None,
+                aggregate_kind:"workspace_archive".into(),aggregate_id:original.id.as_str().to_owned(),
+                aggregate_revision:original.revision,kind:"ArchivedWorkspaceBackupObserved".into(),
+                payload: json!({"epoch":effect.epoch,"originStore":effect.origin,"originEpoch":effect.origin_epoch}),
+            })?;
+            Ok(true)
         })
     }
 
@@ -412,6 +613,32 @@ impl WorkspaceArchiveService {
             result.is_ok() || matches!(result, Err(StorageError::CommitUnknown)),
         );
         result
+    }
+
+    pub fn note_shutdown_failure(
+        &self,
+        ctx: &InvocationContext,
+        proposal: &Id,
+        reason: &str,
+    ) -> Result<(), StorageError> {
+        let (ctx, proposal, detail) = (
+            ctx.clone(),
+            proposal.clone(),
+            reason.chars().take(1024).collect(),
+        );
+        run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            authority_in(tx, &ctx)?;
+            let mut record = tx
+                .workspace_archives()?
+                .workspace_archive(&proposal)?
+                .filter(|r| owner(&ctx, r) && r.phase == ArchivePhase::AwaitingRestart)
+                .ok_or(StorageError::ScopeDenied)?;
+            let revision = record.revision;
+            record.revision += 1;
+            record.detail = Some(detail);
+            tx.workspace_archives()?
+                .put_workspace_archive(&record, Some(revision))
+        })
     }
 
     pub fn cancel_archive(

@@ -414,6 +414,21 @@ impl InvocationContext {
         self.activation = None;
         self
     }
+    pub(crate) fn historical_workspace_scope(&self, epoch: &Counter) -> Option<ScopeKey> {
+        if self.principal_kind != PrincipalKind::Human
+            || self.project_id.is_some()
+            || self.root_id.is_some()
+            || self.session_id.is_some()
+            || self.assignment_id.is_some()
+            || epoch.get() >= self.restore_epoch.get()
+        {
+            return None;
+        }
+        let mut previous = self.clone();
+        previous.restore_epoch = epoch.clone();
+        Some(ScopeKey::of(&previous))
+    }
+
     /// The same invocation working in `project` (its session's project, resolved by a service
     /// that reads the session); everything else is unchanged.
     pub(crate) fn in_project(&self, project: ProjectId) -> Self {

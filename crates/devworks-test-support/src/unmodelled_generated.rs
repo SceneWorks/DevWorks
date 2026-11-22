@@ -4074,6 +4074,26 @@ impl WorkspaceArchiveRead for Unmodelled {
     fn latest_workspace_restore(&self, _: i64) -> Result<Option<RestoredWorkspace>, StorageError> {
         unmodelled()
     }
+    fn archived_restore_receipt(
+        &self,
+        _: &ArchivedRestoreKey<'_>,
+    ) -> Result<
+        Option<devworks_core::protocol::Receipt<devworks_core::protocol::results::DomainDecision>>,
+        StorageError,
+    > {
+        unmodelled()
+    }
+    fn unresolved_restore_effects(
+        &self,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<(i64, RestoredEffect)>, StorageError> {
+        unmodelled()
+    }
+    fn restore_effect(&self, _: i64, _: i64) -> Result<Option<RestoredEffect>, StorageError> {
+        unmodelled()
+    }
     fn restore_effect_held(
         &self,
         _: Option<&devworks_core::protocol::RootId>,
@@ -4091,6 +4111,13 @@ impl WorkspaceArchiveRepository for Unmodelled {
         _: i64,
         _: &OperationId,
         _: &devworks_core::protocol::results::OperationCompletion,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn record_restored_observation(
+        &mut self,
+        _: &RestoredEffect,
+        _: &serde_json::Value,
     ) -> Result<(), StorageError> {
         unmodelled()
     }
@@ -4131,6 +4158,22 @@ impl WorkspaceArchiveStorage for Unmodelled {
         unmodelled()
     }
     fn active_checkpoint(&self) -> Result<WorkspaceCheckpoint, StorageError> {
+        unmodelled()
+    }
+    fn archived_backup_intent(
+        &self,
+        _: &Path,
+        _: &WorkspaceArchive,
+        _: &RestoredEffect,
+    ) -> Result<StoredWorkspaceArchive, StorageError> {
+        unmodelled()
+    }
+    fn archived_effect_operation(
+        &self,
+        _: &Path,
+        _: &WorkspaceArchive,
+        _: &RestoredEffect,
+    ) -> Result<devworks_core::ports::storage::OperationRecord, StorageError> {
         unmodelled()
     }
     fn shipped_migrations(&self) -> Result<Vec<MigrationWitness>, StorageError> {

@@ -10,6 +10,6 @@ Open **Settings → Storage & import → Workspace backup and restore**. Choose 
 
 Choose that folder when restoring. Review the checkpoint and file count. If DevWorks asks you to migrate an older checkpoint, select **Migrate the staged backup**. This applies the app’s verified migrations to a separate copy. Approve the restore, select **Close DevWorks to restore**, then reopen the app. DevWorks verifies the saved result in the same Settings panel and keeps the stopped local workspace as recovery evidence.
 
-Restore advances the workspace epoch. Reconnect external accounts when DevWorks asks. Re-enable the scheduled jobs and installed packages you want to use, and select **Continue** on each eligible work item you want to resume. Unresolved external effects can hold the work they affect. Keep-working starts off.
+Restore advances the workspace epoch. Reconnect external accounts when DevWorks asks. Re-enable the scheduled jobs you want to use. Review the original signed bundle through the package update action before enabling an installed package. Select **Continue** on each eligible work item you want to resume. Unresolved external effects can hold the work they affect. Keep-working starts off.
 
 Logs and ended index overlay records have bounded retention; their linked artifacts follow artifact retention separately. Project deletion preserves repository files and shared referenced artifacts. See [Recovery](help:recovery), [Diagnostics](help:diagnostics), and [Settings](help:settings-Storage).

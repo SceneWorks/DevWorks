@@ -19,6 +19,7 @@ pub struct Status {
     pub current: Option<StoredWorkspaceArchive>,
     pub restored: Option<RestoredWorkspace>,
     pub shipped_schema: i64,
+    pub unresolved: Vec<(i64, devworks_core::ports::storage::RestoredEffect)>,
 }
 
 #[derive(Default)]
@@ -41,6 +42,7 @@ pub(crate) fn is_slot(slot: &SettingsSlot) -> bool {
             | SettingsSlot::WorkspaceReview
             | SettingsSlot::WorkspaceMigrationPlan
             | SettingsSlot::WorkspaceCancel
+            | SettingsSlot::WorkspaceObserve
             | SettingsSlot::WorkspaceCommand
             | SettingsSlot::WorkspaceClose
     )
@@ -61,6 +63,7 @@ impl Panel {
             SettingsSlot::WorkspaceReview,
             SettingsSlot::WorkspaceMigrationPlan,
             SettingsSlot::WorkspaceCancel,
+            SettingsSlot::WorkspaceObserve,
             SettingsSlot::WorkspaceCommand,
             SettingsSlot::WorkspaceClose,
         ]
@@ -117,6 +120,57 @@ impl Panel {
                     restored.unresolved_effects
                 ));
             }
+        }
+        if !self.status.unresolved.is_empty() {
+            ui.collapsing("Unresolved prior operations", |ui| {
+                for (row, effect) in &self.status.unresolved {
+                    ui.label(format!(
+                        "{} · {} · {} epoch {}",
+                        effect.capability,
+                        effect.operation.0.as_str(),
+                        effect.timeline,
+                        effect.origin_epoch
+                    ));
+                    if effect.capability == BACKUP_OPERATION
+                        && ui
+                            .add_enabled(!changing, egui::Button::new("Verify original export…"))
+                            .clicked()
+                        && let Some(backend) = cx.backend()
+                    {
+                        let received = backend.control_epoch();
+                        if let Some(path) = cx.dialogs.pick_folder(None)
+                            && let Some(client) = cx.client.as_deref_mut()
+                        {
+                            let row = *row;
+                            client.task(
+                                SettingsSlot::WorkspaceObserve.into(),
+                                "Observing an archived workspace export",
+                                move |b| {
+                                    b.observe_archived_workspace_export(row, &path, received)
+                                        .map(TaskOutput::WorkspaceEffectObserved)
+                                },
+                            );
+                        }
+                    }
+                    if matches!(effect.capability.as_str(), "git.commit" | "git.worktree")
+                        && ui
+                            .add_enabled(!changing, egui::Button::new("Verify current worktree"))
+                            .clicked()
+                        && let Some(client) = cx.client.as_deref_mut()
+                    {
+                        let received = client.control_epoch();
+                        let row = *row;
+                        client.task(
+                            SettingsSlot::WorkspaceObserve.into(),
+                            "Observing an archived worktree effect",
+                            move |b| {
+                                b.observe_archived_workspace_git(row, received)
+                                    .map(TaskOutput::WorkspaceEffectObserved)
+                            },
+                        );
+                    }
+                }
+            });
         }
         let current = self.status.current.clone();
         let queued = current
@@ -205,6 +259,9 @@ impl Panel {
                     ));
                 }
                 (ArchivePhase::AwaitingRestart, ArchiveAction::Restore { .. }) => {
+                    if let Some(detail) = row.detail.as_deref() {
+                        ui.label(detail);
+                    }
                     ui.label("Restore is approved. Close DevWorks from here and reopen it to apply the backup.");
                     if ui
                         .add_enabled(!changing, egui::Button::new("Close DevWorks to restore"))
@@ -389,12 +446,9 @@ impl Panel {
                 {
                     self.restore_plan = Some(fresh.clone());
                 }
-                if self
-                    .status
-                    .current
-                    .as_ref()
-                    .is_some_and(|entry| entry.phase == ArchivePhase::Queued)
-                {
+                if self.status.current.as_ref().is_some_and(|entry| {
+                    matches!(entry.phase, ArchivePhase::Queued | ArchivePhase::Unknown)
+                }) {
                     self.poll = Some(Instant::now() + Duration::from_millis(700));
                 }
             }
@@ -443,6 +497,20 @@ impl Panel {
                 }
             }
             (SettingsSlot::WorkspaceCancel, Reply::Task(Ok(TaskOutput::Refreshed))) => {
+                self.poll = Some(Instant::now());
+            }
+            (
+                SettingsSlot::WorkspaceObserve,
+                Reply::Task(Ok(TaskOutput::WorkspaceEffectObserved(found))),
+            ) => {
+                self.notice = Some(
+                    if found {
+                        "The original operation was verified."
+                    } else {
+                        "The original operation is still unverified."
+                    }
+                    .into(),
+                );
                 self.poll = Some(Instant::now());
             }
             (SettingsSlot::WorkspaceClose, Reply::Task(Ok(TaskOutput::Refreshed))) => {

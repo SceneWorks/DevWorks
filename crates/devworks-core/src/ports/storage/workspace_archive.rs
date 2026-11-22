@@ -194,6 +194,21 @@ pub trait WorkspaceArchiveStorage: Send + Sync {
 
     fn active_checkpoint(&self) -> Result<WorkspaceCheckpoint, StorageError>;
 
+    /// Read the exact historical backup intent from a verified, immutable image.
+    fn archived_backup_intent(
+        &self,
+        image: &Path,
+        manifest: &WorkspaceArchive,
+        effect: &RestoredEffect,
+    ) -> Result<StoredWorkspaceArchive, StorageError>;
+
+    fn archived_effect_operation(
+        &self,
+        image: &Path,
+        manifest: &WorkspaceArchive,
+        effect: &RestoredEffect,
+    ) -> Result<super::OperationRecord, StorageError>;
+
     /// The checksums accepted at a distinct candidate's migration boundary come from this build.
     fn shipped_migrations(&self) -> Result<Vec<MigrationWitness>, StorageError>;
 }
@@ -267,6 +282,8 @@ pub struct StoredWorkspaceArchive {
     pub operation: Option<OperationId>,
     pub manifest: Option<ArtifactRef>,
     pub migration_manifest: Option<ArtifactRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<crate::protocol::results::OperationCompletion>,
     pub detail: Option<String>,
 }
 
@@ -280,6 +297,29 @@ pub struct RestoredWorkspace {
     pub prior: WorkspaceArchive,
     pub unresolved_effects: i64,
     pub completion: Option<crate::protocol::results::OperationCompletion>,
+}
+
+/// Complete identity of a possibly dispatched operation in one archived timeline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RestoredEffect {
+    pub epoch: i64,
+    pub timeline: String,
+    pub origin: StoreId,
+    pub origin_epoch: i64,
+    pub origin_stage: Id,
+    pub operation: OperationId,
+    pub capability: String,
+    pub fingerprint: String,
+    pub root: Option<crate::protocol::RootId>,
+}
+
+pub struct ArchivedRestoreKey<'a> {
+    pub owner: &'a ActorId,
+    pub scope: &'a str,
+    pub request_key: &'a crate::protocol::RequestKey,
+    pub proposal: &'a Id,
+    pub fingerprint: &'a str,
+    pub revision: crate::registry::SchemaRevision,
 }
 
 pub trait WorkspaceArchiveRead {
@@ -302,6 +342,20 @@ pub trait WorkspaceArchiveRead {
         &self,
         epoch: i64,
     ) -> Result<Option<RestoredWorkspace>, StorageError>;
+    fn archived_restore_receipt(
+        &self,
+        key: &ArchivedRestoreKey<'_>,
+    ) -> Result<
+        Option<crate::protocol::Receipt<crate::protocol::results::DomainDecision>>,
+        StorageError,
+    >;
+    fn unresolved_restore_effects(
+        &self,
+        epoch: i64,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<(i64, RestoredEffect)>, StorageError>;
+    fn restore_effect(&self, epoch: i64, id: i64) -> Result<Option<RestoredEffect>, StorageError>;
     fn restore_effect_held(
         &self,
         root: Option<&crate::protocol::RootId>,
@@ -317,6 +371,11 @@ pub trait WorkspaceArchiveRepository: WorkspaceArchiveRead {
         epoch: i64,
         operation: &OperationId,
         completion: &crate::protocol::results::OperationCompletion,
+    ) -> Result<(), StorageError>;
+    fn record_restored_observation(
+        &mut self,
+        effect: &RestoredEffect,
+        evidence: &serde_json::Value,
     ) -> Result<(), StorageError>;
     fn register_backup_folder(&mut self, grant: &StoredBackupFolder) -> Result<(), StorageError>;
     fn redeem_backup_folder(

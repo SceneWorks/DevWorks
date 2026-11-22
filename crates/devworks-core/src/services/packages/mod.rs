@@ -731,9 +731,28 @@ impl PackageService {
         };
         let current = current_version.as_ref().and_then(policy::inspection);
         if update && p.active_digest.as_deref() == Some(i.manifest_digest.as_str()) {
-            return Ok(DomainDecision::NoChange {
-                result: self.result(tx, &p, update_op(update))?,
-            });
+            if current_version
+                .as_ref()
+                .is_some_and(|version| version.approval.is_some())
+            {
+                return Ok(DomainDecision::NoChange {
+                    result: self.result(tx, &p, update_op(update))?,
+                });
+            }
+            // A restored package retains its contents and state, but its old approval does
+            // not transfer. The normal bundle intake must verify the exact original signed
+            // package against the archived inspection before a person can approve it again.
+            if ctx.principal_kind() != PrincipalKind::Human
+                || i.signer_key.is_none()
+                || current.as_ref() != Some(&i)
+            {
+                return Err(Refusal::new(
+                    DomainErrorCode::PermissionDenied,
+                    "restored_package_reapproval",
+                    target.cloned(),
+                )
+                .into());
+            }
         }
         // The package record exists before anything refers to it.
         if fresh {
@@ -750,6 +769,9 @@ impl PackageService {
             .package_version(&i.package_id, &i.manifest_digest)?
         {
             Some(v) if v.phase == VersionPhase::Rejected => {
+                return Err(conflict("package_version", &i.package_id).into());
+            }
+            Some(v) if v.approval.is_none() && policy::inspection(&v).as_ref() != Some(&i) => {
                 return Err(conflict("package_version", &i.package_id).into());
             }
             Some(v) => v,
@@ -1085,6 +1107,22 @@ impl PackageService {
             .package(package_id.as_str())?
             .filter(|p| p.installed && p.active_digest.is_some())
             .ok_or_else(|| not_found("package", package_id.as_str()))?;
+        let digest = p
+            .active_digest
+            .as_deref()
+            .ok_or(StorageError::ScopeDenied)?;
+        if tx
+            .packages()
+            .package_version(&p.package_id, digest)?
+            .is_none_or(|version| version.approval.is_none())
+        {
+            return Err(Refusal::new(
+                DomainErrorCode::ApprovalRequired,
+                "restored_package_reapproval",
+                Some(package_id.clone()),
+            )
+            .into());
+        }
         if p.enabled && active_failure(&p).is_none() {
             return Ok(DomainDecision::NoChange {
                 result: self.result(tx, &p, "addons.enable")?,

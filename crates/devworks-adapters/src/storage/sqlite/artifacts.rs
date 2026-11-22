@@ -9,6 +9,28 @@ use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId, RootId};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::Value;
 
+// Keep collection and checkpoint custody on the same set of authoritative reference owners.
+const VERSION_REFERENCES: &str =
+    "SELECT blob_digest FROM artifact_versions WHERE deleted_at IS NULL";
+const GRAPH_REFERENCES: &str = "UNION ALL SELECT blob_digest FROM graph_source_captures";
+const STAGED_CONVENTION_REFERENCES: &str =
+    "UNION ALL SELECT a.blob_digest FROM convention_import_artifacts a
+     JOIN convention_imports d ON d.operation_id=a.operation_id WHERE d.phase<>'Published'";
+
+pub(super) fn live_reference_cte(version: i64) -> String {
+    let graph = if version >= 31 { GRAPH_REFERENCES } else { "" };
+    let conventions = if version >= 32 {
+        STAGED_CONVENTION_REFERENCES
+    } else {
+        ""
+    };
+    format!(
+        "WITH live_artifact_references(blob_digest) AS (
+        {VERSION_REFERENCES} {graph} {conventions}
+    )"
+    )
+}
+
 fn json_of(s: &str) -> Result<Value, StorageError> {
     serde_json::from_str(s).map_err(|e| corrupt(format!("stored JSON: {e}")))
 }
@@ -547,11 +569,8 @@ macro_rules! artifact_reads {
             fn live_references(&self, digest: &str) -> Result<i64, StorageError> {
                 count(
                     self.conn,
-                    "SELECT (SELECT COUNT(*) FROM artifact_versions WHERE blob_digest=?1 AND \
-                        deleted_at IS NULL) + (SELECT COUNT(*) FROM graph_source_captures WHERE \
-                        blob_digest=?1) + (SELECT COUNT(*) FROM convention_import_artifacts a \
-                        JOIN convention_imports d ON d.operation_id=a.operation_id WHERE \
-                        a.blob_digest=?1 AND d.phase!='Published')",
+                    &format!("{} SELECT COUNT(*) FROM live_artifact_references WHERE blob_digest=?1",
+                        live_reference_cte(super::migrations::MIGRATIONS.last().map_or(0, |m|m.version))),
                     [digest],
                 )
             }

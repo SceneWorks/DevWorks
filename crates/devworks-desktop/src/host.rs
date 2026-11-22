@@ -923,6 +923,13 @@ impl Engine {
                     if let Some(proposal) = host.restore_shutdown.locked().take()
                         && let Err(error) = arm_workspace_restore(&host, &proposal)
                     {
+                        if let Some(service) = host.runtime.workspace_archives() {
+                            let _ = service.note_shutdown_failure(
+                                &host.ctx,
+                                &proposal,
+                                &error.to_string(),
+                            );
+                        }
                         let mut entry = devworks_core::services::diagnostics::LogEntry::new(
                             "workspace-archive",
                             "restore-shutdown",
@@ -1122,6 +1129,32 @@ impl Backend for DesktopBackend {
             .map_err(|error| error.to_string())
     }
 
+    fn observe_archived_workspace_git(
+        &self,
+        id: i64,
+        received: ControlEpoch,
+    ) -> Result<bool, String> {
+        let git = self
+            .host
+            .runtime
+            .git()
+            .ok_or("Git observation is unavailable.")?;
+        self.archive_service(received)?
+            .observe_restored_git(&self.host.ctx, id, git)
+            .map_err(|error| error.to_string())
+    }
+
+    fn observe_archived_workspace_export(
+        &self,
+        id: i64,
+        path: &Path,
+        received: ControlEpoch,
+    ) -> Result<bool, String> {
+        self.archive_service(received)?
+            .observe_restored_export(&self.host.ctx, id, path)
+            .map_err(|error| error.to_string())
+    }
+
     fn workspace_archive_status(&self) -> Result<crate::settings_screen::archives::Status, String> {
         let service = self
             .host
@@ -1135,6 +1168,9 @@ impl Backend for DesktopBackend {
             current,
             restored,
             shipped_schema: service.shipped_schema().map_err(|e| e.to_string())?,
+            unresolved: service
+                .unresolved_effects(&self.host.ctx, 0)
+                .map_err(|error| error.to_string())?,
         })
     }
 

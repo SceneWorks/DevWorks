@@ -996,13 +996,15 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let workspace_archives = match (&config.workspace_archives, package_service.as_ref()) {
         (Some(ports), Some(packages)) => Some(Arc::new(archive::WorkspaceArchiveService::new(
             store.clone(),
-            ports.storage.clone(),
-            ports.files.clone(),
+            archive::ArchivePorts {
+                storage: ports.storage.clone(),
+                files: ports.files.clone(),
+                app_build: ports.app_build.clone(),
+            },
             artifacts.clone(),
             packages.clone(),
             ids.clone(),
             clock.clone(),
-            ports.app_build.clone(),
         ))),
         (None, _) => None,
         _ => return Err(BootError::Composition(StorageError::ViewUnavailable)),
@@ -2996,6 +2998,12 @@ impl Runtime {
     }
 
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
+        if operation == devworks_core::services::workspace_archive::RESTORE_OPERATION
+            && let Some(archives) = &self.workspace_archives
+            && let Ok(Some(reply)) = archives.replay_prior_restore(ctx, raw)
+        {
+            return Ok(reply);
+        }
         self.command_with(ctx, operation, raw, WriteOptions::command())
     }
 

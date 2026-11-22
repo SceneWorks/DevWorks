@@ -31,6 +31,8 @@ const ARCHIVE_READ_SQL: &str =
 struct Arm {
     proposal: Id,
     stopped_boot: Id,
+    store: devworks_core::protocol::StoreId,
+    epoch: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -123,6 +125,8 @@ pub fn arm_restore(
         &Arm {
             proposal: awaiting.id.clone(),
             stopped_boot: boot.clone(),
+            store: awaiting.store.clone(),
+            epoch: awaiting.epoch,
         },
     )
 }
@@ -161,6 +165,8 @@ fn prepare(
         record(&live, ARCHIVE_READ_SQL, [arm.proposal.as_str()])?
             .ok_or_else(|| invalid("workspace restore approval is no longer current"))?;
     if clean_boot.as_deref() != Some(arm.stopped_boot.as_str())
+        || arm.store != old.store_id
+        || arm.epoch != old.restore_epoch
         || approved.store != old.store_id
         || approved.epoch != old.restore_epoch
         || approved.stage_id != arm.proposal
@@ -306,7 +312,8 @@ fn fence_candidate(
          VALUES(?1,?2,?3,?4,?5,?6)",
         params![epoch,approved.id.as_str(),restore.0.as_str(),encode(source)?,encode(prior)?,receipt],
     ))?;
-    copy_effects(&transaction, live, epoch, restore.0.as_str(), source, prior)?;
+    carry_restore_receipts(&transaction, live, epoch)?;
+    copy_effects(&transaction, live, epoch, approved, source, prior)?;
     // Historical dispatch is retained for observation. Deliveries from the imported epoch
     // must never re-enter an effect consumer under the new host's authority.
     conn::db(transaction.execute_batch(
@@ -322,10 +329,15 @@ fn fence_candidate(
          UPDATE approval_resumes SET state='Refused',revision=revision+1 WHERE state IN ('Pending','Unknown');
          UPDATE packages SET enabled=0,revision=revision+1 WHERE enabled=1;
          UPDATE package_registry SET revision=revision+1;
-         UPDATE package_versions SET approval_json=NULL WHERE approval_json IS NOT NULL;
+         UPDATE package_versions SET approval_json=NULL,
+          waits_json=CASE WHEN phase='Staged' THEN json_array('ExactVersionApproval') ELSE waits_json END;
          UPDATE packages SET trust_json=NULL WHERE trust_json IS NOT NULL;
          UPDATE package_proposals SET state='Superseded',revision=revision+1,decided_at=max(created_at,0) WHERE state='Pending';
          UPDATE root_controls SET reactivate=0 WHERE reactivate=1;
+         UPDATE workspace_archive_runs SET phase='Cancelled',revision=revision+1,
+          record_json=json_set(record_json,'$.phase','Cancelled','$.revision',revision+1,
+            '$.detail','An archived restore approval cannot switch the active workspace')
+          WHERE phase='AwaitingRestart';
          UPDATE schedules SET hold='ReactivationRequired',revision=revision+1
           WHERE enabled=1 AND deleted_at IS NULL AND hold IS NULL;
          UPDATE owned_processes SET state='Failed',revision=revision+1,
@@ -364,6 +376,42 @@ fn fence_candidate(
     File::open(path)
         .and_then(|file| file.sync_all())
         .map_err(io)
+}
+
+fn carry_restore_receipts(
+    candidate: &Connection,
+    stopped: &Connection,
+    epoch: i64,
+) -> Result<(), StorageError> {
+    conn::db(candidate.execute("DELETE FROM workspace_archived_restore_receipts", []))?;
+    const COLUMNS: &str = "owner,scope,request,proposal,operation,fingerprint,result_json";
+    let mut statement = conn::db(stopped.prepare(&format!(
+        "SELECT {COLUMNS} FROM workspace_archived_restore_receipts"
+    )))?;
+    let mut older = conn::db(statement.query([]))?;
+    let mut insert = conn::db(candidate.prepare(&format!(
+        "INSERT INTO workspace_archived_restore_receipts ({COLUMNS}) VALUES (?1,?2,?3,?4,?5,?6,?7)"
+    )))?;
+    while let Some(row) = conn::db(older.next())? {
+        let string = |index| conn::db(row.get::<_, String>(index));
+        conn::db(insert.execute(params![
+            string(0)?,
+            string(1)?,
+            string(2)?,
+            string(3)?,
+            string(4)?,
+            string(5)?,
+            string(6)?,
+        ]))?;
+    }
+    conn::db(candidate.execute(
+        &format!("INSERT INTO workspace_archived_restore_receipts ({COLUMNS})
+         SELECT json_extract(receipt,'$.actor'),json_extract(receipt,'$.scope'),json_extract(receipt,'$.request'),
+             proposal,operation,json_extract(receipt,'$.fingerprint'),json_extract(receipt,'$.reply')
+             FROM workspace_restore_history WHERE epoch=?1"),
+        [epoch],
+    ))?;
+    Ok(())
 }
 
 fn hold_roots(
@@ -411,53 +459,87 @@ fn copy_effects(
     candidate: &Connection,
     stopped: &Connection,
     epoch: i64,
-    restore_operation: &str,
+    restore: &StoredWorkspaceArchive,
     source: &WorkspaceArchive,
     prior: &WorkspaceArchive,
 ) -> Result<(), StorageError> {
     const STATES: &str =
         "('Dispatching','OutcomeUnknown','RetryPending','NeedsInput','ObservedComplete')";
+    let columns = "epoch,timeline,origin_store,origin_epoch,origin_stage,operation,
+        capability,fingerprint,root,state,unresolved,evidence_json";
     conn::db(candidate.execute(
-        &format!("INSERT INTO workspace_restore_effects
-            (epoch,timeline,origin_store,origin_epoch,operation,capability,fingerprint,root,state,unresolved)
-            SELECT ?1,'source',?2,?3,id,capability,args_digest,root_id,state,state<>'ObservedComplete'
-              FROM operations WHERE state IN {STATES}"),
-        params![epoch,source.checkpoint.store_id.0.as_str(),source.checkpoint.restore_epoch],
+        &format!(
+            "INSERT INTO workspace_restore_effects ({columns})
+            SELECT ?1,'source',?2,?3,?4,id,capability,args_digest,root_id,state,
+              state<>'ObservedComplete',NULL FROM operations WHERE state IN {STATES}"
+        ),
+        params![
+            epoch,
+            source.checkpoint.store_id.0.as_str(),
+            source.checkpoint.restore_epoch,
+            restore.stage_id.as_str()
+        ],
+    ))?;
+    // Retain exact origin when an already-restored checkpoint is used as the new source.
+    conn::db(candidate.execute(
+        &format!(
+            "INSERT OR IGNORE INTO workspace_restore_effects ({columns})
+         SELECT ?1,'source',origin_store,origin_epoch,origin_stage,operation,capability,
+            fingerprint,root,state,unresolved,evidence_json FROM workspace_restore_effects
+         WHERE epoch=?2 AND unresolved=1"
+        ),
+        params![epoch, source.checkpoint.restore_epoch],
     ))?;
     let mut rows = conn::db(stopped.prepare(&format!(
-        "SELECT id,capability,args_digest,root_id,state FROM operations WHERE state IN {STATES} AND id<>?1"
+        "SELECT id,capability,args_digest,root_id,state,?2,?3,?4,state<>'ObservedComplete',NULL
+         FROM operations WHERE state IN {STATES} AND id<>?1
+         UNION ALL
+         SELECT operation,capability,fingerprint,root,state,origin_store,origin_epoch,origin_stage,
+            unresolved,evidence_json FROM workspace_restore_effects WHERE epoch=?3"
     )))?;
-    let mut rows = conn::db(rows.query([restore_operation]))?;
-    let mut insert = conn::db(candidate.prepare(
-        "INSERT INTO workspace_restore_effects
-         (epoch,timeline,origin_store,origin_epoch,operation,capability,fingerprint,root,state,unresolved)
-         VALUES(?1,'destination',?2,?3,?4,?5,?6,?7,?8,?8<>'ObservedComplete')",
-    ))?;
+    let restore_operation = restore
+        .operation
+        .as_ref()
+        .ok_or(StorageError::ScopeDenied)?;
+    let mut rows = conn::db(rows.query(params![
+        restore_operation.0.as_str(),
+        prior.checkpoint.store_id.0.as_str(),
+        prior.checkpoint.restore_epoch,
+        prior.operation_id.as_str(),
+    ]))?;
+    let mut insert = conn::db(candidate.prepare(&format!(
+        "INSERT OR IGNORE INTO workspace_restore_effects ({columns})
+         VALUES(?1,'destination',?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
+    )))?;
     while let Some(row) = conn::db(rows.next())? {
         conn::db(insert.execute(params![
             epoch,
-            prior.checkpoint.store_id.0.as_str(),
-            prior.checkpoint.restore_epoch,
+            conn::db(row.get::<_, String>(5))?,
+            conn::db(row.get::<_, i64>(6))?,
+            conn::db(row.get::<_, String>(7))?,
             conn::db(row.get::<_, String>(0))?,
             conn::db(row.get::<_, String>(1))?,
             conn::db(row.get::<_, String>(2))?,
             conn::db(row.get::<_, Option<String>>(3))?,
             conn::db(row.get::<_, String>(4))?,
+            conn::db(row.get::<_, i64>(8))?,
+            conn::db(row.get::<_, Option<String>>(9))?,
         ]))?;
     }
     // The stopped destination can contain the observed outcome of a dispatch captured as
     // unknown in the source. Only exact provenance establishes that it was the same request.
     conn::db(candidate.execute(
         "UPDATE workspace_restore_effects SET unresolved=0
-         WHERE epoch=?1 AND unresolved=1
+         WHERE epoch=?1 AND unresolved=1 AND timeline='source'
          AND EXISTS(SELECT 1 FROM workspace_restore_effects observed
-           WHERE observed.epoch=?1 AND observed.timeline<>workspace_restore_effects.timeline
+           WHERE observed.epoch=?1 AND observed.timeline='destination'
            AND observed.origin_store=workspace_restore_effects.origin_store
            AND observed.origin_epoch=workspace_restore_effects.origin_epoch
            AND observed.operation=workspace_restore_effects.operation
            AND observed.capability=workspace_restore_effects.capability
            AND observed.fingerprint=workspace_restore_effects.fingerprint
-           AND observed.state='ObservedComplete')",
+           AND observed.unresolved=0
+           AND (observed.state='ObservedComplete' OR observed.evidence_json IS NOT NULL))",
         [epoch],
     ))?;
     Ok(())
@@ -550,6 +632,17 @@ fn publish(
             {
                 return Err(error);
             }
+            let failed = config.ids.next_id(IdKind::Operation);
+            let failed_path = archives.create_stage(&failed)?;
+            let cancel = Cancellation::default();
+            let measured = digest_private_file(path, u64::MAX, &cancel)?;
+            copy_verified_member(
+                File::open(path).map_err(io)?,
+                &failed_path,
+                &measured,
+                &cancel,
+            )?;
+            archives.stage(&failed)?.flush()?;
             let prior = archives.staged_database(&prepared.prior.operation_id)?;
             verify(&prior, &prepared.prior.database, &prepared.prior.checkpoint)?;
             let rollback = config.ids.next_id(IdKind::Operation);
@@ -586,6 +679,11 @@ fn record_refused_restore(
     // This runs before a publish or after a verified rollback. The ordinary stopped-store
     // identity must still match the original approval before changing even its audit state.
     let inspected = inspect(path, config.clock.now_ms().get())?;
+    if inspected.store_id != arm.store || inspected.restore_epoch != arm.epoch {
+        return Err(invalid(
+            "failed restore no longer refers to the active workspace",
+        ));
+    }
     let mut writer = conn::open(path, conn::Role::Writer, config.busy_timeout)?;
     let tx = conn::db(writer.transaction())?;
     let Some(mut stored): Option<StoredWorkspaceArchive> =
@@ -604,6 +702,33 @@ fn record_refused_restore(
              capability='workspace.restore' AND state='IntentRecorded'",
             [op.0.as_str()],
         ))?;
+    }
+    if let Some(operation_id) = stored.operation.clone() {
+        use devworks_core::protocol::results::OperationCompletion;
+        use devworks_core::protocol::{
+            CorrelationId, DomainErrorCode, DomainFault, Protocol, RetryAdvice, Revision,
+            support::{BoundedList, BoundedText},
+        };
+        let completion = OperationCompletion::Failed {
+            protocol: Protocol::Draft1,
+            operation_id,
+            revision: Revision::new(stored.revision.saturating_add(1))
+                .map_err(|_| StorageError::ScopeDenied)?,
+            fault: DomainFault {
+                code: DomainErrorCode::StorageUnavailable,
+                retry: RetryAdvice::RefreshAndNewRequest,
+                correlation_id: CorrelationId(config.ids.next_id(IdKind::Correlation)),
+                target_id: Some(stored.id.clone()),
+                target_kind: Some(BoundedText("workspace-restore".into())),
+                revision_dimension: None,
+                expected_revision: None,
+                current_revision: None,
+                blocker_ids: BoundedList(Vec::new()),
+                diagnostic_id: None,
+            },
+        };
+        completion.validate().map_err(StorageError::InvalidRecord)?;
+        stored.completion = Some(completion);
     }
     stored.phase = ArchivePhase::Failed;
     stored.revision += 1;
@@ -634,6 +759,10 @@ pub(in crate::storage::sqlite) fn recover_restore(
     let arm: Arm = read(&root, PENDING)?.ok_or(StorageError::CommitUnknown)?;
     let stage = archives.stage(&arm.proposal)?;
     let outcome = match read::<Outcome>(&stage, OUTCOME)? {
+        Some(outcome) if outcome.restored => {
+            let prepared = read(&stage, PREPARED)?.ok_or(StorageError::CommitUnknown)?;
+            publish(config, &root, archives, path, &prepared, &stage)?
+        }
         Some(outcome) => outcome,
         None => {
             let prepared = match read(&stage, PREPARED)? {
@@ -713,6 +842,7 @@ mod tests {
         BeforeSwitch,
         AfterSwitch,
         CorruptedCandidate,
+        CorruptedAfterOutcome,
     }
 
     #[test]
@@ -728,6 +858,11 @@ mod tests {
     #[test]
     fn known_corrupted_candidate_returns_to_the_verified_previous_store() {
         test_cutover(Cutover::CorruptedCandidate);
+    }
+
+    #[test]
+    fn restart_rechecks_candidate_after_outcome_marker() {
+        test_cutover(Cutover::CorruptedAfterOutcome);
     }
 
     fn test_cutover(cutover: Cutover) {
@@ -817,6 +952,7 @@ mod tests {
             operation: Some(restore.clone()),
             manifest: None,
             migration_manifest: None,
+            completion: None,
             detail: None,
         };
         let record_json = super::super::encode(&approved).unwrap();
@@ -867,7 +1003,22 @@ mod tests {
                 .publish_database(&archives.stage(&prepared.candidate).unwrap(), DATABASE_FILE)
                 .unwrap();
         }
-        if cutover == Cutover::CorruptedCandidate {
+        if cutover == Cutover::CorruptedAfterOutcome {
+            seal(
+                &stage,
+                OUTCOME,
+                &Id::new("successful-outcome").unwrap(),
+                &Outcome {
+                    restored: true,
+                    detail: None,
+                },
+            )
+            .unwrap();
+        }
+        if matches!(
+            cutover,
+            Cutover::CorruptedCandidate | Cutover::CorruptedAfterOutcome
+        ) {
             use std::io::Write;
             let mut damaged = std::fs::OpenOptions::new()
                 .write(true)
@@ -878,7 +1029,10 @@ mod tests {
         }
         let reopened = SqliteStore::open(next).unwrap();
         assert_eq!(reopened.info().store_id, info.store_id);
-        if cutover == Cutover::CorruptedCandidate {
+        if matches!(
+            cutover,
+            Cutover::CorruptedCandidate | Cutover::CorruptedAfterOutcome
+        ) {
             assert_eq!(reopened.info().restore_epoch, info.restore_epoch);
             let actual = reopened
                 .with_writer_connection(|db| {

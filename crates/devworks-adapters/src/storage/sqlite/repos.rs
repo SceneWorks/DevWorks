@@ -30,7 +30,8 @@ use devworks_core::registry::SchemaRevision;
 use grants::grant;
 use history::{AuthorityHistory, event, page};
 pub(crate) use history::{EVENT_COLUMNS, event_of, event_row};
-use operations::{operation, operations_for_capability, state_name, unresolved};
+pub(super) use operations::operation;
+use operations::{operations_for_capability, state_name, unresolved};
 use packages::{package_state, processing};
 use queue::{
     awaiting_eligibility, checkpoint, deliveries, delivery, entry, next_due, progress, status,

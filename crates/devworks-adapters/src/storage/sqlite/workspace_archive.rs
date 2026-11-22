@@ -5,7 +5,8 @@ use crate::fs::workspace_archive::archive_io as io;
 use devworks_core::ports::packages::Inspection;
 use devworks_core::ports::storage::{
     AccessMode, BlobWitness, Cancellation, FileDigest, MigrationWitness, PackageFileWitness,
-    PackageWitness, StorageError, WorkspaceArchive, WorkspaceArchiveStorage, WorkspaceCheckpoint,
+    PackageWitness, RestoredEffect, StorageError, WorkspaceArchive, WorkspaceArchiveStorage,
+    WorkspaceCheckpoint,
 };
 use devworks_core::protocol::{Id, StoreId};
 use rusqlite::backup::{Backup, StepResult};
@@ -99,25 +100,33 @@ fn blobs(conn: &Connection, version: i64) -> Result<Vec<BlobWitness>, StorageErr
         }
         return Ok(Vec::new());
     }
-    let mut statement = conn::db(conn.prepare(
-        "SELECT b.digest,b.generation,b.byte_count,b.state FROM blobs b
-         WHERE EXISTS(SELECT 1 FROM artifact_versions v WHERE v.blob_digest=b.digest AND v.deleted_at IS NULL)
-         ORDER BY b.digest",
-    ))?;
+    let query = format!(
+        "{} SELECT d.blob_digest,b.generation,b.byte_count,b.state
+          FROM (SELECT DISTINCT blob_digest FROM live_artifact_references) d
+          LEFT JOIN blobs b ON b.digest=d.blob_digest
+          ORDER BY d.blob_digest",
+        super::artifacts::live_reference_cte(version),
+    );
+    let mut statement = conn::db(conn.prepare(&query))?;
     let rows = conn::db(statement.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, i64>(2)?,
-            r.get::<_, String>(3)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, Option<String>>(3)?,
         ))
     }))?;
     rows.map(|row| {
         let (sha256, generation, bytes, state) = conn::db(row)?;
-        if state != "Present" || !devworks_core::fingerprint::is_sha256_hex(&sha256) {
+        let (Some(generation), Some(bytes), Some("Present")) =
+            (generation, bytes, state.as_deref())
+        else {
             return Err(invalid(
                 "a live artifact does not have a verified file generation",
             ));
+        };
+        if !devworks_core::fingerprint::is_sha256_hex(&sha256) {
+            return Err(invalid("invalid live artifact digest"));
         }
         Ok(BlobWitness {
             generation: identifier(generation)?,
@@ -333,6 +342,25 @@ mod recovery;
 pub use recovery::arm_restore;
 pub(super) use recovery::{recover_restore, require_no_armed_restore};
 
+fn archived_effect_probe(
+    image: &Path,
+    manifest: &WorkspaceArchive,
+    effect: &RestoredEffect,
+) -> Result<Connection, StorageError> {
+    if manifest.checkpoint.store_id != effect.origin
+        || manifest.checkpoint.restore_epoch != effect.origin_epoch
+        || crate::fs::workspace_archive::digest_private_file(
+            image,
+            manifest.database.bytes,
+            &Cancellation::default(),
+        )? != manifest.database
+        || inspect(image, manifest.checkpoint.captured_at_ms)? != manifest.checkpoint
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    immutable_probe(image)
+}
+
 impl WorkspaceArchiveStorage for SqliteStore {
     fn capture_checkpoint(
         &self,
@@ -457,6 +485,40 @@ impl WorkspaceArchiveStorage for SqliteStore {
             ));
         }
         Ok(active)
+    }
+
+    fn archived_backup_intent(
+        &self,
+        image: &Path,
+        manifest: &WorkspaceArchive,
+        effect: &RestoredEffect,
+    ) -> Result<StoredWorkspaceArchive, StorageError> {
+        if effect.capability != "workspace.backup" {
+            return Err(StorageError::ScopeDenied);
+        }
+        let probe = archived_effect_probe(image, manifest, effect)?;
+        record(&probe,
+            "SELECT r.record_json FROM workspace_archive_runs r JOIN operations o ON o.id=r.operation_id
+             WHERE o.id=?1 AND o.capability=?2 AND o.args_digest=?3",
+            params![effect.operation.0.as_str(), &effect.capability, &effect.fingerprint],
+        )?.filter(|saved: &StoredWorkspaceArchive| {
+            saved.store == effect.origin && saved.epoch == effect.origin_epoch
+                && saved.operation.as_ref() == Some(&effect.operation)
+        }).ok_or(StorageError::ScopeDenied)
+    }
+
+    fn archived_effect_operation(
+        &self,
+        image: &Path,
+        manifest: &WorkspaceArchive,
+        effect: &RestoredEffect,
+    ) -> Result<devworks_core::ports::storage::OperationRecord, StorageError> {
+        let probe = archived_effect_probe(image, manifest, effect)?;
+        repos::operation(&probe, &effect.operation)?
+            .filter(|origin| {
+                origin.args_digest == effect.fingerprint && origin.capability == effect.capability
+            })
+            .ok_or(StorageError::ScopeDenied)
     }
 
     fn shipped_migrations(&self) -> Result<Vec<MigrationWitness>, StorageError> {
@@ -605,6 +667,39 @@ fn encode(value: &impl Serialize) -> Result<String, StorageError> {
         .map_err(|_| StorageError::InvalidRecord("workspace archive state".into()))
 }
 
+const RESTORED_EFFECT_COLUMNS: &str = "rowid,epoch,timeline,origin_store,origin_epoch,
+    origin_stage,operation,capability,fingerprint,root";
+fn restored_effect_of(row: &rusqlite::Row<'_>) -> rusqlite::Result<(i64, RestoredEffect)> {
+    let id = |index| -> rusqlite::Result<Id> {
+        Id::new(row.get::<_, String>(index)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                index,
+                rusqlite::types::Type::Text,
+                error.into(),
+            )
+        })
+    };
+    let root = if row.get::<_, Option<String>>(9)?.is_some() {
+        Some(devworks_core::protocol::RootId(id(9)?))
+    } else {
+        None
+    };
+    Ok((
+        row.get(0)?,
+        RestoredEffect {
+            epoch: row.get(1)?,
+            timeline: row.get(2)?,
+            origin: StoreId(id(3)?),
+            origin_epoch: row.get(4)?,
+            origin_stage: id(5)?,
+            operation: OperationId(id(6)?),
+            capability: row.get(7)?,
+            fingerprint: row.get(8)?,
+            root,
+        },
+    ))
+}
+
 macro_rules! archive_reads {
     ($ty:ty) => {
         impl WorkspaceArchiveRead for $ty {
@@ -683,6 +778,37 @@ macro_rules! archive_reads {
                 }))
             }
 
+            fn archived_restore_receipt(
+                &self,
+                key: &devworks_core::ports::storage::ArchivedRestoreKey<'_>,
+            ) -> Result<Option<devworks_core::protocol::Receipt<devworks_core::protocol::results::DomainDecision>>, StorageError> {
+                record(self.conn,
+                    "SELECT json_extract(result_json,'$.receipt') FROM workspace_archived_restore_receipts
+                     WHERE proposal=?1 AND owner=?2 AND scope=?3 AND request=?4 AND fingerprint=?5
+                     AND json_extract(result_json,'$.schemaRevision')=?6 AND json_extract(result_json,'$.contract')=?7
+                     AND json_extract(result_json,'$.receipt.operationId')=operation",
+                    params![key.proposal.as_str(),key.owner.0.as_str(),key.scope,key.request_key.0.as_str(),
+                        key.fingerprint,key.revision.0,devworks_core::protocol::CONTRACT],
+                )
+            }
+
+            fn unresolved_restore_effects(&self, epoch:i64, after:i64, limit:u16) -> Result<Vec<(i64,RestoredEffect)>,StorageError> {
+                if !(1..=100).contains(&limit) { return Err(invalid("invalid effect read limit")); }
+                let mut stmt = conn::db(self.conn.prepare(&format!(
+                    "SELECT {RESTORED_EFFECT_COLUMNS} FROM workspace_restore_effects
+                     WHERE epoch=?1 AND unresolved=1 AND rowid>?2 ORDER BY rowid LIMIT ?3"
+                )))?;
+                conn::db(conn::db(stmt.query_map(params![epoch,after,limit],restored_effect_of))?.collect())
+            }
+
+            fn restore_effect(&self, epoch:i64,id:i64) -> Result<Option<RestoredEffect>,StorageError> {
+                conn::db(self.conn.query_row(
+                    &format!("SELECT {RESTORED_EFFECT_COLUMNS} FROM workspace_restore_effects
+                    WHERE epoch=?1 AND rowid=?2 AND unresolved=1"),
+                    params![epoch,id], restored_effect_of,
+                ).optional()).map(|value| value.map(|(_,effect)|effect))
+            }
+
             fn restore_effect_held(
                 &self,
                 root: Option<&devworks_core::protocol::RootId>,
@@ -690,7 +816,7 @@ macro_rules! archive_reads {
             ) -> Result<bool, StorageError> {
                 conn::db(self.conn.query_row(
                     "SELECT EXISTS(SELECT 1 FROM workspace_restore_effects e
-                     WHERE e.unresolved=1 AND ((?1 IS NOT NULL AND (e.root=?1 OR
+                     WHERE e.unresolved=1 AND e.epoch=(SELECT restore_epoch FROM store_meta WHERE singleton=1) AND ((?1 IS NOT NULL AND (e.root=?1 OR
                           e.root=(SELECT parent_feature_id FROM work_items WHERE id=?1)))
                        OR (?2 IS NOT NULL AND e.capability=?2 AND (e.root IS NULL OR
                           NOT EXISTS(SELECT 1 FROM work_items WHERE id=e.root)))))",
@@ -704,7 +830,9 @@ macro_rules! archive_reads {
             ) -> Result<Option<StoredWorkspaceArchive>, StorageError> {
                 record(
                     self.conn,
-                    "SELECT record_json FROM workspace_archive_runs WHERE phase='AwaitingRestart'",
+                    "SELECT r.record_json FROM workspace_archive_runs r, store_meta m
+                      WHERE r.phase='AwaitingRestart' AND m.singleton=1 AND
+                      json_extract(r.record_json,'$.store')=m.store_id AND json_extract(r.record_json,'$.epoch')=m.restore_epoch",
                     [],
                 )
             }
@@ -741,6 +869,31 @@ impl WorkspaceArchiveRepository for Unit<'_> {
              WHERE epoch=?1 AND operation=?2 AND json_extract(receipt,'$.completion') IS NULL",
             params![epoch, operation.0.as_str(), encode(completion)?],
         ))? != 1
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(())
+    }
+
+    fn record_restored_observation(
+        &mut self,
+        effect: &RestoredEffect,
+        evidence: &serde_json::Value,
+    ) -> Result<(), StorageError> {
+        if conn::db(self.conn.execute(
+            "UPDATE workspace_restore_effects SET unresolved=0,evidence_json=?7
+             WHERE epoch=?1 AND origin_store=?2 AND origin_epoch=?3 AND
+               operation=?4 AND capability=?5 AND fingerprint=?6 AND unresolved=1",
+            params![
+                effect.epoch,
+                effect.origin.0.as_str(),
+                effect.origin_epoch,
+                effect.operation.0.as_str(),
+                &effect.capability,
+                &effect.fingerprint,
+                encode(evidence)?
+            ],
+        ))? == 0
         {
             return Err(StorageError::ScopeDenied);
         }

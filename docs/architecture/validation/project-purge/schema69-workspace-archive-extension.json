@@ -5,6 +5,7 @@
     {"table": "workspace_backup_folders", "class": "workspace_configuration", "disposition": "preserve_independent"},
     {"table": "workspace_archive_runs", "class": "workspace_configuration", "disposition": "preserve_independent"},
     {"table": "workspace_restore_history", "class": "workspace_configuration", "disposition": "preserve_independent"},
-    {"table": "workspace_restore_effects", "class": "workspace_configuration", "disposition": "preserve_independent"}
+    {"table": "workspace_restore_effects", "class": "workspace_configuration", "disposition": "preserve_independent"},
+    {"table": "workspace_archived_restore_receipts", "class": "workspace_configuration", "disposition": "preserve_independent"}
   ]
 }
