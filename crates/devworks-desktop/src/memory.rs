@@ -190,7 +190,7 @@ pub struct SettingsMemory {
     /// Unsaved drafts by setting key; re-applied (and re-validated) once settings load.
     pub drafts: BTreeMap<String, Value>,
     /// Most recently reviewed retention preview, including an accepted operation after restart.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention_preview: Option<String>,
 }
 
