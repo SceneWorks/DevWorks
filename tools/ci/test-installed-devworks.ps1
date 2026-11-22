@@ -13,56 +13,21 @@ if ($signed.source -cne $Source -or (Get-VerifiedTestSignature $msi).sha256 -cne
     throw 'Signed MSI provenance does not match the approved build'
 }
 
-$installed = Join-Path $env:LOCALAPPDATA 'Programs\DevWorks Test'
-$profile = Join-Path $env:LOCALAPPDATA 'DevWorks Test\Data'
-$startMenu = [Environment]::GetFolderPath('Programs')
-$shortcut = Join-Path $startMenu 'DevWorks Test.lnk'
-$currentUser = 'HKCU:\Software\SceneWorks\DevWorks Test'
-$allUsers = @(
-    'HKLM:\Software\SceneWorks\DevWorks Test',
-    'HKLM:\Software\WOW6432Node\SceneWorks\DevWorks Test'
-)
-if ((Test-Path -LiteralPath ($allUsers + $installed + $shortcut + $profile + $currentUser)) -contains $true) {
+$layout = Get-TestInstallLayout
+$profile = $layout.profile
+$clean = $layout.machine + $layout.installed + $layout.shortcut + $profile + $layout.currentUser
+if ((Test-Path -LiteralPath $clean) -contains $true) {
     throw 'Expected a clean Windows user profile for MSI qualification'
 }
-
-function Invoke-Msi([string]$Action, [string]$Log) {
-    $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-        $Action, ('"{0}"' -f $msi), '/qn', '/norestart', '/l*v', ('"{0}"' -f $Log)
-    )
-    if ($process.ExitCode -ne 0) {
-        Get-Content -LiteralPath $Log -Tail 80 | Write-Host
-        throw "msiexec $Action failed with exit code $($process.ExitCode)"
-    }
-}
-
 $work = Split-Path -Parent $Output
-Invoke-Msi '/i' (Join-Path $work 'install.log')
-Assert-ExactFiles $installed $script:payloadNames
+Invoke-TestMsi $msi '/i' (Join-Path $work 'install.log')
+$productKey = Confirm-TestInstallScope $layout
 foreach ($name in $script:payloadNames) {
-    $path = Join-Path $installed $name
+    $path = Join-Path $layout.installed $name
     $hash = if ($name.EndsWith('.exe')) { (Get-VerifiedTestSignature $path).sha256 } else { Get-Sha256 $path }
     if ($hash -cne $signed.payload[$name].sha256) { throw "Installed bytes differ for $name" }
 }
-
-$uninstallRoots = @(
-    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-)
-$product = @(Get-ItemProperty -Path "$($uninstallRoots[0])\*" -Name DisplayName -ErrorAction SilentlyContinue |
-    Where-Object { $_.DisplayName -ceq 'DevWorks Test' })
-if ($product.Count -ne 1 -or
-    (Test-Path -LiteralPath ($uninstallRoots[1..2] | ForEach-Object { Join-Path $_ $product[0].PSChildName })) -contains $true -or
-    (Test-Path -LiteralPath $allUsers) -contains $true -or
-    (Get-ItemPropertyValue -LiteralPath $currentUser -Name Installed) -ne 1) {
-    throw 'Expected a single per-user MSI registration and no machine-wide registration'
-}
-$desktop = Join-Path $installed 'devworks-desktop.exe'
-$link = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcut)
-if ($link.TargetPath -ne $desktop -or $link.Arguments -ne ('--data-dir "{0}"' -f $profile)) {
-    throw 'The Start-menu shortcut does not launch the installed copy with its own profile'
-}
+$desktop = Join-Path $layout.installed 'devworks-desktop.exe'
 
 $png = Join-Path $work 'first-frame.png'
 $stderr = Join-Path $work 'app.stderr'
@@ -113,8 +78,8 @@ $sentinel = Join-Path $profile 'retain-on-uninstall.txt'
 $before = Get-Sha256 $sentinel
 $profileDatabase = Join-Path $profile 'workspace.sqlite'
 $databaseBefore = Get-Sha256 $profileDatabase
-Invoke-Msi '/x' (Join-Path $work 'uninstall.log')
-if (((Test-Path -LiteralPath @($installed, $shortcut, $product[0].PSPath)) -contains $true) -or
+Invoke-TestMsi $msi '/x' (Join-Path $work 'uninstall.log')
+if (((Test-Path -LiteralPath @($layout.installed, $layout.shortcut, $productKey)) -contains $true) -or
     (Get-Sha256 $sentinel) -cne $before -or (Get-Sha256 $profileDatabase) -cne $databaseBefore) {
     throw 'Uninstall failed to remove the application or preserve its data'
 }

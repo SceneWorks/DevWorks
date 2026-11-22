@@ -98,7 +98,7 @@ function New-TestInstaller([string]$Root, [string]$Payload, [string]$Installer) 
     $object = [IO.Path]::ChangeExtension($Installer, 'wixobj')
     & (Join-Path $env:WIX 'bin\candle.exe') -nologo -arch x64 "-dPayload=$Payload" -out $object $recipe
     if ($LASTEXITCODE -ne 0) { throw 'WiX recipe compilation failed' }
-    & (Join-Path $env:WIX 'bin\light.exe') -nologo -out $Installer $object
+    & (Join-Path $env:WIX 'bin\light.exe') -nologo -spdb -out $Installer $object
     if ($LASTEXITCODE -ne 0) { throw 'WiX installer linking or validation failed' }
     Remove-Item -LiteralPath $object
     $installerApi = New-Object -ComObject WindowsInstaller.Installer
@@ -118,4 +118,51 @@ function New-TestInstaller([string]$Root, [string]$Payload, [string]$Installer) 
         throw 'The MSI must have one embedded CAB'
     }
     $upgrade.Close()
+}
+
+function Get-TestInstallLayout {
+    @{
+        installed = Join-Path $env:LOCALAPPDATA 'DevWorks Test'
+        profile = Join-Path $env:LOCALAPPDATA 'DevWorks Test Data'
+        shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'DevWorks Test.lnk'
+        currentUser = 'HKCU:\Software\SceneWorks\DevWorks Test'
+        machine = @(
+            'HKLM:\Software\SceneWorks\DevWorks Test',
+            'HKLM:\Software\WOW6432Node\SceneWorks\DevWorks Test'
+        )
+    }
+}
+
+function Invoke-TestMsi([string]$Installer, [string]$Action, [string]$Log) {
+    $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+        $Action, ('"{0}"' -f $Installer), '/qn', '/norestart', '/l*v', ('"{0}"' -f $Log)
+    )
+    if ($process.ExitCode -ne 0) {
+        Get-Content -LiteralPath $Log -Tail 80 | Write-Host
+        throw "msiexec $Action failed with exit code $($process.ExitCode)"
+    }
+}
+
+function Confirm-TestInstallScope([hashtable]$Layout) {
+    Assert-ExactFiles $Layout.installed $script:payloadNames
+    $uninstallRoots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    $product = @(Get-ItemProperty -Path "$($uninstallRoots[0])\*" -Name DisplayName -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -ceq 'DevWorks Test' })
+    if ($product.Count -ne 1 -or
+        (Test-Path -LiteralPath ($uninstallRoots[1..2] | ForEach-Object { Join-Path $_ $product[0].PSChildName })) -contains $true -or
+        (Test-Path -LiteralPath $Layout.machine) -contains $true -or
+        (Get-ItemPropertyValue -LiteralPath $Layout.currentUser -Name Installed) -ne 1) {
+        throw 'Expected a single per-user MSI registration and no machine-wide registration'
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    $link = $shell.CreateShortcut($Layout.shortcut)
+    if ($link.TargetPath -ne (Join-Path $Layout.installed 'devworks-desktop.exe') -or
+        $link.Arguments -ne ('--data-dir "{0}"' -f $Layout.profile)) {
+        throw 'The Start-menu shortcut does not launch the installed copy with its own profile'
+    }
+    $product[0].PSPath
 }

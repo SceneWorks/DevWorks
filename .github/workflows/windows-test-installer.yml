@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Compile and inspect a fixture MSI
+      - name: Build, install and remove a fixture MSI
         shell: pwsh
         run: |
           . ./tools/ci/windows-test-installer.ps1
@@ -37,7 +37,17 @@ jobs:
             Copy-Item -LiteralPath "$env:SystemRoot\System32\where.exe" -Destination (Join-Path $payload.FullName $name)
           }
           'Fixture notices' | Set-Content -LiteralPath (Join-Path $payload.FullName 'pdf-notices.zip')
-          New-TestInstaller $env:GITHUB_WORKSPACE $payload.FullName (Join-Path $env:RUNNER_TEMP 'fixture.msi')
+          $package = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'fixture-package')
+          $fixture = Join-Path $package.FullName 'fixture.msi'
+          New-TestInstaller $env:GITHUB_WORKSPACE $payload.FullName $fixture
+          Assert-ExactFiles $package.FullName @('fixture.msi')
+          $layout = Get-TestInstallLayout
+          Invoke-TestMsi $fixture '/i' (Join-Path $env:RUNNER_TEMP 'fixture-install.log')
+          $productKey = Confirm-TestInstallScope $layout
+          Invoke-TestMsi $fixture '/x' (Join-Path $env:RUNNER_TEMP 'fixture-uninstall.log')
+          if ((Test-Path -LiteralPath @($layout.installed, $layout.shortcut, $productKey)) -contains $true) {
+            throw 'The fixture MSI did not remove the test installation'
+          }
 
   preflight:
     name: Match the requested revision to the approved source

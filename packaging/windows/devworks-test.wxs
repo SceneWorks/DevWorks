@@ -8,23 +8,21 @@
                   DowngradeErrorMessage="A newer version of DevWorks Test is already installed." />
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
-        <Directory Id="UserPrograms" Name="Programs">
-          <Directory Id="INSTALLFOLDER" Name="DevWorks Test">
-            <Component Id="TestPayload" Guid="31279012-9178-4474-830A-523C5F1D08DA" Win64="yes">
-              <File Id="DesktopExe" Source="$(var.Payload)\devworks-desktop.exe" />
-              <File Id="PdfWorkerExe" Source="$(var.Payload)\devworks-pdf-worker.exe" />
-              <File Id="PdfNotices" Source="$(var.Payload)\pdf-notices.zip" />
-              <RegistryValue Root="HKCU" Key="Software\SceneWorks\DevWorks Test" Name="Installed"
-                             Type="integer" Value="1" KeyPath="yes" />
-              <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
-            </Component>
-          </Directory>
+        <Directory Id="INSTALLFOLDER" Name="DevWorks Test">
+          <Component Id="TestPayload" Guid="31279012-9178-4474-830A-523C5F1D08DA" Win64="yes">
+            <File Id="DesktopExe" Source="$(var.Payload)\devworks-desktop.exe" />
+            <File Id="PdfWorkerExe" Source="$(var.Payload)\devworks-pdf-worker.exe" />
+            <File Id="PdfNotices" Source="$(var.Payload)\pdf-notices.zip" />
+            <RegistryValue Root="HKCU" Key="Software\SceneWorks\DevWorks Test" Name="Installed"
+                           Type="integer" Value="1" KeyPath="yes" />
+            <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+          </Component>
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Component Id="TestShortcut" Guid="618198A9-DB55-450F-974F-4F37726E142A" Win64="yes">
-          <Shortcut Id="StartMenu" Name="DevWorks Test" Target="[#DesktopExe]" WorkingDirectory="INSTALLFOLDER"
-                    Arguments="--data-dir &quot;[LocalAppDataFolder]DevWorks Test\Data&quot;" />
+          <Shortcut Id="StartMenu" Name="DevWorks Test" Target="[INSTALLFOLDER]devworks-desktop.exe"
+                    WorkingDirectory="INSTALLFOLDER" Arguments="--data-dir &quot;[LocalAppDataFolder]DevWorks Test Data&quot;" />
           <RegistryValue Root="HKCU" Key="Software\SceneWorks\DevWorks Test" Name="Shortcut"
                          Type="integer" Value="1" KeyPath="yes" />
         </Component>
