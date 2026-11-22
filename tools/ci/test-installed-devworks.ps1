@@ -21,7 +21,7 @@ if ((Test-Path -LiteralPath $clean) -contains $true) {
 }
 $work = Split-Path -Parent $Output
 Invoke-TestMsi $msi '/i' (Join-Path $work 'install.log')
-$productKey = Confirm-TestInstallScope $layout
+$productCode = Confirm-TestInstallScope $msi $layout
 foreach ($name in $script:payloadNames) {
     $path = Join-Path $layout.installed $name
     $hash = if ($name.EndsWith('.exe')) { (Get-VerifiedTestSignature $path).sha256 } else { Get-Sha256 $path }
@@ -79,9 +79,9 @@ $before = Get-Sha256 $sentinel
 $profileDatabase = Join-Path $profile 'workspace.sqlite'
 $databaseBefore = Get-Sha256 $profileDatabase
 Invoke-TestMsi $msi '/x' (Join-Path $work 'uninstall.log')
-if (((Test-Path -LiteralPath @($layout.installed, $layout.shortcut, $productKey)) -contains $true) -or
-    (Get-Sha256 $sentinel) -cne $before -or (Get-Sha256 $profileDatabase) -cne $databaseBefore) {
-    throw 'Uninstall failed to remove the application or preserve its data'
+Assert-TestInstallRemoved $layout $productCode
+if ((Get-Sha256 $sentinel) -cne $before -or (Get-Sha256 $profileDatabase) -cne $databaseBefore) {
+    throw 'Uninstall changed the test data'
 }
 
 New-Item -ItemType Directory -Path $Output | Out-Null

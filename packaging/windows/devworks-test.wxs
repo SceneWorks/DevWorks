@@ -3,6 +3,7 @@
   <Product Id="*" Name="DevWorks Test" Language="1033" Version="0.1.0"
            Manufacturer="SceneWorks" UpgradeCode="BC9A5811-2AB9-4479-9419-7D6C2D85DD26">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" />
+    <Condition Message="Install DevWorks Test for the current Windows user.">NOT ALLUSERS</Condition>
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
                   DowngradeErrorMessage="A newer version of DevWorks Test is already installed." />

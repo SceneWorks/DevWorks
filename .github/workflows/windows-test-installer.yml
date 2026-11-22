@@ -43,11 +43,9 @@ jobs:
           Assert-ExactFiles $package.FullName @('fixture.msi')
           $layout = Get-TestInstallLayout
           Invoke-TestMsi $fixture '/i' (Join-Path $env:RUNNER_TEMP 'fixture-install.log')
-          $productKey = Confirm-TestInstallScope $layout
+          $productCode = Confirm-TestInstallScope $fixture $layout
           Invoke-TestMsi $fixture '/x' (Join-Path $env:RUNNER_TEMP 'fixture-uninstall.log')
-          if ((Test-Path -LiteralPath @($layout.installed, $layout.shortcut, $productKey)) -contains $true) {
-            throw 'The fixture MSI did not remove the test installation'
-          }
+          Assert-TestInstallRemoved $layout $productCode
 
   preflight:
     name: Match the requested revision to the approved source

@@ -143,20 +143,61 @@ function Invoke-TestMsi([string]$Installer, [string]$Action, [string]$Log) {
     }
 }
 
-function Confirm-TestInstallScope([hashtable]$Layout) {
+function Get-TestProductCode([string]$Installer) {
+    $api = New-Object -ComObject WindowsInstaller.Installer
+    $database = $api.OpenDatabase($Installer, 0)
+    $view = $database.OpenView("SELECT Value FROM Property WHERE Property='ProductCode'")
+    $view.Execute()
+    $record = $view.Fetch()
+    if (-not $record) { throw 'The MSI lacks a product code' }
+    $productCode = $record.StringData(1)
+    $view.Close()
+    $productCode
+}
+
+function Get-TestProductContexts([string]$ProductCode) {
+    if (-not ('DevWorksInstallerContext' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class DevWorksInstallerContext
+{
+    [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern uint MsiEnumProductsExW(string product, string sid, uint contexts,
+        uint index, IntPtr outProduct, out uint outContext, IntPtr outSid, IntPtr outSidLength);
+
+    public static uint[] Read(string product)
+    {
+        const uint allContexts = 1 | 2 | 4;
+        const uint noMoreItems = 259;
+        const uint unknownProduct = 1605;
+        var contexts = new List<uint>();
+        for (uint index = 0; ; index++)
+        {
+            uint status = MsiEnumProductsExW(product, null, allContexts, index, IntPtr.Zero,
+                out uint context, IntPtr.Zero, IntPtr.Zero);
+            if (status == noMoreItems || status == unknownProduct) return contexts.ToArray();
+            if (status != 0) throw new Win32Exception((int)status);
+            contexts.Add(context);
+        }
+    }
+}
+'@
+    }
+    [DevWorksInstallerContext]::Read($ProductCode)
+}
+
+function Confirm-TestInstallScope([string]$Installer, [hashtable]$Layout) {
     Assert-ExactFiles $Layout.installed $script:payloadNames
-    $uninstallRoots = @(
-        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
-        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-    )
-    $product = @(Get-ItemProperty -Path "$($uninstallRoots[0])\*" -Name DisplayName -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -ceq 'DevWorks Test' })
-    if ($product.Count -ne 1 -or
-        (Test-Path -LiteralPath ($uninstallRoots[1..2] | ForEach-Object { Join-Path $_ $product[0].PSChildName })) -contains $true -or
+    $productCode = Get-TestProductCode $Installer
+    $contexts = @(Get-TestProductContexts $productCode)
+    if ($contexts.Count -ne 1 -or $contexts[0] -ne 2 -or
         (Test-Path -LiteralPath $Layout.machine) -contains $true -or
         (Get-ItemPropertyValue -LiteralPath $Layout.currentUser -Name Installed) -ne 1) {
-        throw 'Expected a single per-user MSI registration and no machine-wide registration'
+        throw "Expected just an unmanaged per-user registration for $productCode, found contexts [$contexts]"
     }
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($Layout.shortcut)
@@ -164,5 +205,13 @@ function Confirm-TestInstallScope([hashtable]$Layout) {
         $link.Arguments -ne ('--data-dir "{0}"' -f $Layout.profile)) {
         throw 'The Start-menu shortcut does not launch the installed copy with its own profile'
     }
-    $product[0].PSPath
+    $productCode
+}
+
+function Assert-TestInstallRemoved([hashtable]$Layout, [string]$ProductCode) {
+    if ((Test-Path -LiteralPath @($Layout.installed, $Layout.shortcut)) -contains $true -or
+        (Get-ItemProperty -LiteralPath $Layout.currentUser -Name Installed,Shortcut -ErrorAction SilentlyContinue) -or
+        @(Get-TestProductContexts $ProductCode).Count -ne 0) {
+        throw 'The MSI did not remove the test installation and registration'
+    }
 }
