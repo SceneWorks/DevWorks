@@ -16,6 +16,7 @@
     {"path":"crates/devworks-core/src/services/projects.rs","topics":["projects","repositories","storage-lifecycle"]},
     {"path":"crates/devworks-core/src/services/router","topics":["routing-context","settings-connections","usage"]},
     {"path":"crates/devworks-core/src/services/router/decisions.rs","topics":["settings-connections","routing-context","recovery"]},
+    {"path":"crates/devworks-core/src/services/workspace_archive","topics":["storage-lifecycle","settings-Storage","recovery"]},
     {"path":"crates/devworks-core/src/services/maintenance","topics":["settings-Storage","jobs","diagnostics"]},
     {"path":"crates/devworks-core/src/services/jobs","topics":["jobs","work-controls"]},
     {"path":"crates/devworks-core/src/services/indexing","topics":["indexing","code-exploration","sdk-semantic"]},

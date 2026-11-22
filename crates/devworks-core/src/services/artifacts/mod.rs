@@ -938,6 +938,32 @@ fn read_refusal(r: ReadRefusal) -> Result<Refusal, StorageError> {
 // ---------------------------------------------------------------------------------------------
 // The service
 
+/// Capability held by the artifact owner for its backup-specific protected writes.
+pub struct ArchivePinAuthority(());
+
+pub(crate) fn pin_checkpoint_blob(
+    tx: &mut dyn WriteTransaction,
+    holder: &Id,
+    blob: &crate::ports::storage::BlobWitness,
+) -> Result<(), StorageError> {
+    let current = tx.artifacts().blob(&blob.content.sha256)?;
+    if current.is_none_or(|record| {
+        record.state != crate::ports::storage::BlobState::Present
+            || record.generation != blob.generation.as_str()
+            || u64::try_from(record.byte_count).ok() != Some(blob.content.bytes)
+    }) {
+        return Err(StorageError::ScopeDenied);
+    }
+    tx.archive_pin(&ArchivePinAuthority(()), holder, &blob.content.sha256)
+}
+
+pub(crate) fn release_checkpoint_blobs(
+    tx: &mut dyn WriteTransaction,
+    holder: &Id,
+) -> Result<i64, StorageError> {
+    tx.archive_release_pins(&ArchivePinAuthority(()), holder)
+}
+
 /// The artifact domain service.
 pub struct ArtifactService {
     pub(crate) files: Arc<dyn ArtifactFiles>,

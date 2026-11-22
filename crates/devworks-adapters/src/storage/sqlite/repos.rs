@@ -339,6 +339,9 @@ impl ReadSnapshot for Snapshot<'_> {
     fn retention(&self) -> Result<&dyn RetentionRead, StorageError> {
         Ok(self)
     }
+    fn workspace_archives(&self) -> Result<&dyn WorkspaceArchiveRead, StorageError> {
+        Ok(self)
+    }
     fn work_imports(&self) -> Result<&dyn WorkImportRead, StorageError> {
         Ok(self)
     }
@@ -531,6 +534,9 @@ impl WriteTransaction for Unit<'_> {
     }
 
     fn retention(&mut self) -> Result<&mut dyn RetentionRepository, StorageError> {
+        Ok(self)
+    }
+    fn workspace_archives(&mut self) -> Result<&mut dyn WorkspaceArchiveRepository, StorageError> {
         Ok(self)
     }
     fn work_imports(&mut self) -> Result<&mut dyn WorkImportRepository, StorageError> {

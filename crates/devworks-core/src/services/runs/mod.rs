@@ -1572,6 +1572,15 @@ impl ControlService {
         expected_control: i64,
     ) -> Result<DomainDecision, Fail> {
         let root = run_root(tx.sessions(), ctx, root_id)?;
+        if crate::services::workspace_archive::restore_effect_held(tx, Some(&root.id), None)? {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "workspace-restore-effect",
+                Some(root.id.0.clone()),
+            )
+            .retry(RetryAdvice::AfterBlockerClears)
+            .into());
+        }
         if tx
             .runs()
             .project_lifecycle(&root.project_id)?
@@ -1920,6 +1929,15 @@ impl ControlService {
         covered: &[HoldRef],
     ) -> Result<DomainDecision, Fail> {
         let root = controlled_root_tx(tx, ctx, root_id)?;
+        if crate::services::workspace_archive::restore_effect_held(tx, Some(&root.id), None)? {
+            return Err(Refusal::new(
+                DomainErrorCode::Conflict,
+                "workspace-restore-effect",
+                Some(root.id.0.clone()),
+            )
+            .retry(RetryAdvice::AfterBlockerClears)
+            .into());
+        }
         // An archived project allocates no work: Continue, like Start, is refused (its holds
         // and the archival stop stay in place).
         if tx

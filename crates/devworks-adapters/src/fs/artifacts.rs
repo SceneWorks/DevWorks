@@ -262,7 +262,7 @@ fn corrupt(digest: &str) -> FileFault {
 }
 
 #[cfg(windows)]
-mod durable {
+pub(super) mod durable {
     use std::io;
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;

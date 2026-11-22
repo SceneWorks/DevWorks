@@ -2173,6 +2173,14 @@ impl PackageService {
         let _ = self.diagnostics.log(e);
     }
 
+    /// A workspace checkpoint must seal the exact installed package versions while neither
+    /// publication nor collection can replace/remove their verified files. The caller only
+    /// reads the store while holding this gate.
+    pub(crate) fn with_checkpoint_files<T>(&self, capture: impl FnOnce() -> T) -> T {
+        let _gate = self.files_gate.locked();
+        capture()
+    }
+
     /// Removes install directories nothing needs: versions of uninstalled packages, versions
     /// older than the rollback predecessor that no pending or running instance pins
     /// (`in_use`), and unreferenced directories (an interrupted publication) older than

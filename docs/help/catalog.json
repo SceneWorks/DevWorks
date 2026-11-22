@@ -442,7 +442,11 @@
     "file": "topics/storage-lifecycle.md",
     "screenIds": [],
     "settingsSections": [],
-    "relatedCapabilityIds": []
+    "relatedCapabilityIds": [
+      "workspace.backup",
+      "workspace.restore",
+      "workspace.migrate"
+    ]
   },
   {
     "id": "diagnostics",

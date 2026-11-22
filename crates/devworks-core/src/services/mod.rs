@@ -48,6 +48,7 @@ pub mod usage;
 pub mod watch;
 pub mod web;
 pub mod work;
+pub mod workspace_archive;
 pub mod write_fence;
 
 use crate::context::InvocationContext;
@@ -119,6 +120,7 @@ pub fn queue_service() -> queue::QueueService {
         Arc::new(schemas::indexing::QueueHook),
         Arc::new(imports::QueueHook),
         Arc::new(maintenance::QueueHook),
+        Arc::new(workspace_archive::QueueHook),
     ])
 }
 
@@ -392,6 +394,17 @@ impl UseCases {
     pub fn with_diagnostics(mut self, service: Arc<diagnostics::DiagnosticService>) -> Self {
         for op in diagnostics::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Registers the native workspace manual archive and offline migration owner.
+    pub fn with_workspace_archives(
+        mut self,
+        service: Arc<workspace_archive::WorkspaceArchiveService>,
+    ) -> Self {
+        for operation in workspace_archive::OPERATIONS {
+            self.register(operation, None, Some(service.clone()));
         }
         self
     }

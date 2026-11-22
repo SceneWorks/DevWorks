@@ -65,6 +65,7 @@ mod usage;
 mod watchers;
 mod work;
 mod work_imports;
+pub mod workspace_archive;
 mod writer;
 
 #[cfg(test)]
@@ -116,6 +117,8 @@ pub struct SqliteConfig {
     pub host_actor: ActorId,
     /// Application build identity recorded with applied migrations.
     pub app_build: String,
+    /// The desktop's native file owners, used only under the stopped-store lock.
+    pub workspace_archives: Option<Arc<crate::fs::workspace_archive::NativeWorkspaceArchives>>,
     /// Size of the query-only read connection pool.
     pub read_connections: usize,
     /// Bound of each writer mailbox (per priority class).
@@ -199,6 +202,7 @@ impl SqliteConfig {
             read_wait: Duration::from_secs(5),
             busy_timeout: Duration::from_secs(5),
             work_probe: None,
+            workspace_archives: None,
         }
     }
 }
@@ -321,6 +325,11 @@ impl SqliteStore {
             Err(TryLockError::Error(e)) => return Err(io(e)),
         }
         let path = config.data_root.join(DATABASE_FILE);
+        if let Some(archives) = &config.workspace_archives {
+            workspace_archive::recover_restore(&config, archives, &path)?;
+        } else {
+            workspace_archive::require_no_armed_restore(&config.data_root)?;
+        }
         // Gate on a read-only connection first: a foreign file or a store this build may not read
         // is refused before any writer PRAGMA (journal mode, fsync policy) can touch it.
         let gated = if path.exists() {

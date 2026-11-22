@@ -143,7 +143,7 @@ impl StagingWrite for NativeStagingWrite<'_> {
 }
 
 #[cfg(unix)]
-fn open_root(root: &Path) -> std::io::Result<File> {
+pub(super) fn open_root(root: &Path) -> std::io::Result<File> {
     if !std::fs::symlink_metadata(root)?.is_dir() {
         return Err(std::io::ErrorKind::InvalidInput.into());
     }
@@ -153,7 +153,7 @@ fn open_root(root: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(windows)]
-fn open_root(root: &Path) -> std::io::Result<File> {
+pub(super) fn open_root(root: &Path) -> std::io::Result<File> {
     use std::os::windows::fs::MetadataExt;
     let file = super::windows::open_held(root)?;
     let meta = file.metadata()?;
@@ -164,7 +164,7 @@ fn open_root(root: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(unix)]
-fn create(root: &File, _path: &Path, name: &str) -> std::io::Result<File> {
+pub(super) fn create(root: &File, _path: &Path, name: &str) -> std::io::Result<File> {
     use std::os::fd::{AsRawFd, FromRawFd};
     let name = std::ffi::CString::new(name)?;
     // SAFETY: live held directory, one validated NUL-terminated component, mode supplied
@@ -185,7 +185,7 @@ fn create(root: &File, _path: &Path, name: &str) -> std::io::Result<File> {
 }
 
 #[cfg(windows)]
-fn create(_root: &File, path: &Path, name: &str) -> std::io::Result<File> {
+pub(super) fn create(_root: &File, path: &Path, name: &str) -> std::io::Result<File> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
@@ -202,10 +202,10 @@ fn create(_root: &File, path: &Path, name: &str) -> std::io::Result<File> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_root(_: &Path) -> std::io::Result<File> {
+pub(super) fn open_root(_: &Path) -> std::io::Result<File> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 #[cfg(not(any(unix, windows)))]
-fn create(_: &File, _: &Path, _: &str) -> std::io::Result<File> {
+pub(super) fn create(_: &File, _: &Path, _: &str) -> std::io::Result<File> {
     Err(std::io::ErrorKind::Unsupported.into())
 }

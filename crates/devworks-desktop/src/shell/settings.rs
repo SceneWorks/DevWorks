@@ -50,6 +50,10 @@ impl Screen for SettingsScreen {
             self.retention.apply(cx, slot, reply);
             return;
         }
+        if crate::settings_screen::archives::is_slot(&slot) {
+            self.archives.apply(cx, slot, reply);
+            return;
+        }
         if let Some((slot, reply)) =
             (SettingsCtl { settings: self, cx }).apply_settings(slot, reply)
         {
@@ -104,6 +108,7 @@ impl Screen for SettingsScreen {
         ctl.poll_connections(&ctx);
         ctl.poll_mcp(&ctx);
         self.retention.window(cx, &ctx);
+        self.archives.window(cx, &ctx);
     }
     fn restore_in_flight(&mut self, slot: &SettingsSlot, u: &Unresolved) {
         match slot {
@@ -305,6 +310,7 @@ impl SettingsCtl<'_, '_> {
                 }
                 SettingsAction::OpenImports => self.effects.push(Effect::OpenImports),
                 SettingsAction::OpenRetention => self.settings.retention.open(),
+                SettingsAction::OpenWorkspaceArchives => self.settings.archives.open(),
                 SettingsAction::OpenConnections => self.load_connections(),
                 SettingsAction::OpenHelp(topic) => self.effects.push(Effect::OpenHelp(topic)),
                 SettingsAction::Connection(a) => self.connection_action(a),

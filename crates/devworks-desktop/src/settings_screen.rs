@@ -18,6 +18,7 @@ use devworks_core::settings::view::{Health, Item, SettingsView, Source, Status};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+pub mod archives;
 pub(crate) mod retention;
 mod secrets;
 
@@ -43,6 +44,7 @@ pub struct SettingsScreen {
     pub category: Option<Category>,
     pub query: String,
     pub(crate) retention: retention::Panel,
+    pub(crate) archives: archives::Panel,
     /// Drafts restored from the previous launch, applied once the view loads.
     pub restored: BTreeMap<String, Value>,
     pub explained: BTreeSet<String>,
@@ -97,6 +99,7 @@ pub enum SettingsAction {
     OpenNotifications,
     OpenImports,
     OpenRetention,
+    OpenWorkspaceArchives,
     /// The provider-connections topic was opened (load connections and the catalog).
     OpenConnections,
     OpenHelp(String),
@@ -468,6 +471,12 @@ impl SettingsScreen {
                     actions.push(SettingsAction::OpenImports);
                 }
                 host(ui, HostSection::Indexing);
+            }
+            if matches!(self.category, None | Some(Category::Storage))
+                && online.is_ok()
+                && widgets::secondary_button(ui, "Workspace backup and restore").clicked()
+            {
+                actions.push(SettingsAction::OpenWorkspaceArchives);
             }
             if matches!(self.category, None | Some(Category::Storage))
                 && self.query.trim().is_empty()

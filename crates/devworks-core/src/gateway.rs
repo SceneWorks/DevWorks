@@ -1059,10 +1059,21 @@ fn unit_of_work(
     // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
     let mut handler_tx = HandlerTx::new(tx, ingress);
-    let refusal = check
-        .map(|check| check(&mut handler_tx, ctx, command.input()))
-        .transpose()?
-        .flatten();
+    let refusal = if crate::services::workspace_archive::restore_effect_held(
+        &mut handler_tx,
+        None,
+        Some(command.descriptor.name),
+    )? {
+        Some(
+            UseCaseRefusal::new(DomainErrorCode::Conflict, "workspace-restore-effect", None)
+                .retry(RetryAdvice::AfterBlockerClears),
+        )
+    } else {
+        check
+            .map(|check| check(&mut handler_tx, ctx, command.input()))
+            .transpose()?
+            .flatten()
+    };
     let outcome = match refusal {
         Some(refusal) => Ok(Decided {
             decision: DomainDecision::Refused {
@@ -1935,6 +1946,28 @@ impl WriteTransaction for HandlerTx<'_> {
         &mut self,
     ) -> Result<&mut dyn crate::ports::storage::RetentionRepository, StorageError> {
         self.inner.get_mut().retention()
+    }
+    fn archive_pin(
+        &mut self,
+        authority: &crate::services::artifacts::ArchivePinAuthority,
+        holder: &Id,
+        digest: &str,
+    ) -> Result<(), StorageError> {
+        self.inner.get_mut().archive_pin(authority, holder, digest)
+    }
+
+    fn archive_release_pins(
+        &mut self,
+        authority: &crate::services::artifacts::ArchivePinAuthority,
+        holder: &Id,
+    ) -> Result<i64, StorageError> {
+        self.inner.get_mut().archive_release_pins(authority, holder)
+    }
+
+    fn workspace_archives(
+        &mut self,
+    ) -> Result<&mut dyn crate::ports::storage::WorkspaceArchiveRepository, StorageError> {
+        self.inner.get_mut().workspace_archives()
     }
     fn work_imports(
         &mut self,

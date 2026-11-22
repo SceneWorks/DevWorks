@@ -31,6 +31,7 @@ pub mod sources;
 mod unix;
 #[cfg(windows)]
 mod windows;
+pub mod workspace_archive;
 
 /// Runs `op`, retrying it briefly while Windows answers `PermissionDenied` for a condition
 /// another handle causes and its closing clears: a file deleted while another handle holds it
