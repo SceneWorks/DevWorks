@@ -1,5 +1,11 @@
 //! One offline Help owner for native UI, agents and the scheduled regeneration producer.
 mod bundle;
+
+/// Release signing and the installer use the bytes embedded by the Help service.
+pub fn bundled_release_digest() -> String {
+    crate::fingerprint::sha256_hex(bundle::commitment().as_bytes())
+}
+
 mod commands;
 mod generation;
 mod maintenance;

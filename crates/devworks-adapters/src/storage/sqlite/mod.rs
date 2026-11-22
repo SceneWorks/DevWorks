@@ -61,6 +61,7 @@ mod schemas;
 mod seed;
 mod sessions;
 mod support;
+pub mod update;
 mod usage;
 mod watchers;
 mod work;
@@ -97,7 +98,7 @@ use devworks_core::ports::storage::{
 use devworks_core::ports::{Clock, IdKind, IdSource};
 use devworks_core::protocol::{ActorId, Id, StoreId};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::fs::{File, OpenOptions, TryLockError};
+use std::fs::File;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -109,6 +110,7 @@ pub const DATABASE_FILE: &str = "workspace.sqlite";
 pub const LOCK_FILE: &str = "workspace.lock";
 
 /// Composition-root configuration.
+#[cfg_attr(test, derive(Clone))]
 pub struct SqliteConfig {
     pub data_root: PathBuf,
     pub clock: Arc<dyn Clock>,
@@ -119,6 +121,8 @@ pub struct SqliteConfig {
     pub app_build: String,
     /// The desktop's native file owners, used only under the stopped-store lock.
     pub workspace_archives: Option<Arc<crate::fs::workspace_archive::NativeWorkspaceArchives>>,
+    /// Signed update startup must verify the exact stopped-store witness before any writes.
+    pub app_update: Option<devworks_core::ports::update::InstallApproval>,
     /// Size of the query-only read connection pool.
     pub read_connections: usize,
     /// Bound of each writer mailbox (per priority class).
@@ -203,6 +207,7 @@ impl SqliteConfig {
             busy_timeout: Duration::from_secs(5),
             work_probe: None,
             workspace_archives: None,
+            app_update: None,
         }
     }
 }
@@ -307,25 +312,11 @@ impl SqliteStore {
     ) -> Result<Self, StorageError> {
         let io = |e: std::io::Error| StorageError::unavailable(Unavailable::Io, e.to_string());
         std::fs::create_dir_all(&config.data_root).map_err(io)?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(config.data_root.join(LOCK_FILE))
-            .map_err(io)?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                return Err(StorageError::unavailable(
-                    Unavailable::DataRootInUse,
-                    "another DevWorks process owns this data root",
-                ));
-            }
-            Err(TryLockError::Error(e)) => return Err(io(e)),
-        }
+        let lock = update::try_profile_lock(&config.data_root)?;
         let path = config.data_root.join(DATABASE_FILE);
-        if let Some(archives) = &config.workspace_archives {
+        if let Some(approved) = &config.app_update {
+            update::check_approved(&config.data_root, approved, migrations, true)?;
+        } else if let Some(archives) = &config.workspace_archives {
             workspace_archive::recover_restore(&config, archives, &path)?;
         } else {
             workspace_archive::require_no_armed_restore(&config.data_root)?;

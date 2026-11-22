@@ -17,7 +17,8 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -407,6 +408,29 @@ fn open_verified(identity: &NativeIdentity, access: u32) -> Result<Owned, Probe>
         Some(_) => Err(Probe::Gone),
         None => Err(Probe::Unknown(last_error("read the process start time"))),
     }
+}
+
+pub(super) fn parent_pid() -> Option<u32> {
+    // SAFETY: the snapshot owns its handle and the entry advertises the Win32 structure size.
+    let snapshot = Owned(unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) });
+    if snapshot.0 == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let own = std::process::id();
+    // SAFETY: handle and entry remain valid for each call.
+    let mut valid = unsafe { Process32FirstW(snapshot.0, &mut entry) };
+    while valid != 0 {
+        if entry.th32ProcessID == own {
+            return Some(entry.th32ParentProcessID);
+        }
+        // SAFETY: same validated snapshot and writable fixed-size entry as above.
+        valid = unsafe { Process32NextW(snapshot.0, &mut entry) };
+    }
+    None
 }
 
 pub(super) fn current_identity() -> Option<NativeIdentity> {

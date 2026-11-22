@@ -1878,6 +1878,7 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_)
                         | TaskOutput::WorkspaceArchive(_)
+                        | TaskOutput::AppUpdateStatus(_)
                         | TaskOutput::WorkspaceBackupFolder(_, _)
                         | TaskOutput::WorkspaceEffectObserved(_),
                     ) => AttachState::Failed("unexpected reply".into()),
@@ -1955,6 +1956,7 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_)
                             | TaskOutput::WorkspaceArchive(_)
+                            | TaskOutput::AppUpdateStatus(_)
                             | TaskOutput::WorkspaceBackupFolder(_, _)
                             | TaskOutput::WorkspaceEffectObserved(_),
                         ) => {}

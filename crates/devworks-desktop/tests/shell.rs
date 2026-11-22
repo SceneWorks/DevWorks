@@ -220,9 +220,7 @@ fn navigation_puts_approvals_below_chat_keeps_intelligence_collapsible_and_the_f
     assert_eq!(h.state().route(), Route::Knowledge);
     // The footer: version and update message, left-aligned at the bottom of the sidebar.
     let version = h.get_by_label("DevWorks 0.1.0-test").rect();
-    let update = h
-        .get_by_role_and_label(Role::Button, "Updates: not checked")
-        .rect();
+    let update = h.get_by_role_and_label(Role::Button, "Updates").rect();
     let settings = nav(&h, "Settings").rect();
     assert!(version.top() > settings.bottom() && update.top() > version.top());
     assert!(

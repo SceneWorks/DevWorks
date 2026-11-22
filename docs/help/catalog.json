@@ -449,6 +449,17 @@
     ]
   },
   {
+    "id": "app-updates",
+    "title": "App updates and restart",
+    "file": "topics/app-updates.md",
+    "screenIds": [],
+    "settingsSections": [],
+    "relatedCapabilityIds": [
+      "workspace.update_status",
+      "workspace.approve_install"
+    ]
+  },
+  {
     "id": "diagnostics",
     "title": "Diagnostics, logs, and evidence",
     "file": "topics/diagnostics.md",

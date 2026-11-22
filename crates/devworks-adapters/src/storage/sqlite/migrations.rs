@@ -774,7 +774,15 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 68,
         minimum_writer: 69,
         sql: include_str!("migrations/0069_workspace_archive.sql"),
-        expected_sha256: "3ad54635795a03becf530b43aa795441931dbfdfb39bd35d3971bb00d54526ef",
+        expected_sha256: "ebf85fad80712a1b22f554570f1fa668c15a807fe69095cd6891e302a5eefcde",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 70,
+        minimum_reader: 68,
+        minimum_writer: 70,
+        sql: include_str!("migrations/0070_app_updates.sql"),
+        expected_sha256: "d1ebef486a64086c5867aee1e1e62bdda234bfc91a5306b0565e01cb9401a945",
         rebuilds_tables: false,
     },
 ];

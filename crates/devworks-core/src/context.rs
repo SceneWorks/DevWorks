@@ -157,7 +157,7 @@ pub struct InvocationContext {
     /// Bound only by the trusted host's dedicated human interaction path, never wire data.
     human_decision: Option<String>,
     human_project_purge: Option<String>,
-    workspace_archive: Option<String>,
+    workspace_maintenance: Option<String>,
     keep_working_project: Option<(ProjectId, i64)>,
     workspace_reply: Option<WorkspaceReply>,
     reviewed_operation: Option<ReviewedOperation>,
@@ -227,17 +227,17 @@ impl HostIngress {
         Some(bound)
     }
 
-    /// Binds the exact native workspace archive command that the person confirmed.
-    pub fn workspace_archive_context(
+    /// Binds the exact native workspace maintenance command that the person confirmed.
+    pub fn workspace_maintenance_context(
         &self,
         context: &InvocationContext,
         input: &crate::operations::OperationInput,
     ) -> Option<InvocationContext> {
-        if context.store_id != self.store_id || !context.workspace_archive_actor(input) {
+        if context.store_id != self.store_id || !context.workspace_maintenance_actor(input) {
             return None;
         }
         let mut bound = context.clone();
-        bound.workspace_archive = Some(workspace_archive_digest(context, input)?);
+        bound.workspace_maintenance = Some(workspace_maintenance_digest(context, input)?);
         Some(bound)
     }
 
@@ -321,7 +321,7 @@ impl InvocationContext {
             worktree: None,
             human_decision: None,
             human_project_purge: None,
-            workspace_archive: None,
+            workspace_maintenance: None,
             keep_working_project: None,
             workspace_reply: None,
             reviewed_operation: None,
@@ -345,20 +345,22 @@ impl InvocationContext {
             && self.human_project_purge == project_purge_digest(self, input)
     }
 
-    pub(crate) fn workspace_archive_matches(
+    pub(crate) fn workspace_maintenance_matches(
         &self,
         input: &crate::operations::OperationInput,
     ) -> bool {
-        self.workspace_archive_actor(input)
-            && self.workspace_archive.is_some()
-            && self.workspace_archive == workspace_archive_digest(self, input)
+        self.workspace_maintenance_actor(input)
+            && self.workspace_maintenance.is_some()
+            && self.workspace_maintenance == workspace_maintenance_digest(self, input)
     }
 
-    fn workspace_archive_actor(&self, input: &crate::operations::OperationInput) -> bool {
+    fn workspace_maintenance_actor(&self, input: &crate::operations::OperationInput) -> bool {
         use crate::operations::{OperationInput, workspace::Input};
         let human = self.principal_kind == PrincipalKind::Human;
         (match input {
-            OperationInput::Workspace(Input::Backup(_) | Input::Restore(_)) => human,
+            OperationInput::Workspace(
+                Input::Backup(_) | Input::Restore(_) | Input::ApproveInstall(_),
+            ) => human,
             OperationInput::Workspace(Input::Migrate(_)) => {
                 human || self.principal_kind == PrincipalKind::Host
             }
@@ -517,7 +519,7 @@ fn decision_digest(
     crate::fingerprint::canonical_digest(&value).ok()
 }
 
-fn workspace_archive_digest(
+fn workspace_maintenance_digest(
     ctx: &InvocationContext,
     input: &crate::operations::OperationInput,
 ) -> Option<String> {

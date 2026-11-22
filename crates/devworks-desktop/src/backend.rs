@@ -94,6 +94,28 @@ pub trait Backend: Send + Sync {
     > {
         Ok(None)
     }
+    fn update_status(&self) -> Result<devworks_core::services::update::UpdateStatus, String> {
+        Err("App updates are unavailable.".into())
+    }
+    fn poll_updates(&self, _manual: bool) -> Result<(), String> {
+        Err("App updates are unavailable.".into())
+    }
+    fn cancel_update_download(&self) {}
+    fn set_update_channel(
+        &self,
+        _channel: devworks_core::protocol::records::UpdateChannel,
+        _received: ControlEpoch,
+    ) -> Result<(), String> {
+        Err("App updates are unavailable.".into())
+    }
+    fn approve_app_update(
+        &self,
+        _frame: &[u8],
+        _proposal: &Id,
+        _received: ControlEpoch,
+    ) -> Result<(), String> {
+        Err("App updates are unavailable.".into())
+    }
     fn workspace_archive_command(
         &self,
         operation: &str,
@@ -403,6 +425,7 @@ pub enum Slot {
     Decisions(crate::decision_ops::DecisionsSlot),
     Work(crate::work_ops::WorkSlot),
     Settings(crate::settings_ops::SettingsSlot),
+    Updates(crate::shell::updates::UpdateSlot),
     AddOns(crate::addons_ops::AddonsSlot),
     Knowledge(crate::knowledge_ops::KnowledgeSlot),
     Purge(crate::purge_ops::PurgeSlot),
@@ -429,7 +452,7 @@ impl Slot {
             Self::Jobs(_) => ScreenId::Jobs,
             Self::Decisions(_) => ScreenId::Decisions,
             Self::Work(_) => ScreenId::Work,
-            Self::Settings(_) => ScreenId::Settings,
+            Self::Settings(_) | Self::Updates(_) => ScreenId::Settings,
             Self::AddOns(_) => ScreenId::AddOns,
             Self::Knowledge(_) => ScreenId::Knowledge,
             Self::Purge(_) => ScreenId::Purge,
@@ -477,6 +500,7 @@ pub enum TaskOutput {
         value: serde_json::Value,
     },
     WorkspaceArchive(Box<crate::settings_screen::archives::Status>),
+    AppUpdateStatus(Box<devworks_core::services::update::UpdateStatus>),
     WorkspaceBackupFolder(Id, i64),
     WorkspaceEffectObserved(bool),
     /// A prepared command frame (attachment, provider or package), not admitted yet.

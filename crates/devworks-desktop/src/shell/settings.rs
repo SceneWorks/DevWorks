@@ -309,6 +309,7 @@ impl SettingsCtl<'_, '_> {
                     self.effects.push(Effect::OpenNotifications);
                 }
                 SettingsAction::OpenImports => self.effects.push(Effect::OpenImports),
+                SettingsAction::OpenUpdates => self.effects.push(Effect::OpenUpdates),
                 SettingsAction::OpenRetention => self.settings.retention.open(),
                 SettingsAction::OpenWorkspaceArchives => self.settings.archives.open(),
                 SettingsAction::OpenConnections => self.load_connections(),

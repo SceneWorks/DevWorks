@@ -9286,9 +9286,9 @@ pub(super) static CATALOG: [OperationDescriptor; 387] = [
         completion: true,
         revisions: &[SchemaRevision(1)],
         native_execution: false,
-        approval_required: false,
-        human_only: false,
-        assignment_scope: AssignmentScope::Project,
+        approval_required: true,
+        human_only: true,
+        assignment_scope: AssignmentScope::Administration,
     },
     OperationDescriptor {
         name: "workspace.logs",

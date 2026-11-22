@@ -30,6 +30,18 @@ use devworks_core::ports::process::{
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeProcessHost;
 
+impl NativeProcessHost {
+    /// Bind a private child handoff to the actual parent and its native birth witness.
+    pub fn has_parent(&self, expected: &NativeIdentity) -> bool {
+        #[cfg(unix)]
+        // SAFETY: this no-argument syscall observes this process's parent.
+        let parent = Some(unsafe { libc::getppid() } as u32);
+        #[cfg(windows)]
+        let parent = windows::parent_pid();
+        parent == Some(expected.pid) && matches!(self.probe(expected), Probe::Alive)
+    }
+}
+
 impl ProcessHost for NativeProcessHost {
     fn platform(&self) -> &'static str {
         if cfg!(windows) { "windows" } else { "unix" }

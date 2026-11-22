@@ -1,0 +1,7 @@
+{
+  "schema": 70,
+  "policy": "dw58-app-updates",
+  "additionalTables": [
+    {"table": "app_update_state", "class": "workspace_configuration", "disposition": "preserve_independent"}
+  ]
+}

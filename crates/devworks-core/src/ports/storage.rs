@@ -838,6 +838,9 @@ pub trait WriteTransaction {
     fn retention(&mut self) -> Result<&mut dyn RetentionRepository, StorageError> {
         Err(StorageError::ViewUnavailable)
     }
+    fn updates(&mut self) -> Result<&mut dyn super::update::UpdateRepository, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
     fn workspace_archives(&mut self) -> Result<&mut dyn WorkspaceArchiveRepository, StorageError> {
         Err(StorageError::ViewUnavailable)
     }
@@ -908,6 +911,9 @@ pub trait ReadSnapshot {
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;
     fn retention(&self) -> Result<&dyn RetentionRead, StorageError> {
+        Err(StorageError::ViewUnavailable)
+    }
+    fn updates(&self) -> Result<&dyn super::update::UpdateRead, StorageError> {
         Err(StorageError::ViewUnavailable)
     }
     fn workspace_archives(&self) -> Result<&dyn WorkspaceArchiveRead, StorageError> {

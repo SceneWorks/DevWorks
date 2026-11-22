@@ -305,7 +305,7 @@ fn human(ctx: &InvocationContext) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn authority_in(
+pub(super) fn authority_in(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
 ) -> Result<(), StorageError> {
@@ -341,7 +341,7 @@ impl CommandHandler for WorkspaceArchiveService {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
-        if !ctx.workspace_archive_matches(command.input()) {
+        if !ctx.workspace_maintenance_matches(command.input()) {
             return Ok(None);
         }
         match command.input() {
@@ -383,7 +383,7 @@ impl CommandHandler for WorkspaceArchiveService {
         command: &AdmittedCommand,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
-        if !ctx.workspace_archive_matches(command.input()) {
+        if !ctx.workspace_maintenance_matches(command.input()) {
             return decided(
                 tx,
                 Err(Refusal::new(

@@ -13214,7 +13214,7 @@
     "workspace.restore": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "workspace.migrate": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "workspace.update_status": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "workspace.approve_install": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "workspace.approve_install": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": true, "humanOnly": true},
     "workspace.logs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "workspace.record_diagnostic": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "repositories.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
