@@ -235,7 +235,7 @@ fn mac_signature(path: &Path) -> Result<(), String> {
     use std::time::{Duration, Instant};
     let team = option_env!("DEVWORKS_SIGNING_TEAM").ok_or("The app has no pinned signing team.")?;
     let requirement = format!(
-        "anchor apple generic and identifier \"com.sceneworks.devworks\" and certificate leaf[subject.OU] = \"{team}\""
+        "=anchor apple generic and identifier \"com.sceneworks.devworks\" and certificate leaf[subject.OU] = \"{team}\""
     );
     let mut child = Command::new("/usr/bin/codesign")
         .args(["--verify", "--deep", "--strict", "-R", &requirement])
