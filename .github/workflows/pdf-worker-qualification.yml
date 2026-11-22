@@ -11,6 +11,8 @@ on:
       - 'crates/devworks-adapters/src/documents/pdf.rs'
       - 'crates/devworks-core/src/services/documents/pdf.rs'
       - 'crates/devworks-desktop/src/bin/devworks-pdf-worker.rs'
+      - 'crates/devworks-desktop/src/document_extraction.rs'
+      - 'crates/devworks-desktop/tests/document_extraction.rs'
       - 'crates/devworks-desktop/tests/pdf_worker.rs'
       - 'crates/devworks-engine/src/documents/pdf.rs'
 
@@ -71,11 +73,12 @@ jobs:
           cargo build --locked -p devworks-desktop --release --bins
           cargo_target="$(cargo metadata --no-deps --locked --format-version 1 | python -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
           python tools/ci/package-pdf-qualification.py --binaries "$cargo_target/release" --output "$RUNNER_TEMP/pdf-worker" --target "${{ matrix.target }}"
-      - name: Exercise the packaged native worker and native failure paths
+      - name: Exercise the packaged worker and native Documents processor
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --release -p devworks-desktop --test pdf_worker -- --nocapture 2>&1 | tee "$RUNNER_TEMP/pdf-worker/test.log"
+          test -f "$DEVWORKS_PDF_PACKAGED_DESKTOP" || exit 1
+          cargo test --locked --release -p devworks-desktop --test pdf_worker --test document_extraction -- --nocapture 2>&1 | tee "$RUNNER_TEMP/pdf-worker/test.log"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

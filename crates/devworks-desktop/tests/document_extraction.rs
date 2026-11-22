@@ -14,7 +14,7 @@ use devworks_core::{
 };
 use devworks_desktop::document_extraction::NativeDocumentProcessor;
 use std::{
-    path::Path,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -35,11 +35,16 @@ fn exact(bytes: &[u8]) -> ArtifactRef {
 #[test]
 fn document_index_processor_preserves_pdf_and_word_source_locators() {
     use devworks_core::protocol::data::{CitationSource, CoverageState, Locator};
-    let processor = NativeDocumentProcessor::beside_desktop(
-        Path::new(env!("CARGO_BIN_EXE_devworks-desktop")),
-        Arc::new(NativeProcessHost),
-    )
-    .unwrap();
+    let desktop = std::env::var_os("DEVWORKS_PDF_PACKAGED_DESKTOP")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_devworks-desktop")));
+    assert!(
+        desktop.is_file(),
+        "missing desktop executable at {}",
+        desktop.display()
+    );
+    let processor =
+        NativeDocumentProcessor::beside_desktop(&desktop, Arc::new(NativeProcessHost)).unwrap();
     let revision = processor.revision();
     let control = ExtractionControl {
         deadline: Instant::now() + Duration::from_secs(10),
@@ -130,27 +135,38 @@ fn document_index_processor_preserves_pdf_and_word_source_locators() {
 }
 
 #[test]
-fn word_vision_renders_only_supported_image_only_placements() {
+fn without_pdf_worker_word_still_renders_supported_image_only_placements() {
     use devworks_core::protocol::data::{CoverageState, Locator};
+    let installation = tempfile::tempdir().unwrap();
+    let desktop = installation.path().join("devworks-desktop");
+    let processor =
+        NativeDocumentProcessor::beside_desktop(&desktop, Arc::new(NativeProcessHost)).unwrap();
+    let revision = processor.revision();
+    let control = ExtractionControl {
+        deadline: Instant::now() + Duration::from_secs(10),
+        cancelled: &|| false,
+    };
+    let missing = processor
+        .extract(
+            ExtractionInput {
+                version: &exact(MIXED),
+                revision: &revision,
+                bytes: MIXED,
+            },
+            &control,
+        )
+        .err();
+    assert_eq!(missing, Some(Id::new("PdfUnavailable").unwrap()));
+
     // The same embedded PNG occurs beside direct text, by itself, and cropped by half.
     let bytes = include_bytes!("fixtures/docx/mixed-vision.docx");
-    let processor = NativeDocumentProcessor::beside_desktop(
-        Path::new(env!("CARGO_BIN_EXE_devworks-desktop")),
-        Arc::new(NativeProcessHost),
-    )
-    .unwrap();
     let mut reference = exact(bytes);
     reference.media_type =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into();
-    let revision = processor.revision();
     let input = ExtractionInput {
         version: &reference,
         revision: &revision,
         bytes,
-    };
-    let control = ExtractionControl {
-        deadline: Instant::now() + Duration::from_secs(10),
-        cancelled: &|| false,
     };
     let indexed = processor.extract(input, &control).unwrap();
     assert_eq!(indexed.blocks.len(), 1);
