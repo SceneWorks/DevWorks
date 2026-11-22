@@ -80,7 +80,7 @@ use rusqlite::Connection;
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "0b51d4371a8fe2f807721dab088f945c091928c0846eebdee4497fac63c6254e";
+    "da24b249a8b836f3123705560cf3ab04b9b255e6203bc39a14b913aba59809a0";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

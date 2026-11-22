@@ -1220,7 +1220,7 @@ fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
 }
 
 pub(super) fn feature_document_migrations(prefix: usize, count: usize) -> Vec<Migration> {
-    let mut migrations = through(prefix);
+    let mut migrations = MIGRATIONS[..prefix].to_vec();
     migrations.extend(
         MIGRATIONS[70..70 + count]
             .iter()

@@ -1173,13 +1173,29 @@ fn document_lineage(
     })
 }
 
+fn exact_catalogue<'a>(
+    migrations: &'a [Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+    sqlite_version: i64,
+) -> Option<&'a [Migration]> {
+    let known = migrations.get(..usize::try_from(meta.schema_version).ok()?)?;
+    let last = known.last()?;
+    (sqlite_version == meta.schema_version
+        && last.version == meta.schema_version
+        && last.minimum_reader == meta.minimum_reader
+        && last.minimum_writer == meta.minimum_writer
+        && matches_catalogue(applied, known))
+    .then_some(known)
+}
+
 /// Source catalogues are retained for archive attestation. Replaying one in a separate
 /// empty reference database never changes the source or authorizes a migration.
 pub(super) fn checkpoint_catalogue(
     conn: &Connection,
     migrations: &[Migration],
 ) -> Result<(Meta, Vec<Migration>), StorageError> {
-    let (meta, _) = check(conn, migrations)?.ok_or_else(|| {
+    let meta = read_meta(conn)?.ok_or_else(|| {
         StorageError::IncompatibleSchema("the checkpoint has no workspace store metadata".into())
     })?;
     let applied = ledger(conn)?;
@@ -1202,16 +1218,7 @@ pub(super) fn checkpoint_catalogue(
         );
         return Ok((meta, source));
     }
-    let known = migrations.get(..usize::try_from(meta.schema_version).unwrap_or(usize::MAX));
-    if let Some(known) = known
-        && sqlite_version == meta.schema_version
-        && known.last().is_some_and(|last| {
-            last.version == meta.schema_version
-                && last.minimum_reader == meta.minimum_reader
-                && last.minimum_writer == meta.minimum_writer
-        })
-        && matches_catalogue(&applied, known)
-    {
+    if let Some(known) = exact_catalogue(migrations, &meta, &applied, sqlite_version) {
         return Ok((meta, known.to_vec()));
     }
     Err(StorageError::IncompatibleSchema(
@@ -1311,46 +1318,37 @@ pub(crate) fn check(
     if document_lineage(migrations, &meta, &applied, sqlite_version).is_some() {
         return Ok(Some((meta, AccessMode::ReadWrite)));
     }
-    for m in migrations
-        .iter()
-        .filter(|m| m.version <= meta.schema_version)
-    {
-        match applied.iter().find(|a| a.version == m.version) {
-            Some(a) if a.checksum == m.checksum() => {}
-            Some(a) if split_migration(migrations, &meta, a).is_some() => {}
-            Some(a) => {
-                return Err(StorageError::IncompatibleSchema(format!(
-                    "migration {} checksum {} does not match this build ({})",
-                    m.version,
-                    a.checksum,
-                    m.checksum()
-                )));
-            }
-            None => {
-                return Err(StorageError::IncompatibleSchema(format!(
-                    "migration {} missing from the ledger",
-                    m.version
-                )));
-            }
-        }
-    }
-    // The colliding versions must identify exactly one published schema. For later builds,
-    // retain the forward compatibility rules after the known prefix has passed verification.
+    // A colliding version must match one complete, known catalogue. Keep the deployed
+    // forward-compatibility rules for later, additive versions after verifying their known prefix.
     if ((APP_OPERATIONS_VERSION - 3) as i64..=build).contains(&meta.schema_version) {
-        let exact = migrations.get(..meta.schema_version as usize);
-        if sqlite_version != meta.schema_version
-            || exact.is_none_or(|exact| {
-                !matches_catalogue(&applied, exact)
-                    || exact.last().is_none_or(|last| {
-                        last.version != meta.schema_version
-                            || last.minimum_reader != meta.minimum_reader
-                            || last.minimum_writer != meta.minimum_writer
-                    })
-            })
-        {
+        if exact_catalogue(migrations, &meta, &applied, sqlite_version).is_none() {
             return Err(StorageError::IncompatibleSchema(
                 "store version witnesses differ from the known migration catalogue".into(),
             ));
+        }
+    } else {
+        for m in migrations
+            .iter()
+            .filter(|m| m.version <= meta.schema_version)
+        {
+            match applied.iter().find(|a| a.version == m.version) {
+                Some(a) if a.checksum == m.checksum() => {}
+                Some(a) if split_migration(migrations, &meta, a).is_some() => {}
+                Some(a) => {
+                    return Err(StorageError::IncompatibleSchema(format!(
+                        "migration {} checksum {} does not match this build ({})",
+                        m.version,
+                        a.checksum,
+                        m.checksum()
+                    )));
+                }
+                None => {
+                    return Err(StorageError::IncompatibleSchema(format!(
+                        "migration {} missing from the ledger",
+                        m.version
+                    )));
+                }
+            }
         }
     }
     let access = if meta.minimum_writer > build {

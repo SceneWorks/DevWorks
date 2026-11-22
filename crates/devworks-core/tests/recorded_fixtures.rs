@@ -464,7 +464,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // bindings alongside the original revision-1 document operations.
     // Document re-extraction adds one revision-12 admission, and activity adds seven at revision 13.
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
-    assert_eq!(admitted.len(), 687);
+    // The combined application operations and Documents catalogue includes the Dreaming bindings.
+    assert_eq!(admitted.len(), 713);
 }
 
 #[test]
