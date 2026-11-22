@@ -1,0 +1,377 @@
+name: DevWorks Windows test installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Accepted DW-414 commit on feature/dw-f12
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/windows-test-installer.yml'
+      - 'packaging/windows/devworks-test.wxs'
+      - 'tools/ci/windows-test-installer.ps1'
+      - 'tools/ci/test-installed-devworks.ps1'
+
+permissions: {}
+
+jobs:
+  recipe:
+    name: Validate the Windows test installer recipe
+    if: github.event_name == 'pull_request'
+    runs-on: windows-2025
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Compile and inspect a fixture MSI
+        shell: pwsh
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'fixture')
+          foreach ($name in $script:payloadNames.Where({ $_.EndsWith('.exe') })) {
+            Copy-Item -LiteralPath "$env:SystemRoot\System32\where.exe" -Destination (Join-Path $payload.FullName $name)
+          }
+          'Fixture notices' | Set-Content -LiteralPath (Join-Path $payload.FullName 'pdf-notices.zip')
+          New-TestInstaller $env:GITHUB_WORKSPACE $payload.FullName (Join-Path $env:RUNNER_TEMP 'fixture.msi')
+
+  preflight:
+    name: Match the requested revision to the approved source
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'SceneWorks/DevWorks' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      source: ${{ steps.source.outputs.source }}
+    steps:
+      - id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ACCEPTED_DW414: 1ae1be523bd7202900904fb9d1b173d1caa07996
+        run: |
+          set -euo pipefail
+          test "$SOURCE_SHA" = "$ACCEPTED_DW414"
+          published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/feature/dw-f12" --jq .object.sha)"
+          test "$SOURCE_SHA" = "$published"
+          printf 'source=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build the exact Windows x64 payload and tests
+    needs: preflight
+    runs-on: windows-2025
+    timeout-minutes: 85
+    permissions:
+      contents: read
+    outputs:
+      payload_id: ${{ steps.payload.outputs.artifact-id }}
+      payload_sha: ${{ steps.archive.outputs.payload_sha }}
+      tests_id: ${{ steps.tests.outputs.artifact-id }}
+      tests_sha: ${{ steps.archive.outputs.tests_sha }}
+    env:
+      DEVWORKS_RELEASE_BUILD: ${{ needs.preflight.outputs.source }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "3"
+      CARGO_PROFILE_RELEASE_STRIP: debuginfo
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.preflight.outputs.source }}
+          path: candidate
+          persist-credentials: false
+      - name: Build production executables and stage the approved inputs
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          . "$env:GITHUB_WORKSPACE/trusted/tools/ci/windows-test-installer.ps1"
+          if ((git rev-parse HEAD) -cne $env:DEVWORKS_RELEASE_BUILD) { throw 'Wrong source checkout' }
+          $rust = rustc -vV
+          $rust | Write-Host
+          if ($rust -cnotcontains 'host: x86_64-pc-windows-msvc') { throw 'Unexpected native toolchain' }
+          cargo build --locked --release -p devworks-desktop --bins
+          if ($LASTEXITCODE -ne 0) { throw 'Windows desktop build failed' }
+          $target = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).target_directory
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
+          $payload = Join-Path $env:RUNNER_TEMP 'unsigned-input'
+          New-Item -ItemType Directory -Path $payload | Out-Null
+          foreach ($name in $script:payloadNames.Where({ $_.EndsWith('.exe') })) {
+            Copy-Item -LiteralPath (Join-Path $target "release\$name") -Destination $payload
+            Assert-UnsignedX64 (Join-Path $payload $name)
+          }
+          @'
+          import runpy
+          import shutil
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          payload = Path(sys.argv[1])
+          notices = payload.parent / "notices"
+          shutil.copytree("packaging/pdf", notices)
+          shutil.copy2("Cargo.lock", notices)
+          runpy.run_path("tools/ci/package-pdf-qualification.py")["dependency_notices"]("x86_64-pc-windows-msvc", notices)
+          with zipfile.ZipFile(payload / "pdf-notices.zip", "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
+              for path in sorted(notices.rglob("*")):
+                  if path.is_file():
+                      output.write(path, path.relative_to(notices))
+          '@ | python -I - $payload
+          if ($LASTEXITCODE -ne 0) { throw 'Building PDF dependency notices failed' }
+          $hashes = [ordered]@{}
+          foreach ($name in $script:payloadNames) { $hashes[$name] = Get-Sha256 (Join-Path $payload $name) }
+          @{ source = $env:DEVWORKS_RELEASE_BUILD; sha256 = $hashes } | ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath (Join-Path $payload 'unsigned.json') -Encoding utf8NoBOM
+      - name: Exercise fixture process failures and stage installed-package tests
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          $tests = Join-Path $env:RUNNER_TEMP 'installed-tests'
+          New-Item -ItemType Directory -Path $tests | Out-Null
+          $records = cargo test --locked --release -p devworks-desktop --features test-support --no-run --test pdf_worker --test document_extraction --message-format=json
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDF test compilation failed' }
+          $expectedTests = @('pdf_worker','document_extraction')
+          $executables = $records | ForEach-Object { ConvertFrom-Json -InputObject $_ -AsHashtable } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -in $expectedTests -and $_.executable }
+          foreach ($name in $expectedTests) {
+            $match = @($executables | Where-Object { $_.target.name -ceq $name })
+            if ($match.Count -ne 1) { throw "No unique compiled test for $name" }
+            Copy-Item -LiteralPath $match[0].executable -Destination (Join-Path $tests "$name.exe")
+          }
+          & (Join-Path $tests 'pdf_worker.exe') native_crash_timeout_and_cancel_reap_the_worker --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated worker failure tests failed' }
+      - name: Encrypt build transfers
+        id: archive
+        shell: pwsh
+        env:
+          DW416_ARCHIVE_KEY: ${{ secrets.DW416_ARCHIVE_KEY }}
+        run: |
+          . ./trusted/tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'unsigned.7z'
+          $tests = Join-Path $env:RUNNER_TEMP 'tests.7z'
+          Protect-TestArtifact (Join-Path $env:RUNNER_TEMP 'unsigned-input') $payload ($script:payloadNames + 'unsigned.json')
+          Protect-TestArtifact (Join-Path $env:RUNNER_TEMP 'installed-tests') $tests @('pdf_worker.exe','document_extraction.exe')
+          "payload_sha=$(Get-Sha256 $payload)" >> $env:GITHUB_OUTPUT
+          "tests_sha=$(Get-Sha256 $tests)" >> $env:GITHUB_OUTPUT
+      - id: payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw416-unsigned-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/unsigned.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - id: tests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw416-tests-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tests.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  sign:
+    name: Sign both executables and the reviewed MSI
+    needs: [preflight, build]
+    runs-on: windows-2025
+    environment: windows-signing
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      signed_id: ${{ steps.signed.outputs.artifact-id }}
+      signed_sha: ${{ steps.archive.outputs.sha256 }}
+    steps:
+      # Candidate files are passive inputs. Only protected main code runs in this job.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.payload_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/transport
+      - name: Validate the exact build payload before using the signer
+        shell: pwsh
+        env:
+          DW416_ARCHIVE_KEY: ${{ secrets.DW416_ARCHIVE_KEY }}
+          PAYLOAD_SHA: ${{ needs.build.outputs.payload_sha }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          $transfer = Join-Path $env:RUNNER_TEMP 'transport/unsigned.7z'
+          Expand-TestArtifact $transfer $env:PAYLOAD_SHA $payload ($script:payloadNames + 'unsigned.json')
+          $receiptPath = Join-Path $payload 'unsigned.json'
+          if ((Get-Item -LiteralPath $receiptPath).Length -gt 4096) { throw 'Oversized build receipt' }
+          $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json -AsHashtable
+          if ($receipt.source -cne $env:SOURCE_SHA -or $receipt.sha256.Count -ne $script:payloadNames.Count) {
+            throw 'Unexpected source SHA or payload inventory'
+          }
+          foreach ($name in $script:payloadNames) {
+            $path = Join-Path $payload $name
+            if ((Get-Sha256 $path) -cne $receipt.sha256[$name]) { throw "Unsigned payload digest failed for $name" }
+            if ($name.EndsWith('.exe')) { Assert-UnsignedX64 $path }
+          }
+          Remove-Item -LiteralPath $receiptPath
+      - name: Sign in to the approved Azure environment
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Sign desktop and PDF worker
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          files: |
+            ${{ runner.temp }}\payload\devworks-desktop.exe
+            ${{ runner.temp }}\payload\devworks-pdf-worker.exe
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: sceneworks-signing
+          certificate-profile-name: sceneworks-public
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Build the MSI from the pinned recipe
+        shell: pwsh
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          foreach ($name in $script:payloadNames.Where({ $_.EndsWith('.exe') })) {
+            Get-VerifiedTestSignature (Join-Path $payload $name) | Out-Null
+          }
+          $package = Join-Path $env:RUNNER_TEMP 'package'
+          New-Item -ItemType Directory -Path $package | Out-Null
+          New-TestInstaller $env:GITHUB_WORKSPACE $payload (Join-Path $package 'DevWorks-Test-windows-x64.msi')
+      - name: Sign MSI
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          files: ${{ runner.temp }}\package\DevWorks-Test-windows-x64.msi
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: sceneworks-signing
+          certificate-profile-name: sceneworks-public
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Verify signatures and encrypt the exact MSI for native testing
+        id: archive
+        shell: pwsh
+        env:
+          DW416_ARCHIVE_KEY: ${{ secrets.DW416_ARCHIVE_KEY }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          $package = Join-Path $env:RUNNER_TEMP 'package'
+          $msi = 'DevWorks-Test-windows-x64.msi'
+          $receipts = [ordered]@{}
+          foreach ($name in $script:payloadNames) {
+            $path = Join-Path $payload $name
+            $receipts[$name] = if ($name.EndsWith('.exe')) {
+              Get-VerifiedTestSignature $path
+            } else {
+              @{ sha256 = Get-Sha256 $path }
+            }
+          }
+          @{
+            source = $env:SOURCE_SHA
+            workflowRevision = $env:GITHUB_SHA
+            payload = $receipts
+            installer = Get-VerifiedTestSignature (Join-Path $package $msi)
+          } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $package 'signed.json') -Encoding utf8NoBOM
+          $encrypted = Join-Path $env:RUNNER_TEMP 'signed.7z'
+          Protect-TestArtifact $package $encrypted @($msi,'signed.json')
+          "sha256=$(Get-Sha256 $encrypted)" >> $env:GITHUB_OUTPUT
+      - id: signed
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw416-signed-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  smoke:
+    name: Verify signed Windows MSI install, PDF and uninstall
+    needs: [preflight, build, sign]
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.tests_id }},${{ needs.sign.outputs.signed_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/transport
+      - name: Validate and decrypt the same-run MSI and test harnesses
+        shell: pwsh
+        env:
+          DW416_ARCHIVE_KEY: ${{ secrets.DW416_ARCHIVE_KEY }}
+          SIGNED_SHA: ${{ needs.sign.outputs.signed_sha }}
+          TESTS_SHA: ${{ needs.build.outputs.tests_sha }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $temp = $env:RUNNER_TEMP
+          Expand-TestArtifact (Join-Path $temp 'transport/signed.7z') $env:SIGNED_SHA (Join-Path $temp 'package') @('DevWorks-Test-windows-x64.msi','signed.json')
+          Expand-TestArtifact (Join-Path $temp 'transport/tests.7z') $env:TESTS_SHA (Join-Path $temp 'tests') @('pdf_worker.exe','document_extraction.exe')
+      - name: Clean-install and run the real desktop and PDF worker
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+        run: |
+          $arguments = @{
+            Package = Join-Path $env:RUNNER_TEMP 'package'
+            Tests = Join-Path $env:RUNNER_TEMP 'tests'
+            Output = Join-Path $env:RUNNER_TEMP 'verified'
+            Source = $env:SOURCE_SHA
+          }
+          ./tools/ci/test-installed-devworks.ps1 @arguments
+      - name: Encrypt the qualified installer for the owner
+        shell: pwsh
+        env:
+          DW416_ARCHIVE_KEY: ${{ secrets.DW416_ARCHIVE_KEY }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $temp = $env:RUNNER_TEMP
+          Protect-TestArtifact (Join-Path $temp 'verified') (Join-Path $temp 'verified.7z') @('DevWorks-Test-windows-x64.msi','SHA256SUMS.txt','qualification.json')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw416-verified-windows-x64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verified.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
