@@ -307,7 +307,9 @@ fn reported(slot: &Slot) -> String {
         ScreenId::AddOns => format!("{:?}", AddonsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Knowledge => format!("{:?}", KnowledgeSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Purge => format!("{:?}", PurgeSlot::try_from(slot.clone()).unwrap()),
-        ScreenId::Placeholder => unreachable!("no slot belongs to the placeholder screens"),
+        ScreenId::Imports | ScreenId::Dreaming | ScreenId::Placeholder => {
+            unreachable!("the baseline fixture has no slots from this screen")
+        }
     }
 }
 

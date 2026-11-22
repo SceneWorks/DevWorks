@@ -472,38 +472,6 @@ fn replace_member(_: &ArchiveDirectory, _: &ArchiveDirectory, _: &str) -> std::i
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use devworks_core::ports::storage::MANIFEST_MEMBER;
-
-    #[test]
-    fn publication_uses_the_held_directory_and_never_replaces_a_manifest() {
-        let root = devworks_test_support::TempRoot::new("devworks-archive-file").created();
-        let directory = ArchiveDirectory::open(root.path(), None).unwrap();
-        let backup = directory.create_folder("backup-test").unwrap();
-        let cancel = Cancellation::default();
-        let data = b"first manifest";
-        backup.publish_manifest(data, &cancel).unwrap();
-        let mut actual = Vec::new();
-        backup
-            .open_member(MANIFEST_MEMBER, 64)
-            .unwrap()
-            .reader
-            .read_to_end(&mut actual)
-            .unwrap();
-        assert_eq!(actual, data);
-        assert!(backup.publish_manifest(b"unrelated", &cancel).is_err());
-        assert_eq!(
-            std::fs::read(backup.location().join(MANIFEST_MEMBER)).unwrap(),
-            data
-        );
-        assert!(directory.create_folder("backup-test").is_err());
-        assert!(ArchiveDirectory::open(backup.location(), Some(directory.identity())).is_err());
-        assert!(backup.open_member("../manifest.json", 64).is_err());
-    }
-}
-
 use devworks_core::ports::files::ArtifactFiles;
 use devworks_core::ports::packages::PackageFiles;
 use devworks_core::ports::storage::{
@@ -969,5 +937,37 @@ impl WorkspaceArchiveFiles for NativeWorkspaceArchives {
             return Ok(());
         }
         Err(StorageError::CommitUnknown)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::ports::storage::MANIFEST_MEMBER;
+
+    #[test]
+    fn publication_uses_the_held_directory_and_never_replaces_a_manifest() {
+        let root = devworks_test_support::TempRoot::new("devworks-archive-file").created();
+        let directory = ArchiveDirectory::open(root.path(), None).unwrap();
+        let backup = directory.create_folder("backup-test").unwrap();
+        let cancel = Cancellation::default();
+        let data = b"first manifest";
+        backup.publish_manifest(data, &cancel).unwrap();
+        let mut actual = Vec::new();
+        backup
+            .open_member(MANIFEST_MEMBER, 64)
+            .unwrap()
+            .reader
+            .read_to_end(&mut actual)
+            .unwrap();
+        assert_eq!(actual, data);
+        assert!(backup.publish_manifest(b"unrelated", &cancel).is_err());
+        assert_eq!(
+            std::fs::read(backup.location().join(MANIFEST_MEMBER)).unwrap(),
+            data
+        );
+        assert!(directory.create_folder("backup-test").is_err());
+        assert!(ArchiveDirectory::open(backup.location(), Some(directory.identity())).is_err());
+        assert!(backup.open_member("../manifest.json", 64).is_err());
     }
 }
