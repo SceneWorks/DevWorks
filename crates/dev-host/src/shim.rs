@@ -2,7 +2,8 @@
 //!
 //! Installed as `cargo` (a link or copy of `dev-host` placed ahead of the real cargo on
 //! `PATH`), or run as `dev-host cargo -- <args>`. It refuses when `check` fails or when
-//! `CARGO_TARGET_DIR` or a `--target-dir` argument points outside the root, fills `CARGO_TARGET_DIR` in when unset, and then
+//! `CARGO_TARGET_DIR` or a `--target-dir` argument points outside the root or into another
+//! host's folder, fills `CARGO_TARGET_DIR` in when unset, and then
 //! runs the real cargo: `DEV_HOST_REAL_CARGO` if set, else the first `cargo` on `PATH` that is
 //! not this program, else `rustup which cargo`.
 
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::check::VolumeProbe;
+use crate::host::Host;
 use crate::{Vars, plan};
 
 pub const REAL_CARGO_VAR: &str = "DEV_HOST_REAL_CARGO";
@@ -34,7 +36,7 @@ pub fn prepare(
     cwd: &Path,
     self_exe: &Path,
     args: &[OsString],
-    check: impl FnOnce(&Vars) -> Result<PathBuf, String>,
+    check: impl FnOnce(&Vars) -> Result<Host, String>,
 ) -> Result<Launch, String> {
     let depth = vars
         .get(DEPTH_VAR)
@@ -47,9 +49,9 @@ pub fn prepare(
              Set {REAL_CARGO_VAR} to the real cargo"
         ));
     }
-    let root = check(vars).map_err(|e| format!("dev-host check failed: {e}"))?;
-    check_target_dir_args(args, &root, cwd)?;
-    let target_dir = plan::target_dir(&root, vars, cwd, &plan::Request::default())?;
+    let host = check(vars).map_err(|e| format!("dev-host check failed: {e}"))?;
+    check_target_dir_args(args, &host, cwd)?;
+    let target_dir = plan::target_dir(&host, vars, cwd, &plan::Request::default())?;
     let cargo = find_real_cargo(vars, self_exe).ok_or_else(|| {
         format!("cannot find the real cargo on PATH or through rustup; set {REAL_CARGO_VAR}")
     })?;
@@ -62,10 +64,10 @@ pub fn prepare(
 
 const TARGET_DIR_FLAG: &str = "--target-dir";
 
-/// Refuses a `--target-dir PATH` or `--target-dir=PATH` cargo argument outside `root`: the flag
-/// overrides `CARGO_TARGET_DIR`. Scanning stops at a bare `--`, after which arguments belong to
-/// the program cargo runs, not to cargo.
-fn check_target_dir_args(args: &[OsString], root: &Path, cwd: &Path) -> Result<(), String> {
+/// Refuses a `--target-dir PATH` or `--target-dir=PATH` cargo argument that
+/// [`Host::allow_build_dir`] refuses: the flag overrides `CARGO_TARGET_DIR`. Scanning stops at a
+/// bare `--`, after which arguments belong to the program cargo runs, not to cargo.
+fn check_target_dir_args(args: &[OsString], host: &Host, cwd: &Path) -> Result<(), String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "--" {
@@ -89,15 +91,7 @@ fn check_target_dir_args(args: &[OsString], root: &Path, cwd: &Path) -> Result<(
             None
         };
         if let Some(value) = value {
-            let path = Path::new(value);
-            if !crate::is_under(path, root, cwd) {
-                return Err(format!(
-                    "{TARGET_DIR_FLAG} {} is outside DEV_HOST_ROOT={}; drop it so dev-host \
-                     assigns a slot, or point it under the root",
-                    path.display(),
-                    root.display()
-                ));
-            }
+            host.allow_build_dir(TARGET_DIR_FLAG, Path::new(value), cwd)?;
         }
     }
     Ok(())
@@ -153,16 +147,17 @@ pub fn run(launch: &Launch, args: &[OsString]) -> Result<i32, String> {
     }
 }
 
-/// The checked root for the real host, as `prepare` expects it.
-pub fn host_check(vars: &Vars) -> Result<PathBuf, String> {
+/// The checked root and host folder for the real host, as `prepare` expects them.
+pub fn host_check(vars: &Vars) -> Result<Host, String> {
     crate::check::check_host(vars)
 }
 
-/// A check against a supplied probe, for callers and tests that need a seam.
+/// A check against a supplied probe and host name, for callers and tests that need a seam.
 pub fn probe_check<'a>(
     probe: &'a dyn VolumeProbe,
-) -> impl FnOnce(&Vars) -> Result<PathBuf, String> + 'a {
-    move |vars| crate::check::check(vars, probe)
+    host_name: &'a str,
+) -> impl FnOnce(&Vars) -> Result<Host, String> + 'a {
+    move |vars| crate::check::check(vars, probe, host_name)
 }
 
 #[cfg(test)]
@@ -171,16 +166,22 @@ mod tests {
     use crate::check::MARKER;
     use crate::testutil::Scratch;
 
+    const HOST: &str = "mac-a";
+
     struct OnOwnVolume;
     impl VolumeProbe for OnOwnVolume {
         fn verify(&self, _root: &Path) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn verify_mount(&self, _path: &Path) -> Result<(), String> {
             Ok(())
         }
     }
 
     fn setup(scratch: &Scratch) -> (PathBuf, PathBuf, PathBuf) {
         let root = scratch.path().join("root");
-        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("hosts").join(HOST)).unwrap();
         std::fs::write(root.join(MARKER), "dev-host-root v1\n").unwrap();
         let shim_dir = scratch.path().join("shim");
         let real_dir = scratch.path().join("real");
@@ -217,11 +218,15 @@ mod tests {
             &wt,
             &shim_dir.join(CARGO_EXE),
             &[],
-            probe_check(&OnOwnVolume),
+            probe_check(&OnOwnVolume, HOST),
         )
         .unwrap();
         assert_eq!(launch.cargo, real_dir.join(CARGO_EXE));
-        assert!(launch.target_dir.starts_with(root.join("build")));
+        assert!(
+            launch
+                .target_dir
+                .starts_with(root.join("hosts").join(HOST).join("build"))
+        );
         assert_eq!(launch.depth, 1);
     }
 
@@ -241,7 +246,7 @@ mod tests {
             scratch.path(),
             &shim_dir.join(CARGO_EXE),
             &[],
-            probe_check(&OnOwnVolume),
+            probe_check(&OnOwnVolume, HOST),
         )
         .unwrap_err();
         assert!(err.contains("outside DEV_HOST_ROOT"), "{err}");
@@ -254,7 +259,7 @@ mod tests {
         let (root, shim_dir, real_dir) = setup(&scratch);
         let outside = scratch.path().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("build")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("hosts").join(HOST).join("build")).unwrap();
         let wt = scratch.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         let v = vars(&root, &shim_dir, &real_dir, &[]);
@@ -263,7 +268,7 @@ mod tests {
             &wt,
             &shim_dir.join(CARGO_EXE),
             &[],
-            probe_check(&OnOwnVolume),
+            probe_check(&OnOwnVolume, HOST),
         )
         .unwrap_err();
         assert!(err.contains("is a symlink"), "{err}");
@@ -278,7 +283,8 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         let v = vars(&root, &shim_dir, &real_dir, &[]);
         let outside = scratch.path().join("outside").display().to_string();
-        let inside = root.join("build/manual").display().to_string();
+        let inside = root.join("hosts/mac-a/build/manual").display().to_string();
+        let other = root.join("hosts/mac-b/build/manual").display().to_string();
         let attempt = |args: &[&str]| {
             let args: Vec<OsString> = args.iter().map(OsString::from).collect();
             prepare(
@@ -286,7 +292,7 @@ mod tests {
                 &wt,
                 &shim_dir.join(CARGO_EXE),
                 &args,
-                probe_check(&OnOwnVolume),
+                probe_check(&OnOwnVolume, HOST),
             )
         };
         for args in [
@@ -296,12 +302,14 @@ mod tests {
             vec![
                 "test",
                 "--target-dir",
-                &format!("{inside}/../../../outside"),
+                &format!("{inside}/../../../../../outside"),
             ],
         ] {
             let err = attempt(&args).unwrap_err();
             assert!(err.contains("outside DEV_HOST_ROOT"), "{args:?}: {err}");
         }
+        let err = attempt(&["build", "--target-dir", &other]).unwrap_err();
+        assert!(err.contains("another host"), "{err}");
         assert!(attempt(&["build", "--target-dir", &inside]).is_ok());
         assert!(attempt(&["build", &format!("--target-dir={inside}")]).is_ok());
         // After a bare `--` the flag belongs to the program cargo runs.
@@ -319,7 +327,7 @@ mod tests {
             scratch.path(),
             &shim_dir.join(CARGO_EXE),
             &[],
-            probe_check(&OnOwnVolume),
+            probe_check(&OnOwnVolume, HOST),
         )
         .unwrap_err();
         assert!(err.starts_with("dev-host check failed"), "{err}");
@@ -330,7 +338,7 @@ mod tests {
             scratch.path(),
             &shim_dir.join(CARGO_EXE),
             &[],
-            probe_check(&OnOwnVolume),
+            probe_check(&OnOwnVolume, HOST),
         )
         .unwrap_err();
         assert!(err.contains("DEV_HOST_ROOT is not set"), "{err}");
@@ -351,7 +359,7 @@ mod tests {
             scratch.path(),
             &shim_dir.join(CARGO_EXE),
             &[],
-            probe_check(&OnOwnVolume),
+            probe_check(&OnOwnVolume, HOST),
         )
         .unwrap_err();
         assert!(err.contains("nested"), "{err}");

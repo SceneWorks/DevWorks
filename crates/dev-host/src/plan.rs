@@ -1,11 +1,15 @@
-//! `dev-host env`: where this worktree builds and keeps temp files.
+//! `dev-host env`: where this worktree builds and keeps temp files, inside this host's folder
+//! `<root>/hosts/<host>/` ([`Host`]).
 //!
-//! - `CARGO_TARGET_DIR` = `<root>/build/<project>/<build-key>/slot-<n>` (sticky per worktree).
-//! - `TMPDIR` (and `TEMP`/`TMP` on Windows) = `<root>/t/<8-char id>`.
+//! - `CARGO_TARGET_DIR` = `<host folder>/build/<project>/<build-key>/slot-<n>` (sticky per
+//!   worktree; the slot registry sits beside the slots, so two hosts never share a slot even
+//!   for the same worktree path).
+//! - `TMPDIR` (and `TEMP`/`TMP` on Windows) = `<host folder>/t/<8-char id>`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::host::Host;
 use crate::{Vars, config, digest, is_under, resolve, slots};
 
 /// Environment variables that change build output but that cargo does not track, so builds
@@ -192,19 +196,13 @@ fn now() -> u64 {
 
 /// The build folder for this worktree.
 ///
-/// A caller-set `CARGO_TARGET_DIR` under the root is kept; one outside the root is an error.
-pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result<PathBuf, String> {
+/// A caller-set `CARGO_TARGET_DIR` under the root is kept; one outside the root or inside
+/// another host's folder is an error ([`Host::allow_build_dir`]).
+pub fn target_dir(host: &Host, vars: &Vars, cwd: &Path, req: &Request) -> Result<PathBuf, String> {
     if let Some(set) = vars.get("CARGO_TARGET_DIR") {
-        return if is_under(Path::new(set), root, cwd) {
-            Ok(resolve(Path::new(set), cwd))
-        } else {
-            Err(format!(
-                "CARGO_TARGET_DIR={set} is outside DEV_HOST_ROOT={}; unset it so dev-host \
-                 assigns a slot, or point it under the root",
-                root.display()
-            ))
-        };
+        return host.allow_build_dir("CARGO_TARGET_DIR", Path::new(set), cwd);
     }
+    let root = host.root();
     let worktree = match &req.worktree {
         Some(w) => resolve(w, cwd),
         None => worktree_of(cwd),
@@ -214,16 +212,17 @@ pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result
         .as_deref()
         .map(sanitize)
         .unwrap_or_else(|| project_of(&worktree));
-    let (toolchain, host) = toolchain(vars, &worktree);
+    let (toolchain, host_triple) = toolchain(vars, &worktree);
     let target = req
         .target
         .clone()
         .or_else(|| vars.get("CARGO_BUILD_TARGET").map(str::to_owned))
-        .or(host)
+        .or(host_triple)
         .unwrap_or_else(|| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
     let inputs = KeyInputs::new(toolchain, target, vars);
-    let key_dir = root.join("build").join(project).join(inputs.key());
-    // A symlinked `build/` (or level below it) would put the build off the root's volume.
+    let key_dir = host.dir().join("build").join(project).join(inputs.key());
+    // A symlinked `hosts/`, host folder, `build/` (or level below it) would put the build off
+    // the root's volume or into another host's folder.
     crate::confine(&key_dir, root, cwd)?;
     std::fs::create_dir_all(&key_dir)
         .map_err(|e| format!("cannot create {}: {e}", key_dir.display()))?;
@@ -232,7 +231,7 @@ pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result
         // Informational only (for people and cleanup reports); a failed write doesn't matter.
         let _ = std::fs::write(&key_file, inputs.describe());
     }
-    let cap = config::slots_per_key(req.slots, vars, &config::read(root)?)?;
+    let cap = config::slots_per_key(req.slots, vars, &config::read(root)?.values)?;
     slots::assign(
         &key_dir,
         &worktree.to_string_lossy(),
@@ -271,15 +270,16 @@ pub fn tmp_id(vars: &Vars, session: Option<&str>) -> String {
 /// The temp folder variable this platform's tools read first.
 const TMP_VAR: &str = if cfg!(windows) { "TEMP" } else { "TMPDIR" };
 
-/// The temp folder (created, mode 0700 on Unix). An existing one already under `<root>/t` is
-/// kept, so repeated calls in one session don't scatter folders.
+/// The temp folder (created, mode 0700 on Unix). An existing one already under this host's
+/// `t/` is kept, so repeated calls in one session don't scatter folders.
 pub fn tmp_dir(
-    root: &Path,
+    host: &Host,
     vars: &Vars,
     cwd: &Path,
     session: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let t = root.join("t");
+    let root = host.root();
+    let t = host.dir().join("t");
     crate::confine(&t, root, cwd)?;
     if session.is_none()
         && let Some(current) = vars.get(TMP_VAR)
@@ -305,13 +305,13 @@ pub fn tmp_dir(
 
 /// Every assignment `env` prints, in order.
 pub fn assignments(
-    root: &Path,
+    host: &Host,
     vars: &Vars,
     cwd: &Path,
     req: &Request,
 ) -> Result<Vec<(String, String)>, String> {
-    let target = target_dir(root, vars, cwd, req)?;
-    let tmp = tmp_dir(root, vars, cwd, req.session.as_deref())?;
+    let target = target_dir(host, vars, cwd, req)?;
+    let tmp = tmp_dir(host, vars, cwd, req.session.as_deref())?;
     let tmp = tmp.to_string_lossy().into_owned();
     let mut out = vec![
         (
@@ -434,16 +434,21 @@ mod tests {
         assert_eq!(sanitize("Scene Works"), "scene-works");
     }
 
-    fn root(scratch: &Scratch) -> PathBuf {
-        let root = scratch.path().join("root");
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    /// Host `name`'s folder (created) under the scratch root.
+    fn host_named(scratch: &Scratch, name: &str) -> Host {
+        let host = Host::new(scratch.path().join("root"), name).unwrap();
+        std::fs::create_dir_all(host.dir()).unwrap();
+        host
+    }
+
+    fn host(scratch: &Scratch) -> Host {
+        host_named(scratch, "mac-a")
     }
 
     #[test]
     fn target_dir_is_sticky_per_worktree_and_separate_across_worktrees() {
         let scratch = Scratch::new("plan-sticky");
-        let root = root(&scratch);
+        let host = host(&scratch);
         let wt_a = scratch.path().join("a");
         let wt_b = scratch.path().join("b");
         std::fs::create_dir_all(&wt_a).unwrap();
@@ -455,67 +460,116 @@ mod tests {
             ..Request::default()
         };
         let vars = Vars::default();
-        let a1 = target_dir(&root, &vars, scratch.path(), &req(&wt_a)).unwrap();
-        let a2 = target_dir(&root, &vars, scratch.path(), &req(&wt_a)).unwrap();
-        let b = target_dir(&root, &vars, scratch.path(), &req(&wt_b)).unwrap();
+        let a1 = target_dir(&host, &vars, scratch.path(), &req(&wt_a)).unwrap();
+        let a2 = target_dir(&host, &vars, scratch.path(), &req(&wt_a)).unwrap();
+        let b = target_dir(&host, &vars, scratch.path(), &req(&wt_b)).unwrap();
         assert_eq!(a1, a2);
         assert_ne!(a1, b);
-        assert!(a1.starts_with(root.join("build").join("demo")));
+        assert!(a1.starts_with(host.dir().join("build").join("demo")));
         assert!(a1.join(slots::STAMP_FILE).is_file());
 
         let moved: Vars = [("MACOSX_DEPLOYMENT_TARGET", "15.0")].into_iter().collect();
-        let a3 = target_dir(&root, &moved, scratch.path(), &req(&wt_a)).unwrap();
+        let a3 = target_dir(&host, &moved, scratch.path(), &req(&wt_a)).unwrap();
         assert_ne!(a1.parent(), a3.parent(), "a new key gets a new folder");
+    }
+
+    #[test]
+    fn two_hosts_on_one_root_never_share_a_slot_or_temp_folder() {
+        let scratch = Scratch::new("plan-hosts");
+        let (mac_a, mac_b) = (host_named(&scratch, "mac-a"), host_named(&scratch, "mac-b"));
+        let wt = scratch.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let req = Request {
+            project: Some("demo".into()),
+            worktree: Some(wt.clone()),
+            target: Some("aarch64-apple-darwin".into()),
+            session: Some("same-session".into()),
+            ..Request::default()
+        };
+        let vars = Vars::default();
+        let on = |host: &Host| assignments(host, &vars, scratch.path(), &req).unwrap();
+        let (a, b) = (on(&mac_a), on(&mac_b));
+        for (key, _) in &a {
+            let value = |set: &[(String, String)]| {
+                PathBuf::from(&set.iter().find(|(k, _)| k == key).unwrap().1)
+            };
+            let (in_a, in_b) = (value(&a), value(&b));
+            assert!(in_a.starts_with(mac_a.dir()), "{key}: {}", in_a.display());
+            assert!(in_b.starts_with(mac_b.dir()), "{key}: {}", in_b.display());
+        }
+        // Each host keeps its own registry, and nothing lands at the root's top level.
+        let target = |set: &[(String, String)]| PathBuf::from(&set[0].1);
+        for (host, set) in [(&mac_a, &a), (&mac_b, &b)] {
+            let registry = target(set).parent().unwrap().join(slots::REGISTRY_FILE);
+            assert!(registry.starts_with(host.dir().join("build")));
+            assert!(registry.is_file());
+        }
+        let top: Vec<_> = std::fs::read_dir(mac_a.root())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(top, vec![std::ffi::OsString::from("hosts")]);
     }
 
     #[test]
     fn caller_target_dir_is_kept_under_root_and_refused_outside() {
         let scratch = Scratch::new("plan-caller");
-        let root = root(&scratch);
-        let inside = root.join("build/custom");
+        let host = host(&scratch);
+        let inside = host.dir().join("build/custom");
         let vars: Vars = [("CARGO_TARGET_DIR", inside.display().to_string())]
             .into_iter()
             .collect();
         assert_eq!(
-            target_dir(&root, &vars, scratch.path(), &Request::default()),
+            target_dir(&host, &vars, scratch.path(), &Request::default()),
             Ok(resolve(&inside, scratch.path()))
         );
+        let other = host.root().join("hosts/mac-b/build/custom");
+        let vars: Vars = [("CARGO_TARGET_DIR", other.display().to_string())]
+            .into_iter()
+            .collect();
+        let err = target_dir(&host, &vars, scratch.path(), &Request::default()).unwrap_err();
+        assert!(err.contains("another host"), "{err}");
         let outside = scratch.path().join("target");
         let vars: Vars = [("CARGO_TARGET_DIR", outside.display().to_string())]
             .into_iter()
             .collect();
-        let err = target_dir(&root, &vars, scratch.path(), &Request::default()).unwrap_err();
+        let err = target_dir(&host, &vars, scratch.path(), &Request::default()).unwrap_err();
         assert!(err.contains("outside DEV_HOST_ROOT"), "{err}");
     }
 
-    /// A root whose `level` (relative to it) is a symlink to a folder outside the root.
+    /// A host whose `level` (relative to the root) is a symlink to a folder outside the root.
     #[cfg(unix)]
-    fn root_with_link(scratch: &Scratch, level: &str) -> (PathBuf, PathBuf) {
-        let root = root(scratch);
+    fn host_with_link(scratch: &Scratch, level: &str) -> (Host, PathBuf) {
+        let host = Host::new(scratch.path().join("root"), "mac-a").unwrap();
         let outside = scratch.path().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        let link = root.join(level);
+        let link = host.root().join(level);
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&outside, &link).unwrap();
-        (root, outside)
+        (host, outside)
     }
 
     #[cfg(unix)]
     #[test]
     fn generated_target_dir_refuses_symlinked_levels_under_the_root() {
-        for level in ["build", "build/demo"] {
+        for level in [
+            "hosts",
+            "hosts/mac-a",
+            "hosts/mac-a/build",
+            "hosts/mac-a/build/demo",
+        ] {
             let scratch = Scratch::new("plan-link");
-            let (root, outside) = root_with_link(&scratch, level);
+            let (host, outside) = host_with_link(&scratch, level);
             let req = Request {
                 project: Some("demo".into()),
                 worktree: Some(scratch.path().to_path_buf()),
                 target: Some("aarch64-apple-darwin".into()),
                 ..Request::default()
             };
-            let err = target_dir(&root, &Vars::default(), scratch.path(), &req).unwrap_err();
+            let err = target_dir(&host, &Vars::default(), scratch.path(), &req).unwrap_err();
             assert!(err.contains("is a symlink"), "{level}: {err}");
             assert!(
-                err.contains(&root.join(level).display().to_string()),
+                err.contains(&host.root().join(level).display().to_string()),
                 "{err}"
             );
             assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "{level}");
@@ -526,29 +580,41 @@ mod tests {
     #[test]
     fn tmp_dir_refuses_a_symlinked_t() {
         let scratch = Scratch::new("plan-tlink");
-        let (root, outside) = root_with_link(&scratch, "t");
-        let err = tmp_dir(&root, &Vars::default(), scratch.path(), Some("s")).unwrap_err();
+        let (host, outside) = host_with_link(&scratch, "hosts/mac-a/t");
+        let err = tmp_dir(&host, &Vars::default(), scratch.path(), Some("s")).unwrap_err();
         assert!(err.contains("is a symlink"), "{err}");
-        let inherited: Vars = [(TMP_VAR, root.join("t/abc").display().to_string())]
+        let inherited: Vars = [(TMP_VAR, host.dir().join("t/abc").display().to_string())]
             .into_iter()
             .collect();
-        assert!(tmp_dir(&root, &inherited, scratch.path(), None).is_err());
+        assert!(tmp_dir(&host, &inherited, scratch.path(), None).is_err());
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[test]
     fn tmp_dir_is_short_stable_per_session_and_created() {
         let scratch = Scratch::new("plan-tmp");
-        let root = root(&scratch);
+        let host = host(&scratch);
         let vars = Vars::default();
-        let a = tmp_dir(&root, &vars, scratch.path(), Some("s-1")).unwrap();
-        let b = tmp_dir(&root, &vars, scratch.path(), Some("s-1")).unwrap();
-        let c = tmp_dir(&root, &vars, scratch.path(), Some("s-2")).unwrap();
+        let a = tmp_dir(&host, &vars, scratch.path(), Some("s-1")).unwrap();
+        let b = tmp_dir(&host, &vars, scratch.path(), Some("s-1")).unwrap();
+        let c = tmp_dir(&host, &vars, scratch.path(), Some("s-2")).unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert!(a.is_dir());
         assert_eq!(a.file_name().unwrap().len(), 8);
-        assert_eq!(a.parent().unwrap(), root.join("t"));
+        assert_eq!(a.parent().unwrap(), host.dir().join("t"));
+        // A TMPDIR inherited from another host's folder is not kept.
+        let foreign: Vars = [(
+            TMP_VAR,
+            host.root()
+                .join("hosts/mac-b/t/abcd1234")
+                .display()
+                .to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let d = tmp_dir(&host, &foreign, scratch.path(), None).unwrap();
+        assert!(d.starts_with(host.dir().join("t")), "{}", d.display());
 
         let run: Vars = [("GITHUB_RUN_ID", "42"), ("GITHUB_RUN_ATTEMPT", "1")]
             .into_iter()

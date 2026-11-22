@@ -1,13 +1,19 @@
-//! `dev-host cleanup`: keeps the root bounded (requirements E8 and E9).
+//! `dev-host cleanup`: keeps this host's folder bounded (requirements E8 and E9).
 //!
-//! What it may delete, and nothing else:
+//! Several hosts may share one root, and a host cannot see another host's processes, so
+//! cleanup deletes only inside this host's own folder `<root>/hosts/<host>/` ([`Host`]). What
+//! it may delete there, and nothing else:
 //! - build slots `build/<project>/<key>/slot-<n>/` whose stamp file is older than `age_days`;
 //! - entries of `t/` and `campaigns/<project>/<id>/work/` folders whose newest file (a deep
 //!   scan of every file, not the folder's own mtime) is older than `age_days`;
 //! - when `build/` or `t/` is over its budget, the least recently used idle entries of that
 //!   folder until it is under budget, warm build slots last.
 //!
-//! `campaigns/*/*/evidence/`, `weights/`, `locks/` and every other folder are only measured.
+//! The budgets apply to this host's folder. Its `locks/`, its `cache/` (caches a tool updates
+//! in place) and every other folder in it are only measured. At the root, the shared
+//! `weights/`, `cache/` and `campaigns/*/*/evidence/` (and any other top-level folder) are only
+//! measured; `hosts/` is never entered except for this host's own folder. The cache budget is
+//! reported against the shared `cache/` plus this host's `cache/`, and never enforced.
 //!
 //! An entry is never deleted while a cargo `.cargo-lock` in it is held, while a live process
 //! has a file in it open (or mapped, or running) or uses it as its working folder, or when the
@@ -32,6 +38,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::config::Budgets;
+use crate::host::{HOSTS_DIR, Host};
 use crate::slots::{self, BusyProbe};
 use crate::{is_link, resolve};
 
@@ -298,7 +305,7 @@ impl Report {
                     .budget
                     .map(|b| format!(" of {} budget", gb(b)))
                     .unwrap_or_default();
-                out.push_str(&format!("  {:<18} {}{budget}\n", s.name, gb(s.bytes)));
+                out.push_str(&format!("  {:<32} {}{budget}\n", s.name, gb(s.bytes)));
             }
         }
         for o in &self.over_budget {
@@ -600,22 +607,25 @@ impl Run<'_> {
     }
 }
 
-/// Runs cleanup on `root`. `now` is the reference time for ages.
+/// Runs cleanup on this host's folder of `host`'s root. `now` is the reference time for ages.
 pub fn run(
-    root: &Path,
+    host: &Host,
     budgets: &Budgets,
     dry_run: bool,
     now: SystemTime,
     live: &dyn Liveness,
     busy: &dyn BusyProbe,
 ) -> Result<Report, String> {
-    let root = root
+    let root = host
+        .root()
         .canonicalize()
-        .map_err(|e| format!("cannot resolve {}: {e}", root.display()))?;
+        .map_err(|e| format!("cannot resolve {}: {e}", host.root().display()))?;
+    // A linked `hosts/` or host folder could lead into another host's folder or off the root.
+    let own = crate::confine(&root.join(HOSTS_DIR).join(host.name()), &root, &root)?;
     let open = live_paths(live)?;
     let mut run = Run {
         budgets,
-        confine: Some(root.clone()),
+        confine: Some(own.clone()),
         now,
         open,
         busy,
@@ -628,11 +638,11 @@ pub fn run(
         run.report.notes.push(note.to_owned());
     }
 
-    // Scan. A symlinked folder on the way to a candidate could lead outside the root, so no
-    // level is followed through a link: the top-level areas, projects and campaigns included.
+    // Scan. A symlinked folder on the way to a candidate could lead outside the host's folder,
+    // so no level is followed through a link: the areas, projects and campaigns included.
     let mut candidates = Vec::new();
     let mut build_other = 0u64;
-    for project in run.unlinked_children(&root.join("build")) {
+    for project in run.unlinked_children(&own.join("build")) {
         if !is_real_dir(&project) {
             build_other += usage(&project).bytes;
             continue;
@@ -670,10 +680,10 @@ pub fn run(
             }
         }
     }
-    for path in run.unlinked_children(&root.join("t")) {
+    for path in run.unlinked_children(&own.join("t")) {
         candidates.push(plain_candidate(path, Area::T));
     }
-    for project in run.unlinked_children(&root.join("campaigns")) {
+    for project in run.unlinked_children(&own.join("campaigns")) {
         for campaign in run.unlinked_children(&project) {
             if run.skip_link(&campaign) {
                 continue;
@@ -684,7 +694,7 @@ pub fn run(
             }
         }
     }
-    let campaigns_total = usage(&root.join("campaigns")).bytes;
+    let campaigns_total = usage(&own.join("campaigns")).bytes;
 
     // E8: age.
     let limit = run.age_limit();
@@ -696,7 +706,7 @@ pub fn run(
         }
     }
 
-    // E9: budgets for build/ and t/.
+    // E9: budgets for this host's build/ and t/.
     for (area, budget, other) in [
         (Area::Build, budgets.build, build_other),
         (Area::T, budgets.t, 0),
@@ -726,15 +736,14 @@ pub fn run(
         }
     }
 
-    // Report sizes after deletions.
+    // Report sizes after deletions: this host's folder, then the shared top level.
+    let prefix = format!("{HOSTS_DIR}/{}/", host.name());
     let work_total = bytes_in(&candidates, Area::CampaignWork, false);
+    let mut cache_total = 0u64;
     let mut sizes = Vec::new();
     let mut loose = 0u64;
-    for path in children(&root) {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+    for path in children(&own) {
+        let name = file_name(&path);
         if !is_real_dir(&path) {
             loose += usage(&path).bytes;
             continue;
@@ -749,22 +758,61 @@ pub fn run(
                 campaigns_total.saturating_sub(bytes_in(&candidates, Area::CampaignWork, true)),
                 None,
             ),
-            "cache" => (usage(&path).bytes, budgets.cache),
             "docker" => (usage(&path).bytes, budgets.docker),
+            "cache" => {
+                let bytes = usage(&path).bytes;
+                cache_total += bytes;
+                (bytes, None)
+            }
             _ => (usage(&path).bytes, None),
         };
         sizes.push(Size {
-            name: format!("{name}/"),
+            name: format!("{prefix}{name}/"),
             bytes,
             budget,
         });
         if name == "campaigns" {
             sizes.push(Size {
-                name: "campaigns/*/*/work".to_owned(),
+                name: format!("{prefix}campaigns/*/*/work"),
                 bytes: work_total,
                 budget: budgets.campaigns_work,
             });
         }
+    }
+    if loose > 0 {
+        sizes.push(Size {
+            name: format!("(files in {prefix})"),
+            bytes: loose,
+            budget: None,
+        });
+    }
+    let mut loose = 0u64;
+    for path in children(&root) {
+        let name = file_name(&path);
+        if name == HOSTS_DIR {
+            // Other hosts' folders are theirs to measure.
+            continue;
+        }
+        if !is_real_dir(&path) {
+            loose += usage(&path).bytes;
+            continue;
+        }
+        let bytes = usage(&path).bytes;
+        if name == "cache" {
+            cache_total += bytes;
+        }
+        sizes.push(Size {
+            name: format!("{name}/"),
+            bytes,
+            budget: None,
+        });
+    }
+    if budgets.cache.is_some() || cache_total > 0 {
+        sizes.push(Size {
+            name: format!("cache/ + {prefix}cache/"),
+            bytes: cache_total,
+            budget: budgets.cache,
+        });
     }
     if loose > 0 {
         sizes.push(Size {
@@ -787,6 +835,12 @@ pub fn run(
     }
     run.report.sizes = sizes;
     Ok(run.report)
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Total bytes of `area`'s candidates that are gone (`gone`) or still there (`!gone`).
@@ -936,9 +990,9 @@ mod tests {
             .unwrap();
     }
 
-    /// A slot under `<root>/build/demo/key/` with a payload file, stamped `stamp_age` days ago.
-    fn slot(root: &Path, worktree: &str, warm: bool, stamp_age: u64, bytes: usize) -> PathBuf {
-        let key = root.join("build/demo/key");
+    /// A slot under `<own>/build/demo/key/` with a payload file, stamped `stamp_age` days ago.
+    fn slot(own: &Path, worktree: &str, warm: bool, stamp_age: u64, bytes: usize) -> PathBuf {
+        let key = own.join("build/demo/key");
         let dir = slots::assign(&key, worktree, 8, 0, warm, &CargoLockProbe).unwrap();
         write_aged(&dir.join("debug/payload"), bytes, days_ago(stamp_age));
         set_mtime(&dir.join(slots::STAMP_FILE), days_ago(stamp_age));
@@ -951,29 +1005,39 @@ mod tests {
         b
     }
 
-    fn root(scratch: &Scratch) -> PathBuf {
-        let root = scratch.path().join("root");
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    /// A host named `name` on the scratch root, and its folder (created). Everything cleanup
+    /// may delete lives in that folder.
+    fn host_named(scratch: &Scratch, name: &str) -> (Host, PathBuf) {
+        let host = Host::new(scratch.path().join("root"), name).unwrap();
+        std::fs::create_dir_all(host.dir()).unwrap();
+        let own = host.dir();
+        (host, own)
+    }
+
+    fn host(scratch: &Scratch) -> (Host, PathBuf) {
+        host_named(scratch, "mac-a")
     }
 
     #[test]
     fn age_rule_removes_stale_entries_and_keeps_protected_folders() {
         let scratch = Scratch::new("cleanup-age");
-        let root = root(&scratch);
-        let stale_slot = slot(&root, "/w/old", false, 8, 10);
-        let fresh_slot = slot(&root, "/w/new", false, 1, 10);
+        let (host, own) = host(&scratch);
+        let stale_slot = slot(&own, "/w/old", false, 8, 10);
+        let fresh_slot = slot(&own, "/w/new", false, 1, 10);
         // Directory mtime is fresh, but the newest file is 8 days old: deep scan wins.
-        write_aged(&root.join("t/oldtmp01/a/b/f"), 10, days_ago(8));
-        write_aged(&root.join("t/newtmp01/a/f"), 10, days_ago(8));
-        write_aged(&root.join("t/newtmp01/g"), 10, days_ago(2));
-        write_aged(&root.join("campaigns/p/c1/work/x"), 10, days_ago(9));
+        write_aged(&own.join("t/oldtmp01/a/b/f"), 10, days_ago(8));
+        write_aged(&own.join("t/newtmp01/a/f"), 10, days_ago(8));
+        write_aged(&own.join("t/newtmp01/g"), 10, days_ago(2));
+        write_aged(&own.join("campaigns/p/c1/work/x"), 10, days_ago(9));
+        write_aged(&own.join("locks/apple-metal.lock"), 0, days_ago(90));
+        // Shared folders at the root: measured, never cleaned, however old.
+        let root = host.root();
         write_aged(&root.join("campaigns/p/c1/evidence/x"), 10, days_ago(90));
         write_aged(&root.join("weights/p/w.bin"), 10, days_ago(90));
-        write_aged(&root.join("locks/apple-metal.lock"), 0, days_ago(90));
+        write_aged(&root.join("cache/p/c.bin"), 10, days_ago(90));
 
         let report = run(
-            &root,
+            &host,
             &budgets(|_| {}),
             false,
             SystemTime::now(),
@@ -983,37 +1047,116 @@ mod tests {
         .unwrap();
         assert!(!stale_slot.exists());
         assert!(fresh_slot.exists());
-        assert!(!root.join("t/oldtmp01").exists());
-        assert!(root.join("t/newtmp01").exists());
-        assert!(!root.join("campaigns/p/c1/work").exists());
+        assert!(!own.join("t/oldtmp01").exists());
+        assert!(own.join("t/newtmp01").exists());
+        assert!(!own.join("campaigns/p/c1/work").exists());
         assert!(root.join("campaigns/p/c1/evidence/x").exists());
         assert!(root.join("weights/p/w.bin").exists());
-        assert!(root.join("locks/apple-metal.lock").exists());
+        assert!(root.join("cache/p/c.bin").exists());
+        assert!(own.join("locks/apple-metal.lock").exists());
         assert_eq!(report.removed.len(), 3, "{}", report.render());
         assert!(report.errors.is_empty(), "{}", report.render());
-        let entries = slots::entries(&root.join("build/demo/key")).unwrap();
+        let entries = slots::entries(&own.join("build/demo/key")).unwrap();
         assert_eq!(entries.len(), 1, "the removed slot leaves the registry");
         let text = report.render();
         for name in [
-            "build/",
-            "t/",
-            "campaigns/",
-            "campaigns/*/*/work",
-            "weights/",
-            "locks/",
+            "hosts/mac-a/build/",
+            "hosts/mac-a/t/",
+            "hosts/mac-a/campaigns/",
+            "hosts/mac-a/campaigns/*/*/work",
+            "hosts/mac-a/locks/",
+            "  campaigns/",
+            "  weights/",
+            "  cache/",
         ] {
             assert!(text.contains(name), "size line for {name}: {text}");
         }
     }
 
     #[test]
+    fn cleanup_never_touches_another_hosts_folder_or_shared_folders() {
+        let scratch = Scratch::new("cleanup-hosts");
+        let (host_a, own_a) = host_named(&scratch, "mac-a");
+        let (_host_b, own_b) = host_named(&scratch, "mac-b");
+        let root = host_a.root().to_path_buf();
+        // Both hosts hold the same stale entries; only mac-a runs cleanup, with zero budgets.
+        for own in [&own_a, &own_b] {
+            slot(own, "/w/same-path", false, 30, 10);
+            write_aged(&own.join("t/old00001/f"), 10, days_ago(30));
+            write_aged(&own.join("campaigns/p/c1/work/x"), 10, days_ago(30));
+        }
+        write_aged(&root.join("campaigns/p/c1/evidence/x"), 10, days_ago(90));
+        write_aged(&root.join("weights/p/w.bin"), 10, days_ago(90));
+        write_aged(&root.join("cache/p/c.bin"), 10, days_ago(90));
+        write_aged(&own_a.join("cache/p/DerivedData/x"), 10, days_ago(90));
+        let zero = budgets(|b| {
+            b.build = Some(0);
+            b.t = Some(0);
+            b.cache = Some(0);
+            b.campaigns_work = Some(0);
+        });
+        let report = run(
+            &host_a,
+            &zero,
+            false,
+            SystemTime::now(),
+            &NoProcesses,
+            &CargoLockProbe,
+        )
+        .unwrap();
+        let text = report.render();
+        assert_eq!(report.removed.len(), 3, "{text}");
+        for r in &report.removed {
+            assert!(r.path.starts_with(&own_a), "{}: {text}", r.path.display());
+        }
+        assert!(!own_a.join("t/old00001").exists());
+        for kept in [
+            own_b.join("build/demo/key/slot-0/debug/payload"),
+            own_b.join("t/old00001/f"),
+            own_b.join("campaigns/p/c1/work/x"),
+            root.join("campaigns/p/c1/evidence/x"),
+            root.join("weights/p/w.bin"),
+            root.join("cache/p/c.bin"),
+            own_a.join("cache/p/DerivedData/x"),
+        ] {
+            assert!(kept.exists(), "{} was deleted: {text}", kept.display());
+        }
+        assert_eq!(
+            slots::entries(&own_b.join("build/demo/key")).unwrap().len(),
+            1
+        );
+        // The other host is never measured either; the shared cache is reported over budget.
+        assert!(!text.contains("mac-b"), "{text}");
+        assert!(text.contains("hosts/mac-a/cache/"), "{text}");
+        let cache = report
+            .sizes
+            .iter()
+            .find(|s| s.name == "cache/ + hosts/mac-a/cache/")
+            .expect("combined cache line");
+        let parts: u64 = report
+            .sizes
+            .iter()
+            .filter(|s| s.name == "cache/" || s.name == "hosts/mac-a/cache/")
+            .map(|s| s.bytes)
+            .sum();
+        assert_eq!(cache.bytes, parts, "{text}");
+        assert!(
+            report
+                .over_budget
+                .iter()
+                .any(|o| o.starts_with("cache/ + ")),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn dry_run_deletes_nothing() {
         let scratch = Scratch::new("cleanup-dry");
-        let root = root(&scratch);
-        let stale_slot = slot(&root, "/w/old", false, 8, 10);
-        write_aged(&root.join("t/oldtmp01/f"), 10, days_ago(8));
+        let (host, own) = host(&scratch);
+        let stale_slot = slot(&own, "/w/old", false, 8, 10);
+        write_aged(&own.join("t/oldtmp01/f"), 10, days_ago(8));
         let report = run(
-            &root,
+            &host,
             &budgets(|_| {}),
             true,
             SystemTime::now(),
@@ -1023,31 +1166,31 @@ mod tests {
         .unwrap();
         assert_eq!(report.removed.len(), 2);
         assert!(stale_slot.exists());
-        assert!(root.join("t/oldtmp01/f").exists());
+        assert!(own.join("t/oldtmp01/f").exists());
         assert!(report.render().contains("would remove"));
     }
 
     #[test]
     fn held_cargo_lock_and_listed_processes_keep_stale_entries() {
         let scratch = Scratch::new("cleanup-live");
-        let root = root(&scratch);
-        let locked_slot = slot(&root, "/w/locked", false, 8, 10);
+        let (host, own) = host(&scratch);
+        let locked_slot = slot(&own, "/w/locked", false, 8, 10);
         let lock_path = locked_slot.join("debug").join(CARGO_LOCK);
         std::fs::write(&lock_path, "").unwrap();
         let held = OpenOptions::new().write(true).open(&lock_path).unwrap();
         held.lock().unwrap();
-        write_aged(&root.join("t/inuse001/f"), 10, days_ago(8));
+        write_aged(&own.join("t/inuse001/f"), 10, days_ago(8));
         let report = run(
-            &root,
+            &host,
             &budgets(|_| {}),
             false,
             SystemTime::now() + DAY,
-            &Listed(vec![root.join("t/inuse001/f")]),
+            &Listed(vec![own.join("t/inuse001/f")]),
             &CargoLockProbe,
         )
         .unwrap();
         assert!(locked_slot.exists());
-        assert!(root.join("t/inuse001/f").exists());
+        assert!(own.join("t/inuse001/f").exists());
         assert!(report.removed.is_empty(), "{}", report.render());
         let text = report.render();
         assert!(text.contains("cargo lock is held"), "{text}");
@@ -1058,32 +1201,32 @@ mod tests {
     #[test]
     fn real_process_scan_sees_an_open_file_and_a_working_folder() {
         let scratch = Scratch::new("cleanup-proc");
-        let root = root(&scratch);
-        write_aged(&root.join("t/openfile/f"), 10, days_ago(8));
-        write_aged(&root.join("t/cwdhere1/f"), 10, days_ago(8));
-        write_aged(&root.join("t/idle0001/f"), 10, days_ago(8));
-        let _open = File::open(root.join("t/openfile/f")).unwrap();
+        let (host, own) = host(&scratch);
+        write_aged(&own.join("t/openfile/f"), 10, days_ago(8));
+        write_aged(&own.join("t/cwdhere1/f"), 10, days_ago(8));
+        write_aged(&own.join("t/idle0001/f"), 10, days_ago(8));
+        let _open = File::open(own.join("t/openfile/f")).unwrap();
         #[cfg(unix)]
         let mut child = std::process::Command::new("sleep")
             .arg("60")
-            .current_dir(root.join("t/cwdhere1"))
+            .current_dir(own.join("t/cwdhere1"))
             .spawn()
             .unwrap();
         #[cfg(windows)]
         let mut child = std::process::Command::new("cmd")
             .args(["/C", "ping -n 60 127.0.0.1 >NUL"])
-            .current_dir(root.join("t/cwdhere1"))
+            .current_dir(own.join("t/cwdhere1"))
             .spawn()
             .unwrap();
         // A Windows child opens its working folder while it starts, after `spawn` returns.
         let started = poll(Duration::from_secs(10), || {
             held_by_process(
-                &root.join("t/cwdhere1"),
+                &own.join("t/cwdhere1"),
                 &live_paths(&ProcessLiveness).unwrap(),
             )
         });
         let report = run(
-            &root,
+            &host,
             &budgets(|_| {}),
             false,
             SystemTime::now(),
@@ -1094,9 +1237,9 @@ mod tests {
         let _ = child.wait();
         assert!(started, "the child's working folder was never listed");
         let report = report.unwrap();
-        assert!(!root.join("t/idle0001").exists(), "{}", report.render());
-        assert!(root.join("t/openfile/f").exists(), "{}", report.render());
-        assert!(root.join("t/cwdhere1").exists(), "{}", report.render());
+        assert!(!own.join("t/idle0001").exists(), "{}", report.render());
+        assert!(own.join("t/openfile/f").exists(), "{}", report.render());
+        assert!(own.join("t/cwdhere1").exists(), "{}", report.render());
     }
 
     /// Whether `check` holds within `limit`, tried every 50 ms.
@@ -1227,21 +1370,21 @@ mod tests {
     #[test]
     fn windows_cleanup_keeps_entries_a_live_process_uses_until_it_exits() {
         let scratch = Scratch::new("cleanup-win-run");
-        let root = root(&scratch);
-        let hold = root.join("t/held0001/f");
+        let (host, own) = host(&scratch);
+        let hold = own.join("t/held0001/f");
         write_aged(&hold, 10, days_ago(8));
-        write_aged(&root.join("t/cwd00001/f"), 10, days_ago(8));
-        write_aged(&root.join("t/idle0001/f"), 10, days_ago(8));
-        std::fs::create_dir_all(root.join("t/exe00001")).unwrap();
-        let mut child = spawn_holder(&root.join("t/exe00001"), &root.join("t/cwd00001"), &hold);
+        write_aged(&own.join("t/cwd00001/f"), 10, days_ago(8));
+        write_aged(&own.join("t/idle0001/f"), 10, days_ago(8));
+        std::fs::create_dir_all(own.join("t/exe00001")).unwrap();
+        let mut child = spawn_holder(&own.join("t/exe00001"), &own.join("t/cwd00001"), &hold);
         let used: Vec<PathBuf> = ["held0001", "cwd00001", "exe00001"]
             .iter()
-            .map(|d| root.join("t").join(d))
+            .map(|d| own.join("t").join(d))
             .collect();
         let started = poll(Duration::from_secs(30), || held(&used) == [true; 3]);
         let cleanup = || {
             run(
-                &root,
+                &host,
                 &budgets(|_| {}),
                 false,
                 SystemTime::now(),
@@ -1259,7 +1402,7 @@ mod tests {
             held(&used)
         );
         let text = report.render();
-        assert!(!root.join("t/idle0001").exists(), "{text}");
+        assert!(!own.join("t/idle0001").exists(), "{text}");
         for dir in &used {
             assert!(dir.exists(), "{} was removed: {text}", dir.display());
         }
@@ -1292,7 +1435,7 @@ mod tests {
         // A copy of a shared library this test binary uses, preloaded into a child: the loader
         // maps it and closes its descriptor, so only /proc/<pid>/maps shows it.
         let scratch = Scratch::new("cleanup-maps");
-        let root = root(&scratch);
+        let (host, own) = host(&scratch);
         let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
         let Some(lib) = mapped_paths(&maps).find(|p| {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
@@ -1301,7 +1444,7 @@ mod tests {
             eprintln!("no shared library other than libc is mapped; nothing to preload");
             return;
         };
-        let copy = root.join("t/mapped01/lib.so");
+        let copy = own.join("t/mapped01/lib.so");
         std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
         std::fs::copy(&lib, &copy).unwrap();
         let mut child = std::process::Command::new("sleep")
@@ -1350,7 +1493,7 @@ mod tests {
     #[test]
     fn symlinked_folders_are_never_followed() {
         let scratch = Scratch::new("cleanup-links");
-        let root = root(&scratch);
+        let (host, own) = host(&scratch);
         let outside = scratch.path().join("outside");
         let link = |target: &Path, at: &Path| {
             std::fs::create_dir_all(at.parent().unwrap()).unwrap();
@@ -1360,18 +1503,18 @@ mod tests {
         let slot_dir = outside.join("build/demo/key/slot-0");
         write_aged(&slot_dir.join("debug/payload"), 10, days_ago(9));
         write_aged(&slot_dir.join(slots::STAMP_FILE), 1, days_ago(9));
-        link(&outside.join("build"), &root.join("build"));
+        link(&outside.join("build"), &own.join("build"));
         // t/ itself.
         write_aged(&outside.join("t/old00001/f"), 10, days_ago(9));
-        link(&outside.join("t"), &root.join("t"));
+        link(&outside.join("t"), &own.join("t"));
         // A campaign project, and a campaign.
         write_aged(&outside.join("project/c1/work/x"), 10, days_ago(9));
-        link(&outside.join("project"), &root.join("campaigns/p1"));
+        link(&outside.join("project"), &own.join("campaigns/p1"));
         write_aged(&outside.join("campaign/work/x"), 10, days_ago(9));
-        link(&outside.join("campaign"), &root.join("campaigns/p2/c2"));
+        link(&outside.join("campaign"), &own.join("campaigns/p2/c2"));
 
         let report = run(
-            &root,
+            &host,
             &budgets(|b| {
                 b.build = Some(0);
                 b.t = Some(0);
@@ -1393,7 +1536,7 @@ mod tests {
         }
         for linked in ["build", "t", "campaigns/p1", "campaigns/p2/c2"] {
             assert!(
-                report.skipped.iter().any(|s| s.path == root.join(linked)),
+                report.skipped.iter().any(|s| s.path == own.join(linked)),
                 "{linked}: {}",
                 report.render()
             );
@@ -1404,26 +1547,26 @@ mod tests {
     #[test]
     fn deletion_is_confined_to_paths_whose_parent_resolves_inside_the_root() {
         let scratch = Scratch::new("cleanup-inside");
-        let root = root(&scratch);
+        let (_, own) = host(&scratch);
         let outside = scratch.path().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        std::fs::create_dir_all(root.join("t")).unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("t/link")).unwrap();
-        assert!(inside(&root.join("t/a"), &root));
+        std::fs::create_dir_all(own.join("t")).unwrap();
+        std::os::unix::fs::symlink(&outside, own.join("t/link")).unwrap();
+        assert!(inside(&own.join("t/a"), &own));
         // The link itself is inside (removing it removes the link); what is behind it is not.
-        assert!(inside(&root.join("t/link"), &root));
-        assert!(!inside(&root.join("t/link/a"), &root));
-        assert!(!inside(&root, &root));
-        assert!(!inside(&outside.join("a"), &root));
+        assert!(inside(&own.join("t/link"), &own));
+        assert!(!inside(&own.join("t/link/a"), &own));
+        assert!(!inside(&own, &own));
+        assert!(!inside(&outside.join("a"), &own));
     }
 
     #[test]
     fn failed_process_scan_removes_nothing() {
         let scratch = Scratch::new("cleanup-broken");
-        let root = root(&scratch);
-        write_aged(&root.join("t/old00001/f"), 10, days_ago(8));
+        let (host, own) = host(&scratch);
+        write_aged(&own.join("t/old00001/f"), 10, days_ago(8));
         let err = run(
-            &root,
+            &host,
             &budgets(|_| {}),
             false,
             SystemTime::now(),
@@ -1432,25 +1575,25 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("nothing was removed"), "{err}");
-        assert!(root.join("t/old00001/f").exists());
+        assert!(own.join("t/old00001/f").exists());
     }
 
     #[test]
     fn over_budget_build_evicts_least_recent_idle_slots_warm_last() {
         let scratch = Scratch::new("cleanup-budget");
-        let root = root(&scratch);
+        let (host, own) = host(&scratch);
         let mb = 1_000_000;
-        let warm = slot(&root, "/w/warm", true, 3, mb);
-        let older = slot(&root, "/w/older", false, 2, mb);
-        let newer = slot(&root, "/w/newer", false, 1, mb);
-        let busy = slot(&root, "/w/busy", false, 4, mb);
+        let warm = slot(&own, "/w/warm", true, 3, mb);
+        let older = slot(&own, "/w/older", false, 2, mb);
+        let newer = slot(&own, "/w/newer", false, 1, mb);
+        let busy = slot(&own, "/w/busy", false, 4, mb);
         let lock_path = busy.join("debug").join(CARGO_LOCK);
         std::fs::write(&lock_path, "").unwrap();
         let held = OpenOptions::new().write(true).open(&lock_path).unwrap();
         held.lock().unwrap();
         // Room for about two slots: the busy one stays, so one more may stay: the warm one.
         let report = run(
-            &root,
+            &host,
             &budgets(|b| b.build = Some(2_500_000)),
             false,
             SystemTime::now(),
@@ -1472,13 +1615,13 @@ mod tests {
     #[test]
     fn over_budget_t_evicts_oldest_first_and_reports_when_still_over() {
         let scratch = Scratch::new("cleanup-tbudget");
-        let root = root(&scratch);
+        let (host, own) = host(&scratch);
         let mb = 1_000_000;
-        write_aged(&root.join("t/aaaa0001/f"), mb, days_ago(3));
-        write_aged(&root.join("t/bbbb0002/f"), mb, days_ago(1));
-        write_aged(&root.join("t/cccc0003/f"), mb, days_ago(2));
+        write_aged(&own.join("t/aaaa0001/f"), mb, days_ago(3));
+        write_aged(&own.join("t/bbbb0002/f"), mb, days_ago(1));
+        write_aged(&own.join("t/cccc0003/f"), mb, days_ago(2));
         let report = run(
-            &root,
+            &host,
             &budgets(|b| b.t = Some(1_500_000)),
             false,
             SystemTime::now(),
@@ -1486,36 +1629,36 @@ mod tests {
             &CargoLockProbe,
         )
         .unwrap();
-        assert!(!root.join("t/aaaa0001").exists());
-        assert!(!root.join("t/cccc0003").exists());
-        assert!(root.join("t/bbbb0002").exists());
+        assert!(!own.join("t/aaaa0001").exists());
+        assert!(!own.join("t/cccc0003").exists());
+        assert!(own.join("t/bbbb0002").exists());
         assert!(report.over_budget.is_empty(), "{}", report.render());
 
-        write_aged(&root.join("t/dddd0004/f"), 3 * mb, days_ago(1));
-        let _open = File::open(root.join("t/dddd0004/f")).unwrap();
+        write_aged(&own.join("t/dddd0004/f"), 3 * mb, days_ago(1));
+        let _open = File::open(own.join("t/dddd0004/f")).unwrap();
         let report = run(
-            &root,
+            &host,
             &budgets(|b| b.t = Some(1_500_000)),
             false,
             SystemTime::now(),
-            &Listed(vec![root.join("t/dddd0004/f")]),
+            &Listed(vec![own.join("t/dddd0004/f")]),
             &CargoLockProbe,
         )
         .unwrap();
-        assert!(root.join("t/dddd0004").exists());
+        assert!(own.join("t/dddd0004").exists());
         assert_eq!(report.over_budget.len(), 1, "{}", report.render());
     }
 
     #[test]
     fn migrate_deletes_an_old_copy_and_refuses_dangerous_paths() {
         let scratch = Scratch::new("cleanup-migrate");
-        let root = root(&scratch);
+        let (host, own) = host(&scratch);
         let home = scratch.path().join("home");
         let old = home.join("old-target");
         write_aged(&old.join("debug/x"), 10, days_ago(1));
         let m = |p: &Path, dry| {
             migrate(
-                &root,
+                host.root(),
                 p,
                 Some(&home),
                 scratch.path(),
@@ -1530,8 +1673,9 @@ mod tests {
             PathBuf::from("/"),
             home.clone(),
             scratch.path().to_path_buf(),
-            root.clone(),
-            root.join("t"),
+            host.root().to_path_buf(),
+            own.clone(),
+            own.join("t"),
             scratch.path().join("missing"),
         ] {
             assert!(m(&bad, false).is_err(), "{} must be refused", bad.display());
@@ -1574,7 +1718,7 @@ mod tests {
             idle
         }));
         let report = migrate(
-            &root,
+            host.root(),
             &old,
             Some(&home),
             scratch.path(),
