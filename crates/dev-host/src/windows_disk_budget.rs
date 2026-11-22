@@ -579,7 +579,7 @@ mod tests {
         until(|| scratch.path().join("writing").exists());
 
         let mut old_owner = process.owner.clone();
-        old_owner.creation_time += 1;
+        old_owner.creation_time -= 1;
         assert!(Process::verified(&old_owner).is_err());
         fixture.0.kill().unwrap();
         fixture.wait();
