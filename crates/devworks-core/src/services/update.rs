@@ -208,13 +208,7 @@ impl UpdateService {
     pub fn poll(&self, manual: bool) -> Result<(), StorageError> {
         let state = self.state()?;
         let now = self.clock.now_ms().get();
-        if state.approval.is_some()
-            || state.retry_at_ms > now
-            || (!manual
-                && state
-                    .checked_at_ms
-                    .is_some_and(|last| last <= now && now < last.saturating_add(HOUR)))
-        {
+        if !poll_due(&state, now, manual) {
             return Ok(());
         }
         let cancel = {
@@ -276,22 +270,15 @@ impl UpdateService {
                         total,
                     };
                 };
-                match self
+                let stage = self
                     .source
-                    .stage(release, &self.running.target, cancel, &progress)
-                {
-                    Ok(stage) => {
-                        if !self.eligible_stage(&stage)
-                            || self.running.installed_binary_digest.is_none()
-                        {
-                            issue = Some(ReleaseError::rejected(
-                                "This release is staged. The installed owner or its storage migration is unqualified.",
-                            ));
-                        }
-                        Some(stage)
-                    }
-                    Err(error) => return Err(error),
+                    .stage(release, &self.running.target, cancel, &progress)?;
+                if !self.eligible_stage(&stage) || self.running.installed_binary_digest.is_none() {
+                    issue = Some(ReleaseError::rejected(
+                        "This release is staged. The installed owner or its storage migration is unqualified.",
+                    ));
                 }
+                Some(stage)
             }
         };
         Ok(PollResult {
@@ -373,19 +360,12 @@ impl UpdateService {
                             }
                         });
                     }
-                    match issue {
-                        Some(issue) => update_failure(&mut state, issue, now),
-                        None => {
-                            state.failures = 0;
-                            state.issue = if had_stage && state.update.is_none() {
-                                Some(format!(
-                                    "The previously staged update is no longer offered for DevWorks {version}."
-                                ))
-                            } else {
-                                None
-                            };
-                        }
-                    }
+                    state.failures = 0;
+                    state.issue = issue.map(|issue| issue.message).or_else(|| {
+                        (had_stage && state.update.is_none()).then(|| {
+                            format!("The previously staged update is no longer offered for DevWorks {version}.")
+                        })
+                    });
                 }
                 Err(error) => update_failure(&mut state, error, now),
             }
@@ -757,6 +737,16 @@ fn select<'a>(
     }
 }
 
+fn poll_due(state: &UpdateState, now: i64, manual: bool) -> bool {
+    state.approval.is_none()
+        && now >= state.retry_at_ms
+        && (manual
+            || state.failures > 0
+            || state
+                .checked_at_ms
+                .is_none_or(|last| now < last || now >= last.saturating_add(HOUR)))
+}
+
 fn update_failure(state: &mut UpdateState, error: ReleaseError, now: i64) {
     state.failures = (state.failures + 1).min(8);
     let delay = if error.cancelled {
@@ -767,4 +757,33 @@ fn update_failure(state: &mut UpdateState, error: ReleaseError, now: i64) {
     let jitter = now.rem_euclid(17_005);
     state.retry_at_ms = (now + delay + jitter).max(error.retry_after_ms.unwrap_or_default());
     state.issue = Some(error.message);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn due_checks_retry_an_offline_attempt_without_replaying_missed_hours() {
+        let mut state = UpdateState {
+            checked_at_ms: Some(10_000),
+            ..UpdateState::default()
+        };
+        assert!(!poll_due(&state, 20_000, false));
+        assert!(poll_due(&state, 20_000, true));
+        assert!(poll_due(&state, 10_000 + HOUR, false));
+        assert!(poll_due(&state, 10_000 + 8 * HOUR, false));
+        update_failure(
+            &mut state,
+            ReleaseError {
+                message: "rate limited".into(),
+                retry_after_ms: Some(500_000),
+                cancelled: false,
+            },
+            20_000,
+        );
+        assert!(!poll_due(&state, 499_999, true));
+        assert!(poll_due(&state, 500_000, false));
+        assert_eq!(state.checked_at_ms, Some(10_000));
+    }
 }
