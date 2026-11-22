@@ -25,8 +25,11 @@ cap applies within macOS sampling intervals. The OS controls cover process creat
 bytes through the private channel.
 
 Run the **Native PDF worker qualification** workflow to build each architecture natively,
-stage the executable and notices, unpack the resulting qualification archive, and exercise
-its worker through the real process host. Each target publishes binary and archive sizes,
+stage the executable and notices, and unpack the resulting qualification archive. The
+owned-worker and native Documents processor tests both resolve the worker beside the
+extracted desktop executable. The processor verifies page locators, scanned-page raster
+placement and encrypted refusal. A separate fixture verifies the missing-worker outcome
+and continued Word extraction. Each target publishes binary and archive sizes,
 SHA-256 digests, and platform/test evidence. The macOS qualification app and embedded worker
 are ad-hoc signed for this test. Production notarization, Windows installer signing, and
 OS-version qualification belong to the actual distribution process. Component results name the
