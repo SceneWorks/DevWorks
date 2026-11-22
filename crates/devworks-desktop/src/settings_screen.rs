@@ -98,6 +98,7 @@ pub enum SettingsAction {
     OpenJobs,
     OpenNotifications,
     OpenImports,
+    OpenUpdates,
     OpenRetention,
     OpenWorkspaceArchives,
     /// The provider-connections topic was opened (load connections and the catalog).
@@ -469,6 +470,9 @@ impl SettingsScreen {
                 }
                 if widgets::secondary_button(ui, "Import work history").clicked() {
                     actions.push(SettingsAction::OpenImports);
+                }
+                if widgets::secondary_button(ui, "App updates").clicked() {
+                    actions.push(SettingsAction::OpenUpdates);
                 }
                 host(ui, HostSection::Indexing);
             }

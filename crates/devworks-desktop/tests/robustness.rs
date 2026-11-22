@@ -1573,14 +1573,12 @@ fn every_route_keeps_its_essential_controls_on_the_minimum_window_at_the_largest
         }
         // The navigation footer sits below the last item; both overlays fit the window.
         let settings = nav(&h, "Settings").rect();
-        let updates = h
-            .get_by_role_and_label(Role::Button, "Updates: not checked")
-            .rect();
+        let updates = h.get_by_role_and_label(Role::Button, "Updates").rect();
         assert!(
             in_content(updates) && updates.top() >= settings.bottom() - 0.5,
             "@{scale}: the updates footer at {updates:?} (Settings nav at {settings:?})"
         );
-        click(&mut h, Role::Button, "Updates: not checked");
+        click(&mut h, Role::Button, "Updates");
         click(&mut h, Role::Button, "Notifications");
         let window = egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -1588,7 +1586,7 @@ fn every_route_keeps_its_essential_controls_on_the_minimum_window_at_the_largest
         )
         .expand(0.5);
         for text in [
-            "Update discovery, approval and installation",
+            "Installed DevWorks 0.1.0-test",
             "Reading, acknowledging, and opening links never approve or resume work.",
             "No notifications in this view.",
         ] {

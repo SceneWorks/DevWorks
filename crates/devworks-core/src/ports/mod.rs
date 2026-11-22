@@ -24,6 +24,7 @@ pub mod router;
 pub mod secrets;
 pub mod skill_files;
 pub mod storage;
+pub mod update;
 pub mod usage;
 pub mod web;
 pub mod workspace_archive;

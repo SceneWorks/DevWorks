@@ -23,6 +23,8 @@ devworks-core = { path = "../devworks-core" }
 devworks-engine = { path = "../devworks-engine" }
 eframe = { version = "=0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "wayland", "wgpu", "x11"] }
 base64 = "=0.22.1"
+ed25519-dalek = "=2.2.0"
+semver.workspace = true
 jiff = "=0.2.39"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 rfd = "=0.17.2"
@@ -52,8 +54,6 @@ devworks-engine = { path = "../devworks-engine", features = ["test-support"] }
 egui_kittest = "=0.37.0"
 # Seeds a work root the desktop does not create yet (the close-lifecycle test).
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
-# Signs a test publisher index (the Add-ons catalog paging test).
-ed25519-dalek = "=2.2.0"
 # An in-process MCP server the Settings resource and prompt test reads from.
 rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "io-util"] }
@@ -70,4 +70,4 @@ objc2-user-notifications = { version = "=0.2.2", default-features = false, featu
 zbus = "=5.19.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "=0.62.2", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_Storage_Packaging_Appx", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell"] }
+windows = { version = "=0.62.2", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_Storage_Packaging_Appx", "Win32_Storage_FileSystem", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_System_Com", "Win32_System_WinRT", "Win32_UI_Shell"] }

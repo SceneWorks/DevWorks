@@ -215,7 +215,7 @@ impl ArchiveDirectory {
         self.flush()
     }
 
-    fn publish_child(&self, source: &Self, name: &str) -> Result<(), StorageError> {
+    pub(crate) fn publish_child(&self, source: &Self, name: &str) -> Result<(), StorageError> {
         member(name)?;
         let sibling = source
             .location()

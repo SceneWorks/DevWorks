@@ -164,6 +164,7 @@ pub enum Effect {
     /// Publishes the client state the purge reviews, then submits the confirmed purge.
     ConfirmPurge,
     CloseForWorkspaceRestore,
+    OpenUpdates,
 }
 
 /// What the coordinator is told about the visible screen.

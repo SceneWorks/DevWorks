@@ -1964,6 +1964,10 @@ impl WriteTransaction for HandlerTx<'_> {
         self.inner.get_mut().archive_release_pins(authority, holder)
     }
 
+    fn updates(&mut self) -> Result<&mut dyn crate::ports::update::UpdateRepository, StorageError> {
+        self.inner.get_mut().updates()
+    }
+
     fn workspace_archives(
         &mut self,
     ) -> Result<&mut dyn crate::ports::storage::WorkspaceArchiveRepository, StorageError> {

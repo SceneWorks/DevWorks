@@ -13,3 +13,5 @@ Harness-enforced values are visible but not editable relaxations. Read-only revi
 The [Complete settings reference](help:settings-reference) lists the maintained keys, defaults, scope, adoption timing, and descriptions. Provider connections have their own [connection guide](help:settings-connections). Role instructions, tools, storage, and other section topics are linked from their Settings sections.
 
 Do not place credentials in ordinary setting text. Use the app's native credential intake so the secret value remains in its secret facility and only an opaque reference enters settings/history.
+
+Open [App updates and restart](help:app-updates) from General to check the release channel or review a staged update.

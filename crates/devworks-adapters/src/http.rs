@@ -71,6 +71,23 @@ impl HttpTransport for NativeHttp {
     }
 }
 impl NativeHttp {
+    /// A same-policy uncredentialed GET for bounded streaming of signed release assets.
+    /// The caller validates each redirect, asset identity and content.
+    pub(crate) fn public_asset(
+        &self,
+        url: &str,
+    ) -> Result<ureq::http::Response<ureq::Body>, HttpError> {
+        self.agent
+            .get(url)
+            .header("Accept", "application/octet-stream")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .config()
+            .timeout_global(Some(Duration::from_secs(180)))
+            .build()
+            .call()
+            .map_err(|error| classify(&error))
+    }
+
     fn exchange(&self, r: &HttpRequest, metadata: bool) -> Result<HttpExchange, HttpError> {
         let timeout = Some(Duration::from_millis(r.timeout_ms.max(1)));
         let result = match r.method {

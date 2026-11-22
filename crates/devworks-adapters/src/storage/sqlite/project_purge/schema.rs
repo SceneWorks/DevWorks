@@ -63,8 +63,9 @@ use rusqlite::Connection;
 /// the new records. Retention adds no project ownership edge.
 /// Migration 69 records workspace archive grants, proposals and distinct restore histories.
 /// Effect provenance is historical evidence with no foreign key to active project rows.
+/// Migration 70 records workspace-wide update discovery and approval with no project ownership edge.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "e18f5353a2ec8fa48b62d75ec448a2ed715a47651ae64e388a1ee2a60ec62d9e";
+    "0b51d4371a8fe2f807721dab088f945c091928c0846eebdee4497fac63c6254e";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

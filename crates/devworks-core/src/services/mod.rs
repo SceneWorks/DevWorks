@@ -44,6 +44,7 @@ pub mod router;
 pub mod runs;
 pub mod schemas;
 pub mod sessions;
+pub mod update;
 pub mod usage;
 pub mod watch;
 pub mod web;
@@ -395,6 +396,13 @@ impl UseCases {
         for op in diagnostics::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));
         }
+        self
+    }
+
+    /// Registers the shared, signed application update service.
+    pub fn with_updates(mut self, service: Arc<update::UpdateService>) -> Self {
+        self.register(update::STATUS, Some(service.clone()), None);
+        self.register(update::APPROVE, None, Some(service));
         self
     }
 

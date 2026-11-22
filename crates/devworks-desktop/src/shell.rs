@@ -40,6 +40,7 @@ mod project_purge;
 pub mod projects;
 mod settings;
 mod settings_secrets;
+pub(crate) mod updates;
 pub mod usage;
 mod watchers;
 pub mod work;
@@ -219,7 +220,7 @@ pub struct Shell {
     last_poll: Instant,
     /// The window's context, from the first frame on (screens make textures through it).
     egui: Option<egui::Context>,
-    updates_open: bool,
+    updates: updates::Panel,
     shutdown_summary: Option<String>,
     /// The text scale the native minimum window size was last set for.
     applied_scale: f32,
@@ -473,7 +474,7 @@ impl Shell {
             last_save: Instant::now(),
             last_poll: Instant::now(),
             egui: None,
-            updates_open: false,
+            updates: updates::Panel::default(),
             shutdown_summary: None,
             applied_scale: 0.0,
             control: init.control,
@@ -678,6 +679,7 @@ impl Shell {
                 Effect::RepositoryList(result) => self.repositories_listed(result),
                 Effect::ProjectMembers(project, result) => self.members_listed(project, result),
                 Effect::ConfirmPurge => self.confirm_purge(),
+                Effect::OpenUpdates => self.updates.open = true,
                 Effect::CloseForWorkspaceRestore => self.request_close(),
             }
         }
@@ -1141,6 +1143,12 @@ impl Shell {
     }
 
     fn apply(&mut self, slot: Slot, reply: Reply) {
+        if let Slot::Updates(slot) = slot {
+            if self.updates.apply(slot, reply) {
+                self.request_close();
+            }
+            return;
+        }
         let owner = slot.screen();
         self.with_screen(owner, |s, cx| s.apply(cx, slot, reply));
     }
@@ -1887,18 +1895,16 @@ impl Shell {
                 });
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                     // The left-aligned footer: installed version and the update message.
-                    let r = ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("Updates: not checked")
-                                    .small()
-                                    .color(theme::ACCENT),
-                            )
-                            .frame(false),
+                    let r = ui.add(
+                        egui::Button::new(
+                            RichText::new(self.updates.caption())
+                                .small()
+                                .color(theme::ACCENT),
                         )
-                        .on_hover_text("Update discovery arrives with DW-58");
+                        .frame(false),
+                    );
                     if r.clicked() {
-                        self.updates_open = !self.updates_open;
+                        self.updates.open = !self.updates.open;
                     }
                     ui.horizontal(|ui| {
                         let (dot, _) =
@@ -1938,27 +1944,10 @@ impl Shell {
         }
         self.with_typed(|d: &mut decisions::DecisionsUi, cx| d.notification_center(cx, ctx));
         self.with_typed(|screen: &mut work_imports::ImportsUi, cx| screen.window(cx, ctx));
-        if self.updates_open {
-            let mut open = true;
-            egui::Window::new("Updates")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(
-                    egui::Align2::LEFT_BOTTOM,
-                    egui::vec2(theme::NAV + 8.0, -36.0),
-                )
-                .show(ctx, |ui| {
-                    ui.label(format!("Installed: DevWorks {}", self.version));
-                    widgets::state_block(
-                        ui,
-                        &ViewState::Unavailable {
-                            what: "update discovery, approval and installation".into(),
-                            owner: "DW-58".into(),
-                        },
-                    );
-                });
-            self.updates_open = open;
+        if matches!(self.lifecycle, Lifecycle::Open) {
+            self.updates
+                .window(self.client.as_mut(), ctx, &self.version);
+            self.updates.tick(self.client.as_mut(), ctx);
         }
         if !matches!(self.lifecycle, Lifecycle::Open | Lifecycle::Closed) {
             let progress = self.control.as_ref().and_then(|c| c.progress());

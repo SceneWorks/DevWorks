@@ -75,6 +75,10 @@ const WORKSPACE_COORDINATOR: &str = "devworks-workspace-coordinator";
 /// Retry-key namespace of the desktop UI surface.
 pub const UI_INGRESS: &str = "desktop-ui";
 /// Lifetime of an upload ticket minted for an attachment (it is spent at once).
+use devworks_core::ports::update::{InstallApproval, ReleaseSource, RunningApplication};
+use devworks_core::protocol::records::UpdateChannel;
+use devworks_core::services::update::{APPROVE, InstallOutcome, UpdateService, UpdateStatus};
+
 pub const UPLOAD_TICKET_MS: i64 = 10 * 60 * 1000;
 
 #[cfg(target_os = "macos")]
@@ -105,6 +109,10 @@ pub struct DesktopConfig {
     pub user_name: String,
     /// The application build recorded with applied migrations.
     pub app_build: String,
+    /// A candidate opened by the one-shot, verified installed-app update handshake.
+    pub app_update: Option<InstallApproval>,
+    #[cfg(feature = "test-support")]
+    pub update_fixture: Option<(Arc<dyn ReleaseSource>, RunningApplication)>,
     /// Shared bound of the owned-process stop at shutdown (AD20 default 30 s).
     pub shutdown_bound: Duration,
     /// An explicitly configured Chromium-family browser executable (`DEVWORKS_BROWSER`), offered
@@ -166,6 +174,9 @@ impl DesktopConfig {
             data_root: data_root.into(),
             user_name: user_display_name(),
             app_build: concat!("devworks-desktop/", env!("CARGO_PKG_VERSION")).to_owned(),
+            app_update: None,
+            #[cfg(feature = "test-support")]
+            update_fixture: None,
             shutdown_bound: Duration::from_secs(30),
             browser_path: std::env::var_os("DEVWORKS_BROWSER")
                 .filter(|p| !p.is_empty())
@@ -277,9 +288,19 @@ pub struct Host {
     web: Arc<WebService>,
     /// The native outgoing MCP client the runtime installed at boot.
     mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>>,
-    restore_shutdown: Mutex<Option<Id>>,
+    restart: Mutex<Option<Restart>>,
+    updates: Arc<UpdateService>,
 }
+enum Restart {
+    Restore(Id),
+    Update(Box<InstallApproval>),
+}
+
 impl Host {
+    pub fn updates(&self) -> &Arc<UpdateService> {
+        &self.updates
+    }
+
     pub fn runtime(&self) -> &Arc<Runtime> {
         &self.runtime
     }
@@ -369,7 +390,27 @@ async fn compose(
     };
     let navigation =
         Arc::new(devworks_core::services::navigation::NavigationContextService::default());
-    let mut use_cases = UseCases::new().with_queue();
+    let release = || -> (Arc<dyn ReleaseSource>, RunningApplication) {
+        let mut source = crate::app_updates::source(&config.data_root);
+        if config.http.is_some() {
+            source = source.with_feed(Arc::new(devworks_core::ports::http::NoNetwork));
+        }
+        (Arc::new(source), crate::app_updates::running())
+    };
+    #[cfg(feature = "test-support")]
+    let (release_source, running_app) = config.update_fixture.clone().unwrap_or_else(release);
+    #[cfg(not(feature = "test-support"))]
+    let (release_source, running_app) = release();
+    let updates = Arc::new(UpdateService::new(
+        store.clone(),
+        release_source,
+        running_app,
+        clock.clone(),
+    ));
+    if store.info().boot_id.is_some() {
+        updates.bind_profile().map_err(StartError::Store)?;
+    }
+    let mut use_cases = UseCases::new().with_queue().with_updates(updates.clone());
     use_cases.register("ui.current_screen", Some(navigation.clone()), None);
     let authority = Arc::new(StoreAuthority {
         store: store.clone(),
@@ -748,6 +789,15 @@ async fn compose(
             ),
         ))
         .map_err(StartError::Principal)?;
+    if config.app_update.is_none()
+        && let Ok(Some(approval)) = updates.pending_approval()
+    {
+        let (outcome, detail) = crate::app_updates::previous_outcome(&config.data_root, &approval)
+            .unwrap_or_else(|error| (InstallOutcome::Uncertain, error));
+        if let Err(error) = updates.finish(&approval, outcome, &detail) {
+            eprintln!("App update outcome remains held: {error}");
+        }
+    }
     runtime.notification_wakeup();
     Ok(Host {
         runtime,
@@ -771,7 +821,8 @@ async fn compose(
         switchable,
         web,
         mcp_clients,
-        restore_shutdown: Mutex::new(None),
+        restart: Mutex::new(None),
+        updates,
     })
 }
 
@@ -878,6 +929,7 @@ impl Engine {
                         ActorId(Id::new(HOST_ACTOR).expect("valid actor")),
                     );
                     sqlite.app_build = config.app_build.clone();
+                    sqlite.app_update = config.app_update.clone();
                     let archive_files = Arc::new(NativeWorkspaceArchives::new(
                         config.data_root.clone(),
                         Arc::new(NativeArtifactFiles::new(
@@ -920,13 +972,14 @@ impl Engine {
                     let _ = stop_rx.await;
                     let processes = host.runtime.shutdown().await;
                     forward.abort();
-                    if let Some(proposal) = host.restore_shutdown.locked().take()
-                        && let Err(error) = arm_workspace_restore(&host, &proposal)
+                    let restart = host.restart.locked().take();
+                    if let Some(Restart::Restore(proposal)) = restart.as_ref()
+                        && let Err(error) = arm_workspace_restore(&host, proposal)
                     {
                         if let Some(service) = host.runtime.workspace_archives() {
                             let _ = service.note_shutdown_failure(
                                 &host.ctx,
-                                &proposal,
+                                proposal,
                                 &error.to_string(),
                             );
                         }
@@ -937,8 +990,26 @@ impl Engine {
                             error.to_string(),
                         );
                         entry.operation = Some("workspace.restore".into());
-                        entry.target_id = Some(proposal);
+                        entry.target_id = Some(proposal.clone());
                         let _ = host.runtime.diagnostics().log(entry);
+                    }
+                    if let Some(Restart::Update(approval)) = restart {
+                        let prepared = if host.runtime.archive_shutdown_verified() {
+                            host.updates
+                                .begin_install(&approval)
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err("DevWorks could not verify that all its local work stopped.".into())
+                        };
+                        let result = prepared.and_then(|()| {
+                            crate::app_updates::launch_helper(&host.data_root, (*approval).clone())
+                        });
+                        if let Err(error) = result {
+                            let _ =
+                                host.updates
+                                    .finish(&approval, InstallOutcome::NotStarted, &error);
+                            eprintln!("DevWorks update was held: {error}");
+                        }
                     }
                     let _ = done_tx.send(ShutdownSummary { processes });
                 });
@@ -979,6 +1050,7 @@ impl Engine {
         }
         // Web requests in flight stop at their next bounded wait; new ones are refused.
         self.host.web.shutdown();
+        self.host.updates.stop_polls();
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
@@ -1077,15 +1149,104 @@ impl DesktopBackend {
 }
 
 impl Backend for DesktopBackend {
+    fn update_status(&self) -> Result<UpdateStatus, String> {
+        self.host
+            .updates
+            .status()
+            .map_err(|error| error.to_string())
+    }
+
+    fn poll_updates(&self, manual: bool) -> Result<(), String> {
+        self.host
+            .updates
+            .poll(manual)
+            .map_err(|error| error.to_string())
+    }
+
+    fn cancel_update_download(&self) {
+        self.host.updates.cancel_poll();
+    }
+
+    fn set_update_channel(
+        &self,
+        channel: UpdateChannel,
+        received: ControlEpoch,
+    ) -> Result<(), String> {
+        if !self.host.runtime.control_quiet_since(received) {
+            return Err("Release settings require direct desktop input.".into());
+        }
+        self.host
+            .updates
+            .set_channel(&self.host.ctx, channel)
+            .map_err(|error| error.to_string())
+    }
+
+    fn approve_app_update(
+        &self,
+        frame: &[u8],
+        proposal: &Id,
+        received: ControlEpoch,
+    ) -> Result<(), String> {
+        use devworks_core::protocol::CommandReply;
+        use devworks_core::protocol::results::DomainDecision;
+        let mut restart = self.host.restart.locked();
+        if restart.is_some() || !self.host.runtime.control_quiet_since(received) {
+            return Err(
+                "This restart requires direct desktop input and an available restart action."
+                    .into(),
+            );
+        }
+        let outcome = self
+            .host
+            .runtime
+            .workspace_maintenance_received(&self.host.ctx, APPROVE, frame, received)
+            .map_err(|error| format!("The install approval could not be recorded. {error:?}"))?;
+        let receipt = match outcome {
+            CommandReply::Recorded { receipt, replayed: false, .. } => receipt,
+            CommandReply::Rejected { code, .. } => {
+                return Err(format!("DevWorks rejected the install approval. {code:?}"));
+            }
+            CommandReply::CommandStatusUnknown { .. } => {
+                return Err("The install approval outcome is unknown. DevWorks will keep the current build.".into());
+            }
+            _ => return Err("This approval was previously recorded. Review the current update before trying again.".into()),
+        };
+        let DomainDecision::Accepted { operation_id } = receipt.decision else {
+            return Err("The staged release or migration plan changed. Review the current update before approving it.".into());
+        };
+        let approval = self
+            .host
+            .updates
+            .approval(proposal)
+            .map_err(|error| error.to_string())?;
+        if approval.operation != operation_id || !self.host.runtime.control_quiet_since(received) {
+            let _ = self.host.updates.finish(
+                &approval,
+                InstallOutcome::NotStarted,
+                "The app restart confirmation changed before it was armed.",
+            );
+            return Err("The app restart confirmation is no longer current.".into());
+        }
+        *restart = Some(Restart::Update(Box::new(approval)));
+        Ok(())
+    }
+
     fn workspace_archive_command(
         &self,
         operation: &str,
         frame: &[u8],
         received: ControlEpoch,
     ) -> CommandOutcome {
-        self.host
-            .runtime
-            .workspace_archive_received(&self.host.ctx, operation, frame, received)
+        if devworks_core::services::workspace_archive::OPERATIONS.contains(&operation) {
+            self.host.runtime.workspace_maintenance_received(
+                &self.host.ctx,
+                operation,
+                frame,
+                received,
+            )
+        } else {
+            self.command(operation, frame)
+        }
     }
 
     fn workspace_backup_folder(
@@ -1188,7 +1349,11 @@ impl Backend for DesktopBackend {
         }) {
             return Err("The selected restore no longer waits for restart.".into());
         }
-        *self.host.restore_shutdown.locked() = Some(proposal.clone());
+        let mut restart = self.host.restart.locked();
+        if restart.is_some() {
+            return Err("Another workspace action already owns this restart.".into());
+        }
+        *restart = Some(Restart::Restore(proposal.clone()));
         Ok(())
     }
 

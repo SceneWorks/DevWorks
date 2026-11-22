@@ -3116,7 +3116,7 @@ impl Runtime {
 
     /// Dedicated native input for whole-workspace archive operations. Receipt replay remains
     /// available through normal command ingress without recreating trusted consent.
-    pub fn workspace_archive_received(
+    pub fn workspace_maintenance_received(
         &self,
         ctx: &InvocationContext,
         operation: &str,
@@ -3132,7 +3132,7 @@ impl Runtime {
                 frame,
             )
             && let Some(bound) = devworks_core::context::HostIngress::new(&*self.store)
-                .workspace_archive_context(ctx, &decoded.input)
+                .workspace_maintenance_context(ctx, &decoded.input)
         {
             return self.command(&bound, operation, frame);
         }

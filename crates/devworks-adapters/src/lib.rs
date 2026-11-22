@@ -1,4 +1,5 @@
 //! DevWorks infrastructure adapters.
+pub mod app_updates;
 pub mod browser;
 pub mod containers;
 pub mod database;
