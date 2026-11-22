@@ -172,6 +172,11 @@ impl<F: Fn(&File) -> io::Result<()>> DiskBudget<F> {
         Ok(Admission::Granted(request))
     }
 
+    /// Read verified reservations for the adapter to test process membership.
+    pub fn reservations(&self) -> io::Result<Vec<Reservation>> {
+        self.locked_state().map(|(_, state)| state.reservations)
+    }
+
     /// Release an exact reservation once the caller proves its writers stopped.
     /// Returns false for an already released id. An unknown writer keeps its charge.
     pub fn release(

@@ -39,6 +39,8 @@ pub mod install;
 pub mod plan;
 pub mod shim;
 pub mod slots;
+#[cfg(windows)]
+pub mod windows_disk_budget;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};

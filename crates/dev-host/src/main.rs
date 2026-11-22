@@ -145,6 +145,16 @@ fn main() -> ExitCode {
             Err(e) => fail(&format!("dev-host check failed: {e}")),
         },
         "env" => run_env(&vars, &rest[1..]),
+        #[cfg(windows)]
+        "disk-budget" => match dev_host::windows_disk_budget::command(&vars, &rest[1..]) {
+            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+            Err(error) => fail(&format!("dev-host disk budget: {error}")),
+        },
+        #[cfg(windows)]
+        "__disk-budget-keeper" => match dev_host::windows_disk_budget::keeper(&vars, &rest[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => fail(&format!("dev-host disk budget keeper: {error}")),
+        },
         "cleanup" => run_cleanup(&vars, &rest[1..]),
         "guard" => run_guard(&rest[1..]),
         "install" => run_install(&vars, &rest[1..]),
@@ -255,10 +265,22 @@ fn run_shim(vars: &Vars, args: &[OsString]) -> ExitCode {
     let launch = std::env::current_exe()
         .map_err(|e| format!("cannot locate this program: {e}"))
         .and_then(|exe| current_dir().map(|cwd| (exe, cwd)))
-        .and_then(|(exe, cwd)| shim::prepare(vars, &cwd, &exe, args, shim::host_check));
+        .and_then(|(exe, cwd)| {
+            shim::prepare(vars, &cwd, &exe, args, |vars| {
+                let host = shim::host_check(vars)?;
+                #[cfg(windows)]
+                dev_host::windows_disk_budget::verify_local_host(&host)?;
+                Ok(host)
+            })
+        });
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return fail(&format!("dev-host cargo shim: refusing to run cargo: {e}")),
+    };
+    #[cfg(windows)]
+    let _disk_budget = match dev_host::windows_disk_budget::local(vars) {
+        Ok(keeper) => keeper,
+        Err(error) => return fail(&format!("dev-host cargo disk budget: {error}")),
     };
     match shim::run(&launch, args) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
