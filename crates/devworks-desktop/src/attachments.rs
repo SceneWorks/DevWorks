@@ -381,21 +381,7 @@ mod tests {
                 assert_eq!(size, [3, 2]);
                 assert_eq!(&rgba[..4], &[255, 0, 0, 255]);
             }
-            TaskOutput::Stored { .. }
-            | TaskOutput::Prepared { .. }
-            | TaskOutput::SettingSecret { .. }
-            | TaskOutput::PackagePrepared { .. }
-            | TaskOutput::Refreshed
-            | TaskOutput::TextPreview(_)
-            | TaskOutput::WorkspaceReplyStatus(_)
-            | TaskOutput::Convention(_)
-            | TaskOutput::Instruction(_)
-            | TaskOutput::McpContent(_)
-            | TaskOutput::SystemOneCompletion(_)
-            | TaskOutput::RepositoryDeletionPreview(_)
-            | TaskOutput::RepositoryDeleted(_) => {
-                panic!("expected a preview")
-            }
+            _ => panic!("expected a preview"),
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
