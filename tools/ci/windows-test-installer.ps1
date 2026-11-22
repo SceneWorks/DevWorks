@@ -96,28 +96,40 @@ function New-TestInstaller([string]$Root, [string]$Payload, [string]$Installer) 
     Assert-ExactFiles $Payload $script:payloadNames
     $recipe = Join-Path $Root 'packaging\windows\devworks-test.wxs'
     $object = [IO.Path]::ChangeExtension($Installer, 'wixobj')
-    & (Join-Path $env:WIX 'bin\candle.exe') -nologo -arch x64 "-dPayload=$Payload" -out $object $recipe
+    & (Join-Path $env:WIX 'bin\candle.exe') -nologo -arch x64 "-dPayload=$Payload" -out $object $recipe | Write-Host
     if ($LASTEXITCODE -ne 0) { throw 'WiX recipe compilation failed' }
-    & (Join-Path $env:WIX 'bin\light.exe') -nologo -spdb -out $Installer $object
+    & (Join-Path $env:WIX 'bin\light.exe') -nologo -spdb -out $Installer $object | Write-Host
     if ($LASTEXITCODE -ne 0) { throw 'WiX installer linking or validation failed' }
     Remove-Item -LiteralPath $object
     $installerApi = New-Object -ComObject WindowsInstaller.Installer
     $database = $installerApi.OpenDatabase($Installer, 0)
     $files = $database.OpenView('SELECT FileName FROM File')
-    $files.Execute()
+    $null = $files.Execute()
     $names = @()
     while ($record = $files.Fetch()) { $names += ($record.StringData(1) -split '\|')[-1] }
-    $files.Close()
+    $null = $files.Close()
     if (Compare-Object ($names | Sort-Object) ($script:payloadNames | Sort-Object) -CaseSensitive) {
         throw 'The MSI carries an unexpected file inventory'
     }
-    $upgrade = $database.OpenView('SELECT Cabinet FROM Media')
-    $upgrade.Execute()
-    $media = $upgrade.Fetch()
-    if (-not $media -or $media.StringData(1) -notlike '#*' -or $upgrade.Fetch()) {
-        throw 'The MSI must have one embedded CAB'
+    $streams = $database.OpenView('SELECT Name FROM _Streams')
+    $null = $streams.Execute()
+    $embedded = @()
+    while ($stream = $streams.Fetch()) { $embedded += $stream.StringData(1) }
+    $null = $streams.Close()
+
+    $media = $database.OpenView('SELECT Cabinet FROM Media')
+    $null = $media.Execute()
+    $cabinetCount = 0
+    while ($row = $media.Fetch()) {
+        $cabinet = $row.StringData(1)
+        if (-not $cabinet.StartsWith('#') -or $cabinet.Substring(1) -cnotin $embedded) {
+            throw "The MSI media entry '$cabinet' does not reference an embedded cabinet"
+        }
+        $cabinetCount++
     }
-    $upgrade.Close()
+    $null = $media.Close()
+    if ($cabinetCount -eq 0) { throw 'The MSI has no embedded cabinets' }
+    $cabinetCount
 }
 
 function Get-TestInstallLayout {
