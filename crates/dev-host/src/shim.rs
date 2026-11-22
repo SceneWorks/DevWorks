@@ -230,6 +230,34 @@ mod tests {
     }
 
     #[test]
+    fn accepts_the_target_dir_env_local_build_exported() {
+        let scratch = Scratch::new("shim-local");
+        let (root, shim_dir, real_dir) = setup(&scratch);
+        let host = crate::host::Host::new(root.clone(), HOST).unwrap();
+        let base = plan::local_temp_base().unwrap();
+        let set = plan::local_build_assignments(&host, &base, scratch.path()).unwrap();
+        let target = PathBuf::from(&set[0].1);
+        let v = vars(
+            &root,
+            &shim_dir,
+            &real_dir,
+            &[("CARGO_TARGET_DIR", target.display().to_string())],
+        );
+        let launch = prepare(
+            &v,
+            scratch.path(),
+            &shim_dir.join(CARGO_EXE),
+            &[],
+            probe_check(&OnOwnVolume, HOST),
+        );
+        let _ = std::fs::remove_dir_all(target.parent().unwrap());
+        assert_eq!(
+            launch.unwrap().target_dir,
+            crate::resolve(&target, scratch.path())
+        );
+    }
+
+    #[test]
     fn refuses_target_dir_outside_root() {
         let scratch = Scratch::new("shim-outside");
         let (root, shim_dir, real_dir) = setup(&scratch);

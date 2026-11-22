@@ -199,11 +199,17 @@ fn now() -> u64 {
 
 /// The build folder for this worktree.
 ///
-/// A caller-set `CARGO_TARGET_DIR` inside this host's folder is kept; any other one is an error
+/// A caller-set `CARGO_TARGET_DIR` inside this host's folder, or the `target/` folder that
+/// `env --local-build` made ([`is_local_build_target`]), is kept; any other one is an error
 /// ([`Host::allow_build_dir`]).
 pub fn target_dir(host: &Host, vars: &Vars, cwd: &Path, req: &Request) -> Result<PathBuf, String> {
     if let Some(set) = vars.get("CARGO_TARGET_DIR") {
-        return host.allow_build_dir("CARGO_TARGET_DIR", Path::new(set), cwd);
+        let set = Path::new(set);
+        // The folder `env --local-build` exported: local disk, outside the root, on purpose.
+        if local_temp_base().is_ok_and(|base| is_local_build_target(set, &base, cwd)) {
+            return Ok(resolve(set, cwd));
+        }
+        return host.allow_build_dir("CARGO_TARGET_DIR", set, cwd);
     }
     let root = host.root();
     let worktree = match &req.worktree {
@@ -334,28 +340,113 @@ fn exports(target: &Path, tmp: &Path) -> Vec<(String, String)> {
     out
 }
 
-/// The system drive's temp location for `env --local-build`: `/tmp` on Unix (never `TMPDIR`,
-/// which an earlier `dev-host env` may have pointed at the root); on Windows the OS temp
-/// folder, which must be on the system drive.
+/// The system drive's temp location for `env --local-build`, read without `TMPDIR`, `TEMP` or
+/// `TMP` (an earlier `dev-host env` points those at the root): `/tmp` on Unix.
+#[cfg(not(windows))]
 pub fn local_temp_base() -> Result<PathBuf, String> {
-    if cfg!(windows) {
-        let base = std::env::temp_dir();
-        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
-        let on_system =
-            crate::check::volume_of(&base).is_some_and(|drive| drive.eq_ignore_ascii_case(&system));
-        if on_system {
-            Ok(base)
-        } else {
-            Err(format!(
-                "the temp folder {} is not on the system drive {system}; set TEMP to a \
-                 folder there",
-                base.display()
-            ))
-        }
-    } else {
-        Ok(PathBuf::from("/tmp"))
-    }
+    Ok(PathBuf::from("/tmp"))
 }
+
+/// The system drive's temp location for `env --local-build`, read without `TMPDIR`, `TEMP` or
+/// `TMP` (an earlier `dev-host env` points those at the root): on Windows the user's
+/// `%LOCALAPPDATA%\Temp`, with the local app data folder asked of the shell
+/// (`SHGetKnownFolderPath`), which must be on the system drive.
+#[cfg(windows)]
+pub fn local_temp_base() -> Result<PathBuf, String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStringExt;
+
+    // Only the shell reads the fields, through the pointer.
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHGetKnownFolderPath(
+            rfid: *const Guid,
+            flags: u32,
+            token: *mut c_void,
+            path: *mut *mut u16,
+        ) -> i32;
+    }
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoTaskMemFree(pv: *mut c_void);
+    }
+    // KnownFolders.h: FOLDERID_LocalAppData {F1B32785-6FBA-4FCF-9D55-7B8E7F157091}.
+    const LOCAL_APP_DATA: Guid = Guid {
+        data1: 0xF1B3_2785,
+        data2: 0x6FBA,
+        data3: 0x4FCF,
+        data4: [0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91],
+    };
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: the GUID outlives the call, a null token means the current user, and `raw`
+    // receives a NUL-terminated string that is freed below with CoTaskMemFree.
+    let hr = unsafe { SHGetKnownFolderPath(&LOCAL_APP_DATA, 0, std::ptr::null_mut(), &mut raw) };
+    let folder = if hr >= 0 && !raw.is_null() {
+        let mut len = 0usize;
+        // SAFETY: `raw` is NUL-terminated.
+        while unsafe { *raw.add(len) } != 0 {
+            len += 1;
+        }
+        // SAFETY: `raw` holds `len` valid UTF-16 units.
+        let units = unsafe { std::slice::from_raw_parts(raw, len) };
+        Some(PathBuf::from(std::ffi::OsString::from_wide(units)))
+    } else {
+        None
+    };
+    // SAFETY: `raw` came from SHGetKnownFolderPath (CoTaskMemFree accepts null).
+    unsafe { CoTaskMemFree(raw.cast()) };
+    let base = folder
+        .ok_or_else(|| format!("cannot find the local app data folder (HRESULT {hr:#x})"))?
+        .join("Temp");
+    let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let on_system =
+        crate::check::volume_of(&base).is_some_and(|drive| drive.eq_ignore_ascii_case(&system));
+    if !on_system {
+        return Err(format!(
+            "the local temp folder {} is not on the system drive {system}",
+            base.display()
+        ));
+    }
+    std::fs::create_dir_all(&base).map_err(|e| format!("cannot create {}: {e}", base.display()))?;
+    Ok(base)
+}
+
+/// Whether `path` is the `target/` folder of a `--local-build` folder directly in `base`
+/// (`<base>/dev-host-local-<8 hex>/target`, real folders, no links), so a later cargo shim
+/// launch accepts the `CARGO_TARGET_DIR` that `env --local-build` exported.
+pub fn is_local_build_target(path: &Path, base: &Path, cwd: &Path) -> bool {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let (Some(fresh), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    let id_ok = fresh
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix(LOCAL_PREFIX))
+        .is_some_and(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+    name == "target"
+        && id_ok
+        && real_dir(fresh)
+        && real_dir(&path)
+        && fresh
+            .parent()
+            .is_some_and(|parent| resolve(parent, cwd) == resolve(base, cwd))
+}
+
+const LOCAL_PREFIX: &str = "dev-host-local-";
 
 /// `dev-host env --local-build`: the same variables, pointing at a new folder of its own under
 /// `base` (on the runner's local disk, outside the root), with no build slot and nothing from
@@ -388,7 +479,7 @@ pub fn local_build_assignments(
     };
     let mut fresh = None;
     for _ in 0..16 {
-        let dir = base.join(format!("dev-host-local-{}", tmp_id(&Vars::default(), None)));
+        let dir = base.join(format!("{LOCAL_PREFIX}{}", tmp_id(&Vars::default(), None)));
         match make(&dir) {
             Ok(()) => {
                 fresh = Some(dir);
@@ -737,6 +828,36 @@ mod tests {
             host.root(),
             scratch.path()
         ));
+    }
+
+    #[test]
+    fn local_build_target_dir_is_accepted_and_look_alikes_are_not() {
+        let scratch = Scratch::new("plan-local-accept");
+        let host = host(&scratch);
+        let base = local_temp_base().unwrap();
+        let set = local_build_assignments(&host, &base, scratch.path()).unwrap();
+        let target = PathBuf::from(&set[0].1);
+        let fresh = target.parent().unwrap().to_path_buf();
+        let with = |dir: &Path| -> Vars {
+            [("CARGO_TARGET_DIR", dir.display().to_string())]
+                .into_iter()
+                .collect()
+        };
+        let kept = target_dir(&host, &with(&target), scratch.path(), &Request::default());
+        let tmp = PathBuf::from(&set[1].1);
+        let refused = [
+            tmp.clone(),
+            fresh.clone(),
+            base.join("dev-host-local-zzzzzzzz/target"),
+        ]
+        .map(|dir| target_dir(&host, &with(&dir), scratch.path(), &Request::default()));
+        let other_base = is_local_build_target(&target, scratch.path(), scratch.path());
+        let _ = std::fs::remove_dir_all(&fresh);
+        assert_eq!(kept, Ok(resolve(&target, scratch.path())));
+        for r in refused {
+            assert!(r.is_err(), "{r:?}");
+        }
+        assert!(!other_base, "only directly in the local temp base");
     }
 
     #[test]
