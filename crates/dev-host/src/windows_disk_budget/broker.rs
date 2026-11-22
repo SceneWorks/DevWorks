@@ -31,8 +31,8 @@ use windows_sys::Win32::System::Pipes::{
 use windows_sys::Win32::System::Threading::CreateMutexW;
 
 use super::native::{Job, Process, SecurityDescriptor, checked, free_bytes, owned, wide};
-use super::{MachinePolicy, POLL, Reservation, Writers, failure};
-use crate::disk_budget::Admission;
+use super::{MachinePolicy, POLL, failure};
+use crate::disk_budget::{Admission, Reservation, Writers};
 
 const PIPE: &str = r"\\.\pipe\SceneWorks.DevHost.DiskBudget";
 const MUTEX: &str = r"Global\SceneWorks.DevHost.DiskBudget";

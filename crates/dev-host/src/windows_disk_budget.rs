@@ -76,8 +76,8 @@ fn disk_policy(volume: String, generation: String, minimum_free_bytes: u64) -> P
 
 impl MachinePolicy {
     fn open(host: &Host) -> io::Result<Self> {
-        let encoded =
-            read_policy()?.ok_or_else(|| failure("Windows disk budget is not provisioned"))?;
+        let encoded = read_registry(POLICY_KEY, POLICY_VALUE)?
+            .ok_or_else(|| failure("Windows disk budget is not provisioned"))?;
         let policy: Self = serde_json::from_str(&encoded).map_err(io::Error::other)?;
         if host.root().canonicalize()? != policy.root {
             return Err(failure(
@@ -172,7 +172,7 @@ fn read_registry(key: &str, value: &str) -> io::Result<Option<String>> {
         return Ok(None);
     }
     registry_result(status)?;
-    if size < 2 || size > 64 * 1024 || size % 2 != 0 {
+    if !(2..=64 * 1024).contains(&size) || !size.is_multiple_of(2) {
         return Err(failure("invalid Windows disk budget policy length"));
     }
     let mut data = vec![0u16; size as usize / 2];
@@ -457,7 +457,8 @@ mod tests {
     use io::ErrorKind;
     use native::{Job, Process, free_bytes};
     use std::fs;
-    use std::process::{Child, ExitStatus};
+    use std::process::{Child, ExitStatus, Stdio};
+    use std::time::Instant;
 
     const BOOT: &str = "11111111111111111111111111111111";
 
