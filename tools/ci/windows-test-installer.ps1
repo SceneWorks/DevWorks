@@ -147,11 +147,15 @@ function Get-TestProductCode([string]$Installer) {
     $api = New-Object -ComObject WindowsInstaller.Installer
     $database = $api.OpenDatabase($Installer, 0)
     $view = $database.OpenView("SELECT Value FROM Property WHERE Property='ProductCode'")
-    $view.Execute()
+    $null = $view.Execute()
     $record = $view.Fetch()
     if (-not $record) { throw 'The MSI lacks a product code' }
-    $productCode = $record.StringData(1)
-    $view.Close()
+    $productCode = [string]$record.StringData(1)
+    $null = $view.Close()
+    $parsed = [guid]::Empty
+    if (-not [guid]::TryParseExact($productCode, 'B', [ref]$parsed)) {
+        throw 'The MSI product code is invalid'
+    }
     $productCode
 }
 
@@ -162,27 +166,29 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public static class DevWorksInstallerContext
 {
     [DllImport("msi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
-    private static extern uint MsiEnumProductsExW(string product, string sid, uint contexts,
-        uint index, IntPtr outProduct, out uint outContext, IntPtr outSid, IntPtr outSidLength);
+    private static extern uint MsiGetProductInfoExW(string product, string sid, uint context,
+        string property, StringBuilder value, ref uint valueLength);
 
     public static uint[] Read(string product)
     {
-        const uint allContexts = 1 | 2 | 4;
-        const uint noMoreItems = 259;
         const uint unknownProduct = 1605;
         var contexts = new List<uint>();
-        for (uint index = 0; ; index++)
+        foreach (uint context in new uint[] { 1, 2, 4 })
         {
-            uint status = MsiEnumProductsExW(product, null, allContexts, index, IntPtr.Zero,
-                out uint context, IntPtr.Zero, IntPtr.Zero);
-            if (status == noMoreItems || status == unknownProduct) return contexts.ToArray();
-            if (status != 0) throw new Win32Exception((int)status);
+            var state = new StringBuilder(16);
+            uint length = (uint)state.Capacity;
+            uint status = MsiGetProductInfoExW(product, null, context, "State", state, ref length);
+            if (status == unknownProduct) continue;
+            if (status != 0) throw new Win32Exception((int)status, $"MSI {product} context {context}: {status}");
+            if (state.ToString() != "5") throw new InvalidOperationException($"Unexpected MSI state {state}");
             contexts.Add(context);
         }
+        return contexts.ToArray();
     }
 }
 '@
