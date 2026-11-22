@@ -25,12 +25,15 @@ usage:
   dev-host lock-dir
       Run the check, then print this host's lock folder <root>/hosts/<host>/locks.
   dev-host env [--format sh|github|powershell] [--project NAME] [--worktree PATH]
-               [--target TRIPLE] [--session ID] [--slots N] [--warm]
+               [--target TRIPLE] [--session ID] [--slots N] [--warm] [--local-build]
       Print CARGO_TARGET_DIR (a sticky build slot,
       <root>/hosts/<host>/build/<project>/<key>/slot-<n>) and TMPDIR (TEMP/TMP on Windows,
       <root>/hosts/<host>/t/<8-char id>).
       --warm marks this worktree's slot warm: reassigned and evicted last (the 7-day idle
       rule still applies).
+      --local-build points both at a new folder (mode 0700) in the system drive's temp
+      location instead, outside DEV_HOST_ROOT, with no build slot and nothing from the
+      share: for release signing builds. Each call makes a new folder; delete it after.
         sh          eval \"$(dev-host env)\"
         github      dev-host env --format github >> \"$GITHUB_ENV\"
         powershell  dev-host env --format powershell | Out-String | Invoke-Expression
@@ -181,11 +184,16 @@ fn current_dir() -> Result<PathBuf, String> {
 fn run_env(vars: &Vars, args: &[OsString]) -> ExitCode {
     let mut format = Format::default_for_platform();
     let mut req = Request::default();
+    let mut local_build = false;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let flag = flag.to_string_lossy();
         if flag == "--warm" {
             req.warm = true;
+            continue;
+        }
+        if flag == "--local-build" {
+            local_build = true;
             continue;
         }
         let Some(value) = it.next().map(|v| v.to_string_lossy().into_owned()) else {
@@ -221,8 +229,18 @@ fn run_env(vars: &Vars, args: &[OsString]) -> ExitCode {
         Ok(host) => host,
         Err(e) => return fail(&format!("dev-host check failed: {e}")),
     };
+    if local_build && (req.warm || req.slots.is_some()) {
+        return usage_error("--local-build uses no build slot; drop --warm and --slots");
+    }
     let result = current_dir()
-        .and_then(|cwd| plan::assignments(&host, vars, &cwd, &req))
+        .and_then(|cwd| {
+            if local_build {
+                plan::local_temp_base()
+                    .and_then(|base| plan::local_build_assignments(&host, &base, &cwd))
+            } else {
+                plan::assignments(&host, vars, &cwd, &req)
+            }
+        })
         .and_then(|a| plan::render(&a, format));
     match result {
         Ok(text) => {

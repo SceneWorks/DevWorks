@@ -5,6 +5,9 @@
 //!   worktree; the slot registry sits beside the slots, so two hosts never share a slot even
 //!   for the same worktree path).
 //! - `TMPDIR` (and `TEMP`/`TMP` on Windows) = `<host folder>/t/<8-char id>`.
+//!
+//! With `--local-build` both point at a new folder on the local disk instead, outside the root
+//! ([`local_build_assignments`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -312,6 +315,10 @@ pub fn assignments(
 ) -> Result<Vec<(String, String)>, String> {
     let target = target_dir(host, vars, cwd, req)?;
     let tmp = tmp_dir(host, vars, cwd, req.session.as_deref())?;
+    Ok(exports(&target, &tmp))
+}
+
+fn exports(target: &Path, tmp: &Path) -> Vec<(String, String)> {
     let tmp = tmp.to_string_lossy().into_owned();
     let mut out = vec![
         (
@@ -324,7 +331,77 @@ pub fn assignments(
         out.push(("TEMP".to_owned(), tmp.clone()));
         out.push(("TMP".to_owned(), tmp));
     }
-    Ok(out)
+    out
+}
+
+/// The system drive's temp location for `env --local-build`: `/tmp` on Unix (never `TMPDIR`,
+/// which an earlier `dev-host env` may have pointed at the root); on Windows the OS temp
+/// folder, which must be on the system drive.
+pub fn local_temp_base() -> Result<PathBuf, String> {
+    if cfg!(windows) {
+        let base = std::env::temp_dir();
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        let on_system =
+            crate::check::volume_of(&base).is_some_and(|drive| drive.eq_ignore_ascii_case(&system));
+        if on_system {
+            Ok(base)
+        } else {
+            Err(format!(
+                "the temp folder {} is not on the system drive {system}; set TEMP to a \
+                 folder there",
+                base.display()
+            ))
+        }
+    } else {
+        Ok(PathBuf::from("/tmp"))
+    }
+}
+
+/// `dev-host env --local-build`: the same variables, pointing at a new folder of its own under
+/// `base` (on the runner's local disk, outside the root), with no build slot and nothing from
+/// the share, so a release signing build reads no state another host can write. Each call makes
+/// a new folder, mode 0700 on Unix, with `target/` and `t/` inside.
+pub fn local_build_assignments(
+    host: &Host,
+    base: &Path,
+    cwd: &Path,
+) -> Result<Vec<(String, String)>, String> {
+    if is_under(base, host.root(), cwd) {
+        return Err(format!(
+            "{} is inside DEV_HOST_ROOT={}; --local-build needs the local disk",
+            base.display(),
+            host.root().display()
+        ));
+    }
+    let base = resolve(base, cwd);
+    let make = |dir: &Path| -> std::io::Result<()> {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(dir)
+    };
+    let mut fresh = None;
+    for _ in 0..16 {
+        let dir = base.join(format!("dev-host-local-{}", tmp_id(&Vars::default(), None)));
+        match make(&dir) {
+            Ok(()) => {
+                fresh = Some(dir);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("cannot create {}: {e}", dir.display())),
+        }
+    }
+    let fresh =
+        fresh.ok_or_else(|| format!("cannot find a free folder name in {}", base.display()))?;
+    let (target, tmp) = (fresh.join("target"), fresh.join("t"));
+    for dir in [&target, &tmp] {
+        make(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    Ok(exports(&target, &tmp))
 }
 
 /// Output formats for `env`.
@@ -624,6 +701,39 @@ mod tests {
             tmp_id(&Vars::default(), None),
             tmp_id(&Vars::default(), None)
         );
+    }
+
+    #[test]
+    fn local_build_paths_are_fresh_private_and_outside_the_root() {
+        let scratch = Scratch::new("plan-local");
+        let host = host(&scratch);
+        let base = scratch.path().join("local");
+        std::fs::create_dir_all(&base).unwrap();
+        let a = local_build_assignments(&host, &base, scratch.path()).unwrap();
+        let b = local_build_assignments(&host, &base, scratch.path()).unwrap();
+        assert_eq!(a.len(), b.len());
+        for ((key, va), (_, vb)) in a.iter().zip(&b) {
+            let (pa, pb) = (PathBuf::from(va), PathBuf::from(vb));
+            assert!(!is_under(&pa, host.root(), scratch.path()), "{key}: {va}");
+            assert!(pa.starts_with(&base) && pa.is_dir(), "{key}: {va}");
+            assert_ne!(pa.parent(), pb.parent(), "{key} differs per call");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let fresh = PathBuf::from(&a[0].1).parent().unwrap().to_path_buf();
+            let mode = std::fs::metadata(&fresh).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        // Nothing was written to the root, and a base inside the root is refused.
+        assert!(!host.dir().join("build").exists() && !host.dir().join("t").exists());
+        let err = local_build_assignments(&host, &host.dir(), scratch.path()).unwrap_err();
+        assert!(err.contains("inside DEV_HOST_ROOT"), "{err}");
+        assert!(!is_under(
+            &local_temp_base().unwrap(),
+            host.root(),
+            scratch.path()
+        ));
     }
 
     #[test]
