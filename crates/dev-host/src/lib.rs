@@ -24,6 +24,7 @@
 pub mod check;
 pub mod cleanup;
 pub mod config;
+pub mod disk_budget;
 pub mod guard;
 pub mod install;
 pub mod plan;
