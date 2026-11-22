@@ -128,7 +128,28 @@ while (-not (Test-Path (Join-Path $output 'finish'))) {
         $status = Invoke-DevHost @('disk-budget', 'status') | ConvertFrom-Json
         $status.Status.leases -eq 0
     } 'The broker did not release both finished jobs.'
-    Write-Host 'Verified LocalSystem broker, standard-account ledger denial, concurrent cargo shim admission, and release.'
+    # A legacy script can keep executing commands after a failing hook. Run
+    # a disposable Worker stand-in with that behavior and prove it stops.
+    $fakeWorker = Join-Path $root 'Runner.Worker.exe'
+    Copy-Item -LiteralPath $env:ComSpec -Destination $fakeWorker
+    $workerScript = Join-Path $root 'worker.cmd'
+    $entered = Join-Path $output 'worker-entered'
+    $escaped = Join-Path $output 'worker-escaped'
+    @"
+@echo entered > "$entered"
+@"$exe" disk-budget runner --worker "$fakeWorker" runner
+@echo escaped > "$escaped"
+"@ | Set-Content -Encoding Ascii -Path $workerScript
+    # The fixture's machine policy intentionally allows no installed workers.
+    $refused = Start-Process -FilePath $fakeWorker -ArgumentList ('/d /c ""{0}""' -f $workerScript) -PassThru
+    if (-not $refused.WaitForExit(20000) -or $refused.ExitCode -ne 1) {
+        throw 'The unregistered Worker was not stopped after admission was refused.'
+    }
+    if (-not (Test-Path $entered) -or (Test-Path $escaped)) {
+        throw 'The refused Worker did not reach the hook boundary or ran past it.'
+    }
+    Write-Host 'Verified cross-account overlap, private ledger, cargo shim, release and hard runner refusal.'
+
 } finally {
     foreach ($task in @($clientTask, $systemTask)) {
         if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {

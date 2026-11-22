@@ -12,7 +12,7 @@ use std::ptr::{null, null_mut};
 
 use serde::{Deserialize, Serialize};
 use windows_sys::Win32::Foundation::{
-    ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -20,7 +20,7 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ID_INFO, FileIdInfo, GetDiskFreeSpaceExW, GetFileInformationByHandleEx,
-    GetFinalPathNameByHandleW, VOLUME_NAME_GUID,
+    GetFinalPathNameByHandleW, SYNCHRONIZE, VOLUME_NAME_GUID,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -32,7 +32,7 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{
     GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
-    PROCESS_TERMINATE, QueryFullProcessImageNameW,
+    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
 };
 
 use crate::disk_budget::{Owner, Writers};
@@ -177,7 +177,7 @@ impl Process {
     pub fn open(pid: u32, assign: bool) -> io::Result<Self> {
         let mut access = PROCESS_QUERY_LIMITED_INFORMATION;
         if assign {
-            access |= PROCESS_SET_QUOTA | PROCESS_TERMINATE;
+            access |= PROCESS_SET_QUOTA | PROCESS_TERMINATE | SYNCHRONIZE;
         }
         // SAFETY: OpenProcess returns a new handle to the requested PID or fails.
         let handle = owned(unsafe { OpenProcess(access, 0, pid) })?;
@@ -209,6 +209,19 @@ impl Process {
                     | u64::from(creation.dwLowDateTime),
             },
         })
+    }
+
+    pub fn refuse_runner_start(&self) -> io::Result<()> {
+        // SAFETY: this exact process handle was opened and checked against the
+        // job-start hook's installed worker image and current ancestry.
+        checked(unsafe { TerminateProcess(self.handle.as_raw_handle(), 1) })?;
+        // SAFETY: open requested SYNCHRONIZE on the same process handle.
+        if unsafe { WaitForSingleObject(self.handle.as_raw_handle(), 5000) } != WAIT_OBJECT_0 {
+            return Err(io::Error::other(
+                "could not confirm refused runner worker exited",
+            ));
+        }
+        Ok(())
     }
 
     fn image(&self) -> io::Result<PathBuf> {

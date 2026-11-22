@@ -30,7 +30,7 @@ use crate::disk_budget::{DiskBudget, Owner, Policy, Reservation};
 use crate::host::Host;
 use crate::{Vars, check, digest};
 use broker::{Request, Response};
-use native::{Anchor, SecurityDescriptor, anchor, checked, wide};
+use native::{Anchor, Process, SecurityDescriptor, anchor, checked, wide};
 
 const POLICY_KEY: &str = r"SOFTWARE\SceneWorks\DevHost";
 const POLICY_VALUE: &str = "DiskBudget";
@@ -306,18 +306,8 @@ fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
     let worker_images = settings
         .worker_images
         .iter()
-        .map(|path| path.canonicalize())
+        .map(|path| worker_image(path))
         .collect::<io::Result<Vec<_>>>()?;
-    if worker_images.iter().any(|image| {
-        !image
-            .file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("Runner.Worker.exe"))
-            || !image.is_file()
-    }) {
-        return Err(failure(
-            "each worker image must be an installed Runner.Worker.exe",
-        ));
-    }
     // Atomically claim the single registry key across roots. Only System and
     // administrators can write it or the ledger. Keep interrupted setup closed.
     let (key, fresh) = RegistryKey::create(POLICY_KEY, REG_OPTION_NON_VOLATILE)?;
@@ -373,6 +363,35 @@ fn provision(host: &Host, settings_path: &Path) -> io::Result<()> {
     )
 }
 
+fn worker_image(path: &Path) -> io::Result<PathBuf> {
+    let image = path.canonicalize()?;
+    if !image
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("Runner.Worker.exe"))
+        || !image.is_file()
+    {
+        return Err(failure("expected the installed Runner.Worker.exe"));
+    }
+    Ok(image)
+}
+
+fn runner_hook(vars: &Vars, path: &Path, profile: &OsStr) -> io::Result<i32> {
+    let worker =
+        Process::open(std::process::id(), false)?.runner_ancestor(&[worker_image(path)?])?;
+    let admission = (|| {
+        MachinePolicy::open(&checked_host(vars)?)?;
+        grant(Request::Runner(text(profile)?.to_owned()))
+    })();
+    if let Err(error) = admission {
+        // Actions can keep evaluating unconditional steps after a hook failure.
+        // Stop this verified worker before control can return to those steps.
+        eprintln!("dev-host refused runner disk admission: {error}");
+        worker.refuse_runner_start()?;
+        return Err(error);
+    }
+    Ok(0)
+}
+
 fn checked_host(vars: &Vars) -> io::Result<Host> {
     check::check_host(vars).map_err(failure)
 }
@@ -399,6 +418,12 @@ pub fn local(host: &Host) -> io::Result<()> {
 }
 
 pub fn command(vars: &Vars, args: &[OsString]) -> io::Result<i32> {
+    if let [command, flag, path, profile] = args
+        && command == "runner"
+        && flag == "--worker"
+    {
+        return runner_hook(vars, Path::new(path), profile);
+    }
     let host = checked_host(vars)?;
     if let [command, path, drained] = args
         && command == "provision"
@@ -418,9 +443,6 @@ pub fn command(vars: &Vars, args: &[OsString]) -> io::Result<i32> {
                 serde_json::to_string(&response).map_err(io::Error::other)?
             );
         }
-        [command, profile] if command == "runner" => {
-            grant(Request::Runner(text(profile)?.to_owned()))?;
-        }
         [command, profile] if command == "grow" => {
             grant(Request::Grow(text(profile)?.to_owned()))?;
         }
@@ -436,7 +458,7 @@ pub fn command(vars: &Vars, args: &[OsString]) -> io::Result<i32> {
         }
         _ => {
             return Err(failure(
-                "usage: dev-host disk-budget provision SETTINGS.json --drained | serve | status | runner PROFILE | grow PROFILE | run PROFILE -- COMMAND [ARGS...]",
+                "usage: dev-host disk-budget provision SETTINGS.json --drained | serve | status | runner --worker WORKER.exe PROFILE | grow PROFILE | run PROFILE -- COMMAND [ARGS...]",
             ));
         }
     }
@@ -455,7 +477,7 @@ mod tests {
     use crate::disk_budget::{Admission, Writers};
     use crate::testutil::Scratch;
     use io::ErrorKind;
-    use native::{Job, Process, free_bytes};
+    use native::{Job, free_bytes};
     use std::fs;
     use std::process::{Child, ExitStatus, Stdio};
     use std::time::Instant;

@@ -42,7 +42,7 @@ usage:
   dev-host cargo [--] ARGS...
       Run the real cargo after the checks. Installing dev-host under the name `cargo`
       ahead of the real one on PATH does the same.
-  dev-host disk-budget [provision SETTINGS.json --drained | serve | status | runner PROFILE |
+  dev-host disk-budget [provision SETTINGS.json --drained | serve | status | runner --worker WORKER.exe PROFILE |
                         grow PROFILE | run PROFILE -- COMMAND [ARGS...]]
       Windows only. Use a single machine-provisioned build volume reservation.
   dev-host cleanup [--dry-run]
