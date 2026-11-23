@@ -11,6 +11,7 @@ pub mod git_transport;
 pub mod http;
 pub mod index;
 pub mod mcp;
+pub mod mcp_inbound;
 pub mod packages;
 pub mod paths;
 pub mod power;

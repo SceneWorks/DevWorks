@@ -653,6 +653,8 @@
         "rollback",
         "uninstall",
         "invoke",
+        "run_workflow",
+        "read_content",
         "invocation"
       ],
       "effectAndAuthority": "Version/digest-bound activation approval for agent-authored packages; declared effect classification",

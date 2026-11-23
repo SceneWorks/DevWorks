@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "e8a19a18e0316eeed673dd512b56fc674836f30c7bad39b4f06aab320f5ccf2f",
+  "catalogSha256": "a94c79642492f518081173c4d4caf380ca2b0d8b1ee2f0e3c4f501ceb9a90119",
   "familyCount": 50,
-  "operationCount": 388,
-  "concreteInputCandidates": 388,
+  "operationCount": 390,
+  "concreteInputCandidates": 390,
   "domainInputsPending": 0,
   "families": [
     {
@@ -18159,6 +18159,100 @@
           "authority": "Scoped",
           "effect": "Journaled",
           "semanticRules": "Human only. Starts one invocation of an installed, enabled package's tool contribution as the calling person: the package's brokered application and inference calls run as that person under their current authority, narrowed by the version's approved manifest grants. Records one durable package.invoke operation and returns it with its state; the invocation runs once, a result that cannot be established is held for reconciliation and never re-run. expected_digest, when given, must be the active manifest digest. Refused for an agent, for a contribution that is not a tool of the active version, and for a package that is not ready.",
+          "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "addons.run_workflow",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "addons.run_workflow",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "addons.run_workflow"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Journaled"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "addons.run_workflow"
+          },
+          "resultValueType": "PackageInvocation",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Journaled",
+          "semanticRules": "Queues an approved package workflow step and the exact ordered verification gates selected by the person or authorized agent. Each run pins the immutable scoped input, package manifests and schema contracts before dispatch. Completion requires current passing evidence from every selected gate and preserves all ordinary DevWorks controls.",
+          "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "addons.read_content",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "addons.read_content",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "addons.read_content"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "addons.read_content"
+          },
+          "resultValueType": "PackageContent",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Materializes the exact approved package Skill, Role or Prompt in the caller's artifact scope. Reading content does not adopt instructions or grant tools. Existing instruction-authoring and approval operations adopt any changes.",
           "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

@@ -359,6 +359,32 @@ pub trait Backend: Send + Sync {
     fn fetch_index_bundle(&self, _package: &str, _digest: &str) -> Result<PathBuf, String> {
         Err("packages are not available here".into())
     }
+    fn package_views(
+        &self,
+        _package: &str,
+        _digest: &str,
+    ) -> Result<devworks_engine::package_host::native_ui::NativeViews, String> {
+        Err("package views are not available here".into())
+    }
+    fn load_package_view_data(
+        &self,
+        _package: &str,
+        _digest: &str,
+        _view: &str,
+        _form: &serde_json::Value,
+    ) -> Result<devworks_engine::package_host::native_ui::ViewData, String> {
+        Err("package view data is not available here".into())
+    }
+    fn prepare_package_view_action(
+        &self,
+        _package: &str,
+        _digest: &str,
+        _view: &str,
+        _action: &str,
+        _form: &serde_json::Value,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
+        Err("package view actions are not available here".into())
+    }
     /// The index source configuration of the workspace (or a project) section, read for the
     /// form that edits it through `indexing.configure_sources` (none without indexing).
     fn index_sources(
@@ -383,6 +409,14 @@ pub trait Backend: Send + Sync {
     /// Stages the user's provider API key without putting raw bytes in a frame or receipt.
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
+    }
+    /// Only the human Settings action can request protected manual client pairing.
+    fn provision_inbound_mcp_credential(
+        &self,
+        _client: &Id,
+        _revision: &devworks_core::protocol::Revision,
+    ) -> Result<Secret, String> {
+        Err("Incoming MCP pairing is unavailable".into())
     }
     fn stage_mcp_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("MCP credential entry is not available".into())
@@ -569,10 +603,19 @@ pub enum TaskOutput {
     DreamingReport(String),
     /// Native host state was refreshed or updated.
     Refreshed,
+    PackageViews {
+        views: devworks_engine::package_host::native_ui::NativeViews,
+        images: std::collections::BTreeMap<String, eframe::egui::ColorImage>,
+    },
+    PackageViewData(devworks_engine::package_host::native_ui::ViewData),
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
     WorkImportReport(String),
     SystemOneCompletion(Box<Option<devworks_core::protocol::results::OperationCompletion>>),
+    IncomingMcp {
+        status: Box<devworks_core::protocol::records::McpInboundStatus>,
+        clients: Vec<devworks_core::protocol::records::McpClientAccess>,
+    },
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.

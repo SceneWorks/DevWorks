@@ -563,6 +563,17 @@ impl GraphService {
                         .ok_or_else(|| scope::unavailable(Some(id.clone())))?;
                     let (state, _) =
                         crate::services::indexing::status::manifest_coverage(&generation.manifest);
+                    if !gaps.contains(&"stale_semantic_package")
+                        && crate::services::indexing::status::semantic_stale(
+                            read.packages(),
+                            &generation.manifest,
+                            &read
+                                .projects()
+                                .repository_projects(&generation.repository_id)?,
+                        )?
+                    {
+                        gaps.push("stale_semantic_package");
+                    }
                     if !matches!(state, CoverageState::Complete)
                         && !gaps.contains(&"index_coverage_partial")
                     {
@@ -921,6 +932,15 @@ fn resolved(
             let (_, recorded) =
                 crate::services::indexing::status::manifest_coverage(&generation.manifest);
             gaps.extend(recorded);
+            if crate::services::indexing::status::semantic_stale(
+                read.packages(),
+                &generation.manifest,
+                &read
+                    .projects()
+                    .repository_projects(&generation.repository_id)?,
+            )? {
+                gaps.push("stale_semantic_package".into());
+            }
         }
         let strings: Vec<_> = gaps.iter().map(|g| g.as_str()).collect();
         let coverage = coverage(

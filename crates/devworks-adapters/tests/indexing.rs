@@ -284,12 +284,14 @@ impl Fx {
             ids: ids.clone(),
             artifacts: Some(artifacts.clone()),
             diagnostics: None,
+            package_semantics: Default::default(),
             enrichers: Default::default(),
             settings,
         });
         let worker = Arc::new(IndexWorker::new(env.clone(), owner.into()));
         let control = Arc::new(ControlService::new(ids.clone()));
         let cases = UseCases::new()
+            .with_inbound_mcp()
             .with_indexing(Arc::new(IndexCoordinator::new(env.clone())))
             .with_projects(Arc::new(ProjectService::new(ids.clone(), control.clone())))
             .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
@@ -1595,6 +1597,118 @@ fn cancelling_a_batch_reports_and_changes_only_visible_runs() {
     let untouched = fx.run(&other.id);
     assert_eq!(untouched.state, RUN_QUEUED);
     assert_eq!(untouched.cancel_requested_at_ms, None);
+}
+
+#[test]
+fn incoming_mcp_indexing_rechecks_grants_after_a_native_restart() {
+    use devworks_core::ports::secrets::SessionSecrets;
+    use devworks_core::services::mcp_inbound::{Binding, Credentials};
+
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("mcp-indexing");
+    let dir = src.join("project");
+    repo(&dir, &[("a.rs", "fn a() {}\n")]);
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    let DomainDecision::Applied {
+        result: OperationResult::ProjectsCreate { value: project },
+    } = decision(fx.command(
+        "projects.create",
+        json!({"name": "MCP indexing", "description": "", "repositoryIds": [repo_id]}),
+    ))
+    else {
+        panic!("project was not created");
+    };
+    assert!(matches!(
+        decision(fx.command(
+            "mcp_server.configure",
+            json!({
+                "expectedRevision": "1", "enabled": true, "bindings": ["Stdio"],
+            })
+        )),
+        DomainDecision::Applied { .. }
+    ));
+    let DomainDecision::Applied {
+        result: OperationResult::McpServerSetClientAccess { value: registered },
+    } = decision(fx.command(
+        "mcp_server.set_client_access",
+        json!({
+            "action": {"kind": "Register", "name": "Index client"},
+        }),
+    ))
+    else {
+        panic!("client was not registered");
+    };
+    let DomainDecision::Applied {
+        result: OperationResult::McpServerSetClientAccess { value: client },
+    } = decision(fx.command(
+        "mcp_server.set_client_access",
+        json!({
+            "action": {
+                "kind": "Replace", "clientId": registered.client_id, "name": registered.name,
+                "expectedRevision": registered.revision, "enabled": true,
+                "projectIds": [project.id], "repositoryIds": [repo_id], "worktreeIds": [],
+                "readOperations": [], "commandOperations": ["indexing.index", "indexing.reindex"],
+            },
+        }),
+    ))
+    else {
+        panic!("client was not enabled");
+    };
+    let credentials = Credentials::new(
+        fx.store.clone(),
+        Box::new(SessionSecrets::new()),
+        Arc::new(devworks_adapters::OsEntropy),
+    );
+    let token = credentials
+        .provision(&fx.user(), &client.client_id, &client.revision)
+        .unwrap();
+    let authenticated = credentials.authenticate(Binding::LocalIpc, &token).unwrap();
+    let ctx = authenticated.invocation(
+        id("mcp-indexing"),
+        project.id.clone(),
+        Revision::new(1).unwrap(),
+    );
+    let queue_index = |operation: &str, request_key: &str| {
+        run_of(decision(fx.command_frame(
+            &ctx,
+            operation,
+            json!({
+                "protocol":"1.0-draft.1", "mode":"Command", "requestKey":request_key,
+                "body":{
+                    "kind":operation, "scope":{"kind":"Project", "projectId":project.id},
+                    "repositoryIds":[repo_id], "expectedSourceRevision":"1",
+                    "views":{"kind":"Published", "repositoryIds":[repo_id]},
+                },
+            }),
+        )))
+    };
+    let accepted = queue_index("indexing.index", "first-index");
+    assert_eq!(fx.drain(), 1);
+    let completed = fx.run(&accepted.id);
+    assert_eq!(completed.state, RUN_SUCCEEDED);
+    assert_eq!(completed.requested_by, ActorId(client.client_id.clone()));
+
+    let rebuild = queue_index("indexing.reindex", "second-index");
+    assert_eq!(fx.run(&rebuild.id).state, RUN_QUEUED);
+    assert!(matches!(
+        decision(fx.command("mcp_server.set_client_access", json!({
+            "action": {"kind": "Revoke", "clientId": client.client_id, "expectedRevision": client.revision},
+        }))),
+        DomainDecision::Applied { .. }
+    ));
+    drop(credentials);
+    let fx = fx.restart("mcp-restart");
+    assert_eq!(fx.drain(), 0);
+    let cancelled = fx.run(&rebuild.id);
+    assert_eq!(cancelled.state, RUN_CANCELLED);
+    assert_eq!(cancelled.attempt, 0);
+    assert_eq!(
+        cancelled.error_code.as_deref(),
+        Some("external_access_changed")
+    );
 }
 
 #[test]

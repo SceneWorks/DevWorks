@@ -156,17 +156,19 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 pub mod approval;
+mod content;
 pub mod index;
 pub mod invoke;
 pub mod policy;
 pub mod recovery;
 mod review_evidence;
 pub mod view;
+pub mod workflow;
 /// A manifest-bound verified guide stream; no package activation or caller authority is added.
 pub use crate::ports::packages::VerifiedPackageFile as VerifiedHelp;
 
 /// The operations [`PackageService`] is registered for.
-pub const OPERATIONS: [&str; 12] = [
+pub const OPERATIONS: [&str; 14] = [
     "addons.catalog",
     "addons.install",
     "addons.configure",
@@ -178,6 +180,8 @@ pub const OPERATIONS: [&str; 12] = [
     "addons.rollback",
     "addons.uninstall",
     "addons.invoke",
+    workflow::OPERATION,
+    "addons.read_content",
     "addons.invocation",
 ];
 /// History aggregate of package lifecycle events.
@@ -325,6 +329,8 @@ enum Prep {
     Configure(GuardCell, ConfigRefusal),
     /// What `addons.invoke` verified before its unit of work.
     Invoke(invoke::Verified),
+    Workflow(invoke::Verified),
+    Content(Option<Box<content::ContentInput>>),
 }
 
 fn invalid(field: &'static str) -> Refusal {
@@ -2722,6 +2728,16 @@ impl CommandHandler for PackageService {
             }
             return Ok(Some(Prepared::new(Prep::Bundle(Box::new(prep)))));
         }
+        if let OperationInput::Addons(ops::Input::ReadContent(i)) = command.input() {
+            return Ok(Some(Prepared::new(Prep::Content(
+                self.prepare_content(ctx, i, env)?.map(Box::new),
+            ))));
+        }
+        if let OperationInput::Addons(ops::Input::RunWorkflow(i)) = command.input() {
+            return Ok(Some(Prepared::new(Prep::Workflow(
+                self.prepare_workflow(ctx, i, env)?,
+            ))));
+        }
         if let OperationInput::Addons(ops::Input::Invoke(i)) = command.input() {
             return Ok(Some(Prepared::new(Prep::Invoke(
                 self.verify_invocation(ctx, i, env)?,
@@ -2791,7 +2807,14 @@ impl CommandHandler for PackageService {
                 }
             }
             Some(Prep::Lifecycle(g)) => g.release(),
-            Some(Prep::Invoke(_)) => {}
+            Some(Prep::Content(Some(prepared))) => {
+                let committed = matches!(reply,
+                    Some(crate::protocol::CommandReply::Recorded { receipt, .. })
+                        if matches!(receipt.decision, DomainDecision::Applied { .. }));
+                self.settle_content(prepared, committed);
+            }
+            Some(Prep::Content(None)) => {}
+            Some(Prep::Invoke(_) | Prep::Workflow(_)) => {}
             Some(Prep::Configure(g, refusal)) => {
                 g.release();
                 let refused = matches!(
@@ -2860,6 +2883,12 @@ impl CommandHandler for PackageService {
                 }
                 OperationInput::Addons(ops::Input::Propose(i)) => self.propose(tx, ctx, i, bundle),
                 OperationInput::Addons(ops::Input::Invoke(i)) => self.invoke(tx, ctx, i, prep),
+                OperationInput::Addons(ops::Input::ReadContent(i)) => {
+                    self.read_content(tx, ctx, i, prep)
+                }
+                OperationInput::Addons(ops::Input::RunWorkflow(i)) => {
+                    self.run_workflow(tx, ctx, command, i, prep)
+                }
                 input => match lifecycle(input) {
                     Some((
                         _,
@@ -2961,6 +2990,14 @@ impl CommandHandler for PackageService {
                 Err(r)
             }
         };
+        if let Ok(DomainDecision::Accepted { operation_id }) = outcome {
+            return Ok(Decided {
+                decision: DomainDecision::Accepted {
+                    operation_id: operation_id.clone(),
+                },
+                operation_id: Some(operation_id),
+            });
+        }
         decided(tx, outcome)
     }
 }

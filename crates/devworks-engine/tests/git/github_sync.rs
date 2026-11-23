@@ -559,6 +559,72 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
     ));
     let repo = id("github-sync-repo");
     let binding = github.qualify_registration(&repo).unwrap();
+    let mcp_admin = UseCases::new().with_inbound_mcp();
+    let change_access = |key, operation, mut body: Value| {
+        body["kind"] = json!(operation);
+        let frame = json!({
+            "mode":"Command", "protocol":"1.0-draft.1", "requestKey":key, "body":body,
+        });
+        match mcp_admin
+            .command(&gateway, &actor, operation, frame.to_string().as_bytes())
+            .unwrap()
+        {
+            CommandReply::Recorded { receipt, .. } => match receipt.decision {
+                DomainDecision::Applied { result } => result,
+                other => panic!("MCP administrative decision {other:?}"),
+            },
+            other => panic!("MCP administrative response {other:?}"),
+        }
+    };
+    change_access(
+        "mcp-configure",
+        "mcp_server.configure",
+        json!({"expectedRevision":"1","enabled":true,"bindings":["Stdio"]}),
+    );
+    let devworks_core::protocol::results::OperationResult::McpServerSetClientAccess {
+        value: registered,
+    } = change_access(
+        "mcp-register",
+        "mcp_server.set_client_access",
+        json!({"action":{"kind":"Register","name":"GitHub native acceptance"}}),
+    )
+    else {
+        panic!("registration result")
+    };
+    let devworks_core::protocol::results::OperationResult::McpServerSetClientAccess {
+        value: active,
+    } = change_access(
+        "mcp-allow",
+        "mcp_server.set_client_access",
+        json!({"action":{
+            "kind":"Replace","clientId":registered.client_id,"expectedRevision":registered.revision,
+            "name":registered.name,"enabled":true,"projectIds":["github-project"],
+            "repositoryIds":["github-sync-repo"],"worktreeIds":[],"readOperations":[],
+            "commandOperations":["issues.link","issues.publish"]
+        }}),
+    )
+    else {
+        panic!("replacement result")
+    };
+    let credentials = devworks_core::services::mcp_inbound::Credentials::new(
+        store.clone(),
+        Box::new(devworks_core::ports::secrets::SessionSecrets::new()),
+        Arc::new(devworks_adapters::OsEntropy),
+    );
+    let token = credentials
+        .provision(&actor, &active.client_id, &active.revision)
+        .unwrap();
+    let mcp_actor = credentials
+        .authenticate(
+            devworks_core::services::mcp_inbound::Binding::LocalIpc,
+            &token,
+        )
+        .unwrap()
+        .invocation(
+            id("paired-github-client"),
+            ProjectId(id("github-project")),
+            Revision::new(1).unwrap(),
+        );
     let command = |schema, revision, key: &str| {
         let frame = serde_json::to_vec(&json!({
             "mode":"Command", "protocol":"1.0-draft.1", "schemaRevision":schema, "requestKey":key,
@@ -569,7 +635,7 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
         }))
         .unwrap();
         gateway
-            .command(&actor, "issues.link", &frame, github.clone())
+            .command(&mcp_actor, "issues.link", &frame, github.clone())
             .unwrap()
     };
     assert!(matches!(
@@ -637,7 +703,7 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
     }))
     .unwrap();
     assert!(matches!(
-        gateway.command(&actor, "issues.publish", &v1_publish, github.clone()).unwrap(),
+        gateway.command(&mcp_actor, "issues.publish", &v1_publish, github.clone()).unwrap(),
         CommandReply::Recorded { receipt, .. } if matches!(receipt.decision, DomainDecision::Refused { .. })
     ));
 
@@ -651,7 +717,7 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
         }))
         .unwrap();
         match gateway
-            .command(&actor, "issues.publish", &frame, github.clone())
+            .command(&mcp_actor, "issues.publish", &frame, github.clone())
             .unwrap()
         {
             CommandReply::Recorded { receipt, .. } => match receipt.decision {

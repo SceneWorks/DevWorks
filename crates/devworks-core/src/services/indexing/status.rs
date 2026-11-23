@@ -3,6 +3,7 @@
 //! or configuration moved on carries freshness gaps and is never `Complete`.
 use super::{IndexEnv, effective_config};
 use crate::context::InvocationContext;
+use crate::locks::RwLockExt;
 use crate::ports::indexing::LanguageMode;
 use crate::ports::storage::*;
 use crate::protocol::data::{Coverage, CoverageState};
@@ -305,6 +306,41 @@ pub fn overlay_status(
     })
 }
 
+/// Repository generations are shared. A project's explicit disable stops package enrichment for
+/// the shared repository while allowing the structural index and other packages to run.
+pub(crate) fn semantic_disabled(
+    registry: &dyn PackageRegistryRead,
+    id: &str,
+    projects: &[crate::protocol::ProjectId],
+) -> Result<bool, StorageError> {
+    Ok(registry.package(id)?.is_some_and(|record| {
+        projects.iter().any(|project| {
+            crate::services::packages::policy::project_disabled(&record, project.0.as_str())
+        })
+    }))
+}
+
+/// Historical rows remain readable. Current graph results describe a changed package as stale.
+pub(crate) fn semantic_stale(
+    registry: &dyn PackageRegistryRead,
+    manifest: &Value,
+    projects: &[crate::protocol::ProjectId],
+) -> Result<bool, StorageError> {
+    for pack in manifest["packs"].as_array().into_iter().flatten() {
+        let (Some(id), Some(digest)) = (pack["id"].as_str(), pack["manifestDigest"].as_str())
+        else {
+            continue;
+        };
+        let active = registry.package(id)?.is_some_and(|record| {
+            record.installed && record.enabled && record.active_digest.as_deref() == Some(digest)
+        });
+        if !active || semantic_disabled(registry, id, projects)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// `indexing.status` of one repository (schema revision 2 adds freshness, languages, packs and
 /// overlays; with `only`, the overlays member lists just that overlay).
 pub fn status(
@@ -355,6 +391,12 @@ pub fn status(
     }
     if generation.is_some() && !config_current {
         reasons.push("configuration-changed".into());
+    }
+    let member_projects = read.projects().repository_projects(repository)?;
+    if let Some(generation) = &generation
+        && semantic_stale(read.packages(), &generation.manifest, &member_projects)?
+    {
+        reasons.push("semantic-package-changed".into());
     }
     let freshness_state = if active.is_some() {
         IndexFreshnessState::Indexing
@@ -480,28 +522,38 @@ pub fn status(
         });
     }
     status.languages = Some(BoundedList(languages.into_iter().take(128).collect()));
-    let installed = env.enrichers();
-    let applied: Vec<String> = generation
+    let mut installed: Vec<_> = env
+        .enrichers
+        .read_locked()
+        .iter()
+        .map(|pack| pack.descriptor())
+        .collect();
+    if let Some(packages) = env.package_semantics.get() {
+        installed.extend(packages.descriptors(read)?);
+    }
+    let applied: Vec<(String, Option<String>)> = generation
         .as_ref()
         .and_then(|g| g.manifest.get("packs").and_then(Value::as_array).cloned())
         .unwrap_or_default()
         .iter()
-        .filter_map(|p| p.get("id").and_then(Value::as_str).map(str::to_owned))
+        .filter_map(|p| {
+            Some((
+                p["id"].as_str()?.to_owned(),
+                p["manifestDigest"].as_str().map(str::to_owned),
+            ))
+        })
         .collect();
     let mut packs = Vec::new();
     let mut ids: Vec<String> = effective.packages.clone();
-    for e in &installed {
-        let d = e.descriptor();
-        if !ids.contains(&d.id) {
-            ids.push(d.id);
+    for descriptor in &installed {
+        if !ids.contains(&descriptor.id) {
+            ids.push(descriptor.id.clone());
         }
     }
     for id in ids {
-        let found = installed
-            .iter()
-            .map(|e| e.descriptor())
-            .find(|d| d.id == id);
-        let enabled = effective.packages.contains(&id);
+        let found = installed.iter().find(|d| d.id == id);
+        let disabled = semantic_disabled(read.packages(), &id, &member_projects)?;
+        let enabled = effective.packages.contains(&id) && !disabled;
         let (state, note, languages) = match (&found, enabled) {
             (None, _) => (
                 SemanticPackState::NotInstalled,
@@ -511,13 +563,23 @@ pub fn status(
                 ),
                 Vec::new(),
             ),
-            (Some(d), false) => (SemanticPackState::Disabled, None, d.languages.clone()),
+            (Some(d), false) => (
+                SemanticPackState::Disabled,
+                disabled.then(|| {
+                    "a member project disabled this package for the shared repository".into()
+                }),
+                d.languages.clone(),
+            ),
             (Some(d), true) if !d.missing.is_empty() => (
                 SemanticPackState::Unavailable,
                 Some(format!("missing prerequisites: {}", d.missing.join(", "))),
                 d.languages.clone(),
             ),
-            (Some(d), true) if applied.contains(&id) => {
+            (Some(d), true)
+                if applied
+                    .iter()
+                    .any(|(id, digest)| id == &d.id && digest == &d.manifest_digest) =>
+            {
                 (SemanticPackState::Applied, None, d.languages.clone())
             }
             (Some(d), true) => (SemanticPackState::Enabled, None, d.languages.clone()),

@@ -1,9 +1,12 @@
 //! Manually scoped backup and restore through the real native gateway and SQLite owners.
 mod common;
 use common::*;
+use devworks_core::ports::secrets::{Secret, SecretError, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::{ArchiveAction, ArchivePhase, Cancellation, WorkspaceArchive};
-use devworks_core::protocol::CommandReply;
+use devworks_core::protocol::records::McpClientAccess;
 use devworks_core::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
+use devworks_core::protocol::{CommandReply, Id, ProjectId, Revision};
+use devworks_core::services::mcp_inbound::{Binding, CredentialError, Credentials};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::frame::fixture;
 use devworks_desktop::host::Engine;
@@ -12,6 +15,7 @@ use eframe::egui::accesskit::Role;
 use rusqlite::Connection;
 use serde_json::json;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn storage_title(root: &Root) -> String {
@@ -133,6 +137,61 @@ fn refresh_manifest(bundle: &Path, archive: &mut WorkspaceArchive) {
     .unwrap();
 }
 
+struct McpVault(Arc<SessionSecrets>);
+impl SecretStore for McpVault {
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+    fn put(&self, k: &SecretKey, v: &Secret) -> Result<(), SecretError> {
+        self.0.put(k, v)
+    }
+    fn get(&self, k: &SecretKey) -> Result<Option<Secret>, SecretError> {
+        self.0.get(k)
+    }
+    fn delete(&self, k: &SecretKey) -> Result<bool, SecretError> {
+        self.0.delete(k)
+    }
+    fn list(&self, namespace: &str) -> Result<Vec<Id>, SecretError> {
+        self.0.list(namespace)
+    }
+}
+
+fn apply_mcp(b: &dyn Backend, name: &str, body: serde_json::Value) -> OperationResult {
+    ops::command_result(b.command(name, &fixture::command(b, name, body))).unwrap()
+}
+
+fn configure_mcp(b: &dyn Backend, revision: &str) {
+    apply_mcp(
+        b,
+        "mcp_server.configure",
+        json!({"expectedRevision":revision,"enabled":true,"bindings":["Stdio"]}),
+    );
+}
+
+fn allow_document_commands(b: &dyn Backend, registration: &McpClientAccess) -> McpClientAccess {
+    let OperationResult::McpServerSetClientAccess { value } = apply_mcp(
+        b,
+        "mcp_server.set_client_access",
+        json!({"action":{
+            "kind":"Replace","clientId":registration.client_id,"expectedRevision":registration.revision,
+            "name":registration.name,"enabled":true,"projectIds":["archive-project"],
+            "repositoryIds":[],"worktreeIds":[],"readOperations":[],
+            "commandOperations":["documents.import"]
+        }}),
+    ) else {
+        panic!("MCP grant reply")
+    };
+    value
+}
+
+fn credentials(app: &Engine, vault: &Arc<SessionSecrets>) -> Credentials {
+    Credentials::new(
+        app.host().runtime().store().clone(),
+        Box::new(McpVault(vault.clone())),
+        Arc::new(devworks_adapters::OsEntropy),
+    )
+}
+
 #[test]
 fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_bytes() {
     let _case = native_runtime_case();
@@ -161,6 +220,66 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         &[],
     );
     let saved = ops::saved_artifact(b.command("artifacts.save", &save)).expect("save real file");
+
+    configure_mcp(b, "1");
+    let OperationResult::McpServerSetClientAccess { value: registered } = apply_mcp(
+        b,
+        "mcp_server.set_client_access",
+        json!({"action":{"kind":"Register","name":"Restore probe"}}),
+    ) else {
+        panic!("register reply")
+    };
+    let pairing = allow_document_commands(b, &registered);
+    let vault = Arc::new(SessionSecrets::new());
+    let project = ProjectId(Id::new("archive-project").unwrap());
+    let ticket = b.mint_project_upload(&project, &input).unwrap();
+    let saved_for_project = ops::saved_artifact(b.command(
+        "artifacts.save",
+        &ops::save_project_artifact(
+            b,
+            project.0.as_str(),
+            ticket.as_str(),
+            "Import source",
+            "text/plain",
+            &devworks_core::fingerprint::sha256_hex(bytes),
+            bytes.len() as u64,
+        ),
+    ))
+    .unwrap();
+    {
+        let secrets = credentials(&app, &vault);
+        let token = secrets
+            .provision(app.host().user(), &pairing.client_id, &pairing.revision)
+            .unwrap();
+        let proof = secrets.authenticate(Binding::LocalIpc, &token).unwrap();
+        let context = proof.invocation(
+            Id::new("native-doc-restore").unwrap(),
+            project.clone(),
+            Revision::new(1).unwrap(),
+        );
+        let frame = fixture::command(
+            b,
+            "documents.import",
+            json!({
+                "scope":{"kind":"Project","projectId":project},"source":saved_for_project.artifact,
+                "title":"Preserved document",
+            }),
+        );
+        let import = || {
+            app.host()
+                .runtime()
+                .command(&context, "documents.import", &frame)
+        };
+        let result = ops::command_result(import()).unwrap();
+        assert!(matches!(result, OperationResult::DocumentsImport { .. }));
+        assert!(matches!(
+            import(),
+            Ok(CommandReply::Recorded { replayed: true, .. })
+        ));
+    }
+    let original_token = credentials(&app, &vault)
+        .provision(app.host().user(), &pairing.client_id, &pairing.revision)
+        .unwrap();
     await_quiet(&app, &root);
     let destination = root.dir("export");
 
@@ -370,6 +489,36 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         result: OperationResult::WorkspaceRestore { value }, ..
     } if value.schema_version.get() == 76 && value.id == proposal.id));
     assert_eq!(storage_title(&root), "Checkpoint authorship");
+    {
+        let secrets = credentials(&reopened, &vault);
+        assert!(matches!(
+            secrets.authenticate(Binding::LocalIpc, &original_token),
+            Err(CredentialError::Denied)
+        ));
+        configure_mcp(backend.as_ref(), "2");
+        assert!(matches!(
+            secrets.provision(
+                reopened.host().user(),
+                &pairing.client_id,
+                &pairing.revision
+            ),
+            Err(CredentialError::Denied)
+        ));
+        let renewed = allow_document_commands(backend.as_ref(), &pairing);
+        assert_ne!(renewed.credential_generation, pairing.credential_generation);
+        let token = secrets
+            .provision(
+                reopened.host().user(),
+                &renewed.client_id,
+                &renewed.revision,
+            )
+            .unwrap();
+        assert!(secrets.authenticate(Binding::LocalIpc, &token).is_ok());
+        assert!(matches!(
+            secrets.authenticate(Binding::LocalIpc, &original_token),
+            Err(CredentialError::Denied)
+        ));
+    }
     let prior = root
         .0
         .join("workspace-archives")

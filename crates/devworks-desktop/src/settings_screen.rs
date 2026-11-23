@@ -71,6 +71,7 @@ pub struct SettingsScreen {
     pub github_repos_next_cursor: Option<String>,
     pub github_repos_loading: bool,
     pub github_org_filter: String,
+    pub(crate) incoming_mcp: crate::mcp_inbound_panel::Panel,
     pub container_capabilities: Option<Vec<ContainerCapability>>,
     pub container_error: Option<String>,
     /// Roles and skills (DW-34).
@@ -122,6 +123,7 @@ pub enum SettingsAction {
     /// A web search, fetch or activity load from the Agent tools section.
     Web(WebAction),
     Mcp(McpAction),
+    IncomingMcp(crate::mcp_inbound_panel::Action),
 }
 
 impl SettingsScreen {
@@ -513,6 +515,9 @@ impl SettingsScreen {
                 let mut mcp = Vec::new();
                 self.mcp.ui(ui, online.is_ok(), &mut mcp);
                 actions.extend(mcp.into_iter().map(SettingsAction::Mcp));
+                let mut incoming = Vec::new();
+                self.incoming_mcp.ui(ui, online.is_ok(), &mut incoming);
+                actions.extend(incoming.into_iter().map(SettingsAction::IncomingMcp));
             }
         });
         scrolls.record("settings-items", out.state.clamped_offset().y);

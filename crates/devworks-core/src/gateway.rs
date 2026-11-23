@@ -383,6 +383,14 @@ impl Gateway<'_> {
                     .map_or(Ok(None), |check| check(ctx, &admitted, answer, s))
                     .map(|refusal| (true, refusal))
             });
+            if !crate::services::mcp_inbound::access::request_live(ctx)
+            {
+                return Ok(self.query_fault(
+                    admitted.query_id,
+                    DomainErrorCode::PermissionDenied,
+                    RetryAdvice::Never,
+                ));
+            }
             match holds {
                 Ok((true, None)) => {}
                 Ok((true, Some(refusal))) => {
@@ -1006,7 +1014,9 @@ fn unit_of_work(
         // authority, and an old-epoch receipt is never replayed as fresh authority.
         return Ok(Unit::Denied);
     }
-    if tx.actors().actor_kind(ctx.principal())?.is_none() {
+    if !crate::services::mcp_inbound::access::request_live(ctx)
+        || tx.actors().actor_kind(ctx.principal())?.is_none()
+    {
         // Receipts and history are attributed to a host-registered principal.
         return Ok(Unit::Denied);
     }
@@ -1023,8 +1033,20 @@ fn unit_of_work(
     // revision the operation no longer registers would otherwise be misreported as a changed
     // intent instead of an incompatible record. A receipt under another *registered* revision is
     // a different intent of the same key (its fingerprint differs), never a replay.
+    let access = crate::services::mcp_inbound::access::command_fence(authorization);
     match tx.receipts().lookup(&command.identity)? {
         Some(LedgerEntry::Purged(stored)) => {
+            if let Some(current) = access {
+                let prior = crate::services::mcp_inbound::access::receipt_fence(
+                    tx.history(),
+                    &stored.outcome.command_id,
+                    &stored.outcome.committed_sequence,
+                )?;
+                match prior {
+                    Some(prior) if prior.receipt_can_replay(current, tx.work())? => {}
+                    _ => return Ok(Unit::Denied),
+                }
+            }
             if stored.operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
@@ -1044,6 +1066,17 @@ fn unit_of_work(
             });
         }
         Some(LedgerEntry::Current(stored)) => {
+            if let Some(current) = access {
+                let prior = crate::services::mcp_inbound::access::receipt_fence(
+                    tx.history(),
+                    &stored.receipt.command_id,
+                    &stored.receipt.committed_sequence,
+                )?;
+                match prior {
+                    Some(prior) if prior.receipt_can_replay(current, tx.work())? => {}
+                    _ => return Ok(Unit::Denied),
+                }
+            }
             if stored.operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
@@ -1070,6 +1103,9 @@ fn unit_of_work(
             schema_revision,
             ..
         }) => {
+            if access.is_some() {
+                return Ok(Unit::Denied);
+            }
             if operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
@@ -1199,6 +1235,18 @@ fn unit_of_work(
         &command.project_targets,
         decided.operation_id.as_ref(),
     )?;
+    let mut payload = json!({
+        "operation": command.descriptor.name,
+        "contract": CONTRACT,
+        "schemaRevision": command.revision.0,
+        "requestDigest": command.fingerprint.as_str(),
+        "decision": decision_kind(&decided.decision),
+        "subject": scope.subject,
+    });
+    if let Some(access) = access {
+        payload["incomingMcpAccess"] = serde_json::to_value(access)
+            .map_err(|_| StorageError::InvalidRecord("incoming MCP receipt access".into()))?;
+    }
     let sequence = tx.history().append(NewEvent {
         id: event_id.clone(),
         actor: ctx.principal().clone(),
@@ -1209,14 +1257,7 @@ fn unit_of_work(
         aggregate_id: command_id.0.as_str().to_owned(),
         aggregate_revision: 1,
         kind: "CommandDecided".into(),
-        payload: json!({
-            "operation": command.descriptor.name,
-            "contract": CONTRACT,
-            "schemaRevision": command.revision.0,
-            "requestDigest": command.fingerprint.as_str(),
-            "decision": decision_kind(&decided.decision),
-            "subject": scope.subject,
-        }),
+        payload,
     })?;
     let committed_sequence = Revision::new(sequence)
         .map_err(|_| StorageError::InvalidRecord("non-positive committed sequence".into()))?;
@@ -1229,6 +1270,24 @@ fn unit_of_work(
         operation_id: decided.operation_id,
         decision,
     };
+    if let (Some(access), Some(operation)) = (access, &receipt.operation_id)
+        && matches!(receipt.decision, DomainDecision::Accepted { .. })
+    {
+        use crate::services::mcp_inbound::access::{OPERATION_ADMITTED, OPERATION_AGGREGATE};
+        let id = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id,
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: OPERATION_AGGREGATE.into(),
+            aggregate_id: operation.0.as_str().into(),
+            aggregate_revision: 1,
+            kind: OPERATION_ADMITTED.into(),
+            payload: json!({"incomingMcpAccess": access}),
+        })?;
+    }
     tx.receipts().record(
         &command.identity,
         &StoredReceipt {

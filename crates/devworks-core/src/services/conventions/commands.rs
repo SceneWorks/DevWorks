@@ -317,7 +317,10 @@ impl ConventionService {
                     .add_convention_resource(&resource, row.revision)?;
             }
         }
-        if changed_body && row.lifecycle == "Active" {
+        if changed_body
+            && row.lifecycle == "Active"
+            && ctx.principal_kind() != crate::context::PrincipalKind::McpClient
+        {
             self.index.record_changed(tx, ctx, &row)?;
         }
         Ok(DomainDecision::Applied {
@@ -349,7 +352,10 @@ impl ConventionService {
                 .to_owned();
         }
         let row = self.write(tx, ctx, &old, row, "ConventionApplicabilityChanged")?;
-        if old.lifecycle != "Active" && row.lifecycle == "Active" {
+        if old.lifecycle != "Active"
+            && row.lifecycle == "Active"
+            && ctx.principal_kind() != crate::context::PrincipalKind::McpClient
+        {
             self.index.record_changed(tx, ctx, &row)?;
         }
         Ok(DomainDecision::Applied {
@@ -702,7 +708,9 @@ impl ConventionService {
                 self.move_node(tx, ctx, &child, next)?;
             }
         }
-        if row.lifecycle == "Active" {
+        if row.lifecycle == "Active"
+            && ctx.principal_kind() != crate::context::PrincipalKind::McpClient
+        {
             self.index.record_changed(tx, ctx, &row)?;
         }
         Ok(row)

@@ -33,6 +33,7 @@ pub mod kernel;
 pub mod knowledge;
 pub mod maintenance;
 pub mod mcp;
+pub mod mcp_inbound;
 pub mod navigation;
 pub mod notifications;
 pub mod packages;
@@ -133,6 +134,15 @@ impl UseCases {
     pub fn with_mcp(mut self, service: Arc<mcp::McpClientService>) -> Self {
         self.mcp_service = Some(service.clone());
         for operation in mcp::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// Incoming MCP administration is private to registered human ingress.
+    pub fn with_inbound_mcp(mut self) -> Self {
+        let service = Arc::new(mcp_inbound::Administration);
+        for operation in mcp_inbound::OPERATIONS {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self

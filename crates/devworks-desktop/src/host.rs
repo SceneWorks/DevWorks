@@ -294,6 +294,7 @@ pub struct Host {
     restart: Mutex<Option<Restart>>,
     updates: Arc<UpdateService>,
     pdf_worker: Option<Arc<devworks_engine::documents::pdf::PdfWorker>>,
+    incoming_mcp: devworks_core::services::mcp_inbound::Credentials,
 }
 enum Restart {
     Restore(Id),
@@ -822,6 +823,11 @@ async fn compose(
         }
     }
     runtime.notification_wakeup();
+    let incoming_mcp = devworks_core::services::mcp_inbound::Credentials::new(
+        runtime.store().clone(),
+        devworks_adapters::secrets::native(),
+        Arc::new(devworks_adapters::OsEntropy),
+    );
     Ok(Host {
         runtime,
         navigation,
@@ -847,6 +853,7 @@ async fn compose(
         restart: Mutex::new(None),
         updates,
         pdf_worker,
+        incoming_mcp,
     })
 }
 
@@ -994,6 +1001,7 @@ impl Engine {
                     });
                     let _ = booted_tx.send(Ok(host.clone()));
                     let _ = stop_rx.await;
+                    host.incoming_mcp.close();
                     let processes = host.runtime.shutdown().await;
                     forward.abort();
                     let restart = host.restart.locked().take();
@@ -1080,6 +1088,7 @@ impl Engine {
             let _ = ticker.send(());
         }
         // Web requests in flight stop at their next bounded wait; new ones are refused.
+        self.host.incoming_mcp.close();
         self.host.web.shutdown();
         self.host.updates.stop_polls();
         if let Some(stop) = self.stop.take() {
@@ -1794,6 +1803,44 @@ impl Backend for DesktopBackend {
             .ok_or("packages are not composed")?;
         host.fetch_bundle(package, digest, &self.scratch_dir().join("packages"))
     }
+    fn package_views(
+        &self,
+        package: &str,
+        digest: &str,
+    ) -> Result<devworks_engine::package_host::native_ui::NativeViews, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .native_views(&self.host.ctx, package, digest)
+    }
+    fn load_package_view_data(
+        &self,
+        package: &str,
+        digest: &str,
+        view: &str,
+        form: &serde_json::Value,
+    ) -> Result<devworks_engine::package_host::native_ui::ViewData, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .load_native_view_data(&self.host.ctx, package, digest, view, form)
+    }
+    fn prepare_package_view_action(
+        &self,
+        package: &str,
+        digest: &str,
+        view: &str,
+        action: &str,
+        form: &serde_json::Value,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .prepare_native_view_action(&self.host.ctx, package, digest, view, action, form)
+    }
     fn index_sources(
         &self,
         project: Option<&str>,
@@ -1821,6 +1868,27 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn provision_inbound_mcp_credential(
+        &self,
+        client: &Id,
+        revision: &devworks_core::protocol::Revision,
+    ) -> Result<Secret, String> {
+        use devworks_core::services::mcp_inbound::CredentialError as E;
+        self.host
+            .incoming_mcp
+            .provision(&self.host.ctx, client, revision)
+            .map_err(|error| {
+                match error {
+                    E::Expired => "This pairing credential has expired. Rotate it before copying.",
+                    E::Denied => "Reload the enabled client before copying its pairing credential.",
+                    E::Closed => "DevWorks is closing.",
+                    E::Unavailable => "The protected credential store is unavailable.",
+                    E::Storage(_) => "DevWorks could not confirm the current client access.",
+                }
+                .to_owned()
+            })
+    }
+
     fn stage_mcp_api_key(&self, key: Secret) -> Result<Id, String> {
         self.host
             .connections

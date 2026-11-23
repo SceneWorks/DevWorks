@@ -445,7 +445,8 @@ impl CoreServices {
             .with_runs(self.control.clone())
             .with_diagnostics(self.diagnostics.clone())
             .with_knowledge(self.knowledge.clone())
-            .with_agents(self.agents.clone());
+            .with_agents(self.agents.clone())
+            .with_inbound_mcp();
         if let Some(web) = &self.web {
             use_cases = use_cases.with_web(web.clone());
         }
@@ -479,10 +480,10 @@ impl CoreServices {
 /// composition scripts one of its operations is [`crate::TestOverrides`].
 pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'static str)> {
     use devworks_core::services::{
-        AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, packages, resources,
+        AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, mcp_inbound, packages, resources,
         router, runs, sessions, web, workspace_archive,
     };
-    let families: [(&'static str, &[&str]); 16] = [
+    let families: [(&'static str, &[&str]); 17] = [
         ("artifacts", &artifacts::OPERATIONS),
         ("resources", &resources::OPERATIONS),
         ("runs", &runs::OPERATIONS),
@@ -499,6 +500,7 @@ pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'s
         ("router", &[router::decisions::OPERATION]),
         ("connections", &router::connections::OPERATIONS),
         ("mcp", &mcp::OPERATIONS),
+        ("mcp_server", &mcp_inbound::OPERATIONS),
     ];
     use_cases.operations().find_map(|op| {
         families

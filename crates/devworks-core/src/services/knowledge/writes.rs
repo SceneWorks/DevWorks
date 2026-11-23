@@ -688,6 +688,9 @@ fn origin_for(
         return Ok(("User".into(), reference));
     }
     match origin.as_deref() {
+        Some("User") if ctx.principal_kind() == PrincipalKind::McpClient => {
+            Err(refuse(DomainErrorCode::PermissionDenied, "origin", None))
+        }
         Some("User") if reference.is_some() => Ok(("User".into(), reference)),
         Some("User") => Err(invalid("origin_ref")),
         _ => Ok(("Agent".into(), reference)),
@@ -717,6 +720,11 @@ fn lesson_for(
     let source = wire(&d.source);
     if model::direct_user_source(&source) && ctx.principal_kind() != PrincipalKind::Human {
         // An agent relays the user's prompt or review, with the user's words attached.
+        return Err(refuse(DomainErrorCode::PermissionDenied, LESSON, None));
+    }
+    if ctx.principal_kind() == PrincipalKind::McpClient
+        && matches!(source.as_str(), "RelayedPrompt" | "RelayedReview")
+    {
         return Err(refuse(DomainErrorCode::PermissionDenied, LESSON, None));
     }
     if matches!(source.as_str(), "RelayedPrompt" | "RelayedReview")

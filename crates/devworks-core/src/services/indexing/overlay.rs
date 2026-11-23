@@ -45,7 +45,7 @@ use super::{
     IndexEnv, OVERLAY_AGGREGATE, RUN_AGGREGATE, digest, effective_config, effective_config_tx,
     history, new_run, record_of, section_config, section_key,
 };
-use crate::context::InvocationContext;
+use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::locks::LockExt;
 use crate::ports::IdKind;
@@ -421,6 +421,7 @@ pub(crate) fn refresh(
     repository: &Id,
     requested: Requested<'_>,
     expected: i64,
+    authorization: &crate::ports::Authorization,
 ) -> Result<DomainDecision, Failure> {
     let r = visible_repository(tx.projects(), ctx, repository)?;
     if let Some(own) = ctx.project_id() {
@@ -516,8 +517,23 @@ pub(crate) fn refresh(
         // The reuse identity is the snapshot (a ref overlay's is its commit, which `existing`
         // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
+        let member_projects = tx.projects().repository_projects(&r.id)?;
+        let mut semantic_changed = false;
+        for id in [&o.branch_generation_id, &o.worktree_generation_id]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(layer) = tx.indexing().generation(id)? {
+                semantic_changed |= super::status::semantic_stale(
+                    tx.packages(),
+                    &layer.manifest,
+                    &member_projects,
+                )?;
+            }
+        }
         let state = super::status::effective_overlay_state(o, base.as_ref(), now, moved);
         if state == OVERLAY_READY
+            && !semantic_changed
             && (commit.is_some() || snapshot.is_some_and(|s| same_snapshot(o, s)))
             && let Some(run) = o
                 .run_id
@@ -613,8 +629,13 @@ pub(crate) fn refresh(
         ctx.project_id(),
         (RUN_AGGREGATE, &run.id, run.revision),
         "IndexRunQueued",
-        json!({"kind": RUN_OVERLAY, "repositoryId": r.id.as_str(), "overlayId": overlay_id.as_str(),
-            "principalKind": ctx.principal_kind().as_str().to_string()}),
+        super::run_queue_payload(
+            authorization,
+            json!({
+                "kind": RUN_OVERLAY, "repositoryId": r.id.as_str(), "overlayId": overlay_id.as_str(),
+                "principalKind": ctx.principal_kind().as_str(),
+            }),
+        )?,
     )?;
     Ok(DomainDecision::Applied {
         result: OperationResult::IndexingRefreshOverlay {
@@ -839,9 +860,18 @@ pub(crate) fn observe_all(
             )?;
             for r in &page {
                 for o in s.indexing().overlays(&r.id)? {
-                    if matches!(o.state.as_str(), OVERLAY_READY | OVERLAY_STALE) {
-                        out.push(o);
+                    if !matches!(o.state.as_str(), OVERLAY_READY | OVERLAY_STALE) {
+                        continue;
                     }
+                    if let Some(run_id) = &o.run_id
+                        && let Some(run) = s.indexing().run(run_id)?
+                        && s.actors().actor_kind(&run.requested_by)?
+                            == Some(PrincipalKind::McpClient)
+                    {
+                        // Only a fresh explicit invocation can schedule a client-owned refresh.
+                        continue;
+                    }
+                    out.push(o);
                 }
             }
             if page.len() < MAX_PAGE as usize {
@@ -1007,6 +1037,8 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         ))
     })
     .map_err(Stop::storage)?;
+    exec.semantic_packs =
+        super::worker::semantic::select(&env, &cfg, &repo_id).map_err(Stop::storage)?;
     let base_pointer = base_view.map_or(0, |p| p.revision);
     let root = PathBuf::from(&snap.worktree_path);
     let head = snap.head_oid.clone();
@@ -1613,11 +1645,16 @@ fn stage_layer(
     exec.stage_units(root, name, generation, &from_commit, &mut done, total, stop)?;
     // Worktree content, in bounded batches, verified against the capture.
     let mut i = 0;
+    let packs = exec.semantic_packs.clone();
+    let commit = exec.run.source_oid.clone().unwrap_or_default();
+    let capture =
+        expected.and_then(|files| crate::fingerprint::canonical_digest(&json!(files)).ok());
     while i < from_worktree.len() {
         if exec.stopped() {
             return Err(Stop::Cancelled);
         }
         let mut rows = Vec::new();
+        let mut captured_files = Vec::new();
         let mut sources = super::source::Sources::new(env.clone(), exec.run.repository_id.clone());
         let mut bytes = 0usize;
         while i < from_worktree.len()
@@ -1663,8 +1700,39 @@ fn stage_layer(
                 &mut exec.warnings,
             )?;
             sources.stage(&mut row.0, content.as_deref())?;
+            if !packs.is_empty()
+                && matches!(
+                    u.mode,
+                    super::worker::MODE_STRUCTURAL | super::worker::MODE_TEXT_FALLBACK
+                )
+                && let (Some(language), Some(content)) = (u.language, content)
+            {
+                captured_files.push((u.key.as_str(), language, content));
+            }
             rows.push(row);
         }
+        let files: Vec<_> = captured_files
+            .iter()
+            .map(
+                |(unit, language, bytes)| crate::ports::indexing::EnrichmentSource {
+                    unit,
+                    language,
+                    bytes,
+                },
+            )
+            .collect();
+        super::worker::semantic::enrich_batch(
+            exec,
+            &packs,
+            super::worker::semantic::SemanticBatch {
+                root,
+                commit: &commit,
+                capture: capture.as_deref(),
+                files: &files,
+            },
+            &mut rows,
+            stop,
+        )?;
         let n = rows.len() as i64;
         let staged = sources.records();
         let capture_env = env.clone();
@@ -1706,6 +1774,7 @@ fn seal_layer(exec: &mut Exec<'_>, generation: &Id) -> Result<(), Stop> {
             })?;
         stored.state = GEN_SEALED.into();
         stored.watermark = count;
+        stored.manifest["packs"] = coverage["semanticPacks"].clone();
         stored.manifest["coverage"] = coverage;
         stored.manifest["units"] = json!(count);
         stored.manifest["indexedAtMs"] = json!(now);

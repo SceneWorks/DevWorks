@@ -19,6 +19,52 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageContent {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub content_kind: Label,
+    pub manifest_digest: Digest,
+    pub artifact: ArtifactRef,
+}
+impl Check for PackageContent {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.content_kind.check()?;
+        self.manifest_digest.check()?;
+        self.artifact.check()?;
+        crate::protocol::rules::record(
+            "PackageContent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageWorkflowGate {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub manifest_digest: Digest,
+    pub reason: Content,
+}
+impl Check for PackageWorkflowGate {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.manifest_digest.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "PackageWorkflowGate",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum LifeState {
     Active,
     Archived,

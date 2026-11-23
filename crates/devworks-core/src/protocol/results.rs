@@ -711,6 +711,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invoke")]
     AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent { value: PackageContent },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invocation")]
     AddonsInvocation { value: PackageInvocation },
@@ -1165,6 +1171,8 @@ impl OperationResult {
             Self::AddonsRollback { .. } => "addons.rollback",
             Self::AddonsUninstall { .. } => "addons.uninstall",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
+            Self::AddonsReadContent { .. } => "addons.read_content",
             Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
@@ -1559,6 +1567,8 @@ impl Check for OperationResult {
             Self::AddonsRollback { value } => value.check()?,
             Self::AddonsUninstall { value } => value.check()?,
             Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsRunWorkflow { value } => value.check()?,
+            Self::AddonsReadContent { value } => value.check()?,
             Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
@@ -1893,6 +1903,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsReadContent { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {

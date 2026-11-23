@@ -1867,6 +1867,8 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::Prepared { .. }
                         | TaskOutput::SettingSecret { .. }
                         | TaskOutput::PackagePrepared { .. }
+                        | TaskOutput::PackageViews { .. }
+                        | TaskOutput::PackageViewData(_)
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
                         | TaskOutput::DocumentSource(_)
@@ -1878,6 +1880,7 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::McpContent(_)
                         | TaskOutput::WorkImportReport(_)
                         | TaskOutput::SystemOneCompletion(_)
+                        | TaskOutput::IncomingMcp { .. }
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_)
                         | TaskOutput::WorkspaceArchive(_)
@@ -1948,6 +1951,8 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::Prepared { .. }
                             | TaskOutput::SettingSecret { .. }
                             | TaskOutput::PackagePrepared { .. }
+                            | TaskOutput::PackageViews { .. }
+                            | TaskOutput::PackageViewData(_)
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
                             | TaskOutput::DocumentSource(_)
@@ -1959,6 +1964,7 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::McpContent(_)
                             | TaskOutput::WorkImportReport(_)
                             | TaskOutput::SystemOneCompletion(_)
+                            | TaskOutput::IncomingMcp { .. }
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_)
                             | TaskOutput::WorkspaceArchive(_)

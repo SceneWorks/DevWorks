@@ -6,8 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, browser, features, git, history, issues, knowledge,
-    next_work, runs, sessions, tasks,
+    OperationInput, addons, approvals, artifacts, browser, features, git, history, issues,
+    knowledge, next_work, runs, sessions, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -544,6 +544,9 @@ fn agent_assignment_scope(
                 history::Input::CommandReceipt(_) => true,
             }
         }
+        OperationInput::Addons(addons::Input::RunWorkflow(input)) => {
+            coordinator && readable_artifact(&input.input.artifact_id, &input.input.version_id)?
+        }
         // Jobs have project scope and no root or assignment owner. Active assignments cannot
         // use project-wide scheduler operations through their ambient agent authority.
         OperationInput::Jobs(_) => false,
@@ -850,6 +853,16 @@ pub(crate) fn decide_in(
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
+    let external = if ctx.principal_kind() == PrincipalKind::McpClient
+        && !matches!(verdict, Verdict::Deny(_))
+    {
+        let fence =
+            crate::services::mcp_inbound::access::authorize(s, ctx, request).map_err(deny)?;
+        fences.push(AuthorityFence::ExternalMcp(Box::new(fence)));
+        true
+    } else {
+        false
+    };
     if let Some((id, digest)) = ownership {
         fences.push(AuthorityFence::GitWorktree { id, digest });
     }
@@ -866,6 +879,11 @@ pub(crate) fn decide_in(
             Ok(Authorization::with_grants(resume.uses).fenced_by(fences))
         }
         Verdict::Deny(reason) => Err(deny(reason)),
+        Verdict::NeedsGrant {
+            kind: GrantKind::Operation,
+            exact: false,
+            reason: DenialReason::GrantRequired,
+        } if external => Ok(Authorization::direct().fenced_by(fences)),
         Verdict::NeedsGrant {
             kind,
             exact,
@@ -1052,6 +1070,7 @@ fn fences_hold_with_context(
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
+            AuthorityFence::ExternalMcp(fence) => fence.holds_in(tx)?,
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
@@ -1123,6 +1142,7 @@ pub fn authorization_holds(
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::ExternalMcp(fence) => fence.holds(s)?,
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
             }

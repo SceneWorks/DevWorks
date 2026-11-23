@@ -161,6 +161,7 @@ pub struct InvocationContext {
     keep_working_project: Option<(ProjectId, i64)>,
     workspace_reply: Option<WorkspaceReply>,
     reviewed_operation: Option<ReviewedOperation>,
+    mcp_client_proof: Option<crate::services::mcp_inbound::access::ClientProof>,
 }
 
 /// A reply claimed from the ordered workspace queue. The invocation ID is its durable operation.
@@ -339,7 +340,21 @@ impl InvocationContext {
             keep_working_project: None,
             workspace_reply: None,
             reviewed_operation: None,
+            mcp_client_proof: None,
         }
+    }
+
+    pub(crate) fn set_mcp_client_proof(
+        &mut self,
+        proof: crate::services::mcp_inbound::access::ClientProof,
+    ) {
+        self.mcp_client_proof = Some(proof);
+    }
+
+    pub(crate) fn mcp_client_proof(
+        &self,
+    ) -> Option<&crate::services::mcp_inbound::access::ClientProof> {
+        self.mcp_client_proof.as_ref()
     }
 
     /// Whether trusted human ingress bound this exact, complete decision. This is not a grant

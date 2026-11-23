@@ -109,6 +109,7 @@ mod jobs;
 mod knowledge;
 mod maintenance;
 mod mcp;
+mod mcp_inbound;
 mod operations;
 mod packages;
 mod projects;

@@ -122,6 +122,8 @@ pub struct NativeProviders {
     schemas: Arc<RegisteredSchemas>,
     composition: ProviderComposition,
     live: Arc<super::live::LiveTurns>,
+    pub(crate) package_codecs:
+        std::sync::OnceLock<std::sync::Weak<crate::package_host::PackageHost>>,
 }
 /// Trusted native producer input. Cancellation is operational ownership, never wire authority.
 pub type InstructionTargets = Vec<(Id, Vec<String>)>;
@@ -351,6 +353,7 @@ impl NativeProviders {
             schemas,
             composition,
             live: Arc::new(super::live::LiveTurns::default()),
+            package_codecs: Default::default(),
         })
     }
     pub(crate) fn verify_instruction_material(
@@ -1436,7 +1439,7 @@ impl OwnedInferenceSource for LazySource {
         attempt: &StoredInferenceAttempt,
         cancellation: &Cancellation,
     ) -> Result<(), StorageError> {
-        let (prepared, connection) = self.owner.prepare(
+        let (mut prepared, connection) = self.owner.prepare(
             &self.context,
             &self.request,
             attempt,
@@ -1455,6 +1458,18 @@ impl OwnedInferenceSource for LazySource {
             max_header_bytes: 65536,
             max_headers: 128,
         };
+        let codec = match self
+            .owner
+            .package_codecs
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            Some(host) => host.select_codec(&self.context, &prepared)?,
+            None => None,
+        };
+        if let Some(codec) = &codec {
+            prepared.body = codec.encode(&prepared, cancellation)?;
+        }
         let mut source = NativeProviderSource::new(
             prepared.clone(),
             self.owner.connections.clone(),
@@ -1462,7 +1477,8 @@ impl OwnedInferenceSource for LazySource {
             limits,
             connection.endpoint,
             connection.credential_revision,
-        );
+        )
+        .with_package_codec(codec);
         let owner = self.owner.clone();
         let context = self.context.clone();
         let captured = attempt.clone();

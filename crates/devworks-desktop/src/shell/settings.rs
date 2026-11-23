@@ -100,7 +100,7 @@ impl Screen for SettingsScreen {
             );
         }
         let mut ctl = SettingsCtl { settings: self, cx };
-        ctl.settings_actions(actions);
+        ctl.settings_actions(actions, ui.ctx());
         if index_actions.iter().any(|a| matches!(a, IndexAction::Runs)) {
             ctl.effects.push(Effect::SetRoute(Route::Indexing));
         }
@@ -134,6 +134,7 @@ impl Screen for SettingsScreen {
                 p.restore_edit(*n, u.frame());
                 p.busy.push((*n, u.label.clone()));
             }
+            SettingsSlot::IncomingMcpSave => self.incoming_mcp.busy = true,
             SettingsSlot::SettingsSave => {
                 self.saving = true;
                 self.unconfirmed = true;
@@ -321,7 +322,7 @@ impl SettingsCtl<'_, '_> {
         );
     }
 
-    fn settings_actions(&mut self, actions: Vec<SettingsAction>) {
+    fn settings_actions(&mut self, actions: Vec<SettingsAction>, ui: &egui::Context) {
         for a in actions {
             match a {
                 SettingsAction::Reload => self.load_settings(),
@@ -412,6 +413,60 @@ impl SettingsCtl<'_, '_> {
                 SettingsAction::Connection(a) => self.connection_action(a),
                 SettingsAction::Web(action) => self.web_action(action),
                 SettingsAction::Mcp(action) => self.mcp_action(action),
+                SettingsAction::IncomingMcp(action) => self.incoming_mcp_action(action, ui),
+            }
+        }
+    }
+
+    fn load_incoming_mcp(&mut self) {
+        self.settings.incoming_mcp.busy = self.client.as_deref_mut().is_some_and(|client| {
+            client.task(
+                SettingsSlot::IncomingMcpLoad.into(),
+                "Loading incoming MCP",
+                |backend| {
+                    let (status, clients) = crate::mcp_inbound_panel::load(backend)?;
+                    Ok(TaskOutput::IncomingMcp {
+                        status: Box::new(status),
+                        clients,
+                    })
+                },
+            )
+        });
+    }
+
+    fn incoming_mcp_action(
+        &mut self,
+        action: crate::mcp_inbound_panel::Action,
+        ui: &egui::Context,
+    ) {
+        use crate::mcp_inbound_panel::Action;
+        self.settings.incoming_mcp.message = None;
+        match action {
+            Action::Reload => self.load_incoming_mcp(),
+            Action::Save(input) => {
+                let operation = input.operation();
+                self.settings.incoming_mcp.busy = self.command(
+                    SettingsSlot::IncomingMcpSave,
+                    "Saving incoming MCP access",
+                    operation,
+                    move |backend| ops::mcp_command(backend, *input),
+                );
+            }
+            Action::CopyCredential(id, revision) => {
+                let ui = ui.clone();
+                self.settings.incoming_mcp.busy =
+                    self.client.as_deref_mut().is_some_and(|client| {
+                        client.task(
+                            SettingsSlot::IncomingMcpCredential.into(),
+                            "Preparing pairing credential",
+                            move |backend| {
+                                let secret =
+                                    backend.provision_inbound_mcp_credential(&id, &revision)?;
+                                ui.copy_text(secret.expose().to_owned());
+                                Ok(TaskOutput::Refreshed)
+                            },
+                        )
+                    });
             }
         }
     }
@@ -1199,6 +1254,36 @@ impl SettingsCtl<'_, '_> {
                 self.settings.mcp.busy = false;
                 self.settings.mcp.pending_server = None;
                 self.settings.mcp.error = Some(error);
+            }
+            (SettingsSlot::IncomingMcpLoad, Reply::Task(result)) => {
+                let panel = &mut self.settings.incoming_mcp;
+                panel.busy = false;
+                match result {
+                    Ok(TaskOutput::IncomingMcp { status, clients }) => {
+                        panel.loaded(*status, clients)
+                    }
+                    Err(error) => panel.message = Some(error),
+                    _ => {}
+                }
+            }
+            (SettingsSlot::IncomingMcpSave, Reply::Command(result)) => {
+                let panel = &mut self.settings.incoming_mcp;
+                panel.busy = false;
+                match ops::command_result(result) {
+                    Ok(_) => {
+                        panel.message = Some("Incoming MCP settings saved.".into());
+                        self.load_incoming_mcp();
+                    }
+                    Err(error) => panel.message = Some(error.describe()),
+                }
+            }
+            (SettingsSlot::IncomingMcpCredential, Reply::Task(result)) => {
+                let panel = &mut self.settings.incoming_mcp;
+                panel.busy = false;
+                panel.message = Some(match result {
+                    Ok(_) => "Pairing credential copied.".into(),
+                    Err(error) => error,
+                });
             }
             (SettingsSlot::McpRelease, Reply::Task(Err(error))) => {
                 self.settings.mcp.error = Some(format!(

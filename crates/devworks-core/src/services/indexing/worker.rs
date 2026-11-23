@@ -29,6 +29,7 @@
 mod calls;
 mod exec;
 mod links;
+pub(crate) mod semantic;
 mod units;
 
 use calls::*;
@@ -185,6 +186,7 @@ impl IndexWorker {
                         .is_none_or(|p| crate::services::runs::closed_to_work(&p.lifecycle)),
                     None => false,
                 };
+                let authority_lost = !index_run_authorized(tx, &r)?;
                 let terminal = |r: &mut StoredIndexRun, state: &str, stage: &str| {
                     r.state = state.into();
                     r.stage = stage.into();
@@ -192,8 +194,11 @@ impl IndexWorker {
                     r.lease_until_ms = None;
                     r.finished_at_ms = Some(now);
                 };
-                if r.cancel_requested_at_ms.is_some() || closed {
-                    if closed {
+                if r.cancel_requested_at_ms.is_some() || closed || authority_lost {
+                    if authority_lost {
+                        r.error_code = Some("external_access_changed".into());
+                        r.error_message = Some("the external client's access changed".into());
+                    } else if closed {
                         r.error_code = Some("project_archived".into());
                         r.error_message = Some("the project was archived or deleted".into());
                     }
@@ -281,6 +286,7 @@ impl IndexWorker {
             ctx: self.env.host_context(run.project_id.as_ref()),
             warnings: run.warnings.clone(),
             shares: BTreeMap::new(),
+            semantic_packs: Vec::new(),
         };
         exec.log(
             "claimed",
@@ -451,6 +457,44 @@ impl IndexWorker {
     }
 }
 
+// A dedicated MCP identity never becomes the host at dispatch. Native index calls still use
+// the worker's trusted host context, after rechecking the external client's persisted admission
+// on every claim and before every checkpoint, including final publication.
+fn index_run_authorized(
+    tx: &mut dyn WriteTransaction,
+    run: &StoredIndexRun,
+) -> Result<bool, StorageError> {
+    use crate::context::PrincipalKind;
+    use crate::ports::AuthorityFence;
+    if tx.actors().actor_kind(&run.requested_by)? != Some(PrincipalKind::McpClient) {
+        return Ok(true);
+    }
+    let page = tx.history().page(
+        &EventFilter::Aggregate {
+            kind: RUN_AGGREGATE.into(),
+            id: run.id.as_str().into(),
+        },
+        0,
+        1,
+    )?;
+    let Some(event) = page.events.first().filter(|event| {
+        event.kind == "IndexRunQueued"
+            && event.actor == run.requested_by
+            && event.project_id == run.project_id
+    }) else {
+        return Ok(false);
+    };
+    let Some(stored) = event.payload.get("externalAuthority") else {
+        return Ok(false);
+    };
+    let fences: Vec<AuthorityFence> = serde_json::from_value(stored.clone())
+        .map_err(|_| StorageError::InvalidRecord("index run authority".into()))?;
+    Ok(fences
+        .iter()
+        .any(|fence| matches!(fence, AuthorityFence::ExternalMcp(_)))
+        && crate::authority::fences_hold(tx, &fences)?)
+}
+
 /// Coverage of a staged generation (languages, modes, gaps) and its unit count.
 pub(crate) fn coverage_of(
     env: &IndexEnv,
@@ -459,6 +503,7 @@ pub(crate) fn coverage_of(
 ) -> Result<(Value, i64), StorageError> {
     let mut languages: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
     let mut gaps: BTreeSet<String> = BTreeSet::new();
+    let mut semantic = BTreeMap::new();
     let mut count = 0i64;
     let mut after: Option<String> = None;
     let bump = |m: &mut Map<String, Value>, k: &str| {
@@ -471,6 +516,11 @@ pub(crate) fn coverage_of(
         })?;
         for u in &page {
             count += 1;
+            for pack in u.payload["semanticPacks"].as_array().into_iter().flatten() {
+                if let Some(id) = pack["id"].as_str() {
+                    semantic.insert(id.to_owned(), pack.clone());
+                }
+            }
             let mode = u.payload.get("mode").and_then(Value::as_str).unwrap_or("");
             let lang = u.payload.get("language").and_then(Value::as_str);
             let errors = u
@@ -531,6 +581,7 @@ pub(crate) fn coverage_of(
     Ok((
         json!({
             "state": state,
+            "semanticPacks": semantic.into_values().collect::<Vec<_>>(),
             "gaps": gaps.into_iter().collect::<Vec<_>>(),
             "languages": Value::Object(languages.into_iter().map(|(k, v)| (k, Value::Object(v))).collect()),
             "excluded": excluded.get("excluded").copied().unwrap_or(0),

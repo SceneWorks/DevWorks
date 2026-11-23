@@ -193,6 +193,7 @@ def main():
         'prices':'usage', 'graph':'code-exploration', 'instructions':'settings-Instructions',
         'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
         'schemas':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
+        'inbound_mcp':'mcp-servers',
         'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control',
         'document_library':'documents-retrieval', 'dreaming':'dreaming',
         'systemone':'settings-connections', 'github':'settings-GitHub', 'work_imports':'work-imports',
