@@ -2,7 +2,7 @@
 //! `tools/contracts-eval/domain-spec.json` (`operationAuthority`). The lists below are a frozen
 //! copy of the operation-name lists `authority/policy.rs` and `authority/service.rs` held before
 //! the rules moved onto the descriptor; they prove every existing operation keeps its behaviour,
-//! except the recorded native-execution decisions.
+//! except the recorded native-execution decisions and new authority rules.
 mod common;
 
 use devworks_core::registry::{self, AssignmentScope, Mode, OperationDescriptor};
@@ -154,6 +154,9 @@ const NEWLY_NATIVE: [&str; 8] = [
     "addons.run_workflow",
 ];
 
+/// DW-37 gives only a human administrator control of database sensitive-column policy.
+const HUMAN_DATABASE_POLICY: &str = "database.edit_sensitive_column_rules";
+
 #[test]
 fn descriptor_attributes_reproduce_the_former_name_lists() {
     for d in registry::all() {
@@ -167,7 +170,7 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         );
         assert_eq!(
             d.human_only,
-            OLD_HUMAN_ONLY.contains(&op),
+            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY,
             "{op} human only"
         );
         let scope = d.assignment_scope;
@@ -190,7 +193,7 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         if d.binding(Mode::Command).is_some() {
             assert_eq!(
                 scope == AssignmentScope::Administration,
-                old_administration(op),
+                old_administration(op) || op == HUMAN_DATABASE_POLICY,
                 "{op} administration"
             );
         } else {
