@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/windows-update-qualification.yml'
       - 'crates/devworks-desktop/src/app_updates/**'
+      - 'tools/ci/windows-trust-probe.py'
 
 permissions:
   contents: read
