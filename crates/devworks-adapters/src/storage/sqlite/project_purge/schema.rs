@@ -76,8 +76,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// action records, plus scoped source observations. A project's settings and runs belong to
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
+/// Migration 73 adds document transfer proposals. Their custody follows both participating
+/// projects and the retained artifact, as recorded in the document-transfers policy. It uses
+/// plain foreign keys so the guarded purge deletes every reviewed row explicitly.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "d9944d0b2848c0394e8546debf61b157b96c0bd212f681ce6abf9eab8f2eb033";
+    "fa19174b0342a91c6c23cbb8ae44fec5a3d57f3a392b31e426b9ce8d7983e211";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

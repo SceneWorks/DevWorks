@@ -1,8 +1,8 @@
 CREATE TABLE document_transfers (
     id TEXT PRIMARY KEY,
-    artifact_id TEXT NOT NULL REFERENCES artifacts ON DELETE CASCADE,
-    source_project_id TEXT NOT NULL REFERENCES projects ON DELETE CASCADE,
-    destination_project_id TEXT NOT NULL REFERENCES projects ON DELETE CASCADE,
+    artifact_id TEXT NOT NULL REFERENCES artifacts,
+    source_project_id TEXT NOT NULL REFERENCES projects,
+    destination_project_id TEXT NOT NULL REFERENCES projects,
     proposal_json TEXT NOT NULL CHECK(json_valid(proposal_json)),
     revision INTEGER NOT NULL CHECK(revision IN (1,2)),
     state TEXT NOT NULL CHECK(state IN ('Pending','Shared','Moved','Declined')),

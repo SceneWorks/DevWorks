@@ -806,7 +806,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 66,
         minimum_writer: 73,
         sql: include_str!("migrations/0073_document_transfers.sql"),
-        expected_sha256: "c4e008e94324e3b84cf4fb10c8c498f98ee6c80fe58d0413a68d1a3c965e0e78",
+        expected_sha256: "7e4772630d9f1125814cb53ffa641fcf371afea8c7801d2c6065c590b61b95d4",
         rebuilds_tables: false,
     },
 ];

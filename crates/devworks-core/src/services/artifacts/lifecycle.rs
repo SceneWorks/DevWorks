@@ -1249,7 +1249,7 @@ impl ArtifactService {
             )
             .into());
         }
-        self.share_authorized(tx, ctx, artifact, target, expected_scope_revision)
+        self.share_authorized(tx, ctx, artifact, target, expected_scope_revision, None)
     }
 
     /// Applies a share after the owning service has checked the caller's transfer authority.
@@ -1260,6 +1260,7 @@ impl ArtifactService {
         mut artifact: StoredArtifact,
         target: &ProjectId,
         expected_scope_revision: &Revision,
+        transfer: Option<&Id>,
     ) -> Result<MutationSummary, Failure> {
         require_explicit(&artifact, &tx.store().host_actor)?;
         let artifact_id = &artifact.id;
@@ -1277,9 +1278,9 @@ impl ArtifactService {
                 Refusal::new(DomainErrorCode::NotFound, "project", Some(target.0.clone())).into(),
             );
         }
-        if artifact.scope.project() == Some(target)
-            || !tx.artifacts().add_share(artifact_id, target)?
-        {
+        let added = artifact.scope.project() != Some(target)
+            && tx.artifacts().add_share(artifact_id, target)?;
+        if !added && transfer.is_none() {
             return Ok(MutationSummary {
                 id: artifact_id.clone(),
                 revision: rev(artifact.scope_revision),
@@ -1289,15 +1290,14 @@ impl ArtifactService {
         artifact.scope_revision += 1;
         artifact.reference_revision += 1;
         tx.artifacts().update_artifact(&artifact)?;
-        event(
-            tx,
-            ctx,
-            &artifact,
-            None,
-            None,
-            "ArtifactShared",
-            json!({"projectId": target.0.as_str(), "scopeRevision": artifact.scope_revision}),
-        )?;
+        let mut payload =
+            json!({"projectId": target.0.as_str(), "scopeRevision": artifact.scope_revision});
+        if let Some(transfer) = transfer {
+            payload["transferId"] = json!(transfer);
+            payload["existingShare"] = json!(!added);
+        }
+        // A fresh agreement to keep sharing also fences a pending contrary move.
+        event(tx, ctx, &artifact, None, None, "ArtifactShared", payload)?;
         Ok(MutationSummary {
             id: artifact_id.clone(),
             revision: rev(artifact.scope_revision),

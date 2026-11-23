@@ -1,6 +1,7 @@
 //! Two current primary coordinators authorize one revision-bound document transfer.
 
 use crate::{
+    authority::policy::resolve_policy,
     context::{InvocationContext, PrincipalKind},
     gateway::AdmittedQuery,
     operations::{OperationInput, documents as ops},
@@ -61,8 +62,13 @@ fn can_coordinate(binding: &PrincipalBinding, work: &WorkRoot) -> bool {
 fn coordinator(
     tx: &mut dyn WriteTransaction,
     root: &RootId,
+    capability: &'static str,
 ) -> Result<DocumentTransferParty, Failure> {
     let work = tx.sessions().work_root(root)?.ok_or_else(denied)?;
+    let policy = resolve_policy(tx.configuration(), Some(&work.project_id))?;
+    if policy.profile.is_none() || !policy.tool_selected(capability, true) {
+        return Err(denied().into());
+    }
     let project = tx
         .projects()
         .project(&work.project_id)?
@@ -145,7 +151,11 @@ pub(super) fn propose(
     ctx: &InvocationContext,
     input: &ops::TransferProposeInput,
 ) -> Result<DocumentTransferRecord, Failure> {
-    let source = coordinator(tx, ctx.root_id().ok_or_else(denied)?)?;
+    let source = coordinator(
+        tx,
+        ctx.root_id().ok_or_else(denied)?,
+        "devworks/documents.transfer_propose",
+    )?;
     if !speaks_for(ctx, &source) || input.summary.0.trim().is_empty() {
         return Err(denied().into());
     }
@@ -168,7 +178,11 @@ pub(super) fn propose(
         &input.expected_scope_revision,
         artifact.scope_revision,
     )?;
-    let destination = coordinator(tx, &input.destination_root_id)?;
+    let destination = coordinator(
+        tx,
+        &input.destination_root_id,
+        "devworks/documents.transfer_respond",
+    )?;
     if source.project == destination.project || source.actor == destination.actor {
         return Err(denied().into());
     }
@@ -232,8 +246,16 @@ pub(super) fn respond(
     {
         return Err(stale().into());
     }
-    if coordinator(tx, &proposal.destination.root)? != proposal.destination
-        || coordinator(tx, &proposal.source.root)? != proposal.source
+    if coordinator(
+        tx,
+        &proposal.destination.root,
+        "devworks/documents.transfer_respond",
+    )? != proposal.destination
+        || coordinator(
+            tx,
+            &proposal.source.root,
+            "devworks/documents.transfer_propose",
+        )? != proposal.source
     {
         return Err(stale().into());
     }
@@ -242,7 +264,14 @@ pub(super) fn respond(
     let state = if !input.destination_needs_document {
         DocumentTransferState::Declined
     } else if proposal.source_needs_document {
-        artifacts.share_authorized(tx, ctx, document, target, &proposal.scope_revision)?;
+        artifacts.share_authorized(
+            tx,
+            ctx,
+            document,
+            target,
+            &proposal.scope_revision,
+            Some(&transfer.id),
+        )?;
         DocumentTransferState::Shared
     } else {
         move_document_authorized(tx, ctx, document, target, &proposal.scope_revision)?;
@@ -295,9 +324,16 @@ pub(super) fn status(
         .authority()
         .principal(ctx.principal())?
         .ok_or_else(denied)?;
-    if primary.is_none_or(|primary| primary.id != assignment || primary.parent_id.is_some())
-        || work.project_id != party.project
+    if primary.is_none_or(|primary| {
+        primary.id != assignment
+            || primary.id != party.assignment
+            || primary.session_id != party.session
+            || primary.parent_id.is_some()
+            || (matches!(transfer.state, DocumentTransferState::Pending)
+                && primary.generation != party.assignment_generation)
+    }) || work.project_id != party.project
         || !can_coordinate(&binding, &work)
+        || binding.revision != party.authority_revision
     {
         return Err(denied().into());
     }

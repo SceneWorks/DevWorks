@@ -187,6 +187,17 @@ fn transfer_response(transfer: &Id, need: bool, key: &str) -> Value {
             "expectedRevision":"1","destinationNeedsDocument":need}})
 }
 
+fn transfer_status(f: &Fixture<'_>, ctx: &InvocationContext, transfer: &Id) -> DomainQueryReply {
+    f.query(
+        ctx,
+        "documents.transfer_status",
+        json!({
+            "protocol":"1.0-draft.1","mode":"Query","schemaRevision":14,"queryId":"transfer-status",
+            "body":{"kind":"documents.transfer_status","transferId":transfer}
+        }),
+    )
+}
+
 fn proposal_id(reply: CommandReply<DomainDecision>) -> Id {
     let OperationResult::DocumentsTransferPropose { value } = applied(reply) else {
         panic!("expected document proposal");
@@ -209,7 +220,7 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
     };
     let _case = native_runtime_case();
     let h = Harness::new();
-    let completed = {
+    let (completed, receiving_assignment) = {
         let (mut f, indexer) = compose(&h);
         seed::rows(
             f.store.as_ref(),
@@ -336,6 +347,11 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
             Ok(())
         })
         .unwrap();
+        let revoked_status = transfer_status(&f, &a, &stale);
+        assert!(matches!(
+            revoked_status, DomainQueryReply::Rejected { fault, .. }
+                if fault.code == DomainErrorCode::PermissionDenied
+        ));
         let old = f.command(
             &b,
             "documents.transfer_respond",
@@ -343,6 +359,101 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
         );
         assert!(matches!(
             old, CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        let before_setting = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "before-setting",
+            ),
+        ));
+        let setting = devworks_core::settings::catalog::descriptor("tools.overrides")
+            .unwrap()
+            .schema_ref();
+        let select_proposal = |previous, selected| {
+            let scope = devworks_core::ports::storage::ConfigScope::Workspace;
+            let setting = setting.clone();
+            write(f.store.as_ref(), move |tx| {
+                tx.configuration().append_revision(
+                    &scope,
+                    "settings",
+                    previous,
+                    1,
+                    json!({"values":{"tools.overrides":{"schema":setting,
+                      "value":{"devworks/documents.transfer_propose":selected}}}}),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        };
+        select_proposal(1, false);
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond",
+                transfer_response(&before_setting, true, "disabled-source")),
+            CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        select_proposal(2, true);
+        let before_archive = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "before-archive",
+            ),
+        ));
+        let project = a.project_id().unwrap().clone();
+        write(f.store.as_ref(), move |tx| {
+            // The lifecycle service advances this epoch on archive, then restores Active.
+            let mut stored = tx.projects().project(&project)?.unwrap();
+            let prior = stored.revision;
+            stored.revision += 1;
+            stored.archive_epoch += 1;
+            tx.projects().update_project(&stored, prior)
+        })
+        .unwrap();
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond",
+                transfer_response(&before_archive, true, "after-reopen")),
+            CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        let contrary = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "contrary",
+            ),
+        ));
+        let retain = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(&f, reference, "document-destination-root", true, "retain"),
+        ));
+        confirm_decision(
+            f.command(
+                &b,
+                "documents.transfer_respond",
+                transfer_response(&retain, true, "retain-answer"),
+            ),
+            "Shared",
+        );
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond",
+                transfer_response(&contrary, true, "contrary-answer")),
+            CommandReply::Recorded { receipt, .. }
                 if matches!(receipt.decision, DomainDecision::Refused { .. })
         ));
         let competing = proposal_id(f.command(
@@ -386,10 +497,16 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
         assert!(search(&f, &a_view, "greenhouse", &[]).passages.is_empty());
         assert_eq!(open(&f, &b_view, &citation).text.0, "Greenhouse evidence.");
         assert_eq!(open(&f, &c, &citation).text.0, "Greenhouse evidence.");
-        let status = result(f.query(&a, "documents.transfer_status", json!({
-            "protocol":"1.0-draft.1","mode":"Query","schemaRevision":14,"queryId":"transfer-result",
-            "body":{"kind":"documents.transfer_status","transferId":moved}
-        })));
+        let retained_assignment = a.assignment_id().unwrap().clone();
+        write(f.store.as_ref(), move |tx| {
+            let mut newer = tx.runs().assignment(&retained_assignment)?.unwrap();
+            let prior = newer.revision;
+            newer.revision += 1;
+            newer.generation += 1;
+            tx.runs().update_assignment(&newer, prior)
+        })
+        .unwrap();
+        let status = result(transfer_status(&f, &a, &moved));
         assert!(matches!(
             status,
             OperationResult::DocumentsTransferStatus { .. }
@@ -408,7 +525,16 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
             "Shared",
         );
         assert_eq!(open(&f, &a_view, &citation).text.0, "Greenhouse evidence.");
-        moved
+        let source_project = ProjectId(id("document-a"));
+        let plan = read(f.store.as_ref(), |r| {
+            r.projects().purge_planning(&source_project)
+        })
+        .unwrap();
+        assert!(plan.rows.iter().any(|row| {
+            row.table == "document_transfers"
+                && row.action == devworks_core::ports::storage::ProjectPurgeRowAction::Delete
+        }));
+        (moved, b.assignment_id().unwrap().clone())
     };
     let f = Fixture::open(&h);
     let recovered = read(f.store.as_ref(), |r| {
@@ -417,6 +543,21 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
     .unwrap();
     assert_eq!(serde_json::to_value(&recovered.state).unwrap(), "Moved");
     assert_eq!(recovered.revision.get(), 2);
+    let deliveries = read(f.store.as_ref(), |r| {
+        r.runs().agent_assignment_thread(
+            &ProjectId(id("document-b")),
+            &receiving_assignment,
+            "Inbound",
+            true,
+            None,
+            20,
+        )
+    });
+    assert!(
+        deliveries
+            .iter()
+            .any(|(message, _)| message.body.contains(completed.as_str()))
+    );
 }
 
 #[test]
