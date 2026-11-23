@@ -946,10 +946,28 @@ fn an_approved_codec_encodes_and_decodes_through_the_owned_router_attempt() {
     codec.provider_codec = true;
     package(a.install(&a.user, &codec));
     a.ready("codec-pack");
+    // The router picks subscribers when it handles an announcement. Drain the codec's own
+    // installation announcement before installing the subscriber for this test.
+    settled(&a, ROUTER, 1);
     let script = react_script(&a, "codec-consumer");
     package(a.install(&a.user, &handler_pack("codec-consumer", "1.0.0")));
+    settled(&a, ROUTER, 2);
     settled(&a, CONSUMER, 1);
     let _ = std::fs::remove_file(script);
+    let deliveries = read(&*a.store, |snapshot| {
+        snapshot.history().page(
+            &EventFilter::Aggregate {
+                kind: "package_event".into(),
+                id: "codec-consumer".into(),
+            },
+            0,
+            2,
+        )
+    });
+    assert_eq!(deliveries.events.len(), 1, "{deliveries:?}");
+    let event = &deliveries.events[0];
+    assert_eq!(event.kind, "PackageEventDelivered");
+    assert_eq!(event.payload["event"]["packageId"], "codec-consumer");
     let recorded = attempts(&a);
     assert_eq!(recorded.len(), 1, "{recorded:?}");
     assert_eq!(recorded[0].state, AttemptState::Settled);
