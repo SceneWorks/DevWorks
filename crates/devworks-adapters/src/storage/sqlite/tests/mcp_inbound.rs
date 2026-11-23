@@ -216,10 +216,13 @@ fn project_access_does_not_grant_a_document_transfer_decision() {
     let fx = Fixture::new();
     fx.configure(8148);
     let registered = fx.register();
-    for operation in ["documents.share", "documents.move"] {
+    for (key, operation) in [
+        ("deny-document-share", "documents.share"),
+        ("deny-document-move", "documents.move"),
+    ] {
         let refusal = fx.command(
             &fx.human,
-            operation,
+            key,
             "mcp_server.set_client_access",
             1,
             json!({"action": {
