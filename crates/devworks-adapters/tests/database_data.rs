@@ -462,6 +462,7 @@ fn mariadb_check_digest() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "explicit native PostgreSQL 17 index fixture"]
 async fn postgres_index_digest() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio_postgres::{Config, NoTls, config::SslMode, error::SqlState};
 
     const CATALOG: &str = "dw37_index_fixture";
@@ -537,8 +538,15 @@ async fn postgres_index_digest() {
 
     let external = Arc::new(external);
     let racing = Arc::clone(&external);
+    let statement_checks = Arc::new(AtomicUsize::new(0));
+    let checks = Arc::clone(&statement_checks);
     let guard = Guard {
         before_statement: Some(Box::new(move || {
+            // The network adapter checks admission before opening a connection. Race DDL
+            // at the PostgreSQL statement boundary, after it has checked the schema digest.
+            if checks.fetch_add(1, Ordering::Relaxed) == 0 {
+                return;
+            }
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     for statement in [
@@ -573,6 +581,7 @@ async fn postgres_index_digest() {
         "the fresh digest should permit the guarded DDL: {:?}",
         applied.err()
     );
+    assert_eq!(statement_checks.load(Ordering::Relaxed), 2);
     drop(external);
     driver.await.unwrap().unwrap();
 }
