@@ -1291,7 +1291,12 @@ fn sensitivity_save_reply_stays_bound_when_workspace_defaults_are_selected() {
         "connection policy committed with reply held",
         |_| held.has_waiter(),
     );
-    h.get_by_label("Workspace defaults").click_accesskit();
+    // Render the pending status before resolving the checkbox's accessibility node.
+    // The committed reply can reach the gate before the screen draws that status.
+    h.step();
+    assert!(has_text(&h, "Saving connection sensitivity rules."));
+    h.get_by_role_and_label(Role::CheckBox, "Workspace defaults")
+        .click_accesskit();
     step_until(&mut h, "scope changed during the save", |s| {
         s.databases.data.rules.is_none()
     });
