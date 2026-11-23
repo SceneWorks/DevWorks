@@ -328,6 +328,12 @@ fn native_repository_analysis_survives_restart_and_keeps_provenance() {
         "export const endpoint = \"http://fixture.test.invalid/status\";\n",
     )
     .unwrap();
+    let fixture_key = "FixtureOnly_12xy34pq56wv78rt";
+    std::fs::write(
+        repo.join(".env.production"),
+        format!("API_KEY=\"{fixture_key}\"\n"),
+    )
+    .unwrap();
     git(&repo, &["init", "-q"]);
     git(
         &repo,
@@ -474,10 +480,25 @@ fn native_repository_analysis_survives_restart_and_keeps_provenance() {
     assert!(
         matches!(&security, OperationResult::AnalysisSecurity { value }
         if value.report.is_some() && value.observation.as_ref().and_then(|item| item.security.as_ref()).is_some_and(|rows|
-           rows.0.len() == 1 && rows.0[0].view_id == first && rows.0[0].scanned_files.get() == 1
-           && rows.0[0].medium.get() == 1)),
+           rows.0.len() == 1 && rows.0[0].view_id == first && rows.0[0].scanned_files.get() == 2
+           && rows.0[0].medium.get() == 2)),
         "{security:?}"
     );
+    let OperationResult::AnalysisSecurity { value } = &security else {
+        unreachable!("asserted the native security report");
+    };
+    let (bytes, _) = app
+        .artifacts()
+        .read_exact(&*store, &user, value.report.as_ref().unwrap(), 1024 * 1024)
+        .unwrap();
+    let report: Value = serde_json::from_slice(&bytes).unwrap();
+    let findings = report["repositories"][0]["findings"].as_array().unwrap();
+    assert!(findings.iter().any(|finding| {
+        finding["path"] == ".env.production"
+            && finding["category"] == "secret"
+            && finding["line"] == 1
+    }));
+    assert!(!std::str::from_utf8(&bytes).unwrap().contains(fixture_key));
     assert!(
         !serde_json::to_string(&security)
             .unwrap()

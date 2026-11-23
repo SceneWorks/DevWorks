@@ -131,9 +131,10 @@ fn selected(path: &str) -> bool {
     let path = path.to_ascii_lowercase();
     !scanner::nonproduction(&path)
         && !path.split('/').any(|part| EXCLUDED.contains(&part))
-        && path
-            .rsplit_once('.')
-            .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext))
+        && (scanner::sensitive(&path)
+            || path
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext)))
 }
 
 pub(in crate::services::graph::repository_analysis) fn local(
