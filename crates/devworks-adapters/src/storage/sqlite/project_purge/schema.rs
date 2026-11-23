@@ -83,7 +83,7 @@ use rusqlite::Connection;
 /// with custody tied to either participating project and to the retained artifact.
 /// Migration 78 adds repository analysis runs with their existing project or workspace scope.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "1c0702568a9c7ed9effc00ddaee6fb7e2bf32d672c6fae8562703d8332fc900b";
+    "eac127e257b7ed629c61cdaf009056f444616d7854444a20d5649caf304b0cb0";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly
