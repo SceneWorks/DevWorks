@@ -554,7 +554,7 @@ fn separately_permitted_database_effect_runs_through_native_gateway_and_operatio
     assert_eq!(adapter.sends.load(Ordering::SeqCst), 0);
     let read_data = |connection: &Value, text: &str| {
         let bytes = serde_json::to_vec(&json!({
-            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"database-read",
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":9,"queryId":"database-read",
             "body":{"kind":"database.read","connectionId":connection["id"],
                 "expectedConnectionRevision":connection["revision"],"statement":text,
                 "parameters":[],"rowLimit":100,"timeoutMs":"30000","includeSchemaDigest":true}
@@ -596,7 +596,7 @@ fn separately_permitted_database_effect_runs_through_native_gateway_and_operatio
                 "id":"deny-database-payload","table":"contacts","column":"payload","allow":false
             }}
         }),
-        1,
+        9,
     ));
     assert_eq!(saved["revision"], "2");
     assert!(read_artifact().is_err());
@@ -612,7 +612,7 @@ fn separately_permitted_database_effect_runs_through_native_gateway_and_operatio
             "statement":"INSERT INTO contacts(id,label) VALUES(2,'PRIVATE_WRITE_MATERIAL')",
             "parameters":[],"timeoutMs":"5000"
         }),
-        2,
+        9,
     );
     let CommandReply::Recorded { receipt, .. } = response else {
         panic!("{response:?}")
@@ -658,7 +658,7 @@ fn separately_permitted_database_effect_runs_through_native_gateway_and_operatio
     let enabled = json!({"id":current.id,"revision":current.revision});
     adapter.lose_observation.store(true, Ordering::SeqCst);
     let request = serde_json::to_vec(&json!({
-        "mode":"Command","protocol":PROTOCOL,"schemaRevision":2,
+        "mode":"Command","protocol":PROTOCOL,"schemaRevision":9,
         "requestKey":"database-fixture-post-commit-loss",
         "body":{"kind":"database.execute_write",
             "connectionId":enabled["id"],"expectedConnectionRevision":enabled["revision"],
@@ -758,7 +758,7 @@ fn verify_database_project_role(app: &HelpApp, private: &Value, shared: &Value) 
     let scope = json!({"kind":"Project","projectId":"project-a"});
     let query = |context: &InvocationContext, connection: &Value| {
         let frame = json!({
-            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"database-project-read",
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":9,"queryId":"database-project-read",
             "body":{"kind":"database.read","scope":scope,"connectionId":connection["id"],
                 "expectedConnectionRevision":connection["revision"],"statement":"SELECT id FROM contacts",
                 "parameters":[],"rowLimit":10,"timeoutMs":"5000"}
@@ -781,7 +781,7 @@ fn verify_database_project_role(app: &HelpApp, private: &Value, shared: &Value) 
         "{admitted:?}"
     );
     let frame = json!({
-        "mode":"Command","protocol":PROTOCOL,"schemaRevision":2,
+        "mode":"Command","protocol":PROTOCOL,"schemaRevision":9,
         "requestKey":"database-reviewer-write",
         "body":{"kind":"database.execute_write","scope":scope,"connectionId":shared["id"],
             "expectedConnectionRevision":shared["revision"],
@@ -870,7 +870,7 @@ fn verify_database_schema_effects(
     use devworks_core::protocol::results::DomainQueryReply;
     let digest = |connection: &Value| {
         let frame = json!({
-            "protocol":PROTOCOL,"mode":"Query","schemaRevision":2,"queryId":"migration-precondition",
+            "protocol":PROTOCOL,"mode":"Query","schemaRevision":9,"queryId":"migration-precondition",
             "body":{"kind":"database.read","connectionId":connection["id"],
                 "expectedConnectionRevision":connection["revision"],"statement":"SELECT 1",
                 "parameters":[],"rowLimit":1,"timeoutMs":"5000","includeSchemaDigest":true}
@@ -924,7 +924,7 @@ fn verify_database_schema_effects(
         assert!(!accepted(app.command(
             "database.apply_migration",
             migrated(connection, material),
-            2
+            9
         )));
     }
     let settle = |reply| {
@@ -947,7 +947,7 @@ fn verify_database_schema_effects(
             operation.latest_attempt()
         );
     };
-    settle(app.command("database.apply_migration", migrated(enabled, own), 2));
+    settle(app.command("database.apply_migration", migrated(enabled, own), 9));
     let connection = source(app, &id(enabled["id"].as_str().unwrap())).connection;
     let selected = json!({"id":connection.id,"revision":connection.revision});
     assert_eq!(
@@ -967,12 +967,12 @@ fn verify_database_schema_effects(
     assert!(!accepted(app.command(
         "database.direct_schema_change",
         direct("ALTER TABLE contacts RENAME COLUMN payload TO unprotected"),
-        2
+        9
     )));
     settle(app.command(
         "database.direct_schema_change",
         direct("CREATE TABLE direct_repair_marker (id INTEGER PRIMARY KEY)"),
-        2,
+        9,
     ));
     assert_eq!(
         target

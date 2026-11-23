@@ -1159,109 +1159,6 @@
         }
       ]
     },
-    "DatabaseLegacyRows": {
-      "additionalProperties": false,
-      "properties": {
-        "rowCount": {
-          "format": "int32",
-          "type": "integer"
-        },
-        "rows": {
-          "$ref": "#/$defs/List_BoundedUntrustedJson_0_500"
-        }
-      },
-      "required": [
-        "rows",
-        "rowCount"
-      ],
-      "type": "object"
-    },
-    "DatabaseSensitiveColumnRule": {
-      "additionalProperties": false,
-      "properties": {
-        "allow": {
-          "type": "boolean"
-        },
-        "catalog": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To256"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "column": {
-          "$ref": "#/$defs/Text1To256"
-        },
-        "id": {
-          "$ref": "#/$defs/Id"
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text0To65536"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "schema": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To256"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "table": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To256"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "column",
-        "allow"
-      ],
-      "type": "object"
-    },
-    "DatabaseSensitiveRuleSet": {
-      "additionalProperties": false,
-      "properties": {
-        "connectionId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Id"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "revision": {
-          "$ref": "#/$defs/Revision"
-        },
-        "rules": {
-          "$ref": "#/$defs/List_DatabaseSensitiveColumnRule_0_500"
-        }
-      },
-      "required": [
-        "revision",
-        "rules"
-      ],
-      "type": "object"
-    },
     "DbColumn": {
       "additionalProperties": false,
       "properties": {
@@ -4204,14 +4101,6 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_BoundedUntrustedJson_0_500": {
-      "items": {
-        "$ref": "#/$defs/BoundedUntrustedJson"
-      },
-      "maxItems": 500,
-      "minItems": 0,
-      "type": "array"
-    },
     "List_BrowserObservation_0_500": {
       "items": {
         "$ref": "#/$defs/BrowserObservation"
@@ -4255,14 +4144,6 @@
     "List_ContextSource_0_500": {
       "items": {
         "$ref": "#/$defs/ContextSource"
-      },
-      "maxItems": 500,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_DatabaseSensitiveColumnRule_0_500": {
-      "items": {
-        "$ref": "#/$defs/DatabaseSensitiveColumnRule"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -7221,57 +7102,6 @@
             },
             "value": {
               "$ref": "#/$defs/SchemaConnection"
-            }
-          },
-          "required": [
-            "kind",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "database.mysql_readonly_query",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/DatabaseLegacyRows"
-            }
-          },
-          "required": [
-            "kind",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "database.sensitive_columns",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/DatabaseSensitiveRuleSet"
-            }
-          },
-          "required": [
-            "kind",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "database.edit_sensitive_column_rules",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/DatabaseSensitiveRuleSet"
             }
           },
           "required": [

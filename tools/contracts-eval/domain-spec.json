@@ -1426,7 +1426,7 @@
         "columns": "?Items<DbColumn>",
         "truncated": "?bool"
       },
-      "since": {"columns": 2, "truncated": 2}
+      "since": {"columns": 10, "truncated": 10}
     },
     "DatabaseSensitiveColumnRule": {
       "kind": "record",
@@ -1477,7 +1477,7 @@
         "source_revision": "?Revision",
         "schema_digest": "?Digest"
       },
-      "since": {"schema_digest": 2}
+      "since": {"schema_digest": 9}
     },
     "DbWriteResult": {
       "kind": "record",
@@ -8618,7 +8618,7 @@
       "effect": "ExternalRead",
       "authority": "Scoped",
       "rules": "Parse/check effective read-only operation through qualified adapter; no arbitrary SQL function side effects, sensitive-column policy before materialization. Results not structural graph persistence.",
-      "since": {"scope": 2, "include_schema_digest": 2, "schema_preview": 2}
+      "since": {"scope": 9, "include_schema_digest": 9, "schema_preview": 9}
     },
     "database.execute_write": {
       "operation": "database.execute_write",
@@ -8636,7 +8636,7 @@
       "effect": "External",
       "authority": "Scoped",
       "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement.",
-      "since": {"scope": 2}
+      "since": {"scope": 9}
     },
     "database.direct_schema_change": {
       "operation": "database.direct_schema_change",
@@ -8656,7 +8656,7 @@
       "effect": "External",
       "authority": "Scoped",
       "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement.",
-      "since": {"scope": 2, "expected_schema_digest": 2, "fallback_reason": 2}
+      "since": {"scope": 9, "expected_schema_digest": 9, "fallback_reason": 9}
     },
     "database.apply_migration": {
       "operation": "database.apply_migration",
@@ -8674,7 +8674,7 @@
       "effect": "External",
       "authority": "Scoped",
       "rules": "Versioned immutable migration; exact target authority independent of artifact read. Unknown application status reconciled through migration evidence.",
-      "since": {"scope": 2, "source": 2}
+      "since": {"scope": 9, "source": 9}
     },
     "database.configure_sensitive_columns": {
       "operation": "database.configure_sensitive_columns",
@@ -8692,6 +8692,7 @@
     "database.mysql_readonly_query": {
       "operation": "database.mysql_readonly_query",
       "mode": "Query",
+      "introducedRevision": 9,
       "fields": {
         "scope": "?DataScope",
         "source": "Text",
@@ -8706,6 +8707,7 @@
     "database.sensitive_columns": {
       "operation": "database.sensitive_columns",
       "mode": "Query",
+      "introducedRevision": 9,
       "fields": {
         "connection_id": "?Id"
       },
@@ -8717,6 +8719,7 @@
     "database.edit_sensitive_column_rules": {
       "operation": "database.edit_sensitive_column_rules",
       "mode": "Command",
+      "introducedRevision": 9,
       "fields": {
         "connection_id": "?Id",
         "expected_revision": "Revision",
@@ -13080,24 +13083,26 @@
     ],
     "database.read": [
       1,
-      2
+      9
     ],
     "database.apply_migration": [
       1,
-      2
+      9
     ],
     "database.direct_schema_change": [
       1,
-      2
+      9
     ],
     "database.execute_write": [
       1,
-      2
+      9
     ],
     "database.mysql_readonly_query": [
-      1,
-      2
+      9,
+      10
     ],
+    "database.sensitive_columns": [9],
+    "database.edit_sensitive_column_rules": [9],
     "database.configure_sensitive_columns": [
       1,
       5

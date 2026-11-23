@@ -3412,14 +3412,14 @@ pub struct DatabaseLegacyRows {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Items<DbColumn>", extend("x-since" = 2))]
+    #[schemars(with = "Items<DbColumn>", extend("x-since" = 10))]
     pub columns: Option<Items<DbColumn>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 10))]
     pub truncated: Option<bool>,
 }
 impl Check for DatabaseLegacyRows {
@@ -3438,10 +3438,10 @@ impl Check for DatabaseLegacyRows {
 
 impl Revisioned for DatabaseLegacyRows {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 10 {
             self.columns = None;
         }
-        if revision < 2 {
+        if revision < 10 {
             self.truncated = None;
         }
     }
@@ -3555,7 +3555,7 @@ pub struct DbReadResult {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Digest", extend("x-since" = 2))]
+    #[schemars(with = "Digest", extend("x-since" = 9))]
     pub schema_digest: Option<Digest>,
 }
 impl Check for DbReadResult {
@@ -3576,7 +3576,7 @@ impl Check for DbReadResult {
 
 impl Revisioned for DbReadResult {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 9 {
             self.schema_digest = None;
         }
     }

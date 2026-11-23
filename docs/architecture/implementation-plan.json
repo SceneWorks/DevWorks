@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
-    "devworks-capability-catalog.json": "ecba2423d1b209a5d74e32b555fcab73cd27564dbe6607fbae46eac00361090b",
+    "devworks-capability-catalog.json": "65cbae4c70d2f2b698dd23eccd6e2c63bf473691cb6abfdefc1063d49e51139f",
     "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "fd81062d0b23b6df2878b51a51dcb2507b57a2c89f336d034887230c810b2009",
+    "contracts/family-coverage.json": "48d67875a3288fbc4593c15b1383367cc5d147a7c4895fc526f4a06defa7f148",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
-    "operations": 382,
+    "operations": 385,
     "requirements": 390,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 382,
+    "inputSchemaCandidates": 385,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -3208,7 +3208,10 @@
         "database.execute_write",
         "database.apply_migration",
         "database.direct_schema_change",
-        "database.configure_sensitive_columns"
+        "database.configure_sensitive_columns",
+        "database.mysql_readonly_query",
+        "database.sensitive_columns",
+        "database.edit_sensitive_column_rules"
       ],
       "primaryRequirements": [],
       "supportingRequirements": [
@@ -14756,6 +14759,48 @@
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
       "resultValueType": "SchemaConnection",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "database.mysql_readonly_query",
+      "family": "database",
+      "serviceOwner": "DataExecutor",
+      "primarySlice": "database_tools",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DatabaseLegacyRows",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "database.sensitive_columns",
+      "family": "database",
+      "serviceOwner": "DataExecutor",
+      "primarySlice": "database_tools",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DatabaseSensitiveRuleSet",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "database.edit_sensitive_column_rules",
+      "family": "database",
+      "serviceOwner": "DataExecutor",
+      "primarySlice": "database_tools",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DatabaseSensitiveRuleSet",
       "requestModes": [
         "Command"
       ],

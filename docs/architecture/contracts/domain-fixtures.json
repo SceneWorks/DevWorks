@@ -701,22 +701,22 @@
   },
   {
     "id": "input-database.mysql_readonly_query-Query",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"Fixture content\"}}",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"Fixture content\"},\"schemaRevision\":9}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-database.sensitive_columns-Query",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.sensitive_columns\"}}",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.sensitive_columns\"},\"schemaRevision\":9}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-database.edit_sensitive_column_rules-Command",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.edit_sensitive_column_rules\",\"expectedRevision\":\"1\",\"edit\":{\"kind\":\"Upsert\",\"rule\":{\"id\":\"id-a\",\"column\":\"fixture\",\"allow\":false}}}}",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.edit_sensitive_column_rules\",\"expectedRevision\":\"1\",\"edit\":{\"kind\":\"Upsert\",\"rule\":{\"id\":\"id-a\",\"column\":\"fixture\",\"allow\":false}}},\"schemaRevision\":9}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -3025,21 +3025,21 @@
   },
   {
     "id": "result-database.mysql_readonly_query",
-    "entry": "operation-result",
+    "entry": "operation-result.r9",
     "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[],\"rowCount\":1}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-database.sensitive_columns",
-    "entry": "operation-result",
+    "entry": "operation-result.r9",
     "raw": "{\"kind\":\"database.sensitive_columns\",\"value\":{\"revision\":\"1\",\"rules\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-database.edit_sensitive_column_rules",
-    "entry": "operation-result",
+    "entry": "operation-result.r9",
     "raw": "{\"kind\":\"database.edit_sensitive_column_rules\",\"value\":{\"revision\":\"1\",\"rules\":[]}}",
     "typedValid": true,
     "schemaValid": true
@@ -5020,8 +5020,8 @@
   },
   {
     "id": "input-database.read-scoped-schema-preview",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.read\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"SELECT 1\",\"parameters\":[],\"rowLimit\":20,\"timeoutMs\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"includeSchemaDigest\":true,\"schemaPreview\":\"ALTER TABLE contacts ADD label TEXT\"},\"schemaRevision\":2}",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.read\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"SELECT 1\",\"parameters\":[],\"rowLimit\":20,\"timeoutMs\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"includeSchemaDigest\":true,\"schemaPreview\":\"ALTER TABLE contacts ADD label TEXT\"},\"schemaRevision\":9}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -5033,18 +5033,95 @@
     "schemaValid": false
   },
   {
+    "id": "input-database.execute_write-scoped",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.execute_write\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"UPDATE fixture SET label = :label\",\"parameters\":[{\"name\":\"label\",\"value\":{\"kind\":\"Text\",\"value\":\"fixture\"}}],\"timeoutMs\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-database.direct_schema_change-exact-fallback",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.direct_schema_change\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"Fixture content\",\"parameters\":[],\"timeoutMs\":\"1\",\"expectedSchemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"fallbackReason\":\"Approved emergency repair\"},\"schemaRevision\":2}",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.direct_schema_change\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"Fixture content\",\"parameters\":[],\"timeoutMs\":\"1\",\"expectedSchemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"fallbackReason\":\"Approved emergency repair\"},\"schemaRevision\":9}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-database.apply_migration-git-source",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.apply_migration\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"migration\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedSchemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source\":{\"repositoryId\":\"repo-a\",\"commit\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"path\":\"migrations/001.sql\"}},\"schemaRevision\":2}",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.apply_migration\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"migration\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedSchemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source\":{\"repositoryId\":\"repo-a\",\"commit\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"path\":\"migrations/001.sql\"}},\"schemaRevision\":9}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "result-database.read-with-schema-digest",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.read\",\"value\":{\"columns\":[],\"rows\":[],\"truncated\":false,\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.read-result-before-schema-digest",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"database.read\",\"value\":{\"columns\":[],\"rows\":[],\"truncated\":false,\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r9-result-database.execute_write",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.execute_write\",\"value\":{\"connectionId\":\"id-a\",\"state\":\"ObservedComplete\",\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-database.direct_schema_change",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.direct_schema_change\",\"value\":{\"connectionId\":\"id-a\",\"state\":\"ObservedComplete\",\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-database.apply_migration",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.apply_migration\",\"value\":{\"connectionId\":\"id-a\",\"state\":\"ObservedComplete\",\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-database.mysql_readonly_query-current",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"SELECT 1 AS item\",\"limit\":1},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.mysql_readonly_query-before-introduction",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"SELECT 1 AS item\",\"limit\":1},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "result-database.mysql_readonly_query-retained-binary",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[{\"payload\":\"AQI=\"}],\"rowCount\":1}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-database.mysql_readonly_query-current-binary",
+    "entry": "operation-result.r10",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[{\"payload\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"rowCount\":1,\"columns\":[{\"name\":\"payload\",\"dataType\":\"blob\",\"sensitive\":false}],\"truncated\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.mysql_readonly_query-current-before-revision",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[{\"payload\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"rowCount\":1,\"columns\":[{\"name\":\"payload\",\"dataType\":\"blob\",\"sensitive\":false}],\"truncated\":true}}",
+    "typedValid": false,
+    "schemaValid": false
   },
   {
     "id": "input-watch.create-probe",
@@ -9695,42 +9772,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1385",
+    "id": "r3-preview-source-13-1396",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1385",
+    "id": "r3-delete-source-13-1396",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1387",
+    "id": "r3-preview-source-15-1398",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1387",
+    "id": "r3-delete-source-15-1398",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1389",
+    "id": "r3-preview-source-256-1400",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1389",
+    "id": "r3-delete-source-256-1400",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

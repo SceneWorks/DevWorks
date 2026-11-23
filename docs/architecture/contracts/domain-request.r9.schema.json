@@ -3924,7 +3924,7 @@
             },
             "scope": {
               "$ref": "#/$defs/DataScope",
-              "x-since": 2
+              "x-since": 9
             },
             "statement": {
               "$ref": "#/$defs/Text0To65536"
@@ -3954,11 +3954,11 @@
             },
             "expectedSchemaDigest": {
               "$ref": "#/$defs/Digest",
-              "x-since": 2
+              "x-since": 9
             },
             "fallbackReason": {
               "$ref": "#/$defs/Text0To65536",
-              "x-since": 2
+              "x-since": 9
             },
             "kind": {
               "const": "database.direct_schema_change",
@@ -3979,7 +3979,7 @@
             },
             "scope": {
               "$ref": "#/$defs/DataScope",
-              "x-since": 2
+              "x-since": 9
             },
             "statement": {
               "$ref": "#/$defs/Text0To65536"
@@ -4029,11 +4029,11 @@
             },
             "scope": {
               "$ref": "#/$defs/DataScope",
-              "x-since": 2
+              "x-since": 9
             },
             "source": {
               "$ref": "#/$defs/DatabaseMigrationSource",
-              "x-since": 2
+              "x-since": 9
             }
           },
           "required": [
@@ -4099,7 +4099,8 @@
             "expectedRevision",
             "edit"
           ],
-          "type": "object"
+          "type": "object",
+          "x-since": 9
         },
         {
           "additionalProperties": false,
@@ -9383,7 +9384,7 @@
             },
             "includeSchemaDigest": {
               "type": "boolean",
-              "x-since": 2
+              "x-since": 9
             },
             "kind": {
               "const": "database.read",
@@ -9397,11 +9398,11 @@
             },
             "schemaPreview": {
               "$ref": "#/$defs/Text0To65536",
-              "x-since": 2
+              "x-since": 9
             },
             "scope": {
               "$ref": "#/$defs/DataScope",
-              "x-since": 2
+              "x-since": 9
             },
             "statement": {
               "$ref": "#/$defs/Text0To65536"
@@ -9457,7 +9458,8 @@
             "source",
             "sql"
           ],
-          "type": "object"
+          "type": "object",
+          "x-since": 9
         },
         {
           "additionalProperties": false,
@@ -9480,7 +9482,8 @@
           "required": [
             "kind"
           ],
-          "type": "object"
+          "type": "object",
+          "x-since": 9
         },
         {
           "additionalProperties": false,

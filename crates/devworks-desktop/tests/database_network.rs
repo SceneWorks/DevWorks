@@ -180,7 +180,7 @@ fn native_mysql_retained_read_contract() {
     };
     let ordered_read = "SELECT id AS item FROM dw_public ORDER BY id";
     if std::env::var("DW37_EXPECT_UNSUPPORTED_RELEASE").as_deref() == Ok("1") {
-        let actual = query(selected.as_str(), ordered_read, 1);
+        let actual = query(selected.as_str(), ordered_read, 9);
         assert!(
             matches!(&actual, DomainQueryReply::Rejected { fault, .. }
                 if fault.code == DomainErrorCode::UnsupportedTarget),
@@ -195,7 +195,7 @@ fn native_mysql_retained_read_contract() {
         "dw37_fixture",
         "127.0.0.1",
     ] {
-        let actual = query(source, ordered_read, 1);
+        let actual = query(source, ordered_read, 9);
         let DomainQueryReply::Result {
             result: OperationResult::DatabaseMysqlReadonlyQuery { value },
             ..
@@ -219,13 +219,13 @@ fn native_mysql_retained_read_contract() {
         "DESCRIBE dw_public",
         "EXPLAIN SELECT id FROM dw_public",
     ] {
-        let actual = query("default", sql, 1);
+        let actual = query("default", sql, 9);
         assert!(
             matches!(actual, DomainQueryReply::Result { .. }),
             "{sql}: {actual:?}"
         );
     }
-    let actual = query("default", "SELECT X'0102' AS payload", 1);
+    let actual = query("default", "SELECT X'0102' AS payload", 9);
     let DomainQueryReply::Result {
         result: OperationResult::DatabaseMysqlReadonlyQuery { value },
         ..
@@ -237,7 +237,7 @@ fn native_mysql_retained_read_contract() {
         serde_json::to_value(value).unwrap(),
         json!({"rows":[{"payload":"AQI="}],"rowCount":1})
     );
-    let actual = query("default", ordered_read, 2);
+    let actual = query("default", ordered_read, 10);
     let DomainQueryReply::Result {
         result: OperationResult::DatabaseMysqlReadonlyQuery { value },
         ..
@@ -252,13 +252,13 @@ fn native_mysql_retained_read_contract() {
         ("default", "UPDATE dw_public SET secret='denied' WHERE id=1"),
     ] {
         assert!(matches!(
-            query(source, sql, 1),
+            query(source, sql, 9),
             DomainQueryReply::Rejected { .. }
         ));
     }
     let applied = command(
         "database.edit_sensitive_column_rules",
-        1,
+        9,
         json!({
             "connectionId":selected,"expectedRevision":"1","edit":{"kind":"Upsert","rule":{
                 "id":"legacy-protected-column","table":"dw_private","column":"secret","allow":false
@@ -268,7 +268,7 @@ fn native_mysql_retained_read_contract() {
     assert!(matches!(applied,CommandReply::Recorded { receipt, .. } if
         matches!(receipt.decision,DomainDecision::Applied { .. })));
     assert!(matches!(
-        query("default", "SELECT secret AS renamed FROM dw_view", 1),
+        query("default", "SELECT secret AS renamed FROM dw_view", 9),
         DomainQueryReply::Rejected { .. }
     ));
 }

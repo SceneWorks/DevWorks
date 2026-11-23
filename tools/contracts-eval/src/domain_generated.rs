@@ -3407,14 +3407,14 @@ pub struct DatabaseLegacyRows {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Items<DbColumn>", extend("x-since" = 2))]
+    #[schemars(with = "Items<DbColumn>", extend("x-since" = 10))]
     pub columns: Option<Items<DbColumn>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 10))]
     pub truncated: Option<bool>,
 }
 impl Check for DatabaseLegacyRows {
@@ -3433,10 +3433,10 @@ impl Check for DatabaseLegacyRows {
 
 impl Revisioned for DatabaseLegacyRows {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 10 {
             self.columns = None;
         }
-        if revision < 2 {
+        if revision < 10 {
             self.truncated = None;
         }
     }
@@ -3550,7 +3550,7 @@ pub struct DbReadResult {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Digest", extend("x-since" = 2))]
+    #[schemars(with = "Digest", extend("x-since" = 9))]
     pub schema_digest: Option<Digest>,
 }
 impl Check for DbReadResult {
@@ -3571,7 +3571,7 @@ impl Check for DbReadResult {
 
 impl Revisioned for DbReadResult {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 9 {
             self.schema_digest = None;
         }
     }
@@ -20218,7 +20218,7 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
         scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
@@ -20231,16 +20231,17 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "bool", extend("x-since" = 2))]
+        #[schemars(with = "bool", extend("x-since" = 9))]
         include_schema_digest: Option<bool>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Content", extend("x-since" = 2))]
+        #[schemars(with = "Content", extend("x-since" = 9))]
         schema_preview: Option<Content>,
     },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.mysql_readonly_query")]
     DatabaseMysqlReadonlyQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20250,6 +20251,7 @@ pub enum DomainQuery {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<i32>,
     },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.sensitive_columns")]
     DatabaseSensitiveColumns {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -22864,13 +22866,13 @@ impl Revisioned for DomainQuery {
                 schema_preview,
                 ..
             } => {
-                if revision < 2 {
+                if revision < 9 {
                     *scope = None;
                 }
-                if revision < 2 {
+                if revision < 9 {
                     *include_schema_digest = None;
                 }
-                if revision < 2 {
+                if revision < 9 {
                     *schema_preview = None;
                 }
             }
@@ -23229,6 +23231,12 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
@@ -23905,7 +23913,7 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
         scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
@@ -23922,7 +23930,7 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
         scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
@@ -23936,14 +23944,14 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Digest", extend("x-since" = 2))]
+        #[schemars(with = "Digest", extend("x-since" = 9))]
         expected_schema_digest: Option<Digest>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Content", extend("x-since" = 2))]
+        #[schemars(with = "Content", extend("x-since" = 9))]
         fallback_reason: Option<Content>,
     },
     #[serde(rename = "database.apply_migration")]
@@ -23953,7 +23961,7 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "DataScope", extend("x-since" = 2))]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
         scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
@@ -23966,7 +23974,7 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "DatabaseMigrationSource", extend("x-since" = 2))]
+        #[schemars(with = "DatabaseMigrationSource", extend("x-since" = 9))]
         source: Option<DatabaseMigrationSource>,
     },
     #[serde(rename = "database.configure_sensitive_columns")]
@@ -23975,6 +23983,7 @@ pub enum DomainCommand {
         expected_revision: Revision,
         column_ids: Items<Id>,
     },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.edit_sensitive_column_rules")]
     DatabaseEditSensitiveColumnRules {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27682,7 +27691,7 @@ impl Revisioned for DomainCommand {
                 }
             }
             Self::DatabaseExecuteWrite { scope, .. } => {
-                if revision < 2 {
+                if revision < 9 {
                     *scope = None;
                 }
             }
@@ -27692,21 +27701,21 @@ impl Revisioned for DomainCommand {
                 fallback_reason,
                 ..
             } => {
-                if revision < 2 {
+                if revision < 9 {
                     *scope = None;
                 }
-                if revision < 2 {
+                if revision < 9 {
                     *expected_schema_digest = None;
                 }
-                if revision < 2 {
+                if revision < 9 {
                     *fallback_reason = None;
                 }
             }
             Self::DatabaseApplyMigration { scope, source, .. } => {
-                if revision < 2 {
+                if revision < 9 {
                     *scope = None;
                 }
-                if revision < 2 {
+                if revision < 9 {
                     *source = None;
                 }
             }
@@ -28042,6 +28051,9 @@ impl Revisioned for DomainCommand {
             Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
@@ -28360,10 +28372,13 @@ pub enum OperationResult {
     DatabaseApplyMigration { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.mysql_readonly_query")]
     DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.sensitive_columns")]
     DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.edit_sensitive_column_rules")]
     DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
@@ -29968,6 +29983,15 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SkillsSetEnabled { .. } if revision < 8 => {

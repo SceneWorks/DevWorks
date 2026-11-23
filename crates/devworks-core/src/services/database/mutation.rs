@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 pub const EFFECT_CONSUMER: &str = "DatabaseMutation";
 const KIND: &str = "DatabaseMutation";
 const MAX_INTENT: u64 = 1024 * 1024;
+const SCHEMA_EXECUTION_REVISION: u32 = 9;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -205,7 +206,7 @@ impl DataExecutor {
         env: &Preparation<'_>,
         input: &ops::Input,
     ) -> Result<Option<Prepared>, StorageError> {
-        if command.schema_revision().0 < 2
+        if command.schema_revision().0 < SCHEMA_EXECUTION_REVISION
             && matches!(
                 input,
                 ops::Input::ApplyMigration(_) | ops::Input::DirectSchemaChange(_)
@@ -289,7 +290,7 @@ impl DataExecutor {
         let crate::operations::OperationInput::Database(input) = command.input() else {
             return Err(invalid().into());
         };
-        if command.schema_revision().0 < 2
+        if command.schema_revision().0 < SCHEMA_EXECUTION_REVISION
             && matches!(
                 input,
                 ops::Input::ApplyMigration(_) | ops::Input::DirectSchemaChange(_)
@@ -297,7 +298,7 @@ impl DataExecutor {
         {
             return Err(Refusal::new(
                 DomainErrorCode::SchemaMismatch,
-                "database_schema_execution_revision_2",
+                "database_schema_execution_revision_9",
                 None,
             )
             .into());

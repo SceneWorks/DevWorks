@@ -147,7 +147,7 @@ impl QueryHandler for DataExecutor {
             query.input(),
             OperationInput::Database(ops::Input::MysqlReadonlyQuery(_))
         );
-        if legacy && query.schema_revision().0 == 1 {
+        if legacy && query.schema_revision().0 == 9 {
             let value = super::mysql_compat::rows(&rows, None)
                 .ok_or_else(|| fault(query, DomainErrorCode::ExternalFailure))?;
             value

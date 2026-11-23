@@ -28,7 +28,7 @@ pub struct ReadInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DataScope", extend("x-since" = 2))]
+    #[schemars(with = "DataScope", extend("x-since" = 9))]
     pub scope: Option<DataScope>,
     pub connection_id: Id,
     pub expected_connection_revision: Revision,
@@ -41,14 +41,14 @@ pub struct ReadInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 9))]
     pub include_schema_digest: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Content", extend("x-since" = 2))]
+    #[schemars(with = "Content", extend("x-since" = 9))]
     pub schema_preview: Option<Content>,
 }
 impl Check for ReadInput {
@@ -67,13 +67,13 @@ impl Check for ReadInput {
 }
 impl Revisioned for ReadInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 9 {
             self.scope = None;
         }
-        if revision < 2 {
+        if revision < 9 {
             self.include_schema_digest = None;
         }
-        if revision < 2 {
+        if revision < 9 {
             self.schema_preview = None;
         }
     }
@@ -88,7 +88,7 @@ pub struct ExecuteWriteInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DataScope", extend("x-since" = 2))]
+    #[schemars(with = "DataScope", extend("x-since" = 9))]
     pub scope: Option<DataScope>,
     pub connection_id: Id,
     pub expected_connection_revision: Revision,
@@ -112,7 +112,7 @@ impl Check for ExecuteWriteInput {
 }
 impl Revisioned for ExecuteWriteInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 9 {
             self.scope = None;
         }
     }
@@ -127,7 +127,7 @@ pub struct ApplyMigrationInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DataScope", extend("x-since" = 2))]
+    #[schemars(with = "DataScope", extend("x-since" = 9))]
     pub scope: Option<DataScope>,
     pub connection_id: Id,
     pub expected_connection_revision: Revision,
@@ -140,7 +140,7 @@ pub struct ApplyMigrationInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DatabaseMigrationSource", extend("x-since" = 2))]
+    #[schemars(with = "DatabaseMigrationSource", extend("x-since" = 9))]
     pub source: Option<DatabaseMigrationSource>,
 }
 impl Check for ApplyMigrationInput {
@@ -157,10 +157,10 @@ impl Check for ApplyMigrationInput {
 }
 impl Revisioned for ApplyMigrationInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 9 {
             self.scope = None;
         }
-        if revision < 2 {
+        if revision < 9 {
             self.source = None;
         }
     }
@@ -175,7 +175,7 @@ pub struct DirectSchemaChangeInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DataScope", extend("x-since" = 2))]
+    #[schemars(with = "DataScope", extend("x-since" = 9))]
     pub scope: Option<DataScope>,
     pub connection_id: Id,
     pub expected_connection_revision: Revision,
@@ -189,14 +189,14 @@ pub struct DirectSchemaChangeInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Digest", extend("x-since" = 2))]
+    #[schemars(with = "Digest", extend("x-since" = 9))]
     pub expected_schema_digest: Option<Digest>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Content", extend("x-since" = 2))]
+    #[schemars(with = "Content", extend("x-since" = 9))]
     pub fallback_reason: Option<Content>,
 }
 impl Check for DirectSchemaChangeInput {
@@ -215,13 +215,13 @@ impl Check for DirectSchemaChangeInput {
 }
 impl Revisioned for DirectSchemaChangeInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 9 {
             self.scope = None;
         }
-        if revision < 2 {
+        if revision < 9 {
             self.expected_schema_digest = None;
         }
-        if revision < 2 {
+        if revision < 9 {
             self.fallback_reason = None;
         }
     }

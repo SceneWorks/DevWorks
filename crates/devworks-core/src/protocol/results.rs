@@ -310,10 +310,13 @@ pub enum OperationResult {
     DatabaseDirectSchemaChange { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.mysql_readonly_query")]
     DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.sensitive_columns")]
     DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[schemars(extend("x-since" = 9))]
     #[serde(rename = "database.edit_sensitive_column_rules")]
     DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
@@ -1852,6 +1855,15 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::SchemasCodeReferences { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SkillsSetEnabled { .. } if revision < 8 => {

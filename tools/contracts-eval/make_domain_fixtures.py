@@ -89,24 +89,48 @@ for name,d in OPS.items():
  for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request'+('.r'+str(d['introducedRevision'])if d.get('introducedRevision',1)>1 else ''),request(name,mode))
 for name,t in ({n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS).items():
  case('result-'+name,'operation-result'+('.r'+str(OPS[name]['introducedRevision'])if OPS.get(name,{}).get('introducedRevision',1)>1 else ''),result(name,t))
-# Database data authority and exact versioned schema-change inputs (DW-37).
+# DW-37 uses successor revisions, preserving the published revision-1 and revision-2 schemas.
 _db_read=copy.deepcopy(POS['input-database.read-Query'])
-_db_read.update(schemaRevision=2)
+_db_read.update(schemaRevision=9)
 _db_read['body'].update(scope={'kind':'Project','projectId':'project-a'},statement='SELECT 1',
  includeSchemaDigest=True,schemaPreview='ALTER TABLE contacts ADD label TEXT')
-case('input-database.read-scoped-schema-preview','domain-request.r2',_db_read)
+case('input-database.read-scoped-schema-preview','domain-request.r9',_db_read)
 _db_legacy=copy.deepcopy(_db_read)
 _db_legacy.pop('schemaRevision')
 case('reject-database.read-revision-one-preview','domain-request',_db_legacy,False,False)
+_db_write=copy.deepcopy(POS['input-database.execute_write-Command'])
+_db_write.update(schemaRevision=9)
+_db_write['body'].update(scope={'kind':'Project','projectId':'project-a'},
+ statement='UPDATE fixture SET label = :label',parameters=[{'name':'label','value':{'kind':'Text','value':'fixture'}}])
+case('input-database.execute_write-scoped','domain-request.r9',_db_write)
 _db_direct=copy.deepcopy(POS['input-database.direct_schema_change-Command'])
-_db_direct.update(schemaRevision=2)
+_db_direct.update(schemaRevision=9)
 _db_direct['body'].update(expectedSchemaDigest='a'*64,fallbackReason='Approved emergency repair')
-case('input-database.direct_schema_change-exact-fallback','domain-request.r2',_db_direct)
+case('input-database.direct_schema_change-exact-fallback','domain-request.r9',_db_direct)
 _db_migration=copy.deepcopy(POS['input-database.apply_migration-Command'])
-_db_migration.update(schemaRevision=2)
+_db_migration.update(schemaRevision=9)
 _db_migration['body']['source']={'repositoryId':'repo-a','commit':{'format':'Sha1','hex':'a'*40},
  'path':'migrations/001.sql'}
-case('input-database.apply_migration-git-source','domain-request.r2',_db_migration)
+case('input-database.apply_migration-git-source','domain-request.r9',_db_migration)
+_db_read_result=result('database.read','DbReadResult')
+_db_read_result['value']['schemaDigest']='a'*64
+case('result-database.read-with-schema-digest','operation-result.r9',_db_read_result)
+case('reject-database.read-result-before-schema-digest','operation-result.r2',_db_read_result,False,False)
+for _name in ['database.execute_write','database.direct_schema_change','database.apply_migration']:
+ case('r9-result-'+_name,'operation-result.r9',result(_name,'DbWriteResult'))
+_mysql=copy.deepcopy(POS['input-database.mysql_readonly_query-Query'])
+_mysql['body'].update(source='fixture',sql='SELECT 1 AS item',limit=1)
+case('input-database.mysql_readonly_query-current','domain-request.r9',{**_mysql,'schemaRevision':10})
+case('reject-database.mysql_readonly_query-before-introduction','domain-request.r2',
+ {**_mysql,'schemaRevision':2},False,False)
+_mysql_value={'kind':'database.mysql_readonly_query','value':{
+ 'rows':[{'payload':'AQI='}],'rowCount':1}}
+case('result-database.mysql_readonly_query-retained-binary','operation-result.r9',_mysql_value)
+_mysql_current=copy.deepcopy(_mysql_value)
+_mysql_current['value'].update(rows=[{'payload':ART}],columns=[{'name':'payload','dataType':'blob','sensitive':False}],truncated=True)
+case('result-database.mysql_readonly_query-current-binary','operation-result.r10',_mysql_current)
+case('reject-database.mysql_readonly_query-current-before-revision','operation-result.r9',
+ _mysql_current,False,False)
 # Watcher sources (DW-96): exactly one of a process, a probe and a timer; only a probe takes a
 # maximum lifetime, a timer keeps no output tail, and a probe runs at most once a second.
 _watch=request('watch.create','Command')

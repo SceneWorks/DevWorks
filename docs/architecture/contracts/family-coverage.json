@@ -7235,10 +7235,10 @@
               "completionSchema": null
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
-              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -7289,12 +7289,12 @@
               "completionSchema": "operation-completion.schema.json"
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.r2.schema.json",
-              "completionSchema": "operation-completion.r2.schema.json"
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7343,12 +7343,12 @@
               "completionSchema": "operation-completion.schema.json"
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.r2.schema.json",
-              "completionSchema": "operation-completion.r2.schema.json"
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7397,12 +7397,12 @@
               "completionSchema": "operation-completion.schema.json"
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.r2.schema.json",
-              "completionSchema": "operation-completion.r2.schema.json"
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7469,6 +7469,7 @@
           "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
         },
         {
+          "introducedRevision": 9,
           "operation": "database.mysql_readonly_query",
           "inputSchema": "domain-request.schema.json",
           "variant": "database.mysql_readonly_query",
@@ -7497,18 +7498,18 @@
           "completionSchema": null,
           "schemaRevisions": [
             {
-              "revision": 1,
-              "inputSchema": "domain-request.schema.json",
-              "resultSchema": "operation-result.schema.json",
-              "queryReplySchema": "domain-query-reply.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             },
             {
-              "revision": 2,
-              "inputSchema": "domain-request.r2.schema.json",
-              "resultSchema": "operation-result.r2.schema.json",
-              "queryReplySchema": "domain-query-reply.r2.schema.json",
+              "revision": 10,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -7523,6 +7524,7 @@
           "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
         },
         {
+          "introducedRevision": 9,
           "operation": "database.sensitive_columns",
           "inputSchema": "domain-request.schema.json",
           "variant": "database.sensitive_columns",
@@ -7551,10 +7553,10 @@
           "completionSchema": null,
           "schemaRevisions": [
             {
-              "revision": 1,
-              "inputSchema": "domain-request.schema.json",
-              "resultSchema": "operation-result.schema.json",
-              "queryReplySchema": "domain-query-reply.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -7569,6 +7571,7 @@
           "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
         },
         {
+          "introducedRevision": 9,
           "operation": "database.edit_sensitive_column_rules",
           "inputSchema": "domain-request.schema.json",
           "variant": "database.edit_sensitive_column_rules",
@@ -7597,12 +7600,12 @@
           "completionSchema": "operation-completion.schema.json",
           "schemaRevisions": [
             {
-              "revision": 1,
-              "inputSchema": "domain-request.schema.json",
-              "resultSchema": "operation-result.schema.json",
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
               "queryReplySchema": null,
-              "commandReplySchema": "domain-command-reply.schema.json",
-              "completionSchema": "operation-completion.schema.json"
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",

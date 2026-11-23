@@ -5640,20 +5640,12 @@
     "DatabaseLegacyRows": {
       "additionalProperties": false,
       "properties": {
-        "columns": {
-          "$ref": "#/$defs/List_DbColumn_0_128",
-          "x-since": 2
-        },
         "rowCount": {
           "format": "int32",
           "type": "integer"
         },
         "rows": {
           "$ref": "#/$defs/List_BoundedUntrustedJson_0_500"
-        },
-        "truncated": {
-          "type": "boolean",
-          "x-since": 2
         }
       },
       "required": [
@@ -5799,7 +5791,7 @@
         },
         "schemaDigest": {
           "$ref": "#/$defs/Digest",
-          "x-since": 2
+          "x-since": 9
         },
         "sourceRevision": {
           "anyOf": [
@@ -24468,7 +24460,8 @@
         "kind",
         "value"
       ],
-      "type": "object"
+      "type": "object",
+      "x-since": 9
     },
     {
       "additionalProperties": false,
@@ -24485,7 +24478,8 @@
         "kind",
         "value"
       ],
-      "type": "object"
+      "type": "object",
+      "x-since": 9
     },
     {
       "additionalProperties": false,
@@ -24502,7 +24496,8 @@
         "kind",
         "value"
       ],
-      "type": "object"
+      "type": "object",
+      "x-since": 9
     },
     {
       "additionalProperties": false,
