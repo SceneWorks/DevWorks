@@ -104,6 +104,19 @@ fn arg(name: &str) -> Option<String> {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(any(unix, windows))]
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
+        let data_root = arg("--data-dir").map(PathBuf::from).or_else(default_data_root);
+        let result = data_root
+            .as_deref()
+            .ok_or_else(|| std::io::Error::other("no DevWorks data root is configured"))
+            .and_then(devworks_desktop::run_mcp_bridge);
+        if let Err(error) = result {
+            eprintln!("devworks mcp: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if std::env::args_os()
         .skip(1)
         .eq([std::ffi::OsStr::new("--release-evidence")])
@@ -133,18 +146,6 @@ fn main() -> eframe::Result {
         .or(recovery_profile)
         .or_else(|| arg("--data-dir").map(PathBuf::from))
         .or_else(default_data_root);
-    #[cfg(any(unix, windows))]
-    if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
-        let result = data_root
-            .as_deref()
-            .ok_or_else(|| std::io::Error::other("no DevWorks data root is configured"))
-            .and_then(devworks_desktop::run_mcp_bridge);
-        if let Err(error) = result {
-            eprintln!("devworks mcp: {error}");
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
     let close_at = arg("--close-after-secs")
         .and_then(|s| s.parse::<u64>().ok())
         .map(|s| Instant::now() + Duration::from_secs(s));
