@@ -318,6 +318,7 @@ impl Gateway<'_> {
                 return Ok(reply);
             }
         };
+        crate::services::mcp_inbound::access::bind_publication(ctx, Mode::Query, &authorization);
         let mut admitted = AdmittedQuery {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -668,6 +669,7 @@ impl Gateway<'_> {
                 }));
             }
         };
+        crate::services::mcp_inbound::access::bind_publication(ctx, Mode::Command, &authorization);
         let mut admitted = AdmittedCommand {
             descriptor: decoded.descriptor,
             binding: decoded.binding,

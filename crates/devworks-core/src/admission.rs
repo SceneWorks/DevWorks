@@ -255,6 +255,62 @@ pub fn decode(selection: Selection<'_>, raw: &[u8]) -> Result<DecodedRequest, Re
     })
 }
 
+/// Build the gateway frame of `arguments` under the host-chosen request `identity` (a stable
+/// identity makes a retried command find its original receipt).
+pub fn frame_tool(
+    identity: String,
+    descriptor: &'static OperationDescriptor,
+    mode: Mode,
+    revision: SchemaRevision,
+    arguments: Value,
+) -> Result<Vec<u8>, &'static str> {
+    if !descriptor.supports(revision) || descriptor.binding(mode).is_none() {
+        return Err("unsupported selected tool binding");
+    }
+    let Value::Object(mut arguments) = arguments else {
+        return Err("tool arguments must be an object");
+    };
+    let key = mode.key_member();
+    let value = match descriptor.envelope {
+        Envelope::Domain => {
+            // The discriminator is host selected. Accepting a caller-supplied one would let a
+            // schema shared by multiple operations silently select another authority binding.
+            if arguments.remove("kind").is_some() {
+                return Err("provider supplied a domain selector");
+            }
+            arguments.insert("kind".into(), Value::String(descriptor.name.into()));
+            let mut envelope = serde_json::Map::new();
+            envelope.insert("protocol".into(), Value::String(CONTRACT.into()));
+            envelope.insert("mode".into(), Value::String(mode.as_str().into()));
+            envelope.insert(key.into(), Value::String(identity));
+            envelope.insert("body".into(), Value::Object(arguments));
+            envelope.insert("schemaRevision".into(), serde_json::json!(revision.0));
+            Value::Object(envelope)
+        }
+        Envelope::Specialized { .. } => {
+            // Older specialized schemas describe the whole wire envelope. Treat any model
+            // values in its identity members as data and replace them with the host binding.
+            arguments.remove("protocol");
+            arguments.remove(key);
+            arguments.remove("schemaRevision");
+            arguments.insert("protocol".into(), Value::String(CONTRACT.into()));
+            arguments.insert(key.into(), Value::String(identity));
+            arguments.insert("schemaRevision".into(), serde_json::json!(revision.0));
+            Value::Object(arguments)
+        }
+    };
+    let bytes = serde_json::to_vec(&value).map_err(|_| "invalid tool frame")?;
+    decode(
+        Selection {
+            operation: descriptor.name,
+            mode,
+        },
+        &bytes,
+    )
+    .map_err(|_| "tool arguments failed selected-operation admission")?;
+    Ok(bytes)
+}
+
 /// Takes the envelope's `schemaRevision` member (absent means [`SchemaRevision::INITIAL`]) and
 /// checks that the selected operation registers it. The member is envelope metadata: it never
 /// reaches the typed decoder, and the fingerprint binds the revision itself.

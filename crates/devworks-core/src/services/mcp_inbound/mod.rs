@@ -2,11 +2,14 @@
 
 pub(crate) mod access;
 mod credentials;
+mod publication;
 mod targets;
 
-pub use access::AccessFence;
+pub use access::{AccessFence, publication_allowed};
 
 pub use credentials::{AuthenticatedClient, Binding, CredentialError, Credentials};
+pub(crate) use publication::selected_operation;
+pub use publication::{PublishedRequest, PublishedTool, published_tools};
 
 use crate::authority::service::{AdminError, bind_principal};
 use crate::context::{InvocationContext, PrincipalKind};
@@ -26,11 +29,10 @@ use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{
     ActorId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, Revision, RevisionDimension,
 };
-use crate::registry::{self, AuthorityClass, Mode};
+use crate::registry::Mode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
-use std::sync::OnceLock;
 
 use super::cursor::{CursorBinding, slice};
 use super::kernel::{Failure, Refusal, decided, not_found, query_fault, rev};
@@ -121,47 +123,6 @@ pub(crate) fn current(read: &dyn ConfigurationRead) -> Result<(i64, Configuratio
     let body = serde_json::from_value(revision.body)
         .map_err(|_| StorageError::InvalidRecord(NAMESPACE.into()))?;
     Ok((revision.revision, body))
-}
-
-#[derive(Deserialize)]
-struct Manifest {
-    tools: Vec<PublishedOperation>,
-}
-
-#[derive(Deserialize)]
-struct PublishedOperation {
-    operation: String,
-    mode: String,
-}
-
-pub(crate) fn selected_operation(operation: &str, mode: Mode) -> bool {
-    static MANIFEST: OnceLock<Manifest> = OnceLock::new();
-    let manifest = MANIFEST.get_or_init(|| {
-        serde_json::from_str(include_str!(
-            "../../../../../docs/architecture/mcp-publication-candidates.json"
-        ))
-        .expect("checked-in MCP publication manifest")
-    });
-    let Some(descriptor) = registry::find(operation) else {
-        return false;
-    };
-    let Some(binding) = descriptor.binding(mode) else {
-        return false;
-    };
-    !descriptor.human_only
-        && !matches!(
-            binding.authority,
-            AuthorityClass::Configuration
-                | AuthorityClass::HumanConfiguration
-                | AuthorityClass::HumanDecision
-                | AuthorityClass::HumanMaintenance
-                | AuthorityClass::HostMaintenance
-        )
-        && !OPERATIONS.contains(&operation)
-        && manifest
-            .tools
-            .iter()
-            .any(|tool| tool.operation == operation && tool.mode == mode.as_str())
 }
 
 fn denied() -> Refusal {
@@ -263,7 +224,7 @@ fn validate_operations(access: &McpClientAccess) -> Result<(), Failure> {
         if !unique(&selected)
             || selected
                 .iter()
-                .any(|op| !selected_operation(op, mode) || !access::supported_target(op))
+                .any(|op| !selected_operation(op, mode) || !access::supported_target(op, mode))
         {
             return Err(invalid("mcp_selected_operations").into());
         }

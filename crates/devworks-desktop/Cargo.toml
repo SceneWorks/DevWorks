@@ -29,10 +29,16 @@ semver.workspace = true
 jiff = "=0.2.39"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 rfd = "=0.17.2"
+rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io", "transport-streamable-http-server"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { version = "=1.54.1", default-features = false, features = ["net", "rt", "sync", "time"] }
+hyper = { version = "=1.12.0", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio"] }
+http-body-util = "=0.1.5"
+tokio-util = { version = "=0.7.20", default-features = false, features = ["codec", "rt"] }
+futures-util = { version = "=0.3.32", default-features = false }
 
 # Attachments open picked files without blocking on, or following into, special files
 # (O_NONBLOCK | O_NOFOLLOW). Already in the lockfile through the adapters.
@@ -58,8 +64,6 @@ devworks-engine = { path = "../devworks-engine", features = ["test-support"] }
 egui_kittest = "=0.37.0"
 # Seeds a work root the desktop does not create yet (the close-lifecycle test).
 rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled", "cache"] }
-# An in-process MCP server the Settings resource and prompt test reads from.
-rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "io-util"] }
 
 # Native notification APIs already resolved through the platform UI dependencies. No helper

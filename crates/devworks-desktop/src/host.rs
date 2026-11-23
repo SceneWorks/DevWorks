@@ -294,7 +294,7 @@ pub struct Host {
     restart: Mutex<Option<Restart>>,
     updates: Arc<UpdateService>,
     pdf_worker: Option<Arc<devworks_engine::documents::pdf::PdfWorker>>,
-    incoming_mcp: devworks_core::services::mcp_inbound::Credentials,
+    incoming_mcp: crate::mcp_inbound_server::IncomingMcp,
 }
 enum Restart {
     Restore(Id),
@@ -823,10 +823,23 @@ async fn compose(
         }
     }
     runtime.notification_wakeup();
-    let incoming_mcp = devworks_core::services::mcp_inbound::Credentials::new(
-        runtime.store().clone(),
-        devworks_adapters::secrets::native(),
-        Arc::new(devworks_adapters::OsEntropy),
+    let protected: Arc<dyn SecretStore> = match &config.secrets {
+        #[cfg(any(test, feature = "test-support"))]
+        Some(test_secrets) => test_secrets.clone(),
+        _ => devworks_adapters::secrets::native().into(),
+    };
+    let credentials = Arc::new(
+        devworks_core::services::mcp_inbound::Credentials::with_secrets(
+            runtime.store().clone(),
+            protected,
+            Arc::new(devworks_adapters::OsEntropy),
+        ),
+    );
+    let incoming_mcp = crate::mcp_inbound_server::IncomingMcp::start(
+        runtime.clone(),
+        credentials,
+        ids.clone(),
+        &config.data_root,
     );
     Ok(Host {
         runtime,
@@ -1539,7 +1552,7 @@ impl Backend for DesktopBackend {
     }
 
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
-        self.host.runtime.query(&self.host.ctx, operation, frame)
+        self.query_cancellable(operation, frame, &Default::default())
     }
     fn query_in_project(&self, project: &ProjectId, operation: &str, frame: &[u8]) -> QueryOutcome {
         let ctx = self
@@ -1584,9 +1597,18 @@ impl Backend for DesktopBackend {
         frame: &[u8],
         options: &devworks_core::ports::storage::ReadOptions,
     ) -> QueryOutcome {
-        self.host
+        let mut outcome = self
+            .host
             .runtime
-            .query_with(&self.host.ctx, operation, frame, options)
+            .query_with(&self.host.ctx, operation, frame, options);
+        if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
+            result: devworks_core::protocol::results::OperationResult::McpServerStatus { value },
+            ..
+        }) = &mut outcome
+        {
+            self.host.incoming_mcp.report(value);
+        }
+        outcome
     }
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
@@ -1876,6 +1898,7 @@ impl Backend for DesktopBackend {
         use devworks_core::services::mcp_inbound::CredentialError as E;
         self.host
             .incoming_mcp
+            .credentials
             .provision(&self.host.ctx, client, revision)
             .map_err(|error| {
                 match error {

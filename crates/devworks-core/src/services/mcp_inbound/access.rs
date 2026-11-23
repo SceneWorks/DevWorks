@@ -11,18 +11,18 @@ use crate::fingerprint::sha256_hex;
 use crate::kernel::work_brief::WorkBrief;
 use crate::operations::{OperationInput, conventions, features, history, indexing, issues, tasks};
 use crate::ports::storage::{
-    ArtifactRead, DELETED, EventFilter, HistoryRead, LedgerEntry, ProjectRead, ReadSnapshot,
-    StorageError, StoredWork, WorkRead, WriteTransaction,
+    ApplicationStore, ArtifactRead, DELETED, EventFilter, HistoryRead, LedgerEntry, ProjectRead,
+    ReadOptions, ReadSnapshot, StorageError, StoredWork, WorkRead, WriteTransaction, read_snapshot,
 };
 use crate::ports::{AuthorityFence, AuthorityRequest, Authorization};
-use crate::protocol::data::DataScope;
+use crate::protocol::data::{DataScope, GraphReadRequest};
 use crate::protocol::{
     ActorId, CommandId, Counter, Id, OperationId, ProjectId, Query, Revision, StoreId,
 };
-use crate::registry::Mode;
+use crate::registry::{self, Envelope, Mode, OperationDescriptor};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 // Equality compares the lifetime identity, so closing an application does not change
 // equality of contexts already held by the same request.
@@ -36,6 +36,16 @@ impl PartialEq for ClientLifetime {
 }
 impl Eq for ClientLifetime {}
 
+#[derive(Clone, Debug)]
+struct Publication(Arc<OnceLock<(Mode, Authorization)>>);
+
+impl PartialEq for Publication {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Publication {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ClientProof {
     store: StoreId,
@@ -47,6 +57,7 @@ pub(crate) struct ClientProof {
     binding: Binding,
     expires_ms: i64,
     live: ClientLifetime,
+    publication: Publication,
 }
 
 /// Durable, secret-free authority fact. Query publication, writers, and deferred work can
@@ -118,9 +129,43 @@ impl AuthenticatedClient {
             binding: self.binding,
             expires_ms: self.expires_ms,
             live: ClientLifetime(self.live.clone()),
+            publication: Publication(Arc::new(OnceLock::new())),
         });
         context
     }
+}
+
+/// Remember the exact authorization used by the gateway. A request context is created for one
+/// selected invocation. Reusing it cannot replace its publication witness.
+pub(crate) fn bind_publication(ctx: &InvocationContext, mode: Mode, grant: &Authorization) {
+    if let Some(proof) = ctx.mcp_client_proof() {
+        let _ = proof.publication.0.set((mode, grant.clone()));
+    }
+}
+
+/// Check the actual admitted scope against a fresh snapshot after serialization and immediately
+/// before the transport releases an answer that carries gateway data.
+pub fn publication_allowed(
+    ctx: &InvocationContext,
+    store: &dyn ApplicationStore,
+    options: &ReadOptions,
+) -> bool {
+    let Some(proof) = ctx.mcp_client_proof() else {
+        return false;
+    };
+    let Some((mode, grant)) = proof.publication.0.get() else {
+        return false;
+    };
+    proof.live.0.load(Ordering::Acquire)
+        && matches!(
+            read_snapshot(store, options, |snapshot| match mode {
+                Mode::Query => crate::authority::authorization_holds(snapshot, grant),
+                Mode::Command =>
+                    crate::authority::service::command_publication_holds(snapshot, grant),
+            }),
+            Ok(true)
+        )
+        && proof.live.0.load(Ordering::Acquire)
 }
 
 pub(crate) fn request_live(ctx: &InvocationContext) -> bool {
@@ -195,7 +240,20 @@ fn full_project_repositories(operation: &str) -> bool {
 
 /// Project-shaped operations whose exact targets are understood by this access layer. Never
 /// allow a new operation based on its family name or a request field alone.
-pub(super) fn supported_target(operation: &str) -> bool {
+pub(super) fn supported_target(operation: &str, mode: Mode) -> bool {
+    registry::find(operation).is_some_and(|descriptor| graph_read(descriptor, mode))
+        || project_target(operation)
+}
+
+fn graph_read(descriptor: &OperationDescriptor, mode: Mode) -> bool {
+    mode == Mode::Query
+        && descriptor.envelope
+            == (Envelope::Specialized {
+                schema: "graph-read-request",
+            })
+}
+
+fn project_target(operation: &str) -> bool {
     matches!(
         operation,
         "projects.get"
@@ -282,7 +340,10 @@ pub(crate) fn authorize(
         return Err(DenialReason::StaleInvocation);
     }
     let operation = request.descriptor.name;
-    if !selected_operation(operation, request.binding.mode) || !supported_target(operation) {
+    let graph_read = graph_read(request.descriptor, request.binding.mode);
+    if !selected_operation(operation, request.binding.mode)
+        || !(project_target(operation) || graph_read)
+    {
         return Err(DenialReason::ToolNotSelected);
     }
     let project = ctx.project_id().ok_or(DenialReason::OutOfProjectScope)?;
@@ -312,15 +373,22 @@ pub(crate) fn authorize(
     let client = config
         .client(&proof.client)
         .ok_or(DenialReason::UnboundPrincipal)?;
-    let exact = IndexTargets::resolve(read, ctx, request.input, &client.access.worktree_ids.0)
+    let mut exact = IndexTargets::resolve(read, ctx, request.input, &client.access.worktree_ids.0)
         .map_err(target_error)?;
+    let mut full_project_repositories = full_project_repositories(operation);
+    if graph_read {
+        let graph: GraphReadRequest = serde_json::from_value(normalized.clone())
+            .map_err(|_| DenialReason::AuthorityUnavailable)?;
+        full_project_repositories |= exact
+            .graph(read, ctx, &graph, &client.access.worktree_ids.0)
+            .map_err(target_error)?;
+    }
     let mut repositories = selected_repositories(request.input);
     repositories.extend(exact.repositories);
     let mut worktrees = exact.worktrees;
     let mut documents =
         document_targets(read.artifacts(), project, request.input).map_err(target_error)?;
     documents.extend(exact.document_run);
-    let full_project_repositories = full_project_repositories(operation);
     if full_project_repositories {
         repositories.extend(
             read.projects()

@@ -3,12 +3,15 @@
 
 use super::{AuthenticatedClient, Binding, CredentialError, Credentials, Secret};
 use devworks_core::protocol::Id;
-use std::ffi::c_void;
+use std::ffi::{OsString, c_void};
 use std::io;
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{NonNull, null_mut};
 use tokio::io::AsyncReadExt;
-use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+use tokio::net::windows::named_pipe::{
+    ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions,
+};
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -16,9 +19,10 @@ use windows_sys::Win32::Security::Authorization::{
 use windows_sys::Win32::Security::{
     GetTokenInformation, RevertToSelf, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
-use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
+use windows_sys::Win32::System::Pipes::{GetNamedPipeServerProcessId, ImpersonateNamedPipeClient};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+    GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 
 pub struct PrivatePipe {
@@ -30,8 +34,15 @@ pub struct PrivatePipe {
 impl PrivatePipe {
     /// A store-specific unambiguous name in the Windows local pipe namespace.
     pub fn bind(store: &Id) -> io::Result<Self> {
-        let name = format!(r"\\.\pipe\devworks-mcp-{}", store.as_str()); // dev-host: allow-path Windows named pipe namespace
-        let owner = process_sid()?;
+        Self::create(pipe_name(store), process_sid()?, true)
+    }
+
+    /// Keep a private pending server instance while another serves a validated connection.
+    pub fn next(&self) -> io::Result<Self> {
+        Self::create(self.name.clone(), self.owner.clone(), false)
+    }
+
+    fn create(name: String, owner: String, first: bool) -> io::Result<Self> {
         let sddl: Vec<u16> = format!("O:{owner}D:P(A;;GA;;;{owner})\0")
             .encode_utf16()
             .collect();
@@ -59,7 +70,7 @@ impl PrivatePipe {
         // handle is deliberately non-inheritable. The pipe refuses remote connections.
         let pipe = unsafe {
             ServerOptions::new()
-                .first_pipe_instance(true)
+                .first_pipe_instance(first)
                 .reject_remote_clients(true)
                 .create_with_security_attributes_raw(
                     &name,
@@ -77,6 +88,14 @@ impl PrivatePipe {
         self.pipe.connect().await
     }
 
+    pub fn stream(&mut self) -> &mut NamedPipeServer {
+        &mut self.pipe
+    }
+
+    pub fn into_stream(self) -> NamedPipeServer {
+        self.pipe
+    }
+
     /// Read a complete pairing frame before checking the peer and decoding the credential.
     /// Win32 associates impersonation with the last message read from the pipe.
     pub async fn authenticate(
@@ -85,6 +104,11 @@ impl PrivatePipe {
         frame: &mut [u8],
         decode: impl FnOnce(&[u8]) -> Result<Secret, CredentialError>,
     ) -> Result<AuthenticatedClient, CredentialError> {
+        self.read_peer_frame(frame).await?;
+        credentials.authenticate(Binding::LocalIpc, &decode(frame)?)
+    }
+
+    pub async fn read_peer_frame(&mut self, frame: &mut [u8]) -> Result<(), CredentialError> {
         if frame.is_empty() {
             return Err(CredentialError::Denied);
         }
@@ -96,8 +120,48 @@ impl PrivatePipe {
         if peer != self.owner {
             return Err(CredentialError::Denied);
         }
-        credentials.authenticate(Binding::LocalIpc, &decode(frame)?)
+        Ok(())
     }
+}
+
+fn pipe_name(root: &Id) -> String {
+    format!(r"\\.\pipe\devworks-mcp-{}", root.as_str()) // dev-host: allow-path Windows named pipe namespace
+}
+
+/// Verify the server is a same-user process running this installed desktop executable before
+/// the bridge sends the bearer. The pipe handle itself supplies the kernel PID.
+pub fn open_desktop(root: &Id) -> io::Result<(NamedPipeClient, u32)> {
+    let pipe = ClientOptions::new().open(pipe_name(root))?;
+    let mut pid = 0_u32;
+    // SAFETY: The live pipe handle and initialized PID out-pointer are valid for the call.
+    if unsafe { GetNamedPipeServerProcessId(pipe.as_raw_handle(), &mut pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: The kernel supplied the process ID. The returned handle is owned on success.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: A nonnull OpenProcess result is uniquely owned by this code.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    let mut name = vec![0_u16; 32768];
+    let mut size = name.len() as u32;
+    // SAFETY: The process handle is live and the filename buffer contains size writable units.
+    if unsafe {
+        QueryFullProcessImageNameW(process.as_raw_handle(), 0, name.as_mut_ptr(), &mut size)
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let server = std::fs::canonicalize(OsString::from_wide(&name[..size as usize]))?;
+    let installed = std::fs::canonicalize(std::env::current_exe()?)?;
+    if server != installed || process_sid_of(process.as_raw_handle())? != process_sid()? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "MCP pipe server denied",
+        ));
+    }
+    Ok((pipe, pid))
 }
 
 struct LocalBuffer(NonNull<c_void>);
@@ -110,9 +174,14 @@ impl Drop for LocalBuffer {
 }
 
 fn process_sid() -> io::Result<String> {
+    // SAFETY: The call takes no arguments and returns a process pseudo handle.
+    process_sid_of(unsafe { GetCurrentProcess() })
+}
+
+fn process_sid_of(process: std::os::windows::io::RawHandle) -> io::Result<String> {
     let mut handle = null_mut();
-    // SAFETY: The process pseudo handle is valid and handle is an initialized out pointer.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut handle) } == 0 {
+    // SAFETY: The caller owns a live process handle or passes the current process pseudo handle.
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut handle) } == 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: OpenProcessToken returned a new token handle, now owned by this function.

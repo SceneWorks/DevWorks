@@ -50,7 +50,7 @@ pub(crate) fn scope_digest(scope: &DataScope) -> String {
     )
 }
 
-pub(super) fn check_pin(
+pub(crate) fn check_pin(
     pin: &StoredGraphReadPin,
     ctx: &InvocationContext,
     requested_scope: &DataScope,

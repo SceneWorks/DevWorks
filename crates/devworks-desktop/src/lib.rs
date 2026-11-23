@@ -69,6 +69,9 @@ pub mod jobs_screen;
 pub mod knowledge_ops;
 pub mod knowledge_screen;
 mod mcp_inbound_panel;
+mod mcp_inbound_server;
+#[cfg(any(unix, windows))]
+pub use mcp_inbound_server::ipc::run as run_mcp_bridge;
 pub mod mcp_panel;
 pub mod memory;
 pub mod native_notifications;

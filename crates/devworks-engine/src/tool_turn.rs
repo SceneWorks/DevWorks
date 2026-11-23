@@ -13,8 +13,8 @@ use devworks_core::{
     operations::{OperationInput, documents},
     ports::{IdKind, storage::*},
     protocol::{
-        ActorId, AttemptId, CONTRACT, CommandReply, Id, OperationId, OperationState, RetryAdvice,
-        Revision, StoreId,
+        ActorId, AttemptId, CommandReply, Id, OperationId, OperationState, RetryAdvice, Revision,
+        StoreId,
         data::Citation,
         provider::{
             ArtifactRef, CompleteToolCall, NativeBinding, ToolCallKey, ToolOutcome, TranscriptBody,
@@ -1712,61 +1712,7 @@ pub(crate) fn frame(
     frame_as(identity, descriptor, mode, revision, arguments)
 }
 
-/// Build the gateway frame of `arguments` under the host-chosen request `identity` (a stable
-/// identity makes a retried command find its original receipt).
-pub(crate) fn frame_as(
-    identity: String,
-    descriptor: &'static OperationDescriptor,
-    mode: Mode,
-    revision: SchemaRevision,
-    arguments: Value,
-) -> Result<Vec<u8>, &'static str> {
-    if !descriptor.supports(revision) || descriptor.binding(mode).is_none() {
-        return Err("unsupported selected tool binding");
-    }
-    let Value::Object(mut arguments) = arguments else {
-        return Err("tool arguments must be an object");
-    };
-    let key = mode.key_member();
-    let value = match descriptor.envelope {
-        Envelope::Domain => {
-            // The discriminator is host selected. Accepting a provider-supplied one would let a
-            // schema shared by multiple operations silently select another authority binding.
-            if arguments.remove("kind").is_some() {
-                return Err("provider supplied a domain selector");
-            }
-            arguments.insert("kind".into(), Value::String(descriptor.name.into()));
-            let mut envelope = serde_json::Map::new();
-            envelope.insert("protocol".into(), Value::String(CONTRACT.into()));
-            envelope.insert("mode".into(), Value::String(mode.as_str().into()));
-            envelope.insert(key.into(), Value::String(identity));
-            envelope.insert("body".into(), Value::Object(arguments));
-            envelope.insert("schemaRevision".into(), json!(revision.0));
-            Value::Object(envelope)
-        }
-        Envelope::Specialized { .. } => {
-            // Older specialized schemas describe the whole wire envelope. Treat any model
-            // values in its identity members as data and replace them with the host binding.
-            arguments.remove("protocol");
-            arguments.remove(key);
-            arguments.remove("schemaRevision");
-            arguments.insert("protocol".into(), Value::String(CONTRACT.into()));
-            arguments.insert(key.into(), Value::String(identity));
-            arguments.insert("schemaRevision".into(), json!(revision.0));
-            Value::Object(arguments)
-        }
-    };
-    let bytes = serde_json::to_vec(&value).map_err(|_| "invalid tool frame")?;
-    admission::decode(
-        Selection {
-            operation: descriptor.name,
-            mode,
-        },
-        &bytes,
-    )
-    .map_err(|_| "tool arguments failed selected-operation admission")?;
-    Ok(bytes)
-}
+pub(crate) use devworks_core::admission::frame_tool as frame_as;
 
 /// Where a dispatch stands after its synchronous part.
 pub(crate) enum DispatchStep {
@@ -2958,6 +2904,7 @@ fn invalid(error: impl ToString) -> StorageError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use devworks_core::protocol::CONTRACT;
     use devworks_core::protocol::{
         AttemptId, CommandId, CorrelationId, Counter, HoldId, Protocol, Receipt, Revision,
     };

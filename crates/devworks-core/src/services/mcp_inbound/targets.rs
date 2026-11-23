@@ -6,7 +6,9 @@ use crate::ports::storage::{
     ArtifactRead, ArtifactRetention, ArtifactState, IndexRead, OVERLAY_UNAVAILABLE, ReadSnapshot,
     StorageError, StoredIndexRun, StoredOverlay,
 };
-use crate::protocol::data::{ArtifactCommand, DataScope, IndexCommand};
+use crate::protocol::data::{
+    ArtifactCommand, DataScope, GraphReadRequest, IndexCommand, ViewSelection,
+};
 use crate::protocol::{Id, ProjectId};
 use serde::{Deserialize, Serialize};
 
@@ -107,7 +109,7 @@ impl IndexTargets {
             .filter(|view| repository.is_none_or(|id| id == &view.repository_id))
             .ok_or(StorageError::ScopeDenied)?;
         self.repository(&view.repository_id);
-        if view.branch_id.is_some() || view.worktree_id.is_some() {
+        if crate::services::graph::scope::overlay(&view) {
             let overlay = read
                 .overlays(&view.repository_id)?
                 .into_iter()
@@ -116,6 +118,59 @@ impl IndexTargets {
             self.overlay(read, &overlay, granted_worktrees)?;
         }
         Ok(())
+    }
+
+    pub fn graph(
+        &mut self,
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        request: &GraphReadRequest,
+        granted_worktrees: &[Id],
+    ) -> Result<bool, StorageError> {
+        if !matches!(&request.scope, DataScope::Project { project_id }
+            if Some(project_id) == ctx.project_id())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        match request.view.as_ref() {
+            Some(ViewSelection::Published { repository_ids }) => {
+                self.repositories.extend(repository_ids.iter().cloned());
+            }
+            Some(ViewSelection::Exact { view_ids }) => {
+                for view in view_ids {
+                    self.view(snapshot.indexing(), view, None, granted_worktrees)?;
+                }
+            }
+            Some(ViewSelection::Pinned { pin_id }) => {
+                let pin = snapshot
+                    .graph()
+                    .graph_pin(pin_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                crate::services::graph::lease::check_pin(
+                    &pin,
+                    ctx,
+                    &request.scope,
+                    snapshot.stamp().now_ms,
+                )
+                .map_err(|_| StorageError::ScopeDenied)?;
+                for view in pin.scope.views {
+                    self.view(
+                        snapshot.indexing(),
+                        &view.view_id,
+                        Some(&view.repository_id),
+                        granted_worktrees,
+                    )?;
+                }
+                self.repositories.extend(
+                    pin.unavailable_repositories
+                        .into_iter()
+                        .map(|missing| missing.repository_id),
+                );
+            }
+            Some(ViewSelection::SchemaPublished { .. }) => return Err(StorageError::ScopeDenied),
+            None => return Ok(true),
+        }
+        Ok(false)
     }
 
     fn cancel(
