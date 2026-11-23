@@ -3,7 +3,7 @@ use devworks_core::operations::{OperationInput, database};
 use devworks_core::protocol::records::{
     DatabaseSensitiveRuleSet, DbReadResult, DbScalar, SchemaConnection, SchemaExposureMode,
 };
-use devworks_core::protocol::{OperationId, OperationState};
+use devworks_core::protocol::{Id, OperationId, OperationState};
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
 
@@ -149,11 +149,37 @@ impl DataScreen {
         (read, write)
     }
 
-    fn rule_edit(&self, delete: bool) -> Result<OperationInput, String> {
+    fn invalidate_rules(&mut self) {
+        self.rules = None;
+        self.query_generation = self.query_generation.wrapping_add(1);
+        self.rule_id.clear();
+        self.rule_catalog.clear();
+        self.rule_schema.clear();
+        self.rule_table.clear();
+        self.rule_column.clear();
+        self.rule_reason.clear();
+        self.rule_allow = false;
+    }
+
+    pub(crate) fn select_connection(&mut self, selected: Option<&str>) {
+        if self.connection.as_deref() != selected {
+            self.connection = selected.map(str::to_owned);
+            self.result = None;
+            self.invalidate_rules();
+            self.confirm_write = false;
+        }
+    }
+
+    fn rule_edit(
+        &self,
+        connection_id: Option<&Id>,
+        delete: bool,
+    ) -> Result<OperationInput, String> {
         let state = self
             .rules
             .as_ref()
-            .ok_or("Load the rules before editing.")?;
+            .filter(|rules| rules.connection_id.as_ref() == connection_id)
+            .ok_or("Load the rules for this policy before editing.")?;
         let optional = |name: &str| (!name.is_empty()).then_some(name.to_owned());
         let edit = if delete {
             json!({"kind":"Delete","id":self.rule_id})
@@ -169,7 +195,7 @@ impl DataScreen {
             }})
         };
         typed(
-            json!({"connectionId":state.connection_id,"expectedRevision":state.revision,"edit":edit}),
+            json!({"connectionId":connection_id,"expectedRevision":state.revision,"edit":edit}),
             database::Input::EditSensitiveColumnRules,
         )
     }
@@ -186,8 +212,7 @@ impl DataScreen {
         let previous = self.workspace_rules;
         ui.checkbox(&mut self.workspace_rules, "Workspace defaults");
         if self.workspace_rules != previous {
-            self.rules = None;
-            self.query_generation = self.query_generation.wrapping_add(1);
+            self.invalidate_rules();
         }
         let connection = (!self.workspace_rules)
             .then(|| source.map(|source| source.id.clone()))
@@ -201,11 +226,17 @@ impl DataScreen {
         {
             actions.push(Action::Data(Box::new(OperationInput::Database(
                 database::Input::SensitiveColumns(database::SensitiveColumnsInput {
-                    connection_id: connection,
+                    connection_id: connection.clone(),
                 }),
             ))));
         }
-        let Some(rules) = &self.rules else { return };
+        let Some(rules) = self
+            .rules
+            .as_ref()
+            .filter(|rules| rules.connection_id == connection)
+        else {
+            return;
+        };
         for rule in &rules.rules.0 {
             let line = format!(
                 "{} · {}.{}.{}.{}",
@@ -250,15 +281,15 @@ impl DataScreen {
             ("Reason", &mut self.rule_reason),
         ] {
             ui.horizontal(|ui| {
-                ui.label(label);
-                ui.text_edit_singleline(field);
+                let label = ui.label(label);
+                ui.text_edit_singleline(field).labelled_by(label.id);
             });
         }
         ui.checkbox(&mut self.rule_allow, "Allow this column");
         ui.horizontal(|ui| {
             for (label, delete) in [("Save rule", false), ("Delete rule", true)] {
                 if button_enabled(ui, label, online && !self.rule_id.is_empty()).clicked() {
-                    match self.rule_edit(delete) {
+                    match self.rule_edit(connection.as_ref(), delete) {
                         Ok(input) => actions.push(Action::Data(Box::new(input))),
                         Err(reason) => actions.push(Action::DataError(reason)),
                     }
@@ -269,16 +300,20 @@ impl DataScreen {
 }
 
 impl DatabasesScreen {
+    pub(crate) fn rule_target_matches(&self, target: Option<&Id>) -> bool {
+        self.project.is_none()
+            && match target {
+                None => self.data.workspace_rules,
+                Some(id) => {
+                    !self.data.workspace_rules && self.source().is_some_and(|s| &s.id == id)
+                }
+            }
+    }
+
     pub(super) fn data_ui(&mut self, ui: &mut Ui, online: bool, actions: &mut Vec<Action>) {
         let source = self.source().cloned();
         let draft = &mut self.data;
-        if draft.connection != self.selected {
-            draft.connection.clone_from(&self.selected);
-            draft.result = None;
-            draft.rules = None;
-            draft.query_generation = draft.query_generation.wrapping_add(1);
-            draft.confirm_write = false;
-        }
+        draft.select_connection(self.selected.as_deref());
         if let Some(source) = &source {
             let (read, write) = DataScreen::permissions(source, self.project.as_deref());
             ui.heading(&source.name.0);

@@ -1,6 +1,6 @@
 //! Native database ingress: exact shared frames, purpose-bound password intake and paging.
 use crate::{
-    backend::{Reply, TaskOutput, Unresolved},
+    backend::{Reply, TaskOutput, Unresolved, is_unknown},
     databases_ops::{self, DatabasesSlot, ObjectsRead, command, query},
     databases_screen::{Action, DatabasesScreen, Draft, ReadIntent},
     memory::RouteMemory,
@@ -10,10 +10,10 @@ use crate::{
     screen::{Cx, Effect, Screen, ScreenContext, ScreenId, controller},
 };
 use devworks_core::{
-    operations::OperationInput as In,
+    operations::{OperationInput as In, database},
     ports::{secrets::Secret, storage::ProjectPurgeClientScope},
     protocol::{
-        CommandReply,
+        CommandReply, Id,
         results::{DomainDecision, OperationResult},
     },
 };
@@ -65,11 +65,15 @@ impl Screen for DatabasesScreen {
         DatabasesScreen::restore_pending(self, saved);
     }
     fn restore_in_flight(&mut self, slot: &DatabasesSlot, _u: &Unresolved) {
-        if matches!(
-            slot,
-            DatabasesSlot::DatabaseCa | DatabasesSlot::DatabaseCommand(_)
-        ) {
-            self.busy = true;
+        match slot {
+            DatabasesSlot::DatabaseRules { generation, .. } => {
+                // The exact command can be confirmed after restart. Its old view cannot.
+                self.data.query_generation = generation.wrapping_add(1);
+                self.rule_command = Some(slot.clone());
+                self.busy = true;
+            }
+            DatabasesSlot::DatabaseCa | DatabasesSlot::DatabaseCommand(_) => self.busy = true,
+            _ => {}
         }
     }
     fn restored(&mut self, cx: &mut Cx) {
@@ -425,6 +429,48 @@ impl DatabasesCtl<'_, '_> {
             self.databases.busy = false;
         }
     }
+    fn current_rule_view(&self, generation: u64, connection_id: Option<&Id>) -> bool {
+        self.databases.data.query_generation == generation
+            && self.databases.project == self.selected_project
+            && self.databases.rule_target_matches(connection_id)
+    }
+
+    fn request_rules(&mut self, input: In, connection_id: Option<Id>) {
+        let generation = self.databases.data.query_generation;
+        if self.databases.busy || !self.current_rule_view(generation, connection_id.as_ref()) {
+            return;
+        }
+        let generation = generation.wrapping_add(1);
+        self.databases.data.query_generation = generation;
+        let label = if connection_id.is_some() {
+            "Saving connection sensitivity rules"
+        } else {
+            "Saving workspace sensitivity defaults"
+        };
+        let slot = DatabasesSlot::DatabaseRules {
+            generation,
+            connection_id,
+        };
+        self.databases.error = None;
+        self.databases.notice = None;
+        let operation = input.operation();
+        if matches!(
+            input,
+            In::Database(database::Input::EditSensitiveColumnRules(_))
+        ) {
+            let submitted =
+                self.command(slot.clone(), label, operation, move |b| command(b, input));
+            if submitted || self.waiting(&slot) {
+                self.databases.rule_command = Some(slot);
+                self.databases.busy = true;
+            }
+        } else {
+            self.query(slot, "Loading sensitivity rules", operation, move |b| {
+                query(b, input)
+            });
+        }
+    }
+
     fn save_database(&mut self) {
         let Some(draft) = self.databases.draft.as_mut() else {
             return;
@@ -520,9 +566,29 @@ impl DatabasesCtl<'_, '_> {
             .iter()
             .map(|p| (p.id.0.as_str().into(), p.name.0.clone()))
             .collect::<Vec<_>>();
+        let rule_command_status = self.databases.rule_command.as_ref().and_then(|slot| {
+            let DatabasesSlot::DatabaseRules { connection_id, .. } = slot else {
+                return None;
+            };
+            Some(match (self.pending(slot), connection_id.is_some()) {
+                (true, true) => "Saving connection sensitivity rules.",
+                (true, false) => "Saving workspace sensitivity defaults.",
+                (false, true) => {
+                    "Use Confirm database outcome to check the pending connection rule change."
+                }
+                (false, false) => {
+                    "Use Confirm database outcome to check the pending workspace defaults change."
+                }
+            })
+        });
         let mut actions = Vec::new();
-        self.databases
-            .ui(ui, self.cx.online(), &projects, &mut actions);
+        self.databases.ui(
+            ui,
+            self.cx.online(),
+            &projects,
+            &mut actions,
+            rule_command_status,
+        );
         for action in actions {
             self.database_action(action);
         }
@@ -569,6 +635,7 @@ impl DatabasesCtl<'_, '_> {
             Action::Select(id) => {
                 self.databases.tab = 0;
                 self.databases.stop_reads();
+                self.databases.data.select_connection(Some(&id));
                 self.databases.selected = Some(id);
                 self.databases.view = None;
                 self.databases.read_pin = None;
@@ -668,8 +735,21 @@ impl DatabasesCtl<'_, '_> {
                 node: r.node_id.as_str().into(),
             }),
             Action::Data(input) => {
+                let rule_target = match &*input {
+                    In::Database(database::Input::SensitiveColumns(query)) => {
+                        Some(query.connection_id.clone())
+                    }
+                    In::Database(database::Input::EditSensitiveColumnRules(edit)) => {
+                        Some(edit.connection_id.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(connection_id) = rule_target {
+                    self.request_rules(*input, connection_id);
+                    return;
+                }
                 let operation = input.operation();
-                if matches!(operation, "database.read" | "database.sensitive_columns") {
+                if operation == "database.read" {
                     self.databases.data.query_generation =
                         self.databases.data.query_generation.wrapping_add(1);
                     let ticket = self.databases.data.query_generation;
@@ -722,12 +802,61 @@ impl DatabasesCtl<'_, '_> {
                         self.databases.data.result = Some(value);
                         self.databases.error = None;
                     }
-                    Ok((OperationResult::DatabaseSensitiveColumns { value }, _)) => {
-                        self.databases.data.rules = Some(value);
-                        self.databases.error = None;
-                    }
                     Ok(_) => self.databases.error = Some("Unexpected database result".into()),
                     Err(error) => self.databases.error = Some(error.describe()),
+                }
+            }
+            (
+                DatabasesSlot::DatabaseRules {
+                    generation,
+                    connection_id,
+                },
+                Reply::Query(outcome),
+            ) => {
+                if self.current_rule_view(generation, connection_id.as_ref()) {
+                    match ops::query_result(outcome) {
+                        Ok((OperationResult::DatabaseSensitiveColumns { value }, _))
+                            if value.connection_id == connection_id =>
+                        {
+                            self.databases.data.rules = Some(value);
+                        }
+                        Ok(_) => {
+                            self.databases.error = Some("Unexpected sensitivity policy.".into())
+                        }
+                        Err(error) => self.databases.error = Some(error.describe()),
+                    }
+                }
+            }
+            (
+                ref slot @ DatabasesSlot::DatabaseRules {
+                    generation,
+                    ref connection_id,
+                },
+                Reply::Command(outcome),
+            ) => {
+                if self.databases.rule_command.as_ref() != Some(slot) || is_unknown(&outcome) {
+                    return None;
+                }
+                self.databases.rule_command = None;
+                self.databases.busy = false;
+                if self.current_rule_view(generation, connection_id.as_ref()) {
+                    match ops::command_result(outcome) {
+                        Ok(OperationResult::DatabaseEditSensitiveColumnRules { value })
+                            if &value.connection_id == connection_id =>
+                        {
+                            self.databases.data.rules = Some(value);
+                            self.databases.error = None;
+                            self.databases.notice =
+                                Some("Sensitivity rule change recorded.".into());
+                        }
+                        Ok(_) => {
+                            self.databases.error = Some("Unexpected sensitivity policy.".into())
+                        }
+                        Err(error) => self.databases.error = Some(error.describe()),
+                    }
+                }
+                if self.databases.project != self.selected_project {
+                    self.load_databases(false);
                 }
             }
             (DatabasesSlot::DatabaseDataStatus, Reply::Query(result)) => {
@@ -960,15 +1089,15 @@ impl DatabasesCtl<'_, '_> {
                                         devworks_core::protocol::records::ItemState::Disabled
                                     ))
                                     .then(|| value.id.as_str().into());
+                                    self.databases
+                                        .data
+                                        .select_connection(self.databases.selected.as_deref());
                                     self.databases.draft = None;
                                     self.databases.tab = 0;
                                     self.databases.clear_explorer();
                                 }
                                 OperationResult::SchemasRemoveIndex { .. } => {
                                     self.databases.clear_explorer()
-                                }
-                                OperationResult::DatabaseEditSensitiveColumnRules { value } => {
-                                    self.databases.data.rules = Some(value);
                                 }
                                 _ => {}
                             }

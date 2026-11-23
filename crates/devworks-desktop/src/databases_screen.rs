@@ -1,6 +1,6 @@
 //! Native database source forms and structural exploration. All records come from SchemaService.
 mod data;
-use crate::paged::Paged;
+use crate::{databases_ops::DatabasesSlot, paged::Paged};
 use devworks_core::protocol::records::*;
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 pub struct DatabasesScreen {
     pub tab: usize,
     pub data: data::DataScreen,
+    pub(crate) rule_command: Option<DatabasesSlot>,
     pub generated_key: Option<devworks_core::ports::secrets::Secret>,
     pub focus_object: bool,
     pub project: Option<String>,
@@ -314,6 +315,7 @@ impl DatabasesScreen {
         availability: Result<(), &str>,
         projects: &[(String, String)],
         actions: &mut Vec<Action>,
+        rule_command_status: Option<&str>,
     ) {
         let mut state = (self, actions);
         crate::widgets::with_right_sidebar(
@@ -346,7 +348,13 @@ impl DatabasesScreen {
                                         },
                                     );
                                 }
-                                state.0.main_ui(ui, availability.is_ok(), projects, state.1);
+                                state.0.main_ui(
+                                    ui,
+                                    availability.is_ok(),
+                                    projects,
+                                    state.1,
+                                    rule_command_status,
+                                );
                             });
                     },
                 );
@@ -370,6 +378,7 @@ impl DatabasesScreen {
         online: bool,
         projects: &[(String, String)],
         actions: &mut Vec<Action>,
+        rule_command_status: Option<&str>,
     ) {
         ui.label(self.project.as_ref().map_or_else(
             || "Workspace database sources".to_owned(),
@@ -403,6 +412,9 @@ impl DatabasesScreen {
         }
         if let Some(notice) = &self.notice {
             ui.label(notice);
+        }
+        if let Some(status) = rule_command_status {
+            ui.label(status);
         }
         if !online {
             ui.label("Database operations are unavailable while offline or closing.");
