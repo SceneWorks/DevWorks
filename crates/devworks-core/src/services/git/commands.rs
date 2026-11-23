@@ -182,15 +182,39 @@ fn cleanup_identity_matches(git: &Git<'_>, expected: &StoredGitWorktree, path: &
         })
 }
 
-fn cleanup_matches(git: &Git<'_>, expected: &StoredGitWorktree, path: &Path) -> bool {
-    cleanup_identity_matches(git, expected, path)
-        && git.revision_observation(path).is_ok_and(|observed| {
-            !observed.dirty
-                && observed.head == expected.head.hex
-                && observed.branch.as_deref() == Some(expected.branch.as_str())
-        })
-        && matches!(git.has_status_hidden_entries(path), Ok(false))
-        && matches!(git.has_ignored_files(path), Ok(false))
+fn require_clean_checkout(
+    git: &Git<'_>,
+    expected: &StoredGitWorktree,
+    path: &Path,
+) -> Result<(), &'static str> {
+    if !cleanup_identity_matches(git, expected, path) {
+        return Err("could not verify the physical worktree and Git metadata");
+    }
+    let observed = git
+        .revision_observation(path)
+        .map_err(|_| "could not verify the worktree revision and status")?;
+    if observed.head != expected.head.hex {
+        return Err("the worktree head changed");
+    }
+    if observed.branch.as_deref() != Some(expected.branch.as_str()) {
+        return Err("the worktree is no longer on its registered branch");
+    }
+    if observed.dirty {
+        return Err("the worktree has tracked or untracked changes");
+    }
+    if git
+        .has_status_hidden_entries(path)
+        .map_err(|_| "could not verify the worktree index flags")?
+    {
+        return Err("the worktree index has entries that Git status can hide");
+    }
+    if git
+        .has_ignored_files(path)
+        .map_err(|_| "could not verify whether the worktree has ignored files")?
+    {
+        return Err("the worktree has ignored local files");
+    }
+    Ok(())
 }
 
 impl GitService {
@@ -1002,8 +1026,8 @@ impl GitService {
         {
             return denied("cleanup target is not a registered isolated worktree");
         }
-        if !cleanup_matches(git, &job.tree, path) {
-            return changed("worktree head changed or has local data that must be retained");
+        if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
+            return changed(reason);
         }
         let default = match git.default_branch(repo) {
             Ok(Some(branch)) => branch
@@ -1035,8 +1059,11 @@ impl GitService {
         ) else {
             return denied("cleanup worktree path is unsupported");
         };
-        if !self.cleanup_path_missing(&staged) || !cleanup_matches(git, &job.tree, path) {
-            return changed("the cleanup staging path or original checkout changed");
+        if !self.cleanup_path_missing(&staged) {
+            return changed("the cleanup staging path changed");
+        }
+        if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
+            return changed(reason);
         }
         let move_effect = git.mutation(
             repo,
@@ -1048,7 +1075,7 @@ impl GitService {
         if move_effect.is_err() {
             if definite_git_refusal(&move_effect)
                 && self.cleanup_path_missing(&staged)
-                && cleanup_matches(git, &job.tree, path)
+                && require_clean_checkout(git, &job.tree, path).is_ok()
             {
                 return changed("Git refused to move the intact checkout");
             }
@@ -1073,7 +1100,9 @@ impl GitService {
         };
         // Moving the physical checkout first fences path-based writers from the deletion target.
         // Recheck the exact native witness, ref and all local data at the staged path.
-        if !cleanup_matches(git, &job.tree, &staged) || !self.cleanup_path_missing(path) {
+        if require_clean_checkout(git, &job.tree, &staged).is_err()
+            || !self.cleanup_path_missing(path)
+        {
             return if restore() {
                 changed("the staged checkout had changed and was restored with its data")
             } else {
@@ -1087,7 +1116,10 @@ impl GitService {
             &operation.id,
             false,
         );
-        if definite_git_refusal(&removal) && cleanup_matches(git, &job.tree, &staged) && restore() {
+        if definite_git_refusal(&removal)
+            && require_clean_checkout(git, &job.tree, &staged).is_ok()
+            && restore()
+        {
             return changed("Git refused to remove the intact checkout");
         }
         self.observe_cleanup(job, operation, git, repository)

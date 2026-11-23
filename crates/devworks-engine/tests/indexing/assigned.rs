@@ -130,6 +130,44 @@ async fn settled(store: &dyn ApplicationStore, id: &OperationId) -> OperationRec
     })
 }
 
+fn restore_fixture_checkout(checkout: &Path) {
+    // Git restores the committed entry and native checkout bytes after fixture edits.
+    git(
+        checkout,
+        &[
+            "restore",
+            "--source=HEAD",
+            "--staged",
+            "--worktree",
+            "--",
+            "src/lib.rs",
+        ],
+    );
+    git(
+        checkout,
+        &["diff", "--quiet", "--no-ext-diff", "HEAD", "--"],
+    );
+}
+
+fn assert_cleanup_refused(operation: &OperationRecord, reason: &str) {
+    assert_eq!(operation.state, OperationState::Failed, "{operation:?}");
+    assert!(
+        operation
+            .attempts
+            .iter()
+            .flat_map(|attempt| &attempt.observations)
+            .any(|observation| {
+                let cause = observation["effect"]["cause"]
+                    .as_str()
+                    .and_then(|cause| serde_json::from_str::<Value>(cause).ok());
+                cause.is_some_and(|cause| {
+                    cause["code"] == "SourceChanged" && cause["reason"] == reason
+                })
+            }),
+        "expected cleanup refusal {reason:?}: {operation:?}"
+    );
+}
+
 #[test]
 fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
     let _case = native_runtime_case();
@@ -147,6 +185,8 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
     git(&repo, &["init", "-q"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "baseline"]);
+    // Use the same CRLF checkout policy for runtime Git and the fixture's isolated Git commands.
+    git(&repo, &["config", "core.autocrlf", "true"]);
     let mut composed = composition(&h, store.clone(), "git");
     let process_host = Arc::new(CleanupHost::default());
     composed.process_host = process_host.clone();
@@ -713,18 +753,18 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
     );
     let dirty = operation(cleanup(&tree, "dirty-cleanup"));
     let done = executor.block_on(settled(&*store, &dirty));
-    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert_cleanup_refused(&done, "the worktree has tracked or untracked changes");
     assert!(edit.exists());
     assert_eq!(
         overlays(status(&worker, None)).overlays.unwrap().0[0].overlay_id,
         own_overlay.overlay_id
     );
-    std::fs::write(&edit, baseline).unwrap();
+    restore_fixture_checkout(checkout);
     let ignored = Path::new(&tree.path).join("private.tmp");
     std::fs::write(&ignored, "local data").unwrap();
     let dirty = operation(cleanup(&tree, "ignored-cleanup"));
     let done = executor.block_on(settled(&*store, &dirty));
-    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert_cleanup_refused(&done, "the worktree has ignored local files");
     assert_eq!(std::fs::read_to_string(&ignored).unwrap(), "local data");
     std::fs::remove_file(&ignored).unwrap();
     for (set, clear, key) in [
@@ -741,33 +781,40 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
         std::fs::write(&edit, &local).unwrap();
         let refused = operation(cleanup(&tree, key));
         let done = executor.block_on(settled(&*store, &refused));
-        assert_eq!(done.state, OperationState::Failed, "{done:?}");
+        assert_cleanup_refused(
+            &done,
+            "the worktree index has entries that Git status can hide",
+        );
         assert_eq!(std::fs::read_to_string(&edit).unwrap(), local);
         git(checkout, &["update-index", clear, "--", "src/lib.rs"]);
-        std::fs::write(&edit, baseline).unwrap();
+        restore_fixture_checkout(checkout);
     }
     git(checkout, &["checkout", "--detach", &tree.head.hex]);
     let detached = operation(cleanup(&tree, "detached-head"));
     let done = executor.block_on(settled(&*store, &detached));
-    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert_cleanup_refused(&done, "the worktree is no longer on its registered branch");
     assert!(checkout.is_dir());
     git(
         checkout,
         &["checkout", tree.branch.strip_prefix("refs/heads/").unwrap()],
     );
 
+    restore_fixture_checkout(checkout);
     let path = checkout.to_str().unwrap();
     git(&repo, &["worktree", "lock", "--", path]);
     let locked = operation(cleanup(&tree, "locked-worktree"));
     let done = executor.block_on(settled(&*store, &locked));
-    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert_cleanup_refused(&done, "Git refused to move the intact checkout");
     assert!(checkout.is_dir());
     git(&repo, &["worktree", "unlock", "--", path]);
 
     *process_host.on_staging.lock().unwrap() = Some(StageEdit::Ignored);
     let staged_dirty = operation(cleanup(&tree, "staged-ignored"));
     let done = executor.block_on(settled(&*store, &staged_dirty));
-    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert_cleanup_refused(
+        &done,
+        "the staged checkout had changed and was restored with its data",
+    );
     assert_eq!(
         std::fs::read_to_string(&ignored).unwrap_or_else(|error| panic!("{error}: {done:?}")),
         "late staged data"
@@ -841,7 +888,7 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
         "{retired:?}"
     );
     let sibling_checkout = PathBuf::from(&sibling_tree.path);
-    std::fs::write(sibling_checkout.join("src/lib.rs"), baseline).unwrap();
+    restore_fixture_checkout(&sibling_checkout);
     *process_host.on_staging.lock().unwrap() =
         Some(StageEdit::Replacement(sibling_checkout.clone()));
     let staged = operation(cleanup_from(
