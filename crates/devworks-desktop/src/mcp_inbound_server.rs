@@ -140,6 +140,23 @@ impl IncomingMcp {
                 .collect();
         }
         status.diagnostic = (!faults.is_empty()).then(|| BoundedText(faults.join(" ")));
+        let missing = published_tools()
+            .iter()
+            .filter(|tool| !self.available(tool))
+            .count();
+        if available > 0 && missing > 0 {
+            status.state = ItemState::Partial;
+            let diagnostic = status
+                .diagnostic
+                .get_or_insert_with(|| BoundedText(String::new()));
+            if !diagnostic.0.is_empty() {
+                diagnostic.0.push(' ');
+            }
+            diagnostic.0.push_str(&format!(
+                "{missing} of {} reviewed MCP tools lack their native owner or pinned schema in this build.",
+                published_tools().len()
+            ));
+        }
     }
 
     fn tools(
@@ -287,13 +304,15 @@ impl IncomingMcp {
     }
 
     fn available(&self, tool: &PublishedTool) -> bool {
-        self.runtime.has_mcp_tool(tool) && tool.has_target_authority()
+        self.runtime.has_mcp_tool(tool)
+            && tool.has_target_authority()
+            && tool.operation.supports(tool.revision)
     }
 
     async fn execute<T: Send + 'static>(
         &self,
         request: CancellationToken,
-        client: Arc<AuthenticatedClient>,
+        proof: RequestProof,
         work: impl FnOnce(Self, ReadOptions) -> Result<T, ErrorData> + Send + 'static,
     ) -> Result<T, ErrorData> {
         let capacity = Arc::clone(&self.requests)
@@ -302,7 +321,7 @@ impl IncomingMcp {
         let quota = {
             let mut clients = self.clients.lock().map_err(|_| unavailable())?;
             clients.retain(|_, quota| quota.strong_count() > 0);
-            let quota = clients.entry(client.id().clone()).or_default();
+            let quota = clients.entry(proof.client.id().clone()).or_default();
             match quota.upgrade() {
                 Some(quota) => quota,
                 None => {
@@ -333,8 +352,9 @@ impl IncomingMcp {
         tokio::select! {
             result = task => result.map_err(|_| unavailable())?,
             _ = request.cancelled() => Err(ErrorData::new(ErrorCode(-32800), "Request cancelled", None)),
+            _ = proof.cancel.cancelled() => Err(ErrorData::new(ErrorCode(-32800), "Request cancelled", None)),
             _ = self.stop.cancelled() => Err(unavailable()),
-            _ = tokio::time::sleep(REQUEST_LIMIT) => Err(ErrorData::new(ErrorCode(-32010), "Request deadline exceeded", None)),
+            _ = tokio::time::sleep(REQUEST_LIMIT) => Err(ErrorData::new(ErrorCode(-32010), "Request deadline exceeded. Recover any command with its application request key.", None)),
         }
     }
 }
@@ -350,6 +370,7 @@ impl Drop for CancelOnDrop {
 struct RequestProof {
     client: Arc<AuthenticatedClient>,
     delivery: Arc<OnceLock<Delivery>>,
+    cancel: CancellationToken,
 }
 
 enum Delivery {
@@ -365,6 +386,7 @@ impl RequestProof {
         Self {
             client: Arc::new(client),
             delivery: Arc::default(),
+            cancel: CancellationToken::new(),
         }
     }
 
@@ -492,7 +514,7 @@ impl ServerHandler for Server {
         let proof = Self::proof(&context)?;
         let cursor = params.and_then(|params| params.cursor);
         self.0
-            .execute(context.ct, proof.client.clone(), move |native, options| {
+            .execute(context.ct, proof.clone(), move |native, options| {
                 native
                     .credentials
                     .granted_tools(&proof.client, &options)
@@ -563,7 +585,7 @@ impl ServerHandler for Server {
     ) -> Result<CallToolResponse, ErrorData> {
         let proof = Self::proof(&context)?;
         self.0
-            .execute(context.ct, proof.client.clone(), move |native, options| {
+            .execute(context.ct, proof.clone(), move |native, options| {
                 let (value, error) = native.run_tool(
                     &proof,
                     &request.name,

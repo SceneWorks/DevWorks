@@ -14,19 +14,66 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use rmcp::model::RequestId;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
+use serde_json::Value;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 type Sdk = StreamableHttpService<Server, LocalSessionManager>;
 const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
+const LEGACY: &str = "2025-11-25";
+const MODERN: &str = "2026-07-28";
+const CLIENT_LIFETIME: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Default)]
+struct Exchanges {
+    legacy: Mutex<HashMap<String, (bool, Instant)>>,
+    pending: Mutex<HashMap<(String, bool, RequestId), CancellationToken>>,
+}
+
+impl Exchanges {
+    fn legacy(&self, client: &str, initialize: bool, notify: bool) -> bool {
+        let Ok(mut entries) = self.legacy.lock() else {
+            return false;
+        };
+        let now = Instant::now();
+        entries.retain(|_, (_, last)| now.duration_since(*last) < CLIENT_LIFETIME);
+        if initialize && (entries.len() < 128 || entries.contains_key(client)) {
+            entries.insert(client.to_owned(), (false, now));
+            return true;
+        }
+        if let Some((ready, last)) = entries.get_mut(client) {
+            *ready |= notify;
+            *last = now;
+            return *ready;
+        }
+        false
+    }
+}
+
+struct Exchange {
+    state: Arc<Exchanges>,
+    id: (String, bool, RequestId),
+}
+
+impl Drop for Exchange {
+    fn drop(&mut self) {
+        if let Ok(mut pending) = self.state.pending.lock()
+            && let Some(token) = pending.remove(&self.id)
+        {
+            token.cancel();
+        }
+    }
+}
 
 pub(super) async fn supervise(native: IncomingMcp) {
     let mut changes = native.runtime.state_changes();
@@ -102,7 +149,8 @@ async fn listen(native: IncomingMcp, listener: TcpListener, stop: CancellationTo
         Arc::new(LocalSessionManager::default()),
         config,
     );
-    let connections = Arc::new(Semaphore::new(16));
+    let connections = Arc::new(Semaphore::new(24));
+    let exchanges = Arc::new(Exchanges::default());
     loop {
         let accepted = tokio::select! {
             _ = stop.cancelled() => break,
@@ -118,12 +166,16 @@ async fn listen(native: IncomingMcp, listener: TcpListener, stop: CancellationTo
         let sdk = sdk.clone();
         let native = native.clone();
         let stop = stop.clone();
+        let exchanges = exchanges.clone();
         tokio::spawn(async move {
             let _slot = slot;
             let handler = service_fn(move |request| {
                 let native = native.clone();
                 let sdk = sdk.clone();
-                async move { Ok::<_, Infallible>(handle(native, sdk, local, peer, request).await) }
+                let exchanges = exchanges.clone();
+                async move {
+                    Ok::<_, Infallible>(handle(native, sdk, exchanges, local, peer, request).await)
+                }
             });
             let mut http = http1::Builder::new();
             http.keep_alive(false)
@@ -141,6 +193,7 @@ async fn listen(native: IncomingMcp, listener: TcpListener, stop: CancellationTo
 async fn handle(
     native: IncomingMcp,
     sdk: Sdk,
+    exchanges: Arc<Exchanges>,
     local: SocketAddr,
     peer: SocketAddr,
     request: Request<Incoming>,
@@ -175,7 +228,86 @@ async fn handle(
     if parts.headers.get_all("mcp-protocol-version").iter().count() > 1 {
         return empty(StatusCode::BAD_REQUEST);
     }
-    let response = sdk.handle(Request::from_parts(parts, body)).await;
+    let Ok(body) = Limited::new(body, MAX_REQUEST_BYTES as usize)
+        .collect()
+        .await
+    else {
+        return empty(StatusCode::PAYLOAD_TOO_LARGE);
+    };
+    let body = body.to_bytes();
+    let Ok(frame) = serde_json::from_slice::<Value>(&body) else {
+        return empty(StatusCode::BAD_REQUEST);
+    };
+    let method = frame["method"].as_str().unwrap_or_default();
+    if frame["jsonrpc"] != "2.0" || method.is_empty() {
+        return empty(StatusCode::BAD_REQUEST);
+    }
+    let version = parts
+        .headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok());
+    let initialize = method == "initialize";
+    let legacy = version == Some(LEGACY) || (initialize && version.is_none());
+    if !(legacy || version == Some(MODERN))
+        || initialize && (!legacy || frame["params"]["protocolVersion"] != LEGACY)
+    {
+        return empty(StatusCode::BAD_REQUEST);
+    }
+    let client = proof.client.transport_revision();
+    if legacy && !initialize {
+        let notify = method == "notifications/initialized" && frame.get("id").is_none();
+        if !exchanges.legacy(&client, false, notify) {
+            return empty(StatusCode::BAD_REQUEST);
+        }
+        if notify {
+            return empty(StatusCode::ACCEPTED);
+        }
+    }
+    if method == "notifications/cancelled" && frame.get("id").is_none() {
+        if !legacy
+            && !parts
+                .headers
+                .get("mcp-method")
+                .is_some_and(|field| field == method)
+        {
+            return empty(StatusCode::BAD_REQUEST);
+        }
+        let Ok(id) = serde_json::from_value::<RequestId>(frame["params"]["requestId"].clone())
+        else {
+            return empty(StatusCode::BAD_REQUEST);
+        };
+        if let Ok(pending) = exchanges.pending.lock()
+            && let Some(cancellation) = pending.get(&(client, legacy, id))
+        {
+            cancellation.cancel();
+        }
+        return empty(StatusCode::ACCEPTED);
+    }
+    let _exchange = if let Some(id) = frame.get("id") {
+        let Ok(id) = serde_json::from_value::<RequestId>(id.clone()) else {
+            return empty(StatusCode::BAD_REQUEST);
+        };
+        let key = (client.clone(), legacy, id);
+        let Ok(mut pending) = exchanges.pending.lock() else {
+            return empty(StatusCode::SERVICE_UNAVAILABLE);
+        };
+        if pending.len() >= 16 {
+            return empty(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        if pending.contains_key(&key) {
+            return empty(StatusCode::CONFLICT);
+        }
+        pending.insert(key.clone(), proof.cancel.clone());
+        Some(Exchange {
+            state: exchanges.clone(),
+            id: key,
+        })
+    } else {
+        None
+    };
+    let response = sdk
+        .handle(Request::from_parts(parts, Full::new(body)))
+        .await;
     let (mut parts, body) = response.into_parts();
     // The SDK's no-session JSON mode must never start an independent event stream.
     if parts
@@ -189,6 +321,14 @@ async fn handle(
         return empty(StatusCode::INTERNAL_SERVER_ERROR);
     };
     let body = body.to_bytes();
+    if initialize
+        && parts.status.is_success()
+        && serde_json::from_slice::<Value>(&body)
+            .is_ok_and(|value| value["result"]["protocolVersion"] == LEGACY)
+        && !exchanges.legacy(&client, true, false)
+    {
+        return empty(StatusCode::SERVICE_UNAVAILABLE);
+    }
     if !matches!(
         tokio::task::spawn_blocking(move || proof.check(&native)).await,
         Ok(true)

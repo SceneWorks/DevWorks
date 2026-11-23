@@ -78,6 +78,23 @@ impl AuthenticatedClient {
     pub fn id(&self) -> &Id {
         &self.id
     }
+
+    /// Identity of current, authenticated transport state. It changes when a client is
+    /// reconfigured, a credential rotates, or restore changes the store's authority epoch.
+    pub fn transport_revision(&self) -> String {
+        sha256_hex(
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                self.store.0.as_str(),
+                self.epoch,
+                self.id.as_str(),
+                self.settings_revision.as_str(),
+                self.client_revision.as_str(),
+                self.generation.as_str()
+            )
+            .as_bytes(),
+        )
+    }
 }
 
 pub struct Credentials {

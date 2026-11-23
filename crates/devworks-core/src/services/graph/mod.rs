@@ -1,7 +1,7 @@
 //! Exact composed graph reads, private source capture, and retention leases.
 mod analysis;
 mod budget;
-mod cursor;
+pub(crate) mod cursor;
 mod dataset;
 mod impact;
 mod incident;

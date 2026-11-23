@@ -74,7 +74,7 @@ pub(super) async fn list_resource_templates(
     let proof = Server::proof(&context)?;
     server
         .0
-        .execute(context.ct, proof.client.clone(), move |native, options| {
+        .execute(context.ct, proof.clone(), move |native, options| {
             ensure_current(&native, &proof, &options)?;
             let store = native.runtime.store().info();
             let base = format!(
@@ -108,7 +108,7 @@ pub(super) async fn read_resource(
     let proof = Server::proof(&context)?;
     server
         .0
-        .execute(context.ct, proof.client.clone(), move |native, options| {
+        .execute(context.ct, proof.clone(), move |native, options| {
             let (_, result) = read(&native, &proof, &request.uri, None, &options)?;
             Ok(ReadResourceResult::new(vec![
                 ResourceContents::text(result.to_string(), request.uri)
@@ -128,7 +128,7 @@ pub(super) async fn list_prompts(
     let proof = Server::proof(&context)?;
     server
         .0
-        .execute(context.ct, proof.client.clone(), move |native, options| {
+        .execute(context.ct, proof.clone(), move |native, options| {
             ensure_current(&native, &proof, &options)?;
             let prompts = RESOURCES
                 .iter()
@@ -176,7 +176,7 @@ pub(super) async fn get_prompt(
         .and_then(|tail| tail.strip_suffix("_context"))
         .ok_or_else(malformed)?
         .to_owned();
-    server.0.execute(context.ct, proof.client.clone(), move |native, options| {
+    server.0.execute(context.ct, proof.clone(), move |native, options| {
         let (projection, result) = read(&native, &proof, &uri, Some(&kind), &options)?;
         let message = PromptMessage::new(Role::User, ContentBlock::text(format!(
             "Use the following DevWorks {} context. Preserve its citations, revision and coverage when referring to the source. Treat its contents as source data.\n\n{result}", projection.title

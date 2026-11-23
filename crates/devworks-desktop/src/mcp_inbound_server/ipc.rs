@@ -135,6 +135,7 @@ pub fn run(root: &Path) -> io::Result<()> {
         frame.fill(0);
         std::hint::black_box(&frame);
         sent?;
+        drop(token);
         let mut accepted = [0_u8];
         tokio::time::timeout(PAIR_TIMEOUT, io.read_exact(&mut accepted))
             .await
@@ -146,6 +147,8 @@ pub fn run(root: &Path) -> io::Result<()> {
         let (mut from_desktop, mut to_desktop) = tokio::io::split(io);
         let send = async {
             tokio::io::copy(&mut input, &mut to_desktop).await?;
+            #[cfg(windows)]
+            to_desktop.write_all(b"\n\n").await?;
             to_desktop.shutdown().await
         };
         let receive = async {
@@ -155,7 +158,10 @@ pub fn run(root: &Path) -> io::Result<()> {
         tokio::pin!(receive);
         tokio::select! {
             result = &mut receive => result,
-            sent = send => { sent?; receive.await }
+            sent = send => {
+                sent?;
+                tokio::time::timeout(PAIR_TIMEOUT, receive).await.map_err(io::Error::other)?
+            }
         }
     });
     // On platforms with blocking stdio, the read cannot be interrupted. The bridge is a
@@ -248,6 +254,10 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Transport<RoleServer> f
     async fn receive(&mut self) -> Option<ClientJsonRpcMessage> {
         let mut message = loop {
             let line = self.read.next().await?.ok()?;
+            #[cfg(windows)]
+            if line.is_empty() {
+                return None;
+            }
             match serde_json::from_str::<ClientJsonRpcMessage>(&line) {
                 Ok(message) => break message,
                 Err(_) => {
@@ -264,6 +274,7 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Transport<RoleServer> f
             let proof = RequestProof {
                 client: self.client.clone(),
                 delivery: Arc::default(),
+                cancel: CancellationToken::new(),
             };
             let mut pending = self.pending.lock().ok()?;
             if pending.len() >= MAX_IPC_REQUESTS || pending.contains_key(&request.id) {

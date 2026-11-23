@@ -63,7 +63,44 @@ pub(super) async fn connect(root: &Path) -> io::Result<(Id, UnixStream)> {
     {
         return Err(denial());
     }
+    let executable = process_executable(target.pid)?;
+    let running = fs::metadata(executable)?;
+    let installed = fs::metadata(std::env::current_exe()?)?;
+    if (running.dev(), running.ino()) != (installed.dev(), installed.ino()) {
+        return Err(denial());
+    }
     Ok((target.instance, stream))
+}
+
+#[cfg(target_os = "macos")]
+fn process_executable(pid: u32) -> io::Result<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut bytes = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let pid = i32::try_from(pid).map_err(|_| denial())?;
+    // SAFETY: The process ID was obtained from the live socket. The buffer is writable
+    // for its full length, and proc_pidpath returns a bounded NUL-terminated path.
+    let read = unsafe { libc::proc_pidpath(pid, bytes.as_mut_ptr().cast(), bytes.len() as u32) };
+    if read <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let finish = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(denial)?;
+    Ok(std::ffi::OsStr::from_bytes(&bytes[..finish]).into())
+}
+
+#[cfg(target_os = "linux")]
+fn process_executable(pid: u32) -> io::Result<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")) // dev-host: allow-path Linux kernel process name
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_executable(_: u32) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "desktop peer identity is unavailable",
+    ))
 }
 
 pub(super) fn start(native: IncomingMcp, root: &Path, stop: CancellationToken) -> io::Result<()> {

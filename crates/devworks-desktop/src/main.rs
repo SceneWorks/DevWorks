@@ -82,11 +82,11 @@ fn arg(name: &str) -> Option<String> {
 }
 
 fn main() -> eframe::Result {
-    let data_root = arg("--data-dir")
-        .map(PathBuf::from)
-        .or_else(default_data_root);
     #[cfg(any(unix, windows))]
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
+        let data_root = arg("--data-dir")
+            .map(PathBuf::from)
+            .or_else(default_data_root);
         let result = data_root
             .as_deref()
             .ok_or_else(|| std::io::Error::other("no DevWorks data root is configured"))
@@ -97,6 +97,9 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    let data_root = arg("--data-dir")
+        .map(PathBuf::from)
+        .or_else(default_data_root);
     let close_at = arg("--close-after-secs")
         .and_then(|s| s.parse::<u64>().ok())
         .map(|s| Instant::now() + Duration::from_secs(s));

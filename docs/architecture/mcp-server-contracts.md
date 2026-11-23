@@ -33,6 +33,12 @@ Use deterministic names such as `devworks_code_search` mapped to one exact quali
 
 Credential provisioning belongs to the application lifetime and stores only protected credential references/verifiers. Newly registered clients start with no access; registration is not consent. This local manual-credential profile does not advertise an OAuth authorization server or dynamic registration. The [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) makes authorization support optional and recommends its OAuth profile for HTTP; this desktop binding documents its manual local pairing exception explicitly. Clients that require OAuth-only HTTP use the stdio connection instead; the compatibility matrix must show that limit. stdio and HTTP registrations share the same principal/grant model. Export client setup snippets with credential placeholders and instructions, never reusable bearer tokens. Credentials are delivered through the OS-backed configuration flow, scoped to this application/store and kept separate from provider secrets.
 
+### Client setup
+
+Start DevWorks and open Settings → Incoming MCP clients. Enable the desired listener, register the client, and grant its projects, repository views and operations. Use **Copy setup** to get the active path and argument array. For stdio, the harness runs the installed desktop executable with `mcp --data-dir <active data directory>` and supplies the pairing credential as `DEVWORKS_MCP_TOKEN` from its protected secret configuration. Keep the desktop open while the client is connected.
+
+For Streamable HTTP, use the loopback `/mcp` URL shown in Settings. Configure the harness to send `Authorization: Bearer <pairing credential>` on every POST. Both protocol profiles use a JSON response on HTTP. Clients that need an independent event stream, or support only OAuth pairing, can use stdio if their client supports that transport.
+
 The app remains a desktop application: close disables admission, closes listeners and bridge channels, and preserves existing pause/recovery behavior. No daemon continues serving. Sleep/reopen follows existing store epoch, recovery and work-control rules; reconnect is not Continue. A tunnel or remote-launch wrapper may carry an authorized local connection, but it is not a shipped public internet service or a bypass of authentication. Public remote hosting is outside this local desktop binding; do not claim remote deployment acceptance from loopback tests.
 
 ## Protocol compatibility
