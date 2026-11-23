@@ -64,7 +64,7 @@ Package: devworks-qualification
 Version: 0.1.0~qualification
 Architecture: $arch
 Maintainer: DevWorks qualification <devworks@example.invalid>
-Depends: $dependencies, libegl1, libgl1, libgl1-mesa-dri, libwayland-client0, libxkbcommon0, libx11-6, libxcursor1, libxi6, libxrandr2
+Depends: $dependencies, libegl1, libgl1, libgl1-mesa-dri, libwayland-client0, libwayland-cursor0, libwayland-egl1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2
 Description: DevWorks Linux qualification build
 CONTROL
   dpkg-deb --root-owner-group --build "$stage" "$package"
@@ -92,9 +92,10 @@ runtime="$root/runtime"
 mkdir -m 700 "$runtime" "$root/no-tools"
 
 export XDG_RUNTIME_DIR="$runtime" LIBGL_ALWAYS_SOFTWARE=1
+display_failed=0
 timeout 75 dbus-run-session -- xvfb-run -a env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 PATH="$root/no-tools" \
   /usr/bin/devworks-qualification --data-dir "$root/profile-x11" \
-  --screenshot "$results/x11.png" --close-after-secs 12 > "$results/x11.log" 2>&1
+  --screenshot "$results/x11.png" --close-after-secs 12 > "$results/x11.log" 2>&1 || display_failed=1
 
 export WAYLAND_DISPLAY=wayland-1
 unset DISPLAY
@@ -108,7 +109,8 @@ done
 test -S "$runtime/$WAYLAND_DISPLAY"
 timeout 75 dbus-run-session -- env XDG_SESSION_TYPE=wayland PATH="$root/no-tools" "$relocated/devworks-desktop" \
   --data-dir "$root/profile-wayland" --screenshot "$results/wayland.png" \
-  --close-after-secs 12 > "$results/wayland.log" 2>&1
+  --close-after-secs 12 > "$results/wayland.log" 2>&1 || display_failed=1
+test "$display_failed" -eq 0
 
 python3 -I - "$root" <<'PY'
 from pathlib import Path
