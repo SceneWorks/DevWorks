@@ -2,14 +2,14 @@
 //! Risk, dependency direction, structural-owner guards and crate-only summaries follow
 //! CodeGraph afe7356 ImpactAnalysisService; query limits add explicit partial coverage.
 use super::{
-    dataset::{self, Key},
+    dataset::{self, Adjacency, Key},
     model,
     read::{Position, Reader},
     scan,
 };
 use crate::ports::storage::*;
 use crate::protocol::Id;
-use crate::protocol::data::GraphResult;
+use crate::protocol::data::{Direction, GraphResult};
 use crate::protocol::records::{
     CodeAffectedNode, CodeImpact, CodeImpactSummary, CodeNodeSelection, CodeRepositoryLink,
     CodeRisk,
@@ -279,7 +279,7 @@ fn indexed(
             &selected.pin.scope,
             &selected.layers,
             nodes,
-            &crate::protocol::data::Direction::Both,
+            &Direction::Both,
             &[],
             budget,
         )
@@ -320,6 +320,7 @@ fn assess(
     if unresolved {
         reader.gaps.push("unresolved_impact_edges");
     }
+    let adjacency = scanned.map(|edges| Adjacency::new(&edges.linked, &mut reader.budget));
     let found = !starts.is_empty();
     let mut start_keys = BTreeSet::new();
     let mut start_repositories = BTreeSet::new();
@@ -350,25 +351,28 @@ fn assess(
     // crossing a repository boundary starts a new segment at the depended-upon repository.
     for wave in 1..=depth {
         let mut candidates = BTreeMap::<Key, (GraphNode, String, Id)>::new();
-        // Every edge the wave can take ends at a node the previous wave reached.
+        // The previous layer owns this wave. Either edge direction may matter for a
+        // cross-repository PUBLISHES relationship.
+        let frontier: Vec<_> = reached
+            .values()
+            .filter(|node| node.depth == wave - 1)
+            .map(|node| dataset::identity(&node.raw))
+            .collect();
         let indexed_wave;
-        let wave_edges = match scanned {
-            Some(edges) => &edges.linked[..],
+        let wave_edges = match &adjacency {
+            Some(adjacency) => {
+                adjacency.around_all(&frontier, &Direction::Both, &mut reader.budget)
+            }
             None => {
-                let frontier: Vec<_> = reached
-                    .values()
-                    .filter(|n| n.depth == wave - 1)
-                    .map(|n| dataset::identity(&n.raw))
-                    .collect();
                 let Some(edges) = indexed(reader, &frontier)? else {
                     return Ok(None);
                 };
                 indexed_wave = edges;
-                &indexed_wave[..]
+                indexed_wave.iter().collect()
             }
         };
         for edge in wave_edges {
-            if !reader.budget.visit() {
+            if !reader.budget.check() {
                 break;
             }
             let cross = edge.source.repository_id != edge.target.repository_id;
@@ -383,11 +387,14 @@ fn assess(
             else {
                 continue;
             };
-            let key = dataset::key(dependent);
-            if reached.contains_key(&key) || candidates.contains_key(&key) {
+            if !cross && !DEPENDENCIES.contains(&edge.raw.edge.kind.as_str()) {
                 continue;
             }
-            if !cross && !DEPENDENCIES.contains(&edge.raw.edge.kind.as_str()) {
+            if !reader.budget.visit() {
+                break;
+            }
+            let key = dataset::key(dependent);
+            if reached.contains_key(&key) || candidates.contains_key(&key) {
                 continue;
             }
             if !reader
@@ -438,29 +445,26 @@ fn assess(
     let mut direct = BTreeSet::<String>::new();
     let mut direct_complete = !reader.gaps.contains(&"graph_visited_limit");
     // A direct cross-repository link has a start at one end.
+    let starts: Vec<_> = reached
+        .values()
+        .filter(|node| node.depth == 0)
+        .map(|node| dataset::identity(&node.raw))
+        .collect();
     let indexed_starts;
-    let start_edges = match scanned {
-        Some(edges) => &edges.linked[..],
+    let start_edges = match &adjacency {
+        Some(adjacency) => adjacency.around_all(&starts, &Direction::Both, &mut reader.budget),
         None => {
-            let starts: Vec<_> = reached
-                .values()
-                .filter(|n| n.depth == 0)
-                .map(|n| dataset::identity(&n.raw))
-                .collect();
             let Some(edges) = indexed(reader, &starts)? else {
                 return Ok(None);
             };
             indexed_starts = edges;
-            &indexed_starts[..]
+            indexed_starts.iter().collect()
         }
     };
-    // The indexed read above may have been cut short after `direct_complete` was first computed.
-    direct_complete &= !reader.gaps.contains(&"graph_visited_limit");
+    // The edge read above may itself have been cut short.
+    direct_complete &=
+        reader.budget.exhausted.is_none() && !reader.gaps.contains(&"graph_visited_limit");
     for edge in start_edges {
-        if !reader.budget.visit() {
-            direct_complete = false;
-            break;
-        }
         if edge.source.repository_id == edge.target.repository_id {
             continue;
         }
@@ -470,6 +474,10 @@ fn assess(
             (&edge.target, &edge.source)
         };
         if start_keys.contains(&dataset::key(dependency)) {
+            if !reader.budget.visit() {
+                direct_complete = false;
+                break;
+            }
             direct.insert(dependent.repository_id.as_str().to_owned());
             add_link(
                 &mut links,
@@ -496,10 +504,10 @@ fn assess(
         }
     }
     if file.is_some() && !start_keys.is_empty() {
-        match (owner, scanned) {
+        match (owner, &adjacency) {
             (Owner::Ambiguous, _) => reader.gaps.push("ambiguous_impact_package_owner"),
-            (Owner::Found(owner), Some(edges)) => {
-                crate_dependents(reader, owner, depth, &edges.linked, &mut links)
+            (Owner::Found(owner), Some(adjacency)) => {
+                crate_dependents(reader, owner, depth, adjacency, &mut links)
             }
             (Owner::Found(_), None) => return Ok(None),
             (Owner::None, _) => {}
@@ -729,28 +737,26 @@ fn crate_owner(reader: &mut Reader<'_>, repository: &Id, path: &str) -> Result<O
     }
 }
 
-/// Adds the crates that depend on `owner` (a file's package), over the scan's `edges`, which
-/// derive the package dependencies across the whole scope.
+/// Adds the crates that depend on the file's owner using the composed package relationships.
 fn crate_dependents(
     reader: &mut Reader<'_>,
     owner: &GraphNode,
     depth: u16,
-    edges: &[scan::Edge],
+    adjacency: &Adjacency<'_>,
     links: &mut Links,
 ) {
     let mut visited = BTreeSet::from([dataset::node_key(owner)]);
-    let mut frontier = visited.clone();
+    let mut frontier = vec![dataset::identity(owner)];
     let mut dependents = BTreeSet::new();
     for _ in 0..depth {
-        let mut next = BTreeSet::new();
+        let mut next = Vec::new();
+        let edges = adjacency.around_all(&frontier, &Direction::Reverse, &mut reader.budget);
         for edge in edges {
+            if edge.raw.edge.kind != "REFERENCES_PACKAGE" {
+                continue;
+            }
             if !reader.budget.visit() {
                 break;
-            }
-            if edge.raw.edge.kind != "REFERENCES_PACKAGE"
-                || !frontier.contains(&dataset::key(&edge.target))
-            {
-                continue;
             }
             if edge.source.repository_id != edge.target.repository_id {
                 dependents.insert((dataset::key(&edge.source), dataset::key(&edge.target)));
@@ -761,8 +767,8 @@ fn crate_dependents(
                     .budget
                     .retain(key.0.len() + key.1.len() + key.2.len() + 96)
             {
-                visited.insert(key.clone());
-                next.insert(key);
+                visited.insert(key);
+                next.push(edge.source.clone());
             }
         }
         frontier = next;

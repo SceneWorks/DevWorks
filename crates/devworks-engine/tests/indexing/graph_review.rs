@@ -719,3 +719,218 @@ fn native_revision_one_traversal_and_dependency_project_representable_graphs() {
         }
     });
 }
+
+/// Publish a native indexed relationship graph without making parser throughput part of the
+/// traversal test. All rows and endpoint indexes are written through the actual storage owner.
+fn publish_large_traversal_fixture(store: &dyn ApplicationStore, location: &Path) {
+    let location = location.to_string_lossy().into_owned();
+    write(store, move |tx| {
+        let repository = id("traversal-repository");
+        let generation = id("traversal-generation");
+        let view = id("traversal-view");
+        tx.projects().insert_repository(&StoredRepository {
+            id: repository.clone(),
+            location,
+            name: "Traversal fixture".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: ACTIVE.into(),
+            languages: vec!["rust".into()],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        let mut captured = StoredGeneration {
+            id: generation.clone(),
+            repository_id: repository.clone(),
+            layer: LAYER_BASELINE.into(),
+            state: GEN_STAGING.into(),
+            source_digest: "a".repeat(40),
+            watermark: 0,
+            manifest: json!({"coverage":{"state":"Complete","gaps":[]}}),
+        };
+        tx.indexing().insert_generation(&captured)?;
+        let mut put = |key: &str, nodes: usize, edges: usize, ends: fn(usize) -> (usize, usize)| {
+            let nodes = (0..nodes)
+                .map(|i| {
+                    let name = format!("{key}-{i}");
+                    StoredNode {
+                        unit_key: key.into(),
+                        node_id: name.replace('.', "-"),
+                        kind: "Function".into(),
+                        name: name.clone(),
+                        payload: json!({"qualifiedName":name}),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let edges = (0..edges)
+                .map(|i| {
+                    let (source, target) = ends(i);
+                    StoredEdge {
+                        unit_key: key.into(),
+                        edge_id: format!("edge-{i:06}"),
+                        source_node_id: nodes[source].node_id.clone(),
+                        target_node_id: nodes[target].node_id.clone(),
+                        kind: "HTTP_CALLS".into(),
+                        payload: json!({"sourceUnit":key,"targetUnit":key,"resolution":"Resolved"}),
+                    }
+                })
+                .collect::<Vec<_>>();
+            tx.indexing().put_unit(
+                &StoredUnit {
+                    generation_id: generation.clone(),
+                    unit_key: key.into(),
+                    content_digest: format!("capture-{key}"),
+                    action: UNIT_REPLACE.into(),
+                    payload: json!({}),
+                },
+                &nodes,
+                &edges,
+            )
+        };
+        // A reachable 1,000-node tree and one back-edge into the root. The root and the
+        // disconnected edges have no repeated identities across units.
+        put("tree.rs", 1001, 1001, |i| {
+            if i == 1000 { (1, 0) } else { (i / 10, i + 1) }
+        })?;
+        for (unit, count) in [25_000, 25_000, 25_000, 23_999].into_iter().enumerate() {
+            put(&format!("unrelated-{unit}.rs"), 160, count, |i| {
+                (i / 160, i % 160)
+            })?;
+        }
+        captured.state = GEN_SEALED.into();
+        captured.watermark = 5;
+        tx.indexing().update_generation(&captured)?;
+        tx.indexing().insert_view(&StoredView {
+            view_id: view.clone(),
+            repository_id: repository.clone(),
+            view_digest: devworks_core::fingerprint::sha256_hex(b"traversal-view"),
+            baseline_id: generation,
+            branch_id: None,
+            worktree_id: None,
+            coverage: json!({"state":"Complete","commit":"a".repeat(40),"sourceRevision":1}),
+        })?;
+        tx.indexing().publish(&repository, &view, 0)?;
+        tx.projects().publish_index_view(&StoredIndexView {
+            view_id: view,
+            repository_id: repository,
+            source_revision: "a".repeat(40),
+            coverage: "Complete".into(),
+            published_at_ms: 1,
+        })?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn native_traversal_reaches_one_thousand_nodes_in_a_hundred_thousand_edge_graph() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let location = sources();
+    let _source = devworks_test_support::TempRoot::adopt(location.clone());
+    publish_large_traversal_fixture(&*store, &location);
+    let selected = scope(&*store, "traversal-repository");
+    assert_eq!(
+        read(&*store, |r| r.graph().graph_counts(&selected)).edges,
+        100_000
+    );
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+
+    let root = "tree-rs-0";
+    let node = json!({"kind":"Node","nodeId":root});
+    let queries = [
+        (
+            "code.traverse",
+            json!({"kind":"Traverse","startIds":[root],"direction":"Forward","edgeKinds":["HTTP_CALLS"],"maxDepth":4}),
+        ),
+        (
+            "code.call_path",
+            json!({"kind":"Path","selection":{"target":node,"direction":"Outbound","depth":4}}),
+        ),
+        (
+            "code.data_lineage",
+            json!({"kind":"DataLineage","selection":node}),
+        ),
+    ];
+    for (operation, query) in queries {
+        let mut frame = json!({
+            "protocol":"1.0-draft.1","schemaRevision":3,"queryId":"large-native-walk","scope":{"kind":"Workspace"},
+            "view":{"kind":"Published","repositoryIds":["traversal-repository"]},"query":query,
+            "limits":{"maxResults":250,"maxVisited":20000,"deadlineMs":10000}
+        });
+        let mut reached = std::collections::BTreeSet::new();
+        let mut followed = std::collections::BTreeSet::new();
+        let mut complete = false;
+        for _ in 0..8 {
+            let reply = app
+                .query(&ctx, operation, frame.to_string().as_bytes())
+                .unwrap();
+            let DomainQueryReply::Result { result, .. } = reply else {
+                panic!("{operation}: {reply:?}");
+            };
+            let page: GraphPage =
+                serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
+                    .unwrap();
+            assert!(
+                !gaps(&page).to_string().contains("graph_visited_limit")
+                    && matches!(
+                        page.completion,
+                        GraphCompletion::Complete | GraphCompletion::ResultLimit
+                    ),
+                "{operation}: {:?}, {:?}",
+                page.completion,
+                gaps(&page)
+            );
+            match &page.result {
+                GraphResult::CodeGraph { value } => {
+                    reached.extend(
+                        value
+                            .nodes
+                            .0
+                            .iter()
+                            .map(|node| node.node_id.as_str().to_owned()),
+                    );
+                    for edge in &value.edges.0 {
+                        assert!(followed.insert(edge.edge_id.as_str().to_owned()));
+                    }
+                }
+                GraphResult::CallTrace { value } => {
+                    for step in &value.entries.0 {
+                        reached.insert(step.node.node_id.as_str().to_owned());
+                        assert!(
+                            followed.insert(step.edge_id.as_ref().unwrap().as_str().to_owned())
+                        );
+                    }
+                }
+                GraphResult::Lineage { value } => {
+                    for step in &value.consumers.0 {
+                        reached.insert(step.node.node_id.as_str().to_owned());
+                        assert!(
+                            followed.insert(step.edge_id.as_ref().unwrap().as_str().to_owned())
+                        );
+                    }
+                }
+                _ => panic!("{operation}: unexpected graph result"),
+            }
+            let Some(cursor) = page.next_cursor else {
+                complete = true;
+                break;
+            };
+            frame["view"] = json!({"kind":"Pinned","pinId":page.view.unwrap().pin_id});
+            frame["cursor"] = json!(cursor);
+        }
+        assert!(complete, "{operation}: traversal never finished");
+        assert!(
+            reached.remove(root),
+            "{operation}: cycle did not reach the root"
+        );
+        assert_eq!(reached.len(), 1_000, "{operation}");
+        assert_eq!(followed.len(), 1_001, "{operation}");
+    }
+    executor.block_on(app.shutdown()).into_result().unwrap();
+}

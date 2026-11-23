@@ -1330,6 +1330,18 @@ fn bound_cursors(
     };
     let mut canonical =
         json!({"scope":request.scope,"query":request.query,"limits":request.limits});
+    if matches!(
+        request.query,
+        GraphQuery::Traverse { .. }
+            | GraphQuery::Path { .. }
+            | GraphQuery::NodeImpact { .. }
+            | GraphQuery::FileImpact { .. }
+            | GraphQuery::DataLineage { .. }
+    ) {
+        // Old offsets counted repeated expansions or a different budget-limited prefix.
+        // Expire their cursors so a client can restart against the same retained pin.
+        canonical["walkOrder"] = json!(2);
+    }
     if let Some(selected) = selected {
         canonical["selection"] = json!(selected.pin.intent_digest);
         let mut registrations = Vec::new();

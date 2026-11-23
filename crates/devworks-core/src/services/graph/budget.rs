@@ -30,7 +30,8 @@ impl Budget {
         }
     }
 
-    pub fn visit(&mut self) -> bool {
+    /// Check non-visit bounds during bookkeeping that operates on already charged rows.
+    pub fn check(&mut self) -> bool {
         if self.exhausted.is_some() {
             return false;
         }
@@ -44,6 +45,13 @@ impl Budget {
         }
         if self.started.elapsed() >= self.deadline {
             self.exhausted = Some("graph_deadline");
+            return false;
+        }
+        true
+    }
+
+    pub fn visit(&mut self) -> bool {
+        if !self.check() {
             return false;
         }
         if self.visited >= self.max_visited {
