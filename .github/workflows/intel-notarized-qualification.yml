@@ -12,41 +12,30 @@ env:
   DMG_SHA256: c9ffcd85bbc19a3cabca8a72bb37b6c52d6e32d1d47abf935e6ad96c7eeb725d
 
 jobs:
-  transfer:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
+  install:
+    runs-on: macos-26-intel
+    timeout-minutes: 12
     permissions:
-      # The draft release is only visible to principals with push access.
-      contents: write
+      actions: read
     steps:
-      - name: Copy the one encrypted draft asset
+      - name: Download the verified encrypted transfer through the GitHub API
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           test "$GITHUB_REPOSITORY" = SceneWorks/DevWorks
-          gh api repos/SceneWorks/DevWorks/releases/454915769 --jq '.draft' | grep -Fx true
-          file="$RUNNER_TEMP/intel-qualification.enc"
-          gh api --allow-escape-sequences -H 'Accept: application/octet-stream' \
-            repos/SceneWorks/DevWorks/releases/assets/781205225 > "$file"
-          printf '%s  %s\n' "$SEALED_SHA256" "$file" | sha256sum --check --strict
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: sealed-intel-dmg
-          path: ${{ runner.temp }}/intel-qualification.enc
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
+          mkdir "$RUNNER_TEMP/transfer"
+          python3 -I - "$RUNNER_TEMP/transfer/artifact.zip" <<'PY'
+          import subprocess
+          import sys
 
-  install:
-    needs: transfer
-    runs-on: macos-26-intel
-    timeout-minutes: 15
-    steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: sealed-intel-dmg
-          path: ${{ runner.temp }}/transfer
+          with open(sys.argv[1], "xb") as out:
+              subprocess.run([
+                  "gh", "api", "--allow-escape-sequences",
+                  "repos/SceneWorks/DevWorks/actions/artifacts/14784607904/zip",
+              ], stdout=out, check=True, timeout=180)
+          PY
+          unzip -p "$RUNNER_TEMP/transfer/artifact.zip" intel-qualification.enc > "$RUNNER_TEMP/transfer/intel-qualification.enc"
       - name: Verify and decrypt the exact notarized DMG
         shell: bash
         env:
