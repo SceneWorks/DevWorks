@@ -86,6 +86,10 @@ async fn session(
     }
     let initial = if read_only(request) {
         "BEGIN READ ONLY"
+    } else if request.expected_schema_digest.is_some() {
+        // The digest must see catalog changes committed before its locks were acquired,
+        // even if a role or database defaults to a longer-lived transaction snapshot.
+        "BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE"
     } else {
         "BEGIN READ WRITE"
     };
@@ -154,7 +158,20 @@ async fn transaction(
             && let Some(expected) = &request.expected_schema_digest
         {
             let selected = schema_scope(request, target, default_schema, scope)?;
-            lock_schema_targets(client, &selected).await?;
+            let changed_tables = request
+                .statements
+                .iter()
+                .flat_map(CheckedStatement::postgres_schema_tables)
+                .map(|relation| {
+                    names(
+                        &DbEngine::Postgres,
+                        relation,
+                        &target.catalog,
+                        default_schema,
+                    )
+                })
+                .collect::<Result<_, _>>()?;
+            lock_schema_targets(client, &selected, &changed_tables).await?;
             if expected != &digest(client, &selected).await? {
                 return Err(refused(FailureKind::StaleSchema));
             }
@@ -174,7 +191,7 @@ async fn transaction(
             let mut rows = read(client, &statement, arguments, &request.limits).await?;
             if request.include_schema_digest {
                 let selected = schema_scope(request, target, default_schema, scope)?;
-                lock_schema_targets(client, &selected).await?;
+                lock_schema_targets(client, &selected, &BTreeSet::new()).await?;
                 rows.schema_digest = Some(digest(client, &selected).await?);
             }
             return Ok(DataOutcome::Read(rows));
@@ -340,8 +357,10 @@ async fn authorize(
 async fn lock_schema_targets(
     client: &Client,
     selected: &BTreeSet<(String, String)>,
+    changed_tables: &BTreeSet<(String, String)>,
 ) -> Result<(), DataFailure> {
-    for (schema, name) in selected {
+    for relation in selected {
+        let (schema, name) = relation;
         if schema == "information_schema" || schema.starts_with("pg_") {
             return Err(refused(FailureKind::PermissionDenied));
         }
@@ -352,12 +371,21 @@ async fn lock_schema_targets(
             .await
             .map_err(|e| refused(classify(e)))?;
         let Some(prior) = prior else { continue };
-        if !matches!(prior.get::<_, &str>(1), "r" | "v") {
+        let kind: &str = prior.get(1);
+        if !matches!(kind, "r" | "v") {
             return Err(refused(FailureKind::UnsupportedStatement));
         }
+        // PostgreSQL permits both forms of CREATE INDEX under ACCESS SHARE. Hold the
+        // stronger lock through apply on exact DDL targets, where PostgreSQL requires
+        // owner rights for the mutation anyway. Read dependencies keep their weaker lock.
+        let (only, mode) = if kind == "r" && changed_tables.contains(relation) {
+            ("ONLY ", "SHARE UPDATE EXCLUSIVE")
+        } else {
+            ("", "ACCESS SHARE")
+        };
         client
             .batch_execute(&format!(
-                "LOCK TABLE {}.{} IN ACCESS SHARE MODE",
+                "LOCK TABLE {only}{}.{} IN {mode} MODE",
                 quote(schema),
                 quote(name)
             ))
@@ -367,7 +395,9 @@ async fn lock_schema_targets(
             .query_opt(resolve, &[schema, name])
             .await
             .map_err(|e| refused(classify(e)))?;
-        if after.is_none_or(|row| row.get::<_, u32>(0) != prior.get::<_, u32>(0)) {
+        if after.is_none_or(|row| {
+            row.get::<_, u32>(0) != prior.get::<_, u32>(0) || row.get::<_, &str>(1) != kind
+        }) {
             return Err(refused(FailureKind::StaleSchema));
         }
     }
@@ -383,18 +413,27 @@ async fn digest(
         .map(|(schema, _)| schema)
         .collect::<Vec<_>>();
     let tables = selected.iter().map(|(_, table)| table).collect::<Vec<_>>();
+    // Select each native relation once, including indexes whose owning table is in scope.
     let statement = client.prepare(
-        "SELECT jsonb_build_array(n.nspname,c.relname,c.relkind,a.attname,a.atttypid,
+        "WITH bound AS (
+           SELECT c.oid FROM unnest($1::text[],$2::text[]) AS names(schema_name,table_name)
+           JOIN pg_catalog.pg_namespace n ON n.nspname=names.schema_name
+           JOIN pg_catalog.pg_class c ON c.relnamespace=n.oid AND c.relname=names.table_name
+           WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
+         ), relations AS (
+           SELECT oid FROM bound
+           UNION SELECT i.indexrelid FROM pg_catalog.pg_index i JOIN bound b ON b.oid=i.indrelid
+         )
+         SELECT jsonb_build_array(n.nspname,c.relname,c.relkind,a.attname,a.atttypid,
            a.atttypmod,a.attnotnull,pg_get_expr(d.adbin,d.adrelid),
-           CASE c.relkind WHEN 'v' THEN pg_get_viewdef(c.oid,false) WHEN 'i' THEN pg_get_indexdef(c.oid) END,
+           CASE WHEN c.relkind='v' THEN pg_get_viewdef(c.oid,false)
+                WHEN c.relkind IN ('i','I') THEN pg_get_indexdef(c.oid) END,
            (SELECT jsonb_agg(pg_get_constraintdef(x.oid) ORDER BY x.conname)
             FROM pg_catalog.pg_constraint x WHERE x.conrelid=c.oid))::text
-         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+         FROM relations r JOIN pg_catalog.pg_class c ON c.oid=r.oid
+         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
          LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
          LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
-         WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'
-           AND EXISTS (SELECT 1 FROM unnest($1::text[],$2::text[]) as bindings(schema_name, table_name)
-                       WHERE bindings.schema_name=n.nspname AND bindings.table_name=c.relname)
          ORDER BY n.nspname,c.relname,a.attnum"
     ).await.map_err(|e| refused(classify(e)))?;
     let parameters: [&(dyn ToSql + Sync); 2] = [&schemas, &tables];
@@ -408,7 +447,12 @@ async fn digest(
     while let Some(row) = rows.next().await {
         let row = row.map_err(|e| refused(classify(e)))?;
         let value: &str = row.get(0);
-        if value.len().saturating_add(material.len()) > 16 * 1024 * 1024 {
+        if material
+            .len()
+            .saturating_add(value.len())
+            .saturating_add(size_of::<u64>())
+            > 16 * 1024 * 1024
+        {
             return Err(refused(FailureKind::ResultLimit));
         }
         material.extend_from_slice(&(value.len() as u64).to_le_bytes());

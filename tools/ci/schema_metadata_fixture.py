@@ -188,6 +188,23 @@ def check_digest_fixture(endpoint, env):
                    cwd=ROOT, env=check_env, check=True)
 
 
+def postgres_index_digest_fixture(endpoint, env):
+    sql("""
+        CREATE ROLE index_writer LOGIN PASSWORD 'devworks_index_writer';
+        CREATE DATABASE dw37_index_fixture OWNER index_writer;
+    """)
+    sql("""
+        SET ROLE index_writer;
+        CREATE TABLE dw_index_target(id INTEGER PRIMARY KEY, note TEXT NOT NULL);
+        INSERT INTO dw_index_target VALUES (1, 'fixture');
+    """, 'dw37_index_fixture')
+    index_env = dict(env, DW37_INDEX_TARGET=f'postgres://{endpoint}/dw37_index_fixture',
+                     DW37_INDEX_USER='index_writer', DW37_INDEX_PASSWORD='devworks_index_writer')
+    subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
+                    'database_data', 'postgres_index_digest', '--', '--exact', '--ignored'],
+                   cwd=ROOT, env=index_env, check=True)
+
+
 with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folder:
     f = Path(folder)
     f.chmod(0o755)
@@ -222,6 +239,8 @@ with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folde
                        cwd=ROOT, env=env, check=True)
         if (a.engine, a.version) in {('mysql', '8.4'), ('mariadb', '11.4')}:
             check_digest_fixture(endpoint, env)
+        if (a.engine, a.version) == ('postgres', '17'):
+            postgres_index_digest_fixture(endpoint, env)
         print(json.dumps({'engine': a.engine, 'version': a.version, 'image': IMAGE,
                           'osTrustChanges': False, 'inference': False}))
     finally:

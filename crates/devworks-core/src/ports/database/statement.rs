@@ -83,6 +83,7 @@ pub enum Inspection {
 #[derive(Clone)]
 pub struct CheckedStatement {
     sql: String,
+    postgres_schema_tables: Vec<Relation>,
     pub read: Footprint,
     pub bindings: Vec<String>,
     pub schema_change: bool,
@@ -94,6 +95,11 @@ pub struct CheckedStatement {
 impl CheckedStatement {
     pub fn sql(&self) -> &str {
         &self.sql
+    }
+
+    /// Existing tables requiring ownership for the checked PostgreSQL DDL.
+    pub fn postgres_schema_tables(&self) -> &[Relation] {
+        &self.postgres_schema_tables
     }
 }
 
@@ -233,6 +239,23 @@ fn schema_statement(statement: &Statement, engine: &DbEngine) -> bool {
         } => true,
         _ => false,
     }
+}
+
+fn postgres_schema_tables(statement: &Statement) -> Result<Vec<Relation>, SqlRefusal> {
+    let names = match statement {
+        Statement::AlterTable(table) => std::slice::from_ref(&table.name),
+        Statement::CreateIndex(index) => std::slice::from_ref(&index.table_name),
+        _ => &[],
+    };
+    names
+        .iter()
+        .map(|name| {
+            Ok(Relation {
+                path: simple_name(name)?,
+                alias: None,
+            })
+        })
+        .collect()
 }
 
 fn rename_destination(table: &sqlparser::ast::AlterTable) -> Result<Option<Vec<Name>>, SqlRefusal> {
@@ -730,9 +753,12 @@ pub fn check(
                 Statement::Explain { .. } => Some(Inspection::QueryPlan),
                 _ => None,
             };
-            if matches!(engine, DbEngine::Postgres) {
+            let postgres_schema_tables = if matches!(engine, DbEngine::Postgres) {
                 let _ = VisitMut::visit(&mut statement, &mut QualifyPostgresBuiltins);
-            }
+                postgres_schema_tables(&statement)?
+            } else {
+                Vec::new()
+            };
             let renames_schema_identity = match &statement {
                 Statement::AlterTable(table) => table.operations.iter().any(|change| {
                     matches!(
@@ -764,6 +790,7 @@ pub fn check(
             Ok(CheckedStatement {
                 inspection,
                 sql,
+                postgres_schema_tables,
                 read: inspect.footprint,
                 bindings: inspect.bindings,
                 schema_change,
@@ -795,6 +822,33 @@ mod tests {
             check(&engine, DataMode::Read, "SELECT 1; SELECT 2"),
             Err(SqlRefusal::StatementCount)
         ));
+    }
+
+    #[test]
+    fn postgres_schema_locks_bind_only_direct_ddl_tables() {
+        let plans = check(
+            &DbEngine::Postgres,
+            DataMode::Migration,
+            "CREATE VIEW report AS SELECT id FROM source;
+             INSERT INTO log SELECT id FROM source;
+             CREATE INDEX events_id ON events (id);
+             ALTER TABLE target DROP COLUMN obsolete;
+             DROP TABLE archive, old_archive",
+        )
+        .unwrap();
+        let targets = plans
+            .iter()
+            .map(|plan| {
+                plan.postgres_schema_tables()
+                    .iter()
+                    .map(|table| table.path[0].value.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            targets,
+            [vec![], vec![], vec!["events"], vec!["target"], vec![]]
+        );
     }
 
     #[test]

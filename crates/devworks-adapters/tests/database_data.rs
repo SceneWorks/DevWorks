@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 struct Guard {
     reject_commit: bool,
+    before_statement: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl DispatchGuard for Guard {
@@ -26,6 +27,9 @@ impl DispatchGuard for Guard {
     }
 
     fn before_statement(&self, _: usize) -> Result<(), DataFailure> {
+        if let Some(check) = &self.before_statement {
+            check();
+        }
         Ok(())
     }
 
@@ -231,6 +235,7 @@ fn fixture(engine: DbEngine, bind: &str) {
         vec![],
         Guard {
             reject_commit: true,
+            ..Guard::default()
         },
     );
     assert!(
@@ -452,6 +457,124 @@ fn mysql_check_digest() {
 #[ignore = "explicit native MariaDB 11.4 CHECK fixture"]
 fn mariadb_check_digest() {
     check_digest_fixture(DbEngine::MariaDb);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "explicit native PostgreSQL 17 index fixture"]
+async fn postgres_index_digest() {
+    use tokio_postgres::{Config, NoTls, config::SslMode, error::SqlState};
+
+    const CATALOG: &str = "dw37_index_fixture";
+    const CHANGE: &str = "ALTER TABLE dw_index_target DROP COLUMN note";
+    let engine = DbEngine::Postgres;
+    let request = |mode, sql| fixture_request(&engine, mode, sql, vec![], "DW37_INDEX", CATALOG);
+    let capture = async || {
+        let mut preview = request(DataMode::Read, "SELECT id FROM dw_index_target");
+        preview.include_schema_digest = true;
+        preview.schema_targets = request(DataMode::Schema, CHANGE).schema_targets;
+        match NetworkDataAdapter
+            .execute(preview, Arc::new(Guard::default()))
+            .await
+        {
+            Ok(DataOutcome::Read(rows)) => rows.schema_digest.expect("native schema digest"),
+            Err(error) => panic!("index digest preview: {error:?}"),
+            _ => panic!("index digest preview returned a mutation"),
+        }
+    };
+    let apply = async |digest, guard| {
+        let mut change = request(DataMode::Schema, CHANGE);
+        change.expected_schema_digest = Some(digest);
+        NetworkDataAdapter.execute(change, Arc::new(guard)).await
+    };
+
+    let before = capture().await;
+    let endpoint = url::Url::parse(&std::env::var("DW37_INDEX_TARGET").unwrap()).unwrap();
+    let (external, driver) = Config::new()
+        .host("127.0.0.1")
+        .port(endpoint.port().unwrap())
+        .dbname(CATALOG)
+        .user(std::env::var("DW37_INDEX_USER").unwrap())
+        .password(std::env::var("DW37_INDEX_PASSWORD").unwrap())
+        .ssl_mode(SslMode::Disable)
+        .connect_timeout(Duration::from_secs(5))
+        .options("-c lock_timeout=200 -c statement_timeout=3000")
+        .connect(NoTls)
+        .await
+        .expect("open separate fixture connection");
+    let driver = tokio::spawn(driver);
+    external
+        .batch_execute("CREATE INDEX note_index ON dw_index_target (note) WHERE id > 0")
+        .await
+        .unwrap();
+    let fresh = capture().await;
+    assert_ne!(
+        before, fresh,
+        "a new standalone index must change the table digest"
+    );
+    let stale = apply(before, Guard::default()).await;
+    assert!(
+        matches!(
+            stale,
+            Err(DataFailure::RolledBack(FailureKind::StaleSchema))
+        ),
+        "the old digest must be rolled back: {:?}",
+        stale.err()
+    );
+    let intact: bool = external
+        .query_one(
+            "SELECT to_regclass('public.note_index') IS NOT NULL AND EXISTS(
+            SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='public.dw_index_target'::regclass
+              AND attname='note' AND NOT attisdropped)",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(
+        intact,
+        "stale DDL must leave the column and the standalone index intact"
+    );
+
+    let external = Arc::new(external);
+    let racing = Arc::clone(&external);
+    let guard = Guard {
+        before_statement: Some(Box::new(move || {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    for statement in [
+                        "CREATE INDEX race_index ON dw_index_target (note)",
+                        "CREATE INDEX CONCURRENTLY race_concurrent_index ON dw_index_target (note)",
+                    ] {
+                        let error = racing
+                            .batch_execute(statement)
+                            .await
+                            .expect_err("DDL lock must fence concurrent index creation");
+                        assert_eq!(
+                            error.code(),
+                            Some(&SqlState::LOCK_NOT_AVAILABLE),
+                            "{statement}: {error}"
+                        );
+                    }
+                })
+            });
+        })),
+        ..Guard::default()
+    };
+    let applied = apply(fresh, guard).await;
+    assert!(
+        matches!(
+            applied,
+            Ok(DataOutcome::Mutation(MutationResult {
+                schema_changed: true,
+                observed_statements: 1,
+                ..
+            }))
+        ),
+        "the fresh digest should permit the guarded DDL: {:?}",
+        applied.err()
+    );
+    drop(external);
+    driver.await.unwrap().unwrap();
 }
 
 #[test]
