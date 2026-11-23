@@ -859,6 +859,22 @@ impl Git<'_> {
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
         self.revision_with_policy(dir, None)
     }
+
+    pub(super) fn has_ignored_files(&self, dir: &Path) -> Result<bool, GitFault> {
+        Ok(!self
+            .run(
+                dir,
+                &[
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                MAX_LISTING_BYTES,
+            )?
+            .is_empty())
+    }
     /// Reviewed preparation/status can hash tracked contents. A late new filter name must
     /// be constrained by the same kernel policy as the eventual reviewed index write.
     pub fn reviewed_revision_observation(

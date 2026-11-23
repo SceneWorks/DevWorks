@@ -3,6 +3,8 @@
 //! blocking pool and published, and shutdown stops a run within the runtime's one deadline
 //! (killing its Git tree) while the run keeps its checkpoint for the next boot. Real SQLite, real
 //! Git repositories in temporary directories, the Tree-sitter parser; no network, no inference.
+#[path = "indexing/assigned.rs"]
+mod assigned;
 mod common;
 #[path = "indexing/graph_impact.rs"]
 mod graph_impact;

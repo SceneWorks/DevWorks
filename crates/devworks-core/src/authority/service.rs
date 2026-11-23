@@ -753,7 +753,41 @@ fn agent_assignment_scope(
                 _ => false,
             },
         },
-        OperationInput::Indexing(_) => false,
+        OperationInput::Indexing(input) => {
+            use crate::operations::indexing::Input;
+            use crate::protocol::data::IndexCommand;
+            use crate::services::indexing::assigned;
+            match input {
+                Input::RefreshOverlay(input) => match &input.command {
+                    IndexCommand::RefreshOverlay {
+                        repository_id,
+                        worktree_id,
+                        git_ref,
+                        ..
+                    } => assigned::refresh_target(
+                        s.git(),
+                        ctx,
+                        repository_id,
+                        worktree_id.as_ref(),
+                        git_ref.is_some(),
+                    )
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                    .is_some(),
+                    _ => false,
+                },
+                Input::Status(input) => match assigned::status_target(
+                    s,
+                    ctx,
+                    input.repository_id.as_ref(),
+                    input.overlay_id.as_ref(),
+                ) {
+                    Ok(_) => true,
+                    Err(StorageError::ScopeDenied) => false,
+                    Err(_) => return Err(DenialReason::AuthorityUnavailable),
+                },
+                _ => false,
+            }
+        }
         // An operation whose assignment scope needs its target checked, but that has no check
         // here, is outside every assignment.
         _ => false,

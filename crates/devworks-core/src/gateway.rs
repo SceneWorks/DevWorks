@@ -229,6 +229,7 @@ enum Waiting {
 
 struct CommandPreparation {
     admitted: AdmittedCommand,
+    worktree_context: Option<InvocationContext>,
     authorization: Authorization,
     handler: Arc<dyn CommandHandler>,
     options: WriteOptions,
@@ -249,6 +250,27 @@ impl PreparedReceive {
 impl Gateway<'_> {
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
+    }
+
+    fn assignment_worktree(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        options: &ReadOptions,
+    ) -> Result<Option<InvocationContext>, StorageError> {
+        if !crate::services::indexing::assigned::applies(ctx)
+            || ctx.worktree().is_some()
+            || !(crate::services::graph::OPERATIONS.contains(&operation)
+                || matches!(
+                    operation,
+                    "indexing.status" | "indexing.refresh_overlay" | "git.cleanup"
+                ))
+        {
+            return Ok(None);
+        }
+        read_snapshot(self.store, options, |read| {
+            crate::services::git::context::assignment_worktree(read, ctx)
+        })
     }
 
     /// Admits and answers a Query for the host-selected `operation` against one read snapshot.
@@ -289,6 +311,19 @@ impl Gateway<'_> {
                 "query admitted with a command key".into(),
             ));
         };
+        let worktree_context = match self.assignment_worktree(ctx, operation, &options) {
+            Ok(context) => context,
+            Err(error) => {
+                let (code, retry) = match error {
+                    StorageError::ScopeDenied => {
+                        (DomainErrorCode::PermissionDenied, RetryAdvice::Never)
+                    }
+                    _ => storage_fault(&error),
+                };
+                return Ok(self.query_fault(query_id, code, retry));
+            }
+        };
+        let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let request = AuthorityRequest {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -591,6 +626,27 @@ impl Gateway<'_> {
                 "command admitted with a query key".into(),
             )));
         };
+        // Implicit custody limits the command without changing its caller's retry namespace.
+        let identity = ReceiptIdentity::bind(ctx, request_key.clone());
+        let worktree_context = match self.assignment_worktree(
+            ctx,
+            operation,
+            &ReadOptions {
+                deadline_ms: options.deadline_ms,
+                cancellation: options.cancellation.clone(),
+            },
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                let code = if matches!(error, StorageError::ScopeDenied) {
+                    Rejection::PermissionDenied
+                } else {
+                    Rejection::StorageUnavailable
+                };
+                return Err(Ok(self.rejected(request_key, code, command_retry(&error))));
+            }
+        };
+        let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let request = AuthorityRequest {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -624,7 +680,7 @@ impl Gateway<'_> {
         let mut admitted = AdmittedCommand {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
-            identity: ReceiptIdentity::bind(ctx, request_key.clone()),
+            identity,
             input: decoded.input,
             fingerprint: decoded.fingerprint,
             revision: decoded.revision,
@@ -684,6 +740,7 @@ impl Gateway<'_> {
         Ok((
             CommandPreparation {
                 admitted,
+                worktree_context,
                 authorization,
                 handler,
                 options,
@@ -700,11 +757,13 @@ impl Gateway<'_> {
     ) -> CommandOutcome {
         let CommandPreparation {
             admitted,
+            worktree_context,
             authorization,
             handler,
             options,
             request_key,
         } = prepared_command;
+        let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let cancellation = options.cancellation.clone();
         let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
         // The use case settles what it prepared once the outcome is known (for example a staged

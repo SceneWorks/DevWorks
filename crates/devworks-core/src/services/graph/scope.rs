@@ -3,7 +3,7 @@ use crate::context::InvocationContext;
 use crate::ports::storage::*;
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::protocol::{DomainErrorCode, Id};
-use crate::services::indexing::{self, status, views};
+use crate::services::indexing::{self, assigned, status, views};
 use crate::services::kernel::{Failure, Refusal};
 use crate::services::projects::{visible_project, visible_repository};
 use std::collections::BTreeSet;
@@ -128,6 +128,7 @@ pub(super) fn retained(
 ) -> Result<views::ViewLayers, Failure> {
     let selected = views::layers(read.indexing(), &binding.view_id)?;
     authorize(read, ctx, scope, &selected.view.repository_id)?;
+    authorize_worktree_view(read, ctx, &selected.view)?;
     let proof = pin
         .view_witnesses
         .iter()
@@ -203,6 +204,36 @@ pub(super) fn authorize(
     Ok(())
 }
 
+/// A caller-supplied overlay view or a retained pin must not select a sibling's local files.
+fn authorize_worktree_view(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    view: &StoredView,
+) -> Result<(), Failure> {
+    if !assigned::applies(ctx) {
+        return Ok(());
+    }
+    let worktree = view
+        .coverage
+        .get("worktreeId")
+        .and_then(serde_json::Value::as_str);
+    if worktree.is_none() && view.worktree_id.is_none() {
+        return Ok(());
+    }
+    if assigned::owned(read.git(), ctx)?.is_some_and(|tree| {
+        tree.repository_id == view.repository_id
+            && Some(assigned::indexed_id(&tree).as_str()) == worktree
+    }) {
+        return Ok(());
+    }
+    Err(Refusal::new(
+        DomainErrorCode::PermissionDenied,
+        "graph_owned_context",
+        None,
+    )
+    .into())
+}
+
 /// Rechecks the effective expiry of an explicit overlay without substituting today's view.
 /// Stale-but-retained exact views remain addressable; current selection requires Ready.
 pub(super) fn exact(
@@ -214,6 +245,7 @@ pub(super) fn exact(
 ) -> Result<views::ViewLayers, Failure> {
     let layers = views::layers(read.indexing(), id)?;
     authorize(read, ctx, scope, &layers.view.repository_id)?;
+    authorize_worktree_view(read, ctx, &layers.view)?;
     if overlay(&layers.view) {
         if let Some(expiry) = layers
             .view

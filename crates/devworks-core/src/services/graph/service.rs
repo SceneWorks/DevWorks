@@ -15,7 +15,7 @@ use crate::{
     protocol::{data::*, records::*, results::*, *},
     services::{
         artifacts::ArtifactService,
-        indexing::{IndexEnv, views},
+        indexing::{IndexEnv, assigned, views},
         kernel::{self, Failure, Refusal, rev},
     },
 };
@@ -230,7 +230,24 @@ impl QueryHandler for GraphService {
                 requested = Some(ViewSelection::Pinned { pin_id });
             }
             let current_worktree = if requested.is_none() {
-                match self.current_worktree(ctx, deadline, env.cancellation) {
+                if assigned::applies(ctx) && ctx.worktree().is_none() {
+                    return Err(scope::unavailable(None));
+                }
+                let resolved = self.current_worktree(ctx, deadline, env.cancellation);
+                let prepared = resolved.and_then(|worktree| {
+                    if let (Some(worktree_id), Some(bound), Some(indexing)) =
+                        (&worktree, ctx.worktree(), &self.indexing)
+                        && assigned::applies(ctx)
+                        && matches!(&request.scope, DataScope::Project{project_id} if Some(project_id) == ctx.project_id())
+                    {
+                        assigned::ensure_current(
+                            indexing, ctx, query.authorization(), bound.repository_id(),
+                            worktree_id, deadline, env.cancellation,
+                        )?;
+                    }
+                    Ok(worktree)
+                });
+                match prepared {
                     Err(Failure::Refused(reason))
                         if reason.code == DomainErrorCode::ViewUnavailable
                             && matches!(request.query, GraphQuery::ScopeStatus) =>

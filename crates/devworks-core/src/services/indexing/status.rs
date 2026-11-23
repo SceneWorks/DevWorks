@@ -306,6 +306,104 @@ pub fn overlay_status(
     })
 }
 
+fn overlay_record(o: &StoredOverlay, state: &'static str) -> OverlayStatus {
+    OverlayStatus {
+        overlay_id: o.id.clone(),
+        revision: rev(o.revision),
+        worktree_id: o.worktree_id.clone(),
+        state: overlay_state(state),
+        view_id: o.view_id.clone(),
+        base_commit: o.base_oid.as_ref().map(|c| label(c, "commit")),
+        head_commit: o.head_oid.as_ref().map(|c| label(c, "commit")),
+        head_ref: o.head_ref.as_ref().map(|c| label(c, "ref")),
+        capture_digest: o.capture_digest.as_ref().map(|c| label(c, "capture")),
+        run_id: o.run_id.clone(),
+        reason: o
+            .reason
+            .as_ref()
+            .map(|r| BoundedText(r.chars().take(4096).collect())),
+        updated_at_ms: counter(o.updated_at_ms),
+        expires_at_ms: counter(o.expires_at_ms),
+    }
+}
+
+/// Read the assigned layer without loading sibling views or repository-wide diagnostics.
+pub(crate) fn assigned_status(
+    env: &IndexEnv,
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    repository: &Id,
+    overlay: Option<&StoredOverlay>,
+    revision: u32,
+) -> Result<RepositoryIndexStatus, Failure> {
+    visible_repository(read.projects(), ctx, repository)?;
+    let idx = read.indexing();
+    let mut status = RepositoryIndexStatus {
+        repository_id: repository.clone(),
+        current_view_ids: BoundedList(Vec::new()),
+        coverage: Coverage {
+            state: CoverageState::Unavailable,
+            gaps: Vec::new(),
+            more_gaps: false,
+        },
+        last_run: None,
+        freshness: None,
+        languages: None,
+        semantic_packs: None,
+        overlays: (revision >= 2).then(|| BoundedList(Vec::new())),
+    };
+    let Some(overlay) = overlay else {
+        return Ok(status);
+    };
+    let baseline = idx
+        .published(repository)?
+        .map(|p| idx.view(&p.view_id))
+        .transpose()?
+        .flatten();
+    let current_config = effective_config(idx, read.projects(), repository)?.digest;
+    let state = effective_overlay_state(
+        overlay,
+        baseline.as_ref().map(|view| &view.baseline_id),
+        env.now(),
+        overlay_config_moved(idx, overlay, &current_config)?,
+    );
+    if state == OVERLAY_READY
+        && let Some(view_id) = &overlay.view_id
+    {
+        let layers = super::views::layers(idx, view_id)?;
+        let mut gaps = Vec::new();
+        let mut state = CoverageState::Complete;
+        for layer in layers.layers {
+            let generation = idx.generation(&layer)?.ok_or(StorageError::ScopeDenied)?;
+            let (coverage, recorded) = manifest_coverage(&generation.manifest);
+            if !matches!(coverage, CoverageState::Complete) {
+                state = CoverageState::Partial;
+            }
+            gaps.extend(recorded.iter().filter_map(|gap| gap_id(gap)));
+        }
+        gaps.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+        gaps.dedup();
+        status.coverage = Coverage {
+            state,
+            more_gaps: gaps.len() > 128,
+            gaps: gaps.into_iter().take(128).collect(),
+        };
+        status.current_view_ids.0.push(view_id.clone());
+    }
+    status.last_run = overlay
+        .run_id
+        .as_ref()
+        .map(|id| idx.run(id))
+        .transpose()?
+        .flatten()
+        .as_ref()
+        .map(run_record);
+    if let Some(records) = &mut status.overlays {
+        records.0.push(overlay_record(overlay, state));
+    }
+    Ok(status)
+}
+
 /// Repository generations are shared. A project's explicit disable stops package enrichment for
 /// the shared repository while allowing the structural index and other packages to run.
 pub(crate) fn semantic_disabled(
@@ -609,23 +707,11 @@ pub fn status(
         listed
             .iter()
             .take(128)
-            .map(|(o, m)| OverlayStatus {
-                overlay_id: o.id.clone(),
-                revision: rev(o.revision),
-                worktree_id: o.worktree_id.clone(),
-                state: overlay_state(effective_overlay_state(o, published_gen.as_ref(), now, *m)),
-                view_id: o.view_id.clone(),
-                base_commit: o.base_oid.as_ref().map(|c| label(c, "commit")),
-                head_commit: o.head_oid.as_ref().map(|c| label(c, "commit")),
-                head_ref: o.head_ref.as_ref().map(|c| label(c, "ref")),
-                capture_digest: o.capture_digest.as_ref().map(|c| label(c, "capture")),
-                run_id: o.run_id.clone(),
-                reason: o
-                    .reason
-                    .as_ref()
-                    .map(|r| BoundedText(r.chars().take(4096).collect())),
-                updated_at_ms: counter(o.updated_at_ms),
-                expires_at_ms: counter(o.expires_at_ms),
+            .map(|(o, m)| {
+                overlay_record(
+                    o,
+                    effective_overlay_state(o, published_gen.as_ref(), now, *m),
+                )
             })
             .collect(),
     ));

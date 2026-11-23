@@ -75,6 +75,7 @@
 //! renames are reconciled (CodeGraph left stale nodes), progress is reported, overlays include
 //! uncommitted worktree changes, and inferred or unresolved relationships are marked instead of
 //! dropped.
+pub(crate) mod assigned;
 pub mod config;
 pub mod discover;
 pub(crate) mod linking;
@@ -1124,12 +1125,39 @@ impl QueryHandler for IndexCoordinator {
             OperationInput::Indexing(iops::Input::Discover(i)) => self.discover(snapshot, ctx, i),
             OperationInput::Indexing(iops::Input::Runs(i)) => self.runs(snapshot, ctx, i),
             OperationInput::Indexing(iops::Input::Status(i)) => {
-                match (&i.repository_id, &i.overlay_id) {
-                    (_, Some(o)) => status::overlay_status(&self.env, snapshot, ctx, o, revision),
-                    (Some(r), None) => status::status(&self.env, snapshot, ctx, r, revision, None),
-                    (None, None) => Err(refuse(DomainErrorCode::InvalidArgument, "status", None)),
-                }
-                .and_then(|value| Ok((OperationResult::IndexingStatus { value }, own_scope()?)))
+                let status = if assigned::applies(ctx) {
+                    assigned::status_target(
+                        snapshot,
+                        ctx,
+                        i.repository_id.as_ref(),
+                        i.overlay_id.as_ref(),
+                    )
+                    .map_err(Failure::from)
+                    .and_then(|(repository, overlay)| {
+                        status::assigned_status(
+                            &self.env,
+                            snapshot,
+                            ctx,
+                            &repository,
+                            overlay.as_ref(),
+                            revision,
+                        )
+                    })
+                } else {
+                    match (&i.repository_id, &i.overlay_id) {
+                        (_, Some(o)) => {
+                            status::overlay_status(&self.env, snapshot, ctx, o, revision)
+                        }
+                        (Some(r), None) => {
+                            status::status(&self.env, snapshot, ctx, r, revision, None)
+                        }
+                        (None, None) => {
+                            Err(refuse(DomainErrorCode::InvalidArgument, "status", None))
+                        }
+                    }
+                };
+                status
+                    .and_then(|value| Ok((OperationResult::IndexingStatus { value }, own_scope()?)))
             }
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
@@ -1168,6 +1196,26 @@ impl CommandHandler for IndexCoordinator {
             } = &r.command
         {
             let stop = || env.stopped(self.env.now());
+            if assigned::applies(ctx) {
+                let worktree = env
+                    .read(|read| {
+                        assigned::refresh_target(
+                            read.git(),
+                            ctx,
+                            repository_id,
+                            worktree_id.as_ref(),
+                            git_ref.is_some(),
+                        )
+                    })?
+                    .ok_or(StorageError::ScopeDenied)?;
+                return Ok(Some(Prepared::new(overlay::observe(
+                    &self.env,
+                    ctx,
+                    repository_id,
+                    &worktree,
+                    &stop,
+                ))));
+            }
             return Ok(match (worktree_id, git_ref) {
                 (Some(w), _) => Some(Prepared::new(overlay::observe(
                     &self.env,
@@ -1228,16 +1276,31 @@ impl CommandHandler for IndexCoordinator {
                     git_ref,
                     expected_source_revision,
                 } => {
-                    let requested = match (worktree_id, git_ref) {
-                        (Some(id), _) => Some(overlay::Requested::Worktree {
-                            id,
-                            observed: command.prepared::<overlay::Observed>(),
-                        }),
-                        (None, Some(_)) => Some(overlay::Requested::Ref {
-                            resolved: command.prepared::<overlay::Resolved>(),
-                        }),
-                        (None, None) => None,
+                    let bound_worktree = if assigned::applies(ctx) {
+                        Some(
+                            assigned::refresh_target(
+                                tx.git(),
+                                ctx,
+                                repository_id,
+                                worktree_id.as_ref(),
+                                git_ref.is_some(),
+                            )?
+                            .ok_or(StorageError::ScopeDenied)?,
+                        )
+                    } else {
+                        None
                     };
+                    let requested =
+                        match (bound_worktree.as_ref().or(worktree_id.as_ref()), git_ref) {
+                            (Some(id), _) => Some(overlay::Requested::Worktree {
+                                id,
+                                observed: command.prepared::<overlay::Observed>(),
+                            }),
+                            (None, Some(_)) => Some(overlay::Requested::Ref {
+                                resolved: command.prepared::<overlay::Resolved>(),
+                            }),
+                            (None, None) => None,
+                        };
                     match requested {
                         Some(requested) => overlay::refresh(
                             &self.env,
@@ -1260,6 +1323,58 @@ impl CommandHandler for IndexCoordinator {
         };
         decided(tx, outcome)
     }
+}
+
+/// A verified owned Git checkout is immediately addressable, even before discovery rescans it.
+pub(crate) fn register_git_worktree(
+    tx: &mut dyn WriteTransaction,
+    tree: &StoredGitWorktree,
+) -> Result<(), StorageError> {
+    let indexed = assigned::indexed_id(tree);
+    let mut rows = tx.indexing().worktrees(&tree.repository_id)?;
+    if rows.iter().any(|existing| existing.worktree_id == indexed) || rows.len() >= 256 {
+        return Ok(());
+    }
+    rows.push(StoredWorktree {
+        repository_id: tree.repository_id.clone(),
+        worktree_id: indexed,
+        path: paths::native_location(&tree.path, cfg!(windows)),
+        head_oid: Some(tree.head.hex.clone()),
+        head_ref: Some(tree.branch.clone()),
+        main: false,
+        observed_at_ms: tx.now_ms(),
+    });
+    tx.indexing().put_worktrees(&tree.repository_id, &rows)
+}
+
+/// Retire only the index entry and overlay for the checkout whose removal Git has observed.
+pub(crate) fn retire_git_worktree(
+    tx: &mut dyn WriteTransaction,
+    tree: &StoredGitWorktree,
+    actor: &ActorId,
+    project: &ProjectId,
+) -> Result<(), StorageError> {
+    let indexed = assigned::indexed_id(tree);
+    if let Some(overlay) = tx.indexing().overlay_for(&tree.repository_id, &indexed)?
+        && overlay.state != OVERLAY_UNAVAILABLE
+    {
+        let revision = overlay::retire_overlay(tx, &overlay, "the worktree was removed")?;
+        history(
+            tx,
+            actor,
+            Some(project),
+            (OVERLAY_AGGREGATE, &overlay.id, revision),
+            "IndexOverlayRetired",
+            json!({"worktreeId": indexed, "gitWorktreeId": tree.id}),
+        )?;
+    }
+    let mut rows = tx.indexing().worktrees(&tree.repository_id)?;
+    let before = rows.len();
+    rows.retain(|row| row.worktree_id != indexed);
+    if rows.len() != before {
+        tx.indexing().put_worktrees(&tree.repository_id, &rows)?;
+    }
+    Ok(())
 }
 
 /// `repositories.remove_index` of a repository (inside its unit of work): every active run of
