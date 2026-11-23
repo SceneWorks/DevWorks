@@ -60,7 +60,7 @@ use crate::protocol::{
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
 use serde_json::json;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -1465,7 +1465,7 @@ fn gateway_owned(event: &NewEvent) -> bool {
 struct HandlerTx<'a> {
     inner: RefCell<&'a mut dyn WriteTransaction>,
     info: StoreInfo,
-    created_operations: BTreeSet<OperationId>,
+    created_operations: HashSet<OperationId>,
     /// The principal of a user- or host-ingress command; authority writes are allowed only for
     /// it, and never for a command an agent, package, MCP client or schedule submitted.
     ingress: Option<ActorId>,
@@ -1477,7 +1477,7 @@ impl<'a> HandlerTx<'a> {
             ingress,
             inner: RefCell::new(inner),
             info,
-            created_operations: BTreeSet::new(),
+            created_operations: HashSet::new(),
         }
     }
 }
