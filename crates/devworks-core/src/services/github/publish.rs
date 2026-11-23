@@ -471,18 +471,7 @@ fn dispatch_preflight(
     job: &Publication,
     reconcile: bool,
 ) -> Result<bool, StorageError> {
-    // A dispatched write may have succeeded before the client was revoked. The owning
-    // GitHub service may read the original remote target to settle its journal, while a
-    // new dispatch and any client-visible operation result still require live client authority.
-    let fences = job
-        .authority_fences
-        .iter()
-        .filter(|fence| !reconcile || !matches!(fence, AuthorityFence::ExternalMcp(_)))
-        .cloned()
-        .collect();
-    let authorization = Authorization::direct().fenced_by(fences);
     if snapshot.stamp().restore_epoch != job.restore_epoch
-        || !authorization_holds(snapshot, &authorization)?
         || !snapshot.projects().project(&job.project)?.is_some_and(|p| {
             p.lifecycle == "Active" && p.scope_revision == job.project_scope_revision
         })
@@ -497,7 +486,14 @@ fn dispatch_preflight(
         return Ok(false);
     }
     if reconcile {
+        // The native owner is observing an already dispatched mutation, using the exact
+        // original remote account, repository and effect marker. Settling that fact cannot
+        // grant the initiating actor new dispatch or result access.
         return Ok(true);
+    }
+    let authorization = Authorization::direct().fenced_by(job.authority_fences.clone());
+    if !authorization_holds(snapshot, &authorization)? {
+        return Ok(false);
     }
     if let Some((id, generation)) = &job.assignment
         && !snapshot

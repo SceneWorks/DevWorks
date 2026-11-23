@@ -2211,7 +2211,8 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
     let mut conflicting_60 = reopened_60.clone();
     conflicting_60["updated_at"] = json!("2023-11-14T22:25:00Z");
     conflicting_60["title"] = json!("Rewrite entire subsystem as new feature");
-    conflicting_60["body"] = json!("Completely replaced scope and requirements.");
+    let reviewed_description = "Completely replaced scope and requirements.";
+    conflicting_60["body"] = json!(reviewed_description);
     conflicting_60["labels"] = json!([{"name": "enhancement"}]);
 
     let script = Arc::new(Script(Mutex::new(VecDeque::from([
@@ -2585,7 +2586,7 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
         "Rewrite entire subsystem as new feature"
     );
     let adopted_brief = devworks_core::kernel::work_brief::WorkBrief::of(&started_adopted).unwrap();
-    assert!(adopted_brief.description.contains("Completely replacing"));
+    assert_eq!(adopted_brief.description, reviewed_description);
     assert!(
         adopted_brief
             .comments

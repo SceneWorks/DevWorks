@@ -505,7 +505,7 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
             Err(CredentialError::Denied)
         ));
         let renewed = allow_document_commands(backend.as_ref(), &pairing);
-        assert_ne!(renewed.credential_generation, pairing.credential_generation);
+        assert_ne!(renewed.revision, pairing.revision);
         let token = secrets
             .provision(
                 reopened.host().user(),
