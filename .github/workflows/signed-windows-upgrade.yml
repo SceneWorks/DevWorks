@@ -272,7 +272,8 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.signed_id }},${{ needs.build.outputs.test_id }}
           merge-multiple: true
           path: ${{ runner.temp }}/transport
-      - name: Restore and validate the isolated run inputs
+      - id: restore
+        name: Restore and validate the isolated run inputs
         shell: pwsh
         env:
           DW421_ARCHIVE_KEY: ${{ secrets.DW417_ARCHIVE_KEY }}
@@ -342,10 +343,16 @@ jobs:
             -TextExtension @('2.5.29.19={critical}{text}CA=1&pathlength=0')
           $leaf = $null
           try {
-            $eku = "2.5.29.37={text}1.3.6.1.5.5.7.3.3&1.3.6.1.4.1.311.97.1.0&$env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID"
+            $expectedEkus = @('1.3.6.1.5.5.7.3.3','1.3.6.1.4.1.311.97.1.0',$env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID)
+            $eku = "2.5.29.37={text}" + ($expectedEkus -join ',')
             $leaf = New-SelfSignedCertificate -Subject 'CN=DevWorks temporary qualification publisher' `
               -Signer $root -Type Custom -KeyUsage DigitalSignature -HashAlgorithm SHA256 `
-              -CertStoreLocation Cert:\CurrentUser\My -TextExtension @($eku,'2.5.29.19={text}')
+              -CertStoreLocation Cert:\CurrentUser\My -TextExtension @($eku,'2.5.29.19={text}CA=0')
+            $usage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($leaf.Extensions['2.5.29.37'], $false)
+            $actualEkus = @($usage.EnhancedKeyUsages | ForEach-Object Value)
+            if (Compare-Object ($expectedEkus | Sort-Object) ($actualEkus | Sort-Object)) {
+              throw 'The lookalike leaf must carry the exact signing and profile EKUs'
+            }
             $rootFile = Join-Path $env:RUNNER_TEMP 'lookalike-root.cer'
             Export-Certificate -Cert $root -FilePath $rootFile | Out-Null
             Import-Certificate -FilePath $rootFile -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
@@ -379,6 +386,7 @@ jobs:
             Remove-Item -LiteralPath $root.PSPath -DeleteKey
           }
       - name: Exercise signed installation and the normal updater entry points
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' }}
         shell: pwsh
         env:
           SOURCE: ${{ needs.build.outputs.source }}
