@@ -87,6 +87,11 @@ def qualify_data():
                 (2,0,-32768,-2147483648,-9223372036854775808),
                 (3,255,32767,2147483647,9223372036854775807),
                 (4,NULL,NULL,NULL,NULL);
+            CREATE TABLE dbo.dw_check_digest (
+                id int NOT NULL PRIMARY KEY,
+                CONSTRAINT ck_dw_check_digest_id CHECK (id > 0)
+            );
+            INSERT dbo.dw_check_digest VALUES (1);
         """)
         for statement in (
             'CREATE VIEW dbo.dw_view AS SELECT secret FROM dbo.dw_private',

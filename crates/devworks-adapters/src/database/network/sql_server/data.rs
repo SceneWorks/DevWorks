@@ -384,8 +384,10 @@ async fn digest(
               FROM sys.index_columns ic WHERE ic.object_id=i.object_id AND ic.index_id=i.index_id
               ORDER BY ic.index_column_id FOR JSON PATH)) AS columns
             FROM sys.indexes i WHERE i.object_id=o.object_id AND i.index_id>0 ORDER BY i.name FOR JSON PATH)) AS indexes,
-          JSON_QUERY((SELECT k.name,CAST(k.type AS nvarchar(2)) AS kind,OBJECT_DEFINITION(k.object_id) AS [definition]
-            FROM sys.objects k WHERE k.parent_object_id=o.object_id AND k.type IN('C','D','F','PK','UQ','TR')
+          JSON_QUERY((SELECT k.name,CAST(k.type AS nvarchar(2)) AS kind,OBJECT_DEFINITION(k.object_id) AS [definition],
+            cc.is_disabled,cc.is_not_trusted
+            FROM sys.objects k LEFT JOIN sys.check_constraints cc ON cc.object_id=k.object_id
+            WHERE k.parent_object_id=o.object_id AND k.type IN('C','D','F','PK','UQ','TR')
             ORDER BY k.name FOR JSON PATH)) AS constraints,
           JSON_QUERY((SELECT f.name,f.referenced_object_id,f.delete_referential_action,f.update_referential_action,
             f.is_disabled,f.is_not_trusted,

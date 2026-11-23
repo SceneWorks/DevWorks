@@ -194,6 +194,7 @@ fn fixture(engine: DbEngine, bind: &str) {
                     vec![Scalar::Null; 4],
                 ]
         );
+        runtime.block_on(sql_server_check_digest());
     }
     if matches!(&engine, DbEngine::Postgres) {
         for sql in [
@@ -345,6 +346,123 @@ fn fixture(engine: DbEngine, bind: &str) {
         "{:?}",
         migration.err()
     );
+}
+
+async fn sql_server_check_digest() {
+    use tiberius::{AuthMethod, Client, Config, EncryptionLevel};
+    use tokio::net::TcpStream;
+    use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
+
+    const CHANGE: &str = "ALTER TABLE dbo.dw_check_digest ADD marker INT;
+        INSERT INTO dbo.dw_check_digest (id, marker) VALUES (-1, 7)";
+    let engine = DbEngine::SqlServer;
+    let capture = async || {
+        let mut preview = request(
+            &engine,
+            DataMode::Read,
+            "SELECT id FROM dbo.dw_check_digest",
+            vec![],
+        );
+        preview.include_schema_digest = true;
+        preview.schema_targets =
+            request(&engine, DataMode::Migration, CHANGE, vec![]).schema_targets;
+        match NetworkDataAdapter
+            .execute(preview, Arc::new(Guard::default()))
+            .await
+        {
+            Ok(DataOutcome::Read(rows)) => rows.schema_digest.expect("native CHECK digest"),
+            Err(error) => panic!("CHECK digest preview: {error:?}"),
+            Ok(DataOutcome::Mutation(_)) => panic!("CHECK digest preview returned a mutation"),
+        }
+    };
+    async fn check_state(client: &mut Client<Compat<TcpStream>>) -> ((bool, bool), String) {
+        let row = client
+            .simple_query(
+                "SELECT is_disabled, is_not_trusted, definition FROM sys.check_constraints
+                 WHERE parent_object_id=OBJECT_ID(N'dbo.dw_check_digest')
+                   AND name=N'ck_dw_check_digest_id'",
+            )
+            .await
+            .unwrap()
+            .into_row()
+            .await
+            .unwrap()
+            .expect("fixture CHECK constraint");
+        (
+            (row.get(0).unwrap(), row.get(1).unwrap()),
+            row.get::<&str, _>(2).unwrap().to_owned(),
+        )
+    }
+
+    let endpoint = url::Url::parse(&std::env::var("DW37_TARGET").unwrap()).unwrap();
+    let mut config = Config::new();
+    config.host("127.0.0.1");
+    config.port(endpoint.port().unwrap());
+    config.database("dw37_fixture");
+    config.encryption(EncryptionLevel::NotSupported);
+    config.authentication(AuthMethod::sql_server(
+        std::env::var("DW37_USER").unwrap(),
+        std::env::var("DW37_PASSWORD").unwrap(),
+    ));
+    let tcp = TcpStream::connect(config.get_addr()).await.unwrap();
+    let mut external = Client::connect(config, tcp.compat_write()).await.unwrap();
+    let (flags, definition) = check_state(&mut external).await;
+    assert_eq!(flags, (false, false));
+    let trusted = capture().await;
+    let mut previous = trusted.clone();
+    for (transition, expected_flags) in [
+        ("NOCHECK CONSTRAINT", (true, true)),
+        ("WITH NOCHECK CHECK CONSTRAINT", (false, true)),
+        ("WITH CHECK CHECK CONSTRAINT", (false, false)),
+    ] {
+        external
+            .simple_query(format!(
+                "ALTER TABLE dbo.dw_check_digest {transition} ck_dw_check_digest_id"
+            ))
+            .await
+            .unwrap()
+            .into_results()
+            .await
+            .unwrap();
+        let (flags, current_definition) = check_state(&mut external).await;
+        assert_eq!(flags, expected_flags, "{transition}");
+        assert_eq!(current_definition, definition, "{transition}");
+
+        let mut migration = request(&engine, DataMode::Migration, CHANGE, vec![]);
+        migration.expected_schema_digest = Some(previous.clone());
+        let outcome = NetworkDataAdapter
+            .execute(migration, Arc::new(Guard::default()))
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                Err(DataFailure::RolledBack(FailureKind::StaleSchema))
+            ),
+            "{transition} must reject the stale migration: {:?}",
+            outcome.err(),
+        );
+        let fresh = capture().await;
+        assert_ne!(previous, fresh, "{transition} must change the digest");
+        previous = fresh;
+    }
+    assert_eq!(previous, trusted);
+
+    let row = external
+        .simple_query(
+            "SELECT COUNT(*), MAX(id),
+               CAST(CASE WHEN COL_LENGTH(N'dbo.dw_check_digest', N'marker') IS NULL
+                    THEN 1 ELSE 0 END AS bit)
+             FROM dbo.dw_check_digest",
+        )
+        .await
+        .unwrap()
+        .into_row()
+        .await
+        .unwrap()
+        .expect("fixture table state");
+    assert_eq!(row.get::<i32, _>(0), Some(1));
+    assert_eq!(row.get::<i32, _>(1), Some(1));
+    assert_eq!(row.get::<bool, _>(2), Some(true));
 }
 
 fn check_digest_fixture(engine: DbEngine) {
