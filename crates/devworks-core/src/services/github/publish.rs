@@ -391,8 +391,8 @@ impl GitHubService {
             .map_err(|_| Fault::InvalidResponse)?;
         let repo = &target.repository;
         let mut uri = url::Url::parse(&format!(
-            "https://api.github.com/repos/{}/{}/issues",
-            repo.owner, repo.name
+            "https://api.github.com/repositories/{}/issues",
+            target.numeric_id
         ))
         .map_err(|_| Fault::InvalidResponse)?;
         uri.query_pairs_mut()
@@ -401,10 +401,7 @@ impl GitHubService {
             .append_pair("direction", "desc")
             .append_pair("per_page", "100")
             .append_pair("since", &since.to_string());
-        let endpoint = Endpoint::new(
-            uri.as_str(),
-            Some(&format!("/repositories/{}/issues", target.numeric_id)),
-        )?;
+        let endpoint = Endpoint::new(uri.as_str(), None)?;
         let now = self.clock.now_ms().get();
         let mut next = None;
         for _ in 0..20 {

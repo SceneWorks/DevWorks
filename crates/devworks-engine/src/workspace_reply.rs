@@ -668,8 +668,9 @@ async fn resume_recorded_turn(
                     .ok_or_else(|| unknown(StorageError::ScopeDenied))?;
                 let engine = engine.clone();
                 let ctx = ctx.clone();
+                let stopping = stopping.clone();
                 tokio::task::spawn_blocking(move || {
-                    finish_compaction(&engine, &ctx, &source, recorded.provider)
+                    finish_compaction(&engine, &ctx, &source, recorded.provider, &stopping)
                 })
                 .await
                 .map_err(|error| EffectResult::Unknown(error.to_string()))?
