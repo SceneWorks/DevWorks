@@ -2787,6 +2787,16 @@ impl Runtime {
         self.admitter.query_with(ctx, operation, raw, options)
     }
 
+    /// The desktop uses the live use cases when deciding what incoming MCP may discover.
+    pub fn has_mcp_tool(&self, tool: &devworks_core::services::mcp_inbound::PublishedTool) -> bool {
+        match tool.binding.mode {
+            devworks_core::registry::Mode::Query => self.use_cases.has_query(tool.operation.name),
+            devworks_core::registry::Mode::Command => {
+                self.use_cases.has_command(tool.operation.name)
+            }
+        }
+    }
+
     pub fn command(&self, ctx: &InvocationContext, operation: &str, raw: &[u8]) -> CommandOutcome {
         self.command_with(ctx, operation, raw, WriteOptions::command())
     }

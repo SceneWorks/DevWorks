@@ -83,6 +83,10 @@ pub struct PrivateConnection {
 }
 
 impl PrivateConnection {
+    pub fn into_stream(self) -> UnixStream {
+        self.stream
+    }
+
     pub fn stream(&mut self) -> &mut UnixStream {
         &mut self.stream
     }
