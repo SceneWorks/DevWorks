@@ -331,7 +331,10 @@
         "retry",
         "disable_retrieval",
         "remove_index",
-        "resolve_citation"
+        "resolve_citation",
+        "transfer_propose",
+        "transfer_respond",
+        "transfer_status"
       ],
       "effectAndAuthority": "Managed artifact ownership/sharing, revision-bound citations and no implicit file deletion",
       "status": "Proposed; exact command/tool schemas require review"

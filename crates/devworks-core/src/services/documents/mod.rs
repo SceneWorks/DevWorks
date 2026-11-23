@@ -6,6 +6,7 @@ pub mod extraction;
 pub mod indexing;
 pub mod pdf;
 mod retrieval;
+mod transfer;
 pub mod vision;
 
 use crate::{
@@ -53,6 +54,9 @@ pub const LIBRARY_OPERATIONS: &[&str] = &[
     "documents.read",
     "documents.share",
     "documents.move",
+    "documents.transfer_propose",
+    "documents.transfer_respond",
+    "documents.transfer_status",
 ];
 pub const INDEX_OPERATIONS: &[&str] = &[
     "documents.index",
@@ -115,6 +119,14 @@ impl DocumentLibrary {
         };
         let details = command.schema_revision().0 >= DETAILS_REVISION;
         let result = match input {
+            ops::Input::TransferPropose(input) => {
+                let value = transfer::propose(tx, ctx, input)?;
+                (OperationResult::DocumentsTransferPropose { value }, true)
+            }
+            ops::Input::TransferRespond(input) => {
+                let value = transfer::respond(&self.artifacts, tx, ctx, input)?;
+                (OperationResult::DocumentsTransferRespond { value }, true)
+            }
             ops::Input::Import(input) => {
                 let scope = document_scope(tx.authority(), ctx, &input.scope)?;
                 if let Some(project) = scope.project() {
@@ -263,6 +275,11 @@ impl DocumentLibrary {
         };
         let details = query.schema_revision().0 >= DETAILS_REVISION;
         let (result, scope_revision) = match input {
+            ops::Input::TransferStatus(input) => {
+                let value = transfer::status(snapshot, ctx, &input.transfer_id)?;
+                let revision = value.revision.get();
+                (OperationResult::DocumentsTransferStatus { value }, revision)
+            }
             ops::Input::Search(request) => {
                 let prepared = query.prepared::<embedding_query::PreparedSearch>();
                 let value = retrieval::search(
@@ -492,6 +509,12 @@ impl QueryHandler for DocumentLibrary {
     }
 
     fn publication_check(&self, query: &AdmittedQuery) -> Option<QueryPublicationCheck> {
+        if matches!(
+            query.input(),
+            OperationInput::Documents(ops::Input::TransferStatus(_))
+        ) {
+            return Some(transfer::check_publication);
+        }
         matches!(
             query.input(),
             OperationInput::Documents(ops::Input::Search(_) | ops::Input::ResolveCitation(_))

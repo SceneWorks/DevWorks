@@ -1,11 +1,47 @@
 //! Document index metadata and immutable extracted passages. Artifact rows still own the
 //! original bytes, versions and access. A checkpoint is separate from a published index.
 use super::{ArtifactScope, StorageError};
-use crate::protocol::{ActorId, Id, ProjectId, Revision, data::Coverage};
+use crate::protocol::records::DocumentTransferState;
+use crate::protocol::{ActorId, AssignmentId, Id, ProjectId, Revision, RootId, data::Coverage};
 use crate::services::documents::extraction::ExtractedBlock;
 use crate::services::documents::vision::VisionTarget;
 use crate::services::documents::vision::VisionUnit;
 use serde::{Deserialize, Serialize};
+
+/// The exact project and primary coordinator custody when a transfer was proposed.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DocumentTransferParty {
+    pub project: ProjectId,
+    pub archive_epoch: i64,
+    pub root: RootId,
+    pub assignment: AssignmentId,
+    pub assignment_generation: i64,
+    pub session: Id,
+    pub activation: Id,
+    pub activation_owner_epoch: i64,
+    pub actor: ActorId,
+    pub authority_revision: i64,
+}
+
+/// The immutable proposal covers one exact document and two authenticated parties.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DocumentTransferProposal {
+    pub document: Id,
+    pub version: Id,
+    pub document_revision: Revision,
+    pub scope_revision: Revision,
+    pub source: DocumentTransferParty,
+    pub destination: DocumentTransferParty,
+    pub source_needs_document: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct StoredDocumentTransfer {
+    pub id: Id,
+    pub proposal: DocumentTransferProposal,
+    pub revision: Revision,
+    pub state: DocumentTransferState,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum DocumentIndexStage {
@@ -90,6 +126,8 @@ pub struct DocumentRankingBatch {
 }
 
 pub trait DocumentRead {
+    fn document_transfer(&self, id: &Id) -> Result<Option<StoredDocumentTransfer>, StorageError>;
+
     /// Identity of the authorized published source versions. The tool-response writer uses
     /// it to reject a ranking if even a non-returned source lost or gained visibility.
     fn document_corpus_digest(
@@ -150,6 +188,18 @@ pub trait DocumentRead {
 }
 
 pub trait DocumentRepository: DocumentRead {
+    fn insert_document_transfer(
+        &mut self,
+        id: &Id,
+        proposal: &DocumentTransferProposal,
+    ) -> Result<(), StorageError>;
+    fn resolve_document_transfer(
+        &mut self,
+        id: &Id,
+        expected: &Revision,
+        outcome: &DocumentTransferState,
+    ) -> Result<(), StorageError>;
+
     /// A producer's identity is distinct from the immutable citation revision it published.
     fn document_extraction_by_key(
         &self,

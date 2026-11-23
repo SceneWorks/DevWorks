@@ -1422,6 +1422,18 @@
       "revision": 9,
       "projection": "none"
     },
+    "DocumentTransferState": {
+      "kind": "enum",
+      "values": ["Pending", "Shared", "Moved", "Declined"]
+    },
+    "DocumentTransferRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "state": "DocumentTransferState"
+      }
+    },
     "DocumentRecord": {
       "kind": "record",
       "fields": {
@@ -8947,6 +8959,49 @@
       "authority": "HumanDecision",
       "rules": "Host mints decision from explicit human interaction; an agent may propose or read, never self-approve."
     },
+    "documents.transfer_propose": {
+      "operation": "documents.transfer_propose",
+      "mode": "Command",
+      "fields": {
+        "document_id": "Id",
+        "expected_document_revision": "Revision",
+        "expected_scope_revision": "Revision",
+        "destination_root_id": "RootId",
+        "source_needs_document": "bool",
+        "summary": "Label"
+      },
+      "result": "DocumentTransferRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "introducedRevision": 14,
+      "rules": "The current source coordinator records its project need. Pin current document, owner, both primary assignments and authority generations, and notify the exact current destination coordinator atomically."
+    },
+    "documents.transfer_respond": {
+      "operation": "documents.transfer_respond",
+      "mode": "Command",
+      "fields": {
+        "transfer_id": "Id",
+        "expected_revision": "Revision",
+        "destination_needs_document": "bool"
+      },
+      "result": "DocumentTransferRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "introducedRevision": 14,
+      "rules": "Only the pinned current destination coordinator decides. Revalidate both parties and the document, then share for joint need, move for exclusive destination need, or decline. Consume the proposal and record the receipt with the document mutation."
+    },
+    "documents.transfer_status": {
+      "operation": "documents.transfer_status",
+      "mode": "Query",
+      "fields": {
+        "transfer_id": "Id"
+      },
+      "result": "DocumentTransferRecord",
+      "effect": "ReadOnly",
+      "authority": "Scoped",
+      "introducedRevision": 14,
+      "rules": "Return the exact transfer outcome only to one of its authorized coordinator participants. A transfer receipt does not grant document content access."
+    },
     "documents.import": {
       "operation": "documents.import",
       "mode": "Command",
@@ -11871,6 +11926,9 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "documents.transfer_propose": [14],
+    "documents.transfer_respond": [14],
+    "documents.transfer_status": [14],
     "documents.import": [1, 10, 13],
     "documents.list": [1, 10, 13],
     "documents.read": [1, 10, 13],
@@ -13074,6 +13132,9 @@
     "dreaming.propose": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "dreaming.revert": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "dreaming.review": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.transfer_propose": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.transfer_respond": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.transfer_status": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.import": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

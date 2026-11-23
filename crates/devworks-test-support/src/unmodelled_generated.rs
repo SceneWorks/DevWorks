@@ -32,6 +32,7 @@ use devworks_core::protocol::ProjectId;
 use devworks_core::protocol::Revision;
 use devworks_core::protocol::RootId;
 use devworks_core::protocol::provider::ArtifactRef;
+use devworks_core::protocol::records::DocumentTransferState;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
 use devworks_core::services::documents::extraction::ExtractedBlock;
@@ -875,6 +876,9 @@ impl DiagnosticRepository for Unmodelled {
     }
 }
 impl DocumentRead for Unmodelled {
+    fn document_transfer(&self, _: &Id) -> Result<Option<StoredDocumentTransfer>, StorageError> {
+        unmodelled()
+    }
     fn document_corpus_digest(
         &self,
         _: &ArtifactScope,
@@ -940,6 +944,21 @@ impl DocumentRead for Unmodelled {
     }
 }
 impl DocumentRepository for Unmodelled {
+    fn insert_document_transfer(
+        &mut self,
+        _: &Id,
+        _: &DocumentTransferProposal,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn resolve_document_transfer(
+        &mut self,
+        _: &Id,
+        _: &Revision,
+        _: &DocumentTransferState,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn document_extraction_by_key(
         &self,
         _: &Id,
