@@ -53,8 +53,10 @@ fn verify_profile(path: &Path, profile: &str) -> Result<(), String> {
     let mut signatures = WINTRUST_SIGNATURE_SETTINGS {
         cbStruct: std::mem::size_of::<WINTRUST_SIGNATURE_SETTINGS>() as u32,
         dwFlags: WSS_VERIFY_SPECIFIC | WSS_GET_SECONDARY_SIG_COUNT,
+        // Request the primary signature explicitly. Windows can leave the
+        // output index untouched on success for this embedded signature.
+        dwIndex: 0,
         cSecondarySigs: u32::MAX,
-        dwVerifiedSigIndex: u32::MAX,
         ..Default::default()
     };
     let mut data = WINTRUST_DATA {
@@ -78,7 +80,10 @@ fn verify_profile(path: &Path, profile: &str) -> Result<(), String> {
                 "Windows could not verify the embedded Authenticode signature ({status:#010x})."
             ))
         } else if signatures.cSecondarySigs != 0 || signatures.dwVerifiedSigIndex != 0 {
-            Err("Expected one verified embedded Windows signature.".into())
+            Err(format!(
+                "Expected one verified embedded Windows signature (secondary count {}, index {}).",
+                signatures.cSecondarySigs, signatures.dwVerifiedSigIndex,
+            ))
         } else {
             verified_identity(data.hWVTStateData, profile).map_err(str::to_owned)
         };
