@@ -336,8 +336,64 @@ pub(in crate::storage::sqlite) fn scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devworks_core::ports::storage::{ReadOptions, read_snapshot};
+    use devworks_core::ports::storage::{
+        ProjectRecordKind, ReadOptions, WORKSPACE_SCOPE_KEY, read_snapshot,
+    };
     use devworks_core::protocol::Id;
+
+    #[test]
+    fn purge_selects_only_the_projects_analysis_runs_and_preserves_workspace_policy() {
+        let h = crate::storage::sqlite::tests::Harness::new();
+        let store = h.store();
+        let conn = h.raw();
+        for project in ["purge-a", "purge-b"] {
+            conn.execute(
+                "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) \
+                 VALUES(?1,'Fixture','Deleted',1,1,0)",
+                [project],
+            )
+            .unwrap();
+        }
+        for (id, scope) in [
+            ("analysis-a", "purge-a"),
+            ("analysis-b", "purge-b"),
+            ("analysis-workspace", WORKSPACE_SCOPE_KEY),
+        ] {
+            conn.execute(
+                "INSERT INTO analysis_runs(id,operation_id,scope_key,binding_key,lineage_key,\
+                 requested_at_ms,revision,payload_json) VALUES(?1,?1,?2,?3,?3,0,1,'{}')",
+                rusqlite::params![id, scope, "a".repeat(64)],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO database_sensitive_policies(source_key,source_id,policy_json) \
+             VALUES('',NULL,'{}')",
+            [],
+        )
+        .unwrap();
+        let project = ProjectId(Id::new("purge-a").unwrap());
+        let selected = read_snapshot(&store, &ReadOptions::default(), |read| {
+            read.projects().purge_candidates(&project)
+        })
+        .unwrap()
+        .unwrap();
+        let analysis_keys = selected
+            .rows
+            .iter()
+            .filter(|row| row.table == ProjectRecordKind::AnalysisRuns)
+            .map(|row| row.key_digest.as_str())
+            .collect::<Vec<_>>();
+        let expected = super::super::guard::key_digest(r#"["analysis-a"]"#).unwrap();
+        assert_eq!(analysis_keys, [expected.as_str()]);
+        assert!(
+            selected
+                .rows
+                .iter()
+                .all(|row| row.table != ProjectRecordKind::DatabaseSensitivePolicies)
+        );
+    }
+
     #[test]
     fn confined_instruction_drafts_are_purged_with_their_project_only() {
         let h = crate::storage::sqlite::tests::Harness::new();
