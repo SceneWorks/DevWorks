@@ -335,6 +335,8 @@ pub trait GraphRepository: GraphRead {
         expected_revision: i64,
     ) -> Result<(), StorageError>;
     fn invalidate_graph_pins_for_view(&mut self, view: &Id) -> Result<(), StorageError>;
+    /// Revoke leases of every retained generation of an exact overlay as part of retirement.
+    fn invalidate_graph_pins_for_overlay(&mut self, overlay: &Id) -> Result<(), StorageError>;
     fn insert_graph_source_capture(
         &mut self,
         record: &StoredGraphSourceCapture,

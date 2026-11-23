@@ -1121,6 +1121,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             artifacts: Some(artifacts.clone()),
             diagnostics: Some(diagnostics.clone()),
             package_semantics: Default::default(),
+            run_queued: Default::default(),
             enrichers: std::sync::RwLock::new(ix.enrichers),
             settings: ix.settings,
         });

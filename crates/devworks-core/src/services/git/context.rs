@@ -1,6 +1,9 @@
 //! Host-only binding of an invocation to durable, currently owned Git work.
 use crate::context::{BoundWorktree, InvocationContext, PrincipalKind};
-use crate::ports::storage::{ApplicationStore, ReadOptions, StorageError, read_snapshot};
+use crate::ports::storage::{
+    ApplicationStore, ReadOptions, ReadSnapshot, StorageError, StoredAssignment, StoredSession,
+    read_snapshot,
+};
 use crate::protocol::Id;
 use crate::services::work::model::WorkBrief;
 /// Resolve host-selected identity, never a model-supplied path or revision. This grants no
@@ -75,6 +78,116 @@ pub fn bind_worktree(
         record.work_id,
         record.ownership_revision,
     )))
+}
+
+pub(crate) fn live_assignment(
+    assignment: &StoredAssignment,
+    session: &StoredSession,
+    ctx: &InvocationContext,
+) -> bool {
+    assignment.state.is_live()
+        && Some(&assignment.root_id) == ctx.root_id()
+        && Some(&assignment.session_id) == ctx.session_id()
+        && !session.closed()
+        && &session.agent_id == ctx.principal()
+        && session.project_id.as_ref() == ctx.project_id()
+        && session.root_id.as_ref() == ctx.root_id()
+}
+
+/// Operation targets narrow current custody. A target never grants custody by itself.
+#[derive(Default)]
+pub struct AssignmentCheckout<'a> {
+    pub repository: Option<&'a Id>,
+    pub worktree: Option<&'a Id>,
+    pub any_for_visibility: bool,
+}
+
+/// Resolve a normal launcher context from current assignment custody, without trusting tool input.
+pub fn assignment_worktree(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    target: AssignmentCheckout<'_>,
+) -> Result<Option<InvocationContext>, StorageError> {
+    let Some(assignment_id) = ctx
+        .assignment_id()
+        .filter(|_| ctx.principal_kind() == PrincipalKind::Agent && ctx.worktree().is_none())
+    else {
+        return Ok(None);
+    };
+    if read.stamp().store_id != *ctx.store_id()
+        || read.stamp().restore_epoch != ctx.restore_epoch().get()
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let Some(assignment) = read.runs().assignment(assignment_id)? else {
+        return Err(StorageError::ScopeDenied);
+    };
+    let Some(session) = read.sessions().session(&assignment.session_id)? else {
+        return Err(StorageError::ScopeDenied);
+    };
+    if !live_assignment(&assignment, &session, ctx) {
+        return Err(StorageError::ScopeDenied);
+    }
+    let work = read
+        .work()
+        .work(&assignment.work_id.0)?
+        .ok_or(StorageError::ScopeDenied)?;
+    let brief = WorkBrief::of(&work)?;
+    if ctx.project_id() != Some(&work.project_id)
+        || (work.id != assignment.root_id.0
+            && work.parent_feature_id.as_ref() != Some(&assignment.root_id.0))
+        || brief
+            .assigned_agent_id
+            .as_ref()
+            .is_some_and(|id| id != &ctx.principal().0)
+        || brief
+            .assignment_id
+            .as_ref()
+            .is_some_and(|id| id != assignment_id)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let members = read.projects().members(&work.project_id)?;
+    let repositories = read.work().work_repositories(&work.id)?;
+    let mut after = None;
+    let mut unique = None;
+    loop {
+        let page = read.git().git_worktrees(&work.id, after.as_ref(), 64)?;
+        for row in &page {
+            if row.removed
+                || &row.owner != ctx.principal()
+                || row.owner_root_id.as_ref() != ctx.root_id()
+                || row.owner_assignment_id.as_ref() != ctx.assignment_id()
+                || !members.contains(&row.repository_id)
+                || !repositories.contains(&row.repository_id)
+                || target
+                    .repository
+                    .is_some_and(|repository| repository != &row.repository_id)
+                || target.worktree.is_some_and(|id| {
+                    id != &row.id && id != &crate::services::indexing::assigned::indexed_id(row)
+                })
+            {
+                continue;
+            }
+            if unique.is_some() {
+                return Ok(None);
+            }
+            unique = Some(BoundWorktree::resolved(
+                row.id.clone(),
+                row.repository_id.clone(),
+                row.work_id.clone(),
+                row.ownership_revision,
+            ));
+            if target.any_for_visibility {
+                return Ok(unique.map(|worktree| ctx.clone().bind_worktree(worktree)));
+            }
+        }
+        if page.len() < 64 {
+            break;
+        }
+        after = page.last().map(|row| row.id.clone());
+    }
+    Ok(unique.map(|worktree| ctx.clone().bind_worktree(worktree)))
 }
 
 /// Trusted journal witness, never a tool input. Reconstructed only from committed host data.

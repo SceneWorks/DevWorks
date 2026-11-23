@@ -130,6 +130,8 @@ impl RegisteredSchemas {
         }
         let selected = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
             current_context(snapshot, ctx)?;
+            let worktree = assignment_worktree(snapshot, ctx)?;
+            let ctx = worktree.as_ref().unwrap_or(ctx);
             let principal = snapshot.authority().principal(ctx.principal())?;
             let plan_reviewer = principal.as_ref().and_then(|p| p.role)
                 == Some(devworks_core::settings::catalog::AgentRole::PlanReviewer);
@@ -142,9 +144,6 @@ impl RegisteredSchemas {
             let mut selected = Vec::new();
             for descriptor in registry::all() {
                 if plan_reviewer && !(source_enabled && descriptor.name == "code.source") {
-                    continue;
-                }
-                if ctx.assignment_id().is_some() && descriptor.name.starts_with("indexing.") {
                     continue;
                 }
                 for binding in descriptor.modes {
@@ -452,6 +451,12 @@ impl RegisteredSchemas {
                 if equal(&expected, reference) {
                     read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
                         current_context(s, ctx)?;
+                        let worktree = if d.family == "indexing" {
+                            assignment_worktree(s, ctx)?
+                        } else {
+                            None
+                        };
+                        let ctx = worktree.as_ref().unwrap_or(ctx);
                         let principal = s.authority().principal(ctx.principal())?;
                         let effective =
                             policy::resolve_policy(s.configuration(), ctx.project_id())?;
@@ -674,6 +679,24 @@ fn builtin_schema_binding(schema_id: &str) -> Option<(&str, Mode)> {
 fn equal(a: &SchemaRef, b: &SchemaRef) -> bool {
     a.schema_id.as_str() == b.schema_id.as_str() && a.revision == b.revision && a.sha256 == b.sha256
 }
+fn assignment_worktree(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+) -> Result<Option<InvocationContext>, StorageError> {
+    use devworks_core::services::git::context::{AssignmentCheckout, assignment_worktree};
+    match assignment_worktree(
+        read,
+        ctx,
+        AssignmentCheckout {
+            any_for_visibility: true,
+            ..Default::default()
+        },
+    ) {
+        Err(StorageError::ScopeDenied) => Ok(None),
+        result => result,
+    }
+}
+
 fn current_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), StorageError> {
     if s.stamp().store_id != *ctx.store_id()
         || s.stamp().restore_epoch != ctx.restore_epoch().get()

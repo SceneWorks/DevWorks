@@ -72,7 +72,7 @@ impl IndexSupervisor {
     pub fn new(worker: Arc<IndexWorker>, config: IndexingConfig) -> Arc<Self> {
         let discover_at_boot = config.discover_at_boot;
         let (status, _) = watch::channel(IndexingStatus::default());
-        Arc::new(Self {
+        let supervisor = Arc::new(Self {
             analysis: std::sync::OnceLock::new(),
             worker,
             config,
@@ -81,7 +81,14 @@ impl IndexSupervisor {
             in_flight: AtomicUsize::new(0),
             tasks: Mutex::new(Vec::new()),
             status,
-        })
+        });
+        let weak = Arc::downgrade(&supervisor);
+        let _ = supervisor.env().run_queued.set(Arc::new(move || {
+            if let Some(supervisor) = weak.upgrade() {
+                supervisor.notify();
+            }
+        }));
+        supervisor
     }
     pub(crate) fn install_analysis(
         &self,

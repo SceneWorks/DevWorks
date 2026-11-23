@@ -207,7 +207,7 @@ impl UseCases {
         self
     }
 
-    /// The six owned Git task operations share one service and gateway on every surface.
+    /// The owned Git task operations share one service and gateway on every surface.
     pub fn with_git(mut self, service: Arc<git::GitService>) -> Self {
         for operation in [
             "git.worktree",
@@ -216,6 +216,7 @@ impl UseCases {
             "git.commit",
             "git.push",
             "git.pull_request",
+            "git.cleanup",
         ] {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }

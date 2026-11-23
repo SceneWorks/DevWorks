@@ -6,7 +6,7 @@ mod commands;
 pub mod context;
 pub mod github;
 pub mod helper;
-mod location;
+pub(crate) mod location;
 mod transport;
 use crate::context::InvocationContext;
 use crate::gateway::AdmittedQuery;

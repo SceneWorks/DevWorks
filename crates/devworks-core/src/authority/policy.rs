@@ -464,6 +464,13 @@ pub fn registered_tool_visibility(
     let class = selected.authority;
     let command = selected.mode == Mode::Command;
     let agent = kind == PrincipalKind::Agent;
+    if crate::services::indexing::assigned::applies(ctx)
+        && fam == "indexing"
+        && (ctx.worktree().is_none()
+            || !matches!(op, "indexing.refresh_overlay" | "indexing.status"))
+    {
+        return Verdict::Deny(DenialReason::OutOfAssignmentScope);
+    }
     // Project-wide operations have no target that can be narrowed to the running root or
     // assignment. Agents use addressed reads and writes for their root and delegated references.
     match descriptor.assignment_scope {

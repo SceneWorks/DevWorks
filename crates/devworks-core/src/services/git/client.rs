@@ -859,6 +859,32 @@ impl Git<'_> {
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
         self.revision_with_policy(dir, None)
     }
+
+    pub(super) fn has_ignored_files(&self, dir: &Path) -> Result<bool, GitFault> {
+        Ok(!self
+            .run(
+                dir,
+                &[
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                MAX_LISTING_BYTES,
+            )?
+            .is_empty())
+    }
+    /// Git status and non-forced worktree removal may both ignore changes to index entries
+    /// with skip-worktree or assume-unchanged set. Cleanup can only trust ordinary entries.
+    pub(super) fn has_status_hidden_entries(&self, dir: &Path) -> Result<bool, GitFault> {
+        let listing = self.run(dir, &["ls-files", "-v", "-z"], MAX_LISTING_BYTES)?;
+        Ok(listing
+            .split(|byte| *byte == 0)
+            .filter(|row| !row.is_empty())
+            .any(|row| !matches!(row, [b'H', b' ', _, ..])))
+    }
+
     /// Reviewed preparation/status can hash tracked contents. A late new filter name must
     /// be constrained by the same kernel policy as the eventual reviewed index write.
     pub fn reviewed_revision_observation(
@@ -1670,27 +1696,38 @@ impl Git<'_> {
         dir: &Path,
         base: &str,
     ) -> Result<(Vec<Change>, Vec<String>), GitFault> {
-        let out = self.run(
-            dir,
-            &[
-                "diff",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--name-status",
-                "-z",
-                "-M",
-                base,
-                "--",
-            ],
-            MAX_LISTING_BYTES,
-        )?;
-        let (mut changes, mut refused) = parse_name_status(&out)?;
-        let untracked = self.run(
-            dir,
-            &["ls-files", "-z", "--others", "--exclude-standard"],
-            MAX_LISTING_BYTES,
-        )?;
+        self.local_changes_with_policy(dir, base, None)
+    }
+
+    /// An automatic worktree capture is a read. Restrict it to a qualified Git that cannot
+    /// start repository-configured clean/process filters or other child commands.
+    pub(crate) fn reviewed_local_changes(
+        &self,
+        dir: &Path,
+        base: &str,
+    ) -> Result<(Vec<Change>, Vec<String>), GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.safe_dirty(dir, 0, Some(&policy))?;
+        self.local_changes_with_policy(dir, base, Some(&policy))
+    }
+
+    fn local_changes_with_policy(
+        &self,
+        dir: &Path,
+        base: &str,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<(Vec<Change>, Vec<String>), GitFault> {
+        let read = |args: &[&str]| match policy {
+            Some(policy) => self.reviewed_read(dir, args, MAX_LISTING_BYTES, policy),
+            None => self.run(dir, args, MAX_LISTING_BYTES),
+        };
+        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
+        if policy.is_some() {
+            args.push("--ignore-submodules=dirty");
+        }
+        args.extend(["--name-status", "-z", "-M", base, "--"]);
+        let (mut changes, mut refused) = parse_name_status(&read(&args)?)?;
+        let untracked = read(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         for raw in untracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
             match path_of(raw) {
                 Some(p) => changes.push(Change::Added(p)),
