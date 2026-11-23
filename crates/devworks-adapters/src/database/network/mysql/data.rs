@@ -91,7 +91,7 @@ pub(crate) async fn execute(
         let selected = schema_scope(&request, &target, &target.catalog, &scope)?;
         prime_metadata_locks(&mut conn, &selected).await?;
         rows.schema_digest = Some(schema_digest(
-            &signatures(&mut conn, &target, &selected).await?,
+            &signatures(&mut conn, &target, &selected, &request.config.engine).await?,
         )?);
     }
     match result {
@@ -505,6 +505,7 @@ async fn signatures(
     conn: &mut MySqlConnection,
     target: &Target,
     selected: &TargetNames,
+    engine: &DbEngine,
 ) -> Result<SchemaSignatures, DataFailure> {
     const PROBES: &[&str] = &[
         "SELECT TABLE_NAME, CAST(JSON_ARRAY(TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_COLLATION) AS CHAR)
@@ -522,13 +523,43 @@ async fn signatures(
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE BINARY TABLE_SCHEMA=BINARY ?
           ORDER BY BINARY TABLE_NAME,BINARY CONSTRAINT_NAME,ORDINAL_POSITION",
     ];
+    // Hash the full native clause bytes in the server so even a large expression contributes a
+    // bounded row. A missing definition or enforcement value yields NULL and fails decoding.
+    const MYSQL_CHECKS: &str = "SELECT TABLE_NAME,
+        CASE WHEN clause_digest IS NOT NULL AND enforcement IN ('YES','NO')
+             THEN CAST(JSON_ARRAY('CHECK',CONSTRAINT_NAME,clause_digest,enforcement) AS CHAR) END
+        FROM (SELECT tc.TABLE_NAME,tc.CONSTRAINT_NAME,tc.ENFORCED AS enforcement,
+                     SHA2(CAST(cc.CHECK_CLAUSE AS BINARY),256) AS clause_digest
+              FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+              LEFT JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
+                ON BINARY cc.CONSTRAINT_CATALOG=BINARY tc.CONSTRAINT_CATALOG
+               AND BINARY cc.CONSTRAINT_SCHEMA=BINARY tc.CONSTRAINT_SCHEMA
+               AND BINARY cc.CONSTRAINT_NAME=BINARY tc.CONSTRAINT_NAME
+              WHERE BINARY tc.TABLE_SCHEMA=BINARY ? AND tc.CONSTRAINT_TYPE='CHECK') checks
+        ORDER BY BINARY TABLE_NAME,BINARY CONSTRAINT_NAME";
+    // MariaDB stores no per-constraint enforcement flag. The effective session variable controls
+    // both column and table checks. Include the level because their names may overlap.
+    const MARIADB_CHECKS: &str = "SELECT TABLE_NAME,
+        CASE WHEN clause_digest IS NOT NULL AND enforcement IN (0,1)
+             THEN CAST(JSON_ARRAY('CHECK',CONSTRAINT_NAME,constraint_level,clause_digest,enforcement) AS CHAR) END
+        FROM (SELECT TABLE_NAME,CONSTRAINT_NAME,`LEVEL` AS constraint_level,
+                     SHA2(CAST(CHECK_CLAUSE AS BINARY),256) AS clause_digest,
+                     @@SESSION.check_constraint_checks AS enforcement
+              FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS
+              WHERE BINARY CONSTRAINT_SCHEMA=BINARY ?) checks
+        ORDER BY BINARY TABLE_NAME,BINARY CONSTRAINT_NAME,BINARY constraint_level,BINARY clause_digest";
+    let checks = if matches!(engine, DbEngine::MariaDb) {
+        MARIADB_CHECKS
+    } else {
+        MYSQL_CHECKS
+    };
     let mut material: BTreeMap<_, Vec<u8>> = selected
         .iter()
         .map(|name| (name.clone(), Vec::new()))
         .collect();
     let mut size = 0usize;
-    for probe in PROBES {
-        let mut stream = sqlx::query_as::<_, (String, String)>(*probe)
+    for probe in PROBES.iter().copied().chain([checks]) {
+        let mut stream = sqlx::query_as::<_, (String, String)>(probe)
             .bind(&target.catalog)
             .fetch(&mut *conn);
         while let Some((name, row)) = stream
@@ -576,7 +607,7 @@ async fn schema_change(
         .await
         .map_err(|e| refused(classify(e)))?;
     prime_metadata_locks(conn, &all).await?;
-    let mut expected = signatures(conn, target, &all).await?;
+    let mut expected = signatures(conn, target, &all, &request.config.engine).await?;
     if request.expected_schema_digest.as_ref() != Some(&schema_digest(&expected)?) {
         return Err(refused(FailureKind::StaleSchema));
     }
@@ -613,7 +644,7 @@ async fn schema_change(
                 sqlx::raw_sql("START TRANSACTION READ WRITE").execute(&mut *conn).await
                     .map_err(|error| refused(classify(error)))?;
                 authorize(conn, request, target, guard, scope, sql).await?;
-                if !same_schema(&signatures(conn, target, &step).await?, &expected) {
+                if !same_schema(&signatures(conn, target, &step, &request.config.engine).await?, &expected) {
                     return Err(rollback(conn, refused(FailureKind::StaleSchema)).await);
                 }
                 let affected = match run_statement(conn, request, target, guard, scope, position).await {
@@ -647,7 +678,7 @@ async fn schema_change(
         if sql.schema_change {
             if position + 1 < request.statements.len() {
                 expected.extend(
-                    signatures(conn, target, &step)
+                    signatures(conn, target, &step, &request.config.engine)
                         .await
                         .map_err(|_| boundary.interrupted(FailureKind::Unavailable))?,
                 );
@@ -704,7 +735,10 @@ async fn schema_statement(
             .await
             .map_err(|e| refused(classify(e)))?;
     }
-    if !same_schema(&signatures(conn, target, step).await?, expected) {
+    if !same_schema(
+        &signatures(conn, target, step, &request.config.engine).await?,
+        expected,
+    ) {
         return Err(refused(FailureKind::StaleSchema));
     }
     authorize(conn, request, target, guard, scope, statement).await?;

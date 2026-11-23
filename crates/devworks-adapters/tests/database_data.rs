@@ -42,15 +42,30 @@ impl DispatchGuard for Guard {
 }
 
 fn request(engine: &DbEngine, mode: DataMode, sql: &str, params: Vec<Scalar>) -> DataRequest {
-    let endpoint = std::env::var("DW37_TARGET").expect("explicit disposable native database");
-    let username = std::env::var("DW37_USER").expect("disposable target principal");
-    let password = std::env::var("DW37_PASSWORD").expect("disposable target password");
-    assert!(endpoint.contains("://127.0.0.1:") && endpoint.ends_with("/dw37_fixture"));
+    fixture_request(engine, mode, sql, params, "DW37", "dw37_fixture")
+}
+
+fn fixture_request(
+    engine: &DbEngine,
+    mode: DataMode,
+    sql: &str,
+    params: Vec<Scalar>,
+    env: &str,
+    catalog: &str,
+) -> DataRequest {
+    let endpoint =
+        std::env::var(format!("{env}_TARGET")).expect("explicit disposable native database");
+    let username = std::env::var(format!("{env}_USER")).expect("disposable target principal");
+    let password = std::env::var(format!("{env}_PASSWORD")).expect("disposable target password");
+    let target = url::Url::parse(&endpoint).expect("valid disposable target");
+    assert_eq!(target.host_str(), Some("127.0.0.1"));
+    assert!(target.port().is_some());
+    assert_eq!(target.path(), format!("/{catalog}"));
     let config: ConnectionConfig = serde_json::from_value(json!({
         "name":"Isolated data fixture",
         "engine":engine,
         "endpoint":endpoint,
-        "catalogs":["dw37_fixture"],
+        "catalogs":[catalog],
         "schemas":[],
         "includePatterns":["dw_*"],
         "excludePatterns":[],
@@ -325,6 +340,118 @@ fn fixture(engine: DbEngine, bind: &str) {
         "{:?}",
         migration.err()
     );
+}
+
+fn check_digest_fixture(engine: DbEngine) {
+    use sqlx::ConnectOptions;
+    use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
+
+    const CATALOG: &str = "dw37_check_fixture";
+    const CHANGE: &str = "ALTER TABLE dw_checks ADD marker INT";
+    let request = |mode, sql| fixture_request(&engine, mode, sql, vec![], "DW37_CHECK", CATALOG);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let capture = || {
+        let mut preview = request(DataMode::Read, "SELECT id FROM dw_checks");
+        preview.include_schema_digest = true;
+        preview.schema_targets = statement::schema_targets(
+            &statement::check(&engine, DataMode::Schema, CHANGE).unwrap(),
+        );
+        match runtime.block_on(NetworkDataAdapter.execute(preview, Arc::new(Guard::default()))) {
+            Ok(DataOutcome::Read(rows)) => rows.schema_digest.expect("CHECK schema digest"),
+            Err(error) => panic!("CHECK digest preview: {error:?}"),
+            _ => panic!("CHECK digest preview returned a mutation"),
+        }
+    };
+    let reject = |digest| {
+        let mut change = request(DataMode::Schema, CHANGE);
+        change.expected_schema_digest = Some(digest);
+        let result =
+            runtime.block_on(NetworkDataAdapter.execute(change, Arc::new(Guard::default())));
+        assert!(
+            matches!(result, Err(DataFailure::Refused(FailureKind::StaleSchema))),
+            "the native adapter must reject the previous schema digest: {:?}",
+            result.err()
+        );
+    };
+
+    let before = capture();
+    assert_eq!(before, capture());
+    let endpoint = url::Url::parse(&std::env::var("DW37_CHECK_TARGET").unwrap()).unwrap();
+    let mut external = runtime
+        .block_on(
+            MySqlConnectOptions::new()
+                .host("127.0.0.1")
+                .port(endpoint.port().unwrap())
+                .database(CATALOG)
+                .username(&std::env::var("DW37_CHECK_USER").unwrap())
+                .password(&std::env::var("DW37_CHECK_PASSWORD").unwrap())
+                .ssl_mode(MySqlSslMode::Disabled)
+                .connect(),
+        )
+        .expect("separate fixture connection");
+    let mysql = matches!(engine, DbEngine::MySql);
+    let drop = if mysql {
+        "ALTER TABLE dw_checks DROP CHECK ck_id"
+    } else {
+        "ALTER TABLE dw_checks DROP CONSTRAINT ck_id"
+    };
+    runtime.block_on(async {
+        sqlx::raw_sql(drop).execute(&mut external).await.unwrap();
+        sqlx::raw_sql("ALTER TABLE dw_checks ADD CONSTRAINT ck_id CHECK (id > 1)")
+            .execute(&mut external)
+            .await
+            .unwrap();
+    });
+    let new_clause = capture();
+    assert_ne!(
+        before, new_clause,
+        "changed CHECK expression must change the digest"
+    );
+    reject(before);
+
+    if mysql {
+        runtime
+            .block_on(
+                sqlx::raw_sql("ALTER TABLE dw_checks ALTER CHECK ck_id NOT ENFORCED")
+                    .execute(&mut external),
+            )
+            .unwrap();
+        assert_ne!(
+            new_clause,
+            capture(),
+            "CHECK enforcement must change the digest"
+        );
+        reject(new_clause);
+    }
+    let markers: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT count(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+         AND TABLE_NAME='dw_checks' AND COLUMN_NAME='marker'",
+            )
+            .fetch_one(&mut external),
+        )
+        .unwrap();
+    assert_eq!(
+        markers, 0,
+        "stale schema requests must leave the table unchanged"
+    );
+}
+
+#[test]
+#[ignore = "explicit native MySQL 8.4 CHECK fixture"]
+fn mysql_check_digest() {
+    check_digest_fixture(DbEngine::MySql);
+}
+
+#[test]
+#[ignore = "explicit native MariaDB 11.4 CHECK fixture"]
+fn mariadb_check_digest() {
+    check_digest_fixture(DbEngine::MariaDb);
 }
 
 #[test]

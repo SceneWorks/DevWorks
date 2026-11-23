@@ -171,6 +171,23 @@ def fixtures():
         source('mariadb-check-name-fixture.sql', 'metadata_fixture')
 
 
+def check_digest_fixture(endpoint, env):
+    # Keep the existing retained read fixture and its metadata_reader grants independent.
+    sql("""
+        CREATE DATABASE dw37_check_fixture;
+        CREATE USER 'check_writer'@'%' IDENTIFIED BY 'devworks_check_writer';
+        GRANT SELECT, ALTER, CREATE, INSERT, LOCK TABLES ON dw37_check_fixture.* TO 'check_writer'@'%';
+        USE dw37_check_fixture;
+        CREATE TABLE dw_checks(id INT NOT NULL PRIMARY KEY, CONSTRAINT ck_id CHECK (id > 0)) ENGINE=InnoDB;
+        INSERT INTO dw_checks VALUES (2);
+    """)
+    check_env = dict(env, DW37_CHECK_TARGET=f'{a.engine}://{endpoint}/dw37_check_fixture',
+                     DW37_CHECK_USER='check_writer', DW37_CHECK_PASSWORD='devworks_check_writer')
+    subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
+                    'database_data', f'{a.engine}_check_digest', '--', '--exact', '--ignored'],
+                   cwd=ROOT, env=check_env, check=True)
+
+
 with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folder:
     f = Path(folder)
     f.chmod(0o755)
@@ -193,6 +210,8 @@ with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folde
         if a.engine == 'mysql':
             env.update(DW37_TARGET=f'mysql://{endpoint}/dw37_fixture',
                        DW37_USER='metadata_reader', DW37_PASSWORD='devworks_metadata_reader')
+            if a.version == '9.7':
+                env['DW37_EXPECT_UNSUPPORTED_RELEASE'] = '1'
         # Ordinary tests ignore network fixture cases; this explicit job runs every case for
         # this engine (extraction, bounds, TLS/CA/hostname refusal) without inference.
         subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
@@ -201,6 +220,8 @@ with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folde
         subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-desktop', '--test',
                         'database_network', a.engine, '--', '--ignored', '--nocapture'],
                        cwd=ROOT, env=env, check=True)
+        if (a.engine, a.version) in {('mysql', '8.4'), ('mariadb', '11.4')}:
+            check_digest_fixture(endpoint, env)
         print(json.dumps({'engine': a.engine, 'version': a.version, 'image': IMAGE,
                           'osTrustChanges': False, 'inference': False}))
     finally:
