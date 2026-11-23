@@ -534,11 +534,12 @@ fn committed_reply_remains_recoverable_when_the_app_closes_before_publication() 
     use devworks_core::gateway::AdmittedCommand;
     use devworks_core::ports::storage::{LedgerEntry, WriteTransaction};
     use devworks_core::ports::{CommandHandler, Decided, HandlerFailure, Preparation, Prepared};
-    use devworks_core::protocol::RequestKey;
+    use std::sync::Mutex;
 
     struct CloseAfterCommit {
         knowledge: KnowledgeService,
         credentials: Arc<Credentials>,
+        identity: Arc<Mutex<Option<ReceiptIdentity>>>,
     }
     impl CommandHandler for CloseAfterCommit {
         fn decide(
@@ -547,6 +548,7 @@ fn committed_reply_remains_recoverable_when_the_app_closes_before_publication() 
             command: &AdmittedCommand,
             tx: &mut dyn WriteTransaction,
         ) -> Result<Decided, HandlerFailure> {
+            *self.identity.lock().unwrap() = Some(command.identity().clone());
             self.knowledge.decide(ctx, command, tx)
         }
 
@@ -587,12 +589,14 @@ fn committed_reply_remains_recoverable_when_the_app_closes_before_publication() 
             ProjectId(id("first")),
             Revision::new(1).unwrap(),
         );
+    let recorded_identity = Arc::new(Mutex::new(None));
     fx.cases.register(
         "knowledge.record",
         None,
         Some(Arc::new(CloseAfterCommit {
             knowledge: KnowledgeService::new(fx.h.ids.clone(), fx.h.clock.clone(), None),
             credentials,
+            identity: recorded_identity.clone(),
         })),
     );
 
@@ -600,7 +604,7 @@ fn committed_reply_remains_recoverable_when_the_app_closes_before_publication() 
         fx.claim(&ctx, "closed-after-commit", "first", None),
         CommandReply::CommandStatusUnknown { .. }
     ));
-    let identity = ReceiptIdentity::bind(&ctx, RequestKey(id("closed-after-commit")));
+    let identity = recorded_identity.lock().unwrap().take().unwrap();
     let durable = read_snapshot(&*fx.store, &ReadOptions::default(), |read| {
         read.receipts().lookup(&identity)
     })

@@ -612,6 +612,7 @@ impl AccessFence {
                 return Ok(false);
             };
             if row.project_id != self.project
+                || (require_original_revision && row.scope_revision != witness.scope_revision)
                 || row
                     .parent_feature_id
                     .as_ref()
