@@ -1,0 +1,165 @@
+name: DW-417 verify the already signed Windows releases
+
+on:
+  push:
+    branches: [codex/dw-417-verify-signed-recovery]
+    paths: [.github/workflows/windows-signed-qualification-recovery.yml]
+
+permissions: {}
+
+env:
+  DEVWORKS_WINDOWS_SIGNING_PROFILE_OID: '1.3.6.1.4.1.311.97.840169298.24257481.644551716.202800253'
+  PAYLOAD_NAMES: old-desktop.exe,old-worker.exe,new-desktop.exe,new-worker.exe
+
+jobs:
+  verify:
+    name: Run signed approval, startup and recovery on Windows
+    runs-on: windows-2025
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 8c3abd8ed506bec07d4a8649c33caa8d8da575fc
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: bfe84f3e6183074ef23df7af0fd39e31af78fd8b
+          path: candidate
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: 14786718991,14787067844
+          run-id: 45097014373
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/transport
+      - id: restore
+        name: Restore and validate the isolated run inputs
+        shell: pwsh
+        env:
+          DW421_ARCHIVE_KEY: ${{ secrets.DW417_ARCHIVE_KEY }}
+          SOURCE: bfe84f3e6183074ef23df7af0fd39e31af78fd8b
+          SIGNED_HASH: 5bfb653bb9f5d86c01efb8c424ce4e9861deeb7b819583427551cda2a74b3728
+          TEST_HASH: 387f103ba846fd55e3a01c6d43f97276a42c37e587fe646e6e12c07a9a2b5525
+        run: |
+          . ./trusted/tools/ci/windows-test-installer.ps1
+          $signed = Join-Path $env:RUNNER_TEMP 'signed'
+          $tests = Join-Path $env:RUNNER_TEMP 'tests'
+          $names = $env:PAYLOAD_NAMES.Split(',')
+          Expand-TestArtifact (Join-Path $env:RUNNER_TEMP 'transport/upgrade-signed.7z') $env:SIGNED_HASH $signed ($names + 'signed.json')
+          Expand-TestArtifact (Join-Path $env:RUNNER_TEMP 'transport/upgrade-tests.7z') $env:TEST_HASH $tests @('test-key.pem','native-verifier.exe')
+          $receipt = Get-Content -LiteralPath (Join-Path $signed 'signed.json') -Raw | ConvertFrom-Json -AsHashtable
+          if ($receipt.source -cne $env:SOURCE -or $receipt.files.Count -ne $names.Count) { throw 'Wrong signed fixture' }
+          foreach ($name in $names) {
+            $signature = Get-VerifiedTestSignature (Join-Path $signed $name)
+            if ($signature.sha256 -cne $receipt.files[$name].sha256) { throw "Signed file changed: $name" }
+          }
+          $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'installed-upgrade')
+          foreach ($label in @('old','new')) {
+            $image = New-Item -ItemType Directory -Path (Join-Path $work ("${label}er"))
+            Copy-Item -LiteralPath (Join-Path $signed "$label-desktop.exe") (Join-Path $image 'devworks-desktop.exe')
+            Copy-Item -LiteralPath (Join-Path $signed "$label-worker.exe") (Join-Path $image 'devworks-pdf-worker.exe')
+          }
+      - name: Require a valid timestamp on the approved currently valid leaf
+        shell: pwsh
+        run: |
+          $fixtures = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'timestamp-fixtures')
+          $genuine = Join-Path $fixtures 'genuine.exe'
+          $noStamp = Join-Path $fixtures 'no-timestamp.exe'
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'signed/new-desktop.exe') $genuine
+          Copy-Item -LiteralPath $genuine $noStamp
+          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
+          $signTool = Get-ChildItem -LiteralPath $sdk -Filter signtool.exe -Recurse |
+            Where-Object { $_.Directory.Name -eq 'x64' -and $_.Directory.Parent.Name -match '^\d+(\.\d+){3}$' } |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+          if (-not $signTool) { throw 'Windows SDK SignTool is unavailable' }
+          "DW417_SIGNTOOL=$($signTool.FullName)" >> $env:GITHUB_ENV
+          & $signTool.FullName remove /u $noStamp
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot remove the timestamp from the native fixture' }
+          $genuineSignature = Get-AuthenticodeSignature -LiteralPath $genuine
+          $stripped = Get-AuthenticodeSignature -LiteralPath $noStamp
+          if ($stripped.Status -ne 'Valid' -or $stripped.SignatureType -ne 'Authenticode' -or
+              $stripped.SignerCertificate.Thumbprint -ne $genuineSignature.SignerCertificate.Thumbprint -or $stripped.TimeStamperCertificate -or
+              $stripped.SignerCertificate.NotAfter -le (Get-Date)) {
+            throw 'Timestamp-stripped fixture must still be a trusted, currently valid Authenticode file'
+          }
+          python -I candidate/tools/ci/make-bad-authenticode-timestamp.py $genuine (Join-Path $fixtures 'bad-timestamp.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot construct the corrupted timestamp fixture' }
+          $env:DEVWORKS_WINDOWS_TRUST_FIXTURES = $fixtures.FullName
+          $test = 'app_updates::windows_trust::tests::current_leaf_requires_a_verified_timestamp'
+          $result = & (Join-Path $env:RUNNER_TEMP 'tests/native-verifier.exe') $test --ignored --exact --nocapture
+          if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $test ... ok") {
+            $result | Write-Host
+            throw 'Product timestamp checks failed or did not run'
+          }
+          $result | Write-Host
+      - name: Reject a locally trusted lookalike publisher
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'lookalike.exe'
+          $verifier = Join-Path $env:RUNNER_TEMP 'tests/native-verifier.exe'
+          Copy-Item -LiteralPath $verifier $fixture
+          $root = New-SelfSignedCertificate -Subject 'CN=DevWorks temporary qualification root' -Type Custom `
+            -HashAlgorithm SHA256 -KeyUsage CertSign,CRLSign -CertStoreLocation Cert:\CurrentUser\My `
+            -TextExtension @('2.5.29.19={critical}{text}CA=1&pathlength=0')
+          $leaf = $null
+          try {
+            $expectedEkus = @('1.3.6.1.5.5.7.3.3','1.3.6.1.4.1.311.97.1.0',$env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID)
+            $eku = "2.5.29.37={text}" + ($expectedEkus -join ',')
+            $leaf = New-SelfSignedCertificate -Subject 'CN=DevWorks temporary qualification publisher' `
+              -Signer $root -Type Custom -KeyUsage DigitalSignature -HashAlgorithm SHA256 `
+              -CertStoreLocation Cert:\CurrentUser\My -TextExtension @($eku,'2.5.29.19={text}CA=0')
+            $usage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($leaf.Extensions['2.5.29.37'], $false)
+            $actualEkus = @($usage.EnhancedKeyUsages | ForEach-Object Value)
+            if (Compare-Object ($expectedEkus | Sort-Object) ($actualEkus | Sort-Object)) {
+              throw 'The lookalike leaf must carry the exact signing and profile EKUs'
+            }
+            $rootFile = Join-Path $env:RUNNER_TEMP 'lookalike-root.cer'
+            Export-Certificate -Cert $root -FilePath $rootFile | Out-Null
+            Import-Certificate -FilePath $rootFile -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+            & $env:DW417_SIGNTOOL sign /sha1 $leaf.Thumbprint /s My /fd SHA256 $fixture
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot sign the isolated lookalike fixture' }
+            $signature = Get-AuthenticodeSignature -LiteralPath $fixture
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $leaf.Thumbprint) {
+              throw 'Windows must independently trust the lookalike publisher for the first test'
+            }
+            $env:DEVWORKS_WINDOWS_LOOKALIKE = $fixture
+            $test = 'app_updates::windows_trust::tests::the_profile_requires_the_microsoft_root_even_when_windows_trusts_the_publisher'
+            $result = & $verifier $test --ignored --exact --nocapture
+            $result | Write-Host
+            if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $test ... ok") {
+              throw 'Product did not enforce the Microsoft root pin'
+            }
+            Remove-Item -LiteralPath "Cert:\LocalMachine\Root\$($root.Thumbprint)"
+            if ((Get-AuthenticodeSignature -LiteralPath $fixture).Status -eq 'Valid') {
+              throw 'The lookalike certificate remains trusted after removing the temporary root'
+            }
+            $env:DEVWORKS_WINDOWS_LOOKALIKE_UNTRUSTED = '1'
+            $result = & $verifier $test --ignored --exact --nocapture
+            $result | Write-Host
+            if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $test ... ok") {
+              throw 'Product did not reject the now-untrusted issuer'
+            }
+          } finally {
+            $rootEntry = "Cert:\LocalMachine\Root\$($root.Thumbprint)"
+            if (Test-Path -LiteralPath $rootEntry) { Remove-Item -LiteralPath $rootEntry }
+            if ($leaf) { Remove-Item -LiteralPath $leaf.PSPath -DeleteKey }
+            Remove-Item -LiteralPath $root.PSPath -DeleteKey
+          }
+      - name: Exercise signed installation and the normal updater entry points
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' }}
+        shell: pwsh
+        env:
+          SOURCE: bfe84f3e6183074ef23df7af0fd39e31af78fd8b
+        run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,BuildNumber,OSArchitecture | Format-List
+          $local = [Environment]::GetFolderPath('LocalApplicationData')
+          $work = Join-Path $env:RUNNER_TEMP 'installed-upgrade'
+          $key = Join-Path $env:RUNNER_TEMP 'tests/test-key.pem'
+          python -I candidate/tools/ci/qualify-windows-update.py exercise $work $local $key $env:SOURCE
+          if ($LASTEXITCODE -ne 0) { throw 'Signed native approval, upgrade or rollback qualification failed' }
