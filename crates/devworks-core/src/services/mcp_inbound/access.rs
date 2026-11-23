@@ -1,15 +1,18 @@
 //! A live native credential and durable scope witness back each selected gateway call.
 
-use super::targets::{DocumentTarget, IndexTargets, WorktreeTarget, document_targets};
+use super::targets::{
+    DocumentTarget, IndexRemoval, IndexTargets, WorktreeTarget, document_targets,
+};
 use super::{AuthenticatedClient, Binding, Configuration, current, selected_operation};
 use crate::admission::{project_targets, work_targets};
 use crate::authority::DenialReason;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::sha256_hex;
+use crate::kernel::work_brief::WorkBrief;
 use crate::operations::{OperationInput, conventions, features, history, indexing, issues, tasks};
 use crate::ports::storage::{
     ArtifactRead, DELETED, EventFilter, HistoryRead, LedgerEntry, ProjectRead, ReadSnapshot,
-    StorageError, WorkRead, WriteTransaction,
+    StorageError, StoredWork, WorkRead, WriteTransaction,
 };
 use crate::ports::{AuthorityFence, AuthorityRequest, Authorization};
 use crate::protocol::data::DataScope;
@@ -68,6 +71,8 @@ pub struct AccessFence {
     worktrees: Vec<WorktreeTarget>,
     #[serde(default)]
     documents: Vec<DocumentTarget>,
+    #[serde(default)]
+    index_removal: Option<IndexRemoval>,
     work: Vec<WorkScope>,
 }
 
@@ -190,7 +195,7 @@ fn full_project_repositories(operation: &str) -> bool {
 
 /// Project-shaped operations whose exact targets are understood by this access layer. Never
 /// allow a new operation based on its family name or a request field alone.
-fn supported_target(operation: &str) -> bool {
+pub(super) fn supported_target(operation: &str) -> bool {
     matches!(
         operation,
         "projects.get"
@@ -236,14 +241,11 @@ fn supported_target(operation: &str) -> bool {
             | "knowledge.scope"
             | "knowledge.delete_by_source"
             | "knowledge.delete_selected"
-            | "knowledge.import_user_data"
             | "knowledge.promote"
             | "knowledge.challenge"
             | "history.command_receipt"
             | "history.operation_status"
             | "documents.import"
-            | "documents.share"
-            | "documents.move"
             | "documents.index"
             | "documents.retry"
             | "documents.disable_retrieval"
@@ -317,6 +319,7 @@ pub(crate) fn authorize(
     let mut worktrees = exact.worktrees;
     let mut documents =
         document_targets(read.artifacts(), project, request.input).map_err(target_error)?;
+    documents.extend(exact.document_run);
     let full_project_repositories = full_project_repositories(operation);
     if full_project_repositories {
         repositories.extend(
@@ -326,6 +329,13 @@ pub(crate) fn authorize(
         );
     }
     let mut work_targets = work_targets(&normalized);
+    if let OperationInput::Tasks(tasks::Input::Create(input)) = request.input
+        && let Some(parent) = &input.parent_id
+        && !work_targets.contains(&parent.0)
+    {
+        work_targets.push(parent.0.clone());
+    }
+
     let recovering_receipt = recovery_scope(read, ctx, request.input)?;
     let recovering_operation = operation_scope(read, ctx, request.input)?;
     for original in recovering_receipt
@@ -348,18 +358,21 @@ pub(crate) fn authorize(
             }
         }
     }
-    for id in work_targets {
+    let mut next = 0;
+    while let Some(id) = work_targets.get(next).cloned() {
+        next += 1;
         let row = read
             .work()
             .work(&id)
-            .map_err(|_| DenialReason::AuthorityUnavailable)?
+            .map_err(target_error)?
             .filter(|row| &row.project_id == project)
             .ok_or(DenialReason::OutOfProjectScope)?;
-        repositories.extend(
-            read.work()
-                .work_repositories(&id)
-                .map_err(|_| DenialReason::AuthorityUnavailable)?,
-        );
+        repositories.extend(work_repositories(read.work(), &row).map_err(target_error)?);
+        if let Some(parent) = row.parent_feature_id
+            && !work_targets.contains(&parent)
+        {
+            work_targets.push(parent);
+        }
         work.push(WorkScope {
             id,
             scope_revision: row.scope_revision,
@@ -386,6 +399,7 @@ pub(crate) fn authorize(
         recovering_operation: recovering_operation.map(|(operation, _)| operation),
         worktrees,
         documents,
+        index_removal: exact.removal,
         work,
     };
     if fence
@@ -396,6 +410,17 @@ pub(crate) fn authorize(
     } else {
         Err(DenialReason::OutOfProjectScope)
     }
+}
+
+fn work_repositories(read: &dyn WorkRead, row: &StoredWork) -> Result<Vec<Id>, StorageError> {
+    let mut repositories = read.work_repositories(&row.id)?;
+    repositories.extend(
+        WorkBrief::of(row)?
+            .touches
+            .into_iter()
+            .map(|touch| touch.repository_id),
+    );
+    Ok(repositories)
 }
 
 fn target_error(error: StorageError) -> DenialReason {
@@ -454,32 +479,35 @@ fn operation_scope(
     let Query::Operation { operation_id } = &query.query else {
         return Err(DenialReason::OutOfProjectScope);
     };
-    let page = read
-        .history()
-        .page(
-            &EventFilter::Aggregate {
-                kind: OPERATION_AGGREGATE.into(),
-                id: operation_id.0.as_str().into(),
-            },
-            0,
-            1,
-        )
-        .map_err(|_| DenialReason::AuthorityUnavailable)?;
-    let event = page
-        .events
-        .first()
-        .filter(|event| {
-            event.kind == OPERATION_ADMITTED
-                && &event.actor == ctx.principal()
-                && event.operation_id.as_ref() == Some(operation_id)
-        })
+    let access = operation_fence(read.history(), ctx, operation_id)
+        .map_err(target_error)?
         .ok_or(DenialReason::OutOfProjectScope)?;
-    let access: AccessFence = serde_json::from_value(event.payload["incomingMcpAccess"].clone())
-        .map_err(|_| DenialReason::AuthorityUnavailable)?;
-    if !access.store_matches(ctx) || !access.command {
-        return Err(DenialReason::OutOfProjectScope);
-    }
     Ok(Some((operation_id.clone(), access)))
+}
+
+pub(crate) fn operation_fence(
+    history: &dyn HistoryRead,
+    ctx: &InvocationContext,
+    operation_id: &OperationId,
+) -> Result<Option<AccessFence>, StorageError> {
+    let page = history.page(
+        &EventFilter::Aggregate {
+            kind: OPERATION_AGGREGATE.into(),
+            id: operation_id.0.as_str().into(),
+        },
+        0,
+        1,
+    )?;
+    let Some(event) = page.events.first().filter(|event| {
+        event.kind == OPERATION_ADMITTED
+            && &event.actor == ctx.principal()
+            && event.operation_id.as_ref() == Some(operation_id)
+    }) else {
+        return Ok(None);
+    };
+    let access: AccessFence = serde_json::from_value(event.payload["incomingMcpAccess"].clone())
+        .map_err(|_| StorageError::InvalidRecord("incoming MCP operation access".into()))?;
+    Ok((access.store_matches(ctx) && access.command).then_some(access))
 }
 
 pub(crate) fn operation_recovery_matches(
@@ -579,11 +607,15 @@ impl AccessFence {
         allowed_repositories: &[Id],
     ) -> Result<bool, StorageError> {
         for witness in &self.work {
-            if !work
-                .work(&witness.id)?
-                .is_some_and(|row| row.project_id == self.project)
-                || work
-                    .work_repositories(&witness.id)?
+            let Some(row) = work.work(&witness.id)? else {
+                return Ok(false);
+            };
+            if row.project_id != self.project
+                || row
+                    .parent_feature_id
+                    .as_ref()
+                    .is_some_and(|parent| !self.work.iter().any(|scope| &scope.id == parent))
+                || work_repositories(work, &row)?
                     .iter()
                     .any(|repository| !allowed_repositories.contains(repository))
             {
@@ -655,10 +687,14 @@ impl AccessFence {
     }
 
     fn work_holds(&self, work: &dyn WorkRead) -> Result<bool, StorageError> {
+        if !self.work_publication_holds(work, &self.repositories)? {
+            return Ok(false);
+        }
         for witness in &self.work {
-            if !work.work(&witness.id)?.is_some_and(|row| {
-                row.project_id == self.project && row.scope_revision == witness.scope_revision
-            }) {
+            if !work
+                .work(&witness.id)?
+                .is_some_and(|row| row.scope_revision == witness.scope_revision)
+            {
                 return Ok(false);
             }
         }
@@ -674,7 +710,9 @@ impl AccessFence {
                 return Ok(false);
             }
         }
-        Ok(true)
+        self.index_removal
+            .as_ref()
+            .map_or(Ok(true), |removal| removal.holds(indexing))
     }
 
     fn documents_hold(&self, artifacts: &dyn ArtifactRead) -> Result<bool, StorageError> {
@@ -697,6 +735,22 @@ impl AccessFence {
         ) && self.project_holds(read.projects())?
             && self.worktrees_hold(read.indexing())?
             && self.work_holds(read.work())?
+            && self.documents_hold(read.artifacts())?)
+    }
+
+    /// A successful command may itself advance its work item's scope revision.
+    /// Disclose its receipt only when the resulting work still belongs to the admitted scope.
+    pub(crate) fn publication_holds(&self, read: &dyn ReadSnapshot) -> Result<bool, StorageError> {
+        let stamp = read.stamp();
+        let (_, configuration) = current(read.configuration())?;
+        Ok(self.registrations_hold(
+            &configuration,
+            &stamp.store_id,
+            stamp.restore_epoch,
+            stamp.now_ms,
+        ) && self.project_holds(read.projects())?
+            && self.worktrees_hold(read.indexing())?
+            && self.work_publication_holds(read.work(), &self.repositories)?
             && self.documents_hold(read.artifacts())?)
     }
 

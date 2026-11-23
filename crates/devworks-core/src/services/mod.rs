@@ -596,6 +596,13 @@ impl UseCases {
 
     /// A new receipt may have delivered a message; a replay or a refusal committed nothing new.
     fn signal_commit(&self, outcome: &CommandOutcome) {
+        if let (Some(wake), Ok(CommandReply::CommandStatusUnknown { .. })) =
+            (&self.delivery_wake, outcome)
+        {
+            // The command may have committed even when its caller could not receive the receipt.
+            wake.notify();
+            return;
+        }
         if let (
             Some(wake),
             Ok(CommandReply::Recorded {

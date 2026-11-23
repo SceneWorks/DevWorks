@@ -501,6 +501,87 @@ fn document_command_rechecks_the_artifact_owner_before_deferred_dispatch() {
 }
 
 #[test]
+fn committed_reply_remains_recoverable_when_the_app_closes_before_publication() {
+    use devworks_core::context::ReceiptIdentity;
+    use devworks_core::gateway::AdmittedCommand;
+    use devworks_core::ports::storage::{LedgerEntry, WriteTransaction};
+    use devworks_core::ports::{CommandHandler, Decided, HandlerFailure, Preparation, Prepared};
+    use devworks_core::protocol::RequestKey;
+
+    struct CloseAfterCommit {
+        knowledge: KnowledgeService,
+        credentials: Arc<Credentials>,
+    }
+    impl CommandHandler for CloseAfterCommit {
+        fn decide(
+            &self,
+            ctx: &InvocationContext,
+            command: &AdmittedCommand,
+            tx: &mut dyn WriteTransaction,
+        ) -> Result<Decided, HandlerFailure> {
+            self.knowledge.decide(ctx, command, tx)
+        }
+
+        fn settle(
+            &self,
+            _: &InvocationContext,
+            _: Option<&Prepared>,
+            reply: Option<&DomainCommandReply>,
+            _: &Preparation<'_>,
+        ) {
+            assert!(matches!(
+                reply,
+                Some(CommandReply::Recorded {
+                    replayed: false,
+                    ..
+                })
+            ));
+            self.credentials.close();
+        }
+    }
+
+    let mut fx = Fixture::new();
+    fx.configure(8147);
+    let active = fx.replace("enable", &fx.register(), &["knowledge.record"]);
+    let credentials = Arc::new(Credentials::new(
+        fx.store.clone(),
+        Box::new(SessionSecrets::new()),
+        Arc::new(crate::OsEntropy),
+    ));
+    let token = credentials
+        .provision(&fx.human, &active.client_id, &active.revision)
+        .unwrap();
+    let ctx = credentials
+        .authenticate(Binding::LocalIpc, &token)
+        .unwrap()
+        .invocation(
+            id("publication-close"),
+            ProjectId(id("first")),
+            Revision::new(1).unwrap(),
+        );
+    fx.cases.register(
+        "knowledge.record",
+        None,
+        Some(Arc::new(CloseAfterCommit {
+            knowledge: KnowledgeService::new(fx.h.ids.clone(), fx.h.clock.clone(), None),
+            credentials,
+        })),
+    );
+
+    assert!(matches!(
+        fx.claim(&ctx, "closed-after-commit", "first", None),
+        CommandReply::CommandStatusUnknown { .. }
+    ));
+    let identity = ReceiptIdentity::bind(&ctx, RequestKey(id("closed-after-commit")));
+    let durable = read_snapshot(&*fx.store, &ReadOptions::default(), |read| {
+        read.receipts().lookup(&identity)
+    })
+    .unwrap();
+    assert!(matches!(durable, Some(LedgerEntry::Current(recorded))
+        if matches!(recorded.receipt.decision, DomainDecision::Applied { .. })));
+}
+
+#[test]
 fn private_http_preflight_checks_listener_and_credential_on_every_request() {
     let connection = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let local = connection.local_addr().unwrap();
