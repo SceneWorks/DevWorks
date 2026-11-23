@@ -598,13 +598,14 @@ impl AccessFence {
         {
             return Ok(false);
         }
-        self.work_publication_holds(work, &current_request.repositories)
+        self.work_holds(work, &current_request.repositories, false)
     }
 
-    fn work_publication_holds(
+    fn work_holds(
         &self,
         work: &dyn WorkRead,
         allowed_repositories: &[Id],
+        require_original_revision: bool,
     ) -> Result<bool, StorageError> {
         for witness in &self.work {
             let Some(row) = work.work(&witness.id)? else {
@@ -686,21 +687,6 @@ impl AccessFence {
             && (!self.full_project_repositories || members.len() == self.repositories.len()))
     }
 
-    fn work_holds(&self, work: &dyn WorkRead) -> Result<bool, StorageError> {
-        if !self.work_publication_holds(work, &self.repositories)? {
-            return Ok(false);
-        }
-        for witness in &self.work {
-            if !work
-                .work(&witness.id)?
-                .is_some_and(|row| row.scope_revision == witness.scope_revision)
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
     fn worktrees_hold(
         &self,
         indexing: &dyn crate::ports::storage::IndexRead,
@@ -734,7 +720,7 @@ impl AccessFence {
             stamp.now_ms,
         ) && self.project_holds(read.projects())?
             && self.worktrees_hold(read.indexing())?
-            && self.work_holds(read.work())?
+            && self.work_holds(read.work(), &self.repositories, true)?
             && self.documents_hold(read.artifacts())?)
     }
 
@@ -750,7 +736,7 @@ impl AccessFence {
             stamp.now_ms,
         ) && self.project_holds(read.projects())?
             && self.worktrees_hold(read.indexing())?
-            && self.work_publication_holds(read.work(), &self.repositories)?
+            && self.work_holds(read.work(), &self.repositories, false)?
             && self.documents_hold(read.artifacts())?)
     }
 
@@ -764,7 +750,7 @@ impl AccessFence {
             tx.now_ms(),
         ) && self.project_holds(tx.projects())?
             && self.worktrees_hold(tx.indexing())?
-            && self.work_holds(tx.work())?
+            && self.work_holds(tx.work(), &self.repositories, true)?
             && self.documents_hold(tx.artifacts())?)
     }
 }
