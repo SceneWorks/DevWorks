@@ -226,6 +226,43 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
         .0,
         202
     );
+    let expected: std::collections::BTreeSet<String> =
+        devworks_core::services::mcp_inbound::published_tools()
+            .iter()
+            .filter(|tool| {
+                runtime.has_mcp_tool(tool)
+                    && tool.has_target_authority()
+                    && tool.operation.supports(tool.revision)
+            })
+            .map(|tool| tool.name.clone())
+            .collect();
+    let mut cursor = None;
+    let mut discovered = std::collections::BTreeSet::new();
+    loop {
+        let params = cursor
+            .take()
+            .map_or_else(|| json!({}), |cursor| json!({"cursor":cursor}));
+        let (_, reply) = http(
+            port,
+            "POST",
+            Some(&token),
+            &legacy_headers,
+            Some(request(8, "tools/list", params)),
+        );
+        for tool in reply["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{reply}"))
+        {
+            let name = tool["name"].as_str().unwrap();
+            assert!(discovered.insert(name.to_owned()), "duplicate tool {name}");
+        }
+        assert!(discovered.len() <= expected.len());
+        cursor = reply["result"]["nextCursor"].as_str().map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(discovered, expected);
     for version in [LEGACY, MODERN] {
         let mut headers = vec![("Mcp-Protocol-Version", version)];
         if version == MODERN {
@@ -377,6 +414,28 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
         "{lookup}"
     );
 
+    #[cfg(unix)]
+    if let Some(probe) = std::env::var_os("DEVWORKS_MCP_INTEROP_COMMAND") {
+        let status = std::process::Command::new(probe)
+            .env(
+                "DEVWORKS_MCP_INTEROP_URL",
+                format!("http://127.0.0.1:{port}/mcp"),
+            )
+            .env("DEVWORKS_MCP_INTEROP_PROJECT", project.id.0.as_str())
+            .env(
+                "DEVWORKS_MCP_WIRE_TEST_EXE",
+                std::env::current_exe().unwrap(),
+            )
+            .env("DEVWORKS_MCP_WIRE_TEST_ROOT", &root.0)
+            .env("DEVWORKS_MCP_TOKEN", token.expose())
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "independent MCP client probe returned {status}"
+        );
+    }
+
     command(
         &*backend,
         "mcp_server.set_client_access",
@@ -411,6 +470,23 @@ fn bridge_child_uses_the_test_desktop_image() {
         std::io::stdout().flush().unwrap();
         devworks_desktop::run_mcp_bridge(std::path::Path::new(&root)).unwrap();
     }
+}
+
+#[test]
+fn cli_bridge_leaves_a_missing_profile_untouched() {
+    let root = common::Root::new("no-running-desktop");
+    let absent = root.0.join("absent-profile");
+    let status = std::process::Command::new(env!("CARGO_BIN_EXE_devworks-desktop"))
+        .arg("mcp")
+        .arg("--data-dir")
+        .arg(&absent)
+        .env("DEVWORKS_MCP_TOKEN", "unregistered-test-client")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!status.status.success());
+    assert!(status.stdout.is_empty());
+    assert!(!absent.exists());
 }
 
 #[cfg(unix)]
