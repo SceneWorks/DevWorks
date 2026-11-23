@@ -258,6 +258,11 @@ pub trait Backend: Send + Sync {
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
     }
+    /// The executable and active data root for the local Settings copy action.
+    fn incoming_mcp_stdio_paths(&self) -> Option<(PathBuf, PathBuf)> {
+        None
+    }
+
     /// Only the human Settings action can request protected manual client pairing.
     fn provision_inbound_mcp_credential(
         &self,
@@ -445,6 +450,7 @@ pub enum TaskOutput {
     IncomingMcp {
         status: Box<devworks_core::protocol::records::McpInboundStatus>,
         clients: Vec<devworks_core::protocol::records::McpClientAccess>,
+        stdio_paths: Option<(PathBuf, PathBuf)>,
     },
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),

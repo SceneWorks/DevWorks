@@ -1,14 +1,15 @@
 //! Manual pairing uses the protected OS facility independently of other credentials.
 //! A verified credential is short-lived evidence for one application request, not a session.
 
-use super::{Client, Configuration, current};
+use super::{Client, Configuration, PublishedTool, current, published_tools};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::ports::http::{Entropy, base64url};
 use crate::ports::secrets::{Secret, SecretKey, SecretStore};
 use crate::ports::storage::{ApplicationStore, ReadOptions, StorageError, read_snapshot};
-use crate::protocol::records::McpServerBinding;
+use crate::protocol::records::{McpInboundSettings, McpServerBinding};
 use crate::protocol::{Id, Revision, StoreId};
+use crate::registry::Mode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use subtle::ConstantTimeEq;
@@ -72,9 +73,33 @@ pub struct AuthenticatedClient {
     pub(super) live: Arc<AtomicBool>,
 }
 
+impl AuthenticatedClient {
+    /// Stable registration identifier for native request budgets.
+    pub fn id(&self) -> &Id {
+        &self.id
+    }
+
+    /// Identity of current, authenticated transport state. It changes when a client is
+    /// reconfigured, a credential rotates, or restore changes the store's authority epoch.
+    pub fn transport_revision(&self) -> String {
+        sha256_hex(
+            format!(
+                "{}:{}:{}:{}:{}:{}",
+                self.store.0.as_str(),
+                self.epoch,
+                self.id.as_str(),
+                self.settings_revision.as_str(),
+                self.client_revision.as_str(),
+                self.generation.as_str()
+            )
+            .as_bytes(),
+        )
+    }
+}
+
 pub struct Credentials {
     store: Arc<dyn ApplicationStore>,
-    protected: Box<dyn SecretStore>,
+    protected: Arc<dyn SecretStore>,
     entropy: Arc<dyn Entropy>,
     provision: Mutex<()>,
     live: Arc<AtomicBool>,
@@ -85,6 +110,14 @@ impl Credentials {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         protected: Box<dyn SecretStore>,
+        entropy: Arc<dyn Entropy>,
+    ) -> Self {
+        Self::with_secrets(store, protected.into(), entropy)
+    }
+
+    pub fn with_secrets(
+        store: Arc<dyn ApplicationStore>,
+        protected: Arc<dyn SecretStore>,
         entropy: Arc<dyn Entropy>,
     ) -> Self {
         Self {
@@ -98,6 +131,17 @@ impl Credentials {
 
     pub fn close(&self) {
         self.live.store(false, Ordering::Release);
+    }
+
+    /// Effective native settings, including restore's disabled state, without credential data.
+    pub fn settings(&self, options: &ReadOptions) -> Result<McpInboundSettings, CredentialError> {
+        self.require_open()?;
+        let result = read_snapshot(&*self.store, options, |snapshot| {
+            let (_, config) = current(snapshot.configuration())?;
+            Ok(config.status(snapshot.stamp().restore_epoch).settings)
+        })?;
+        self.require_open()?;
+        Ok(result)
     }
 
     fn require_open(&self) -> Result<(), CredentialError> {
@@ -234,6 +278,48 @@ impl Credentials {
             expires_ms,
             live: self.live.clone(),
         })
+    }
+
+    /// Discovery uses only current registrations. Capabilities are filtered again by the
+    /// desktop composition root against the owners it has installed.
+    pub fn granted_tools(
+        &self,
+        client: &AuthenticatedClient,
+        options: &ReadOptions,
+    ) -> Result<Vec<&'static PublishedTool>, CredentialError> {
+        self.require_open()?;
+        if !Arc::ptr_eq(&self.live, &client.live) {
+            return Err(CredentialError::Denied);
+        }
+        let tools = read_snapshot(&*self.store, options, |snapshot| {
+            let stamp = snapshot.stamp();
+            let (_, config) = current(snapshot.configuration())?;
+            let access = config.client(&client.id).filter(|stored| {
+                stamp.store_id == client.store
+                    && stamp.restore_epoch == client.epoch
+                    && stamp.now_ms < client.expires_ms
+                    && client.binding.enabled(&config, stamp.restore_epoch)
+                    && config.settings.revision == client.settings_revision
+                    && stored.authorized_epoch == Some(stamp.restore_epoch)
+                    && stored.access.enabled
+                    && stored.access.revision == client.client_revision
+                    && stored.access.credential_generation == client.generation
+            });
+            Ok(access.map(|stored| {
+                published_tools()
+                    .iter()
+                    .filter(|tool| {
+                        let allowed = match tool.binding.mode {
+                            Mode::Query => &stored.access.read_operations,
+                            Mode::Command => &stored.access.command_operations,
+                        };
+                        allowed.0.iter().any(|name| name.0 == tool.operation.name)
+                    })
+                    .collect()
+            }))
+        })?;
+        self.require_open()?;
+        tools.ok_or(CredentialError::Denied)
     }
 
     fn admission_target(

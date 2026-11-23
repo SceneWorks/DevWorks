@@ -2,8 +2,28 @@
 use super::read::Position;
 use crate::ports::storage::StorageError;
 use crate::protocol::Id;
+use crate::protocol::data::ViewSelection;
 use crate::services::cursor::CursorBinding;
 use crate::services::kernel::Failure;
+
+/// A continuation's lease is the actual view selection. Use this at admission and execution
+/// so a stale explicit view cannot hide the scope selected by the cursor.
+pub(crate) fn requested_view(
+    mut requested: Option<ViewSelection>,
+    cursor: Option<&str>,
+) -> Result<Option<ViewSelection>, Failure> {
+    if let Some(cursor) = cursor
+        && let Some(pin_id) = Cursors::pin(cursor)?
+    {
+        if let Some(ViewSelection::Pinned { pin_id: provided }) = &requested
+            && provided != &pin_id
+        {
+            return Err(StorageError::CursorExpired.into());
+        }
+        requested = Some(ViewSelection::Pinned { pin_id });
+    }
+    Ok(requested)
+}
 
 pub(super) struct Cursors {
     binding: CursorBinding,

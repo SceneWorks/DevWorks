@@ -318,6 +318,7 @@ impl Gateway<'_> {
                 return Ok(reply);
             }
         };
+        crate::services::mcp_inbound::access::bind_publication(ctx, Mode::Query, &authorization);
         let mut admitted = AdmittedQuery {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -358,6 +359,11 @@ impl Gateway<'_> {
         let answered = read_snapshot(self.store, &read_options, |snapshot| {
             let stamp = snapshot.stamp().clone();
             if &stamp.store_id != ctx.store_id() || stamp.restore_epoch != ctx.restore_epoch().get()
+            {
+                return Ok(None);
+            }
+            if ctx.principal_kind() == PrincipalKind::McpClient
+                && !crate::authority::authorization_holds(snapshot, &authorization)?
             {
                 return Ok(None);
             }
@@ -624,6 +630,7 @@ impl Gateway<'_> {
                 }));
             }
         };
+        crate::services::mcp_inbound::access::bind_publication(ctx, Mode::Command, &authorization);
         let mut admitted = AdmittedCommand {
             descriptor: decoded.descriptor,
             binding: decoded.binding,

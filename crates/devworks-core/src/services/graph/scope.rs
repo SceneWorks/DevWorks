@@ -12,7 +12,7 @@ pub(super) fn unavailable(id: Option<Id>) -> Failure {
     Refusal::new(DomainErrorCode::ViewUnavailable, "graph_view", id).into()
 }
 
-pub(super) fn overlay(view: &StoredView) -> bool {
+pub(crate) fn overlay(view: &StoredView) -> bool {
     view.coverage.get("head").is_some()
         || view.coverage.get("overlayId").is_some()
         || view.branch_id.is_some()

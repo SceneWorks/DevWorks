@@ -218,17 +218,8 @@ impl QueryHandler for GraphService {
             if env.stopped(self.clock.now_ms().get()) {
                 return Err(StorageError::Cancelled.into());
             }
-            let mut requested = request.view.clone();
-            if let Some(cursor) = &request.cursor
-                && let Some(pin_id) = Cursors::pin(cursor)?
-            {
-                if let Some(ViewSelection::Pinned { pin_id: provided }) = &requested
-                    && provided != &pin_id
-                {
-                    return Err(StorageError::CursorExpired.into());
-                }
-                requested = Some(ViewSelection::Pinned { pin_id });
-            }
+            let requested =
+                super::cursor::requested_view(request.view.clone(), request.cursor.as_deref())?;
             let current_worktree = if requested.is_none() {
                 match self.current_worktree(ctx, deadline, env.cancellation) {
                     Err(Failure::Refused(reason))

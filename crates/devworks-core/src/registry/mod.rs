@@ -445,7 +445,7 @@ fn refs(v: &Value, out: &mut BTreeSet<String>) {
     }
 }
 /// Keeps only the definitions the document still references (transitively).
-fn prune_definitions(mut v: Value) -> Value {
+pub(crate) fn prune_definitions(mut v: Value) -> Value {
     let Some(Value::Object(defs)) = v.as_object_mut().and_then(|m| m.remove("$defs")) else {
         return v;
     };

@@ -14,6 +14,7 @@ use devworks_core::protocol::support::{BoundedList, BoundedText, Limit, Port};
 use devworks_core::protocol::{Id, ProjectId, Revision};
 use eframe::egui::{self, Ui};
 use serde_json::json;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub enum Action {
@@ -30,6 +31,7 @@ pub struct Panel {
     pub(crate) clients: Vec<McpClientAccess>,
     pub(crate) busy: bool,
     pub(crate) message: Option<String>,
+    stdio_paths: Option<(PathBuf, PathBuf)>,
     load_requested: bool,
     enabled: bool,
     stdio: bool,
@@ -115,7 +117,12 @@ fn access(action: McpClientAccessAction) -> Action {
 }
 
 impl Panel {
-    pub(crate) fn loaded(&mut self, status: McpInboundStatus, clients: Vec<McpClientAccess>) {
+    pub(crate) fn loaded(
+        &mut self,
+        status: McpInboundStatus,
+        clients: Vec<McpClientAccess>,
+        stdio_paths: Option<(PathBuf, PathBuf)>,
+    ) {
         self.enabled = status.settings.enabled;
         self.stdio = status
             .settings
@@ -136,6 +143,7 @@ impl Panel {
             .map_or_else(String::new, |p| p.get().to_string());
         self.status = Some(status);
         self.clients = clients;
+        self.stdio_paths = stdio_paths;
         if let Some(draft) = &self.client {
             self.client = self
                 .clients
@@ -194,7 +202,7 @@ impl Panel {
                         }
                     }
                     if widgets::secondary_button(ui, "Copy setup").clicked() {
-                        ui.ctx().copy_text(setup(status));
+                        ui.ctx().copy_text(setup(status, self.stdio_paths.as_ref()));
                     }
                 });
             }
@@ -279,7 +287,7 @@ fn text(ui: &mut Ui, label: &str, buffer: &mut String) {
 
 /// Structural setup information only. A separately provisioned local credential is never
 /// accepted by this function. Protocol versions come from actual host status.
-fn setup(status: &McpInboundStatus) -> String {
+fn setup(status: &McpInboundStatus, stdio_paths: Option<&(PathBuf, PathBuf)>) -> String {
     let mut value = json!({
         "available": matches!(status.state, ItemState::Enabled),
         "supportedProtocolVersions": status.protocol_versions.0,
@@ -287,8 +295,18 @@ fn setup(status: &McpInboundStatus) -> String {
     for binding in &status.settings.bindings.0 {
         match binding {
             McpServerBinding::Stdio => {
+                let (command, args) = match stdio_paths
+                    .and_then(|(exe, root)| Some((exe.to_str()?, root.to_str()?)))
+                {
+                    Some((exe, root)) => (exe, vec!["mcp", "--data-dir", root]),
+                    None => (
+                        "<installed DevWorks executable>",
+                        vec!["mcp", "--data-dir", "<active DevWorks data directory>"],
+                    ),
+                };
                 value["stdio"] = json!({
-                    "command": "<installed DevWorks MCP bridge>",
+                    "command": command,
+                    "args": args,
                     "environment": {"DEVWORKS_MCP_TOKEN": "<protected credential reference>"},
                 });
             }

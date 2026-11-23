@@ -850,6 +850,74 @@ fn revocation_during_a_native_query_prevents_publication() {
     });
 }
 
+#[test]
+fn outgoing_mcp_answer_rechecks_scope_after_gateway_returns() {
+    use devworks_core::protocol::results::DomainQueryReply;
+    use devworks_core::services::mcp_inbound::{publication_allowed, published_tools};
+
+    let fx = Fixture::new();
+    fx.configure(8148);
+    let registered = fx.register();
+    let active = fx.replace("enable", &registered, &[]);
+    let token = fx
+        .credentials
+        .provision(&fx.human, &active.client_id, &active.revision)
+        .unwrap();
+    let client = fx
+        .credentials
+        .authenticate(Binding::LocalIpc, &token)
+        .unwrap();
+    let options = ReadOptions::default();
+    let tools = fx.credentials.granted_tools(&client, &options).unwrap();
+    assert_eq!(tools.len(), 1);
+    let tool = tools[0];
+    assert!(std::ptr::eq(
+        tool,
+        published_tools()
+            .iter()
+            .find(|t| t.name == "devworks_projects_get")
+            .unwrap()
+    ));
+    let id = id("late-publication");
+    let request = tool
+        .request(
+            &id,
+            json!({
+                "projectId": "first",
+                "input": { "projectId": "first" },
+            }),
+        )
+        .unwrap();
+    let ctx = client.invocation(id, request.project, Revision::new(1).unwrap());
+    let authority = HostAuthority {
+        store: &*fx.store,
+        clock: &*fx.h.clock,
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: &*fx.store,
+        authority: &authority,
+        ids: &*fx.h.ids,
+    };
+    assert!(matches!(
+        fx.cases
+            .query(&gateway, &ctx, tool.operation.name, &request.frame)
+            .unwrap(),
+        DomainQueryReply::Result { .. }
+    ));
+    assert!(publication_allowed(&ctx, &*fx.store, &options, &[]));
+    fx.admin(
+        "revocation",
+        "mcp_server.set_client_access",
+        json!({"action":{"kind":"Revoke","clientId":active.client_id,"expectedRevision":active.revision}}),
+    );
+    assert!(!publication_allowed(&ctx, &*fx.store, &options, &[]));
+    assert!(matches!(
+        fx.credentials.granted_tools(&client, &options),
+        Err(CredentialError::Denied)
+    ));
+}
+
 #[cfg(windows)]
 #[test]
 fn incoming_named_pipe_rechecks_the_kernel_peer_for_its_message() {

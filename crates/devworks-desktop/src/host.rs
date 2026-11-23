@@ -273,7 +273,7 @@ pub struct Host {
     web: Arc<WebService>,
     /// The native outgoing MCP client the runtime installed at boot.
     mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>>,
-    incoming_mcp: devworks_core::services::mcp_inbound::Credentials,
+    incoming_mcp: crate::mcp_inbound_server::IncomingMcp,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
@@ -707,10 +707,24 @@ async fn compose(
         ))
         .map_err(StartError::Principal)?;
     runtime.notification_wakeup();
-    let incoming_mcp = devworks_core::services::mcp_inbound::Credentials::new(
-        runtime.store().clone(),
-        devworks_adapters::secrets::native(),
-        Arc::new(devworks_adapters::OsEntropy),
+    let protected: Arc<dyn SecretStore> = match &config.secrets {
+        #[cfg(any(test, feature = "test-support"))]
+        Some(test_secrets) => test_secrets.clone(),
+        _ => devworks_adapters::secrets::native().into(),
+    };
+    let credentials = Arc::new(
+        devworks_core::services::mcp_inbound::Credentials::with_secrets(
+            runtime.store().clone(),
+            protected,
+            Arc::new(devworks_adapters::OsEntropy),
+        ),
+    );
+    let incoming_mcp = crate::mcp_inbound_server::IncomingMcp::start(
+        runtime.clone(),
+        authority.clone(),
+        credentials,
+        ids.clone(),
+        &config.data_root,
     );
     Ok(Host {
         runtime,
@@ -1032,7 +1046,7 @@ impl Backend for DesktopBackend {
     }
 
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
-        self.host.runtime.query(&self.host.ctx, operation, frame)
+        self.query_cancellable(operation, frame, &Default::default())
     }
     fn supports_query_cancellation(&self) -> bool {
         true
@@ -1043,9 +1057,18 @@ impl Backend for DesktopBackend {
         frame: &[u8],
         options: &devworks_core::ports::storage::ReadOptions,
     ) -> QueryOutcome {
-        self.host
+        let mut outcome = self
+            .host
             .runtime
-            .query_with(&self.host.ctx, operation, frame, options)
+            .query_with(&self.host.ctx, operation, frame, options);
+        if let Ok(devworks_core::protocol::results::DomainQueryReply::Result {
+            result: devworks_core::protocol::results::OperationResult::McpServerStatus { value },
+            ..
+        }) = &mut outcome
+        {
+            self.host.incoming_mcp.report(value);
+        }
+        outcome
     }
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
@@ -1326,6 +1349,10 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn incoming_mcp_stdio_paths(&self) -> Option<(PathBuf, PathBuf)> {
+        Some((std::env::current_exe().ok()?, self.host.data_root.clone()))
+    }
+
     fn provision_inbound_mcp_credential(
         &self,
         client: &Id,
@@ -1334,6 +1361,7 @@ impl Backend for DesktopBackend {
         use devworks_core::services::mcp_inbound::CredentialError as E;
         self.host
             .incoming_mcp
+            .credentials
             .provision(&self.host.ctx, client, revision)
             .map_err(|error| {
                 match error {

@@ -1,7 +1,7 @@
 //! Exact composed graph reads, private source capture, and retention leases.
 mod analysis;
 mod budget;
-mod cursor;
+pub(crate) mod cursor;
 mod dataset;
 mod impact;
 mod incident;
@@ -22,7 +22,7 @@ mod scan;
 pub(crate) mod schema_refs;
 #[doc(hidden)]
 pub use scan::scanned_edges;
-mod scope;
+pub(crate) mod scope;
 mod search;
 
 mod operators;

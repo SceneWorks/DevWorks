@@ -35,7 +35,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_projects_get",
@@ -56,7 +57,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_features_list",
@@ -77,7 +79,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_features_get",
@@ -98,7 +101,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_features_create",
@@ -119,7 +123,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_features_edit_plan",
@@ -140,7 +145,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_features_prioritize",
@@ -161,7 +167,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_features_dependencies",
@@ -182,7 +189,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_features_request_plan_approval",
@@ -203,7 +211,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_features_edit",
@@ -224,7 +233,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_issues_list",
@@ -245,7 +255,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_issues_get",
@@ -266,7 +277,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_issues_create",
@@ -287,7 +299,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_issues_edit",
@@ -308,7 +321,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_issues_prioritize",
@@ -329,7 +343,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_issues_publish",
@@ -350,7 +365,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_issues_link",
@@ -371,7 +387,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_list",
@@ -392,7 +409,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_get",
@@ -413,7 +431,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_create",
@@ -434,7 +453,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_edit",
@@ -455,7 +475,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_prioritize",
@@ -476,7 +497,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_tasks_move",
@@ -497,7 +519,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_assign",
@@ -518,7 +541,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_dependency_links",
@@ -539,7 +563,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_acceptance_evidence",
@@ -560,7 +585,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_sync_plan",
@@ -581,7 +607,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_tasks_set_feature",
@@ -602,7 +629,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_workflows_list",
@@ -623,7 +651,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_workflows_create_status",
@@ -644,7 +673,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_workflows_rename_status",
@@ -665,7 +695,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_workflows_order",
@@ -686,7 +717,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_workflows_reassign_and_remove",
@@ -707,7 +739,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_next_work_inspect_claim",
@@ -728,7 +761,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_next_work_inspect_queue",
@@ -749,7 +783,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_runs_inspect",
@@ -770,7 +805,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_runs_eligibility",
@@ -791,7 +827,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_agents_inspect",
@@ -812,7 +849,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_agents_inbox",
@@ -833,7 +871,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_sessions_list",
@@ -854,7 +893,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_sessions_get",
@@ -875,7 +915,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_sessions_transcript",
@@ -893,7 +934,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_sessions_briefing",
@@ -914,7 +956,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_sessions_context_sources",
@@ -935,7 +978,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_history_events",
@@ -956,7 +1000,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_history_work_lineage",
@@ -977,7 +1022,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_history_git_links",
@@ -998,7 +1044,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_history_evidence_links",
@@ -1019,7 +1066,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_history_operation_status",
@@ -1040,7 +1088,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_history_tool_usage",
@@ -1061,7 +1110,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_history_command_receipt",
@@ -1082,7 +1132,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 6
     },
     {
       "name": "devworks_code_search",
@@ -1103,7 +1154,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_architecture",
@@ -1124,7 +1176,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_dependency",
@@ -1145,7 +1198,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_impact",
@@ -1166,7 +1220,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_source",
@@ -1187,7 +1242,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_traverse",
@@ -1208,7 +1264,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_graph_scope_status",
@@ -1229,7 +1286,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_overview",
@@ -1250,7 +1308,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_nodes_by_file",
@@ -1271,7 +1330,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_node_detail",
@@ -1292,7 +1352,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_set_trust",
@@ -1313,7 +1374,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_file_impact",
@@ -1334,7 +1396,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_graph_schema",
@@ -1355,7 +1418,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_call_path",
@@ -1376,7 +1440,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_data_lineage",
@@ -1397,7 +1462,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_consumers",
@@ -1418,7 +1484,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_publishers",
@@ -1439,7 +1506,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_snippet",
@@ -1460,7 +1528,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_code_repository_dependencies",
@@ -1481,7 +1550,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_indexing_discover",
@@ -1502,7 +1572,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_indexing_index",
@@ -1523,7 +1594,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_indexing_reindex",
@@ -1544,7 +1616,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_indexing_refresh_overlay",
@@ -1565,7 +1638,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_indexing_retire_view",
@@ -1586,7 +1660,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_indexing_cancel",
@@ -1607,7 +1682,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_indexing_status",
@@ -1628,7 +1704,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_indexing_runs",
@@ -1649,7 +1726,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_indexing_configure_sources",
@@ -1670,7 +1748,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_analysis_health",
@@ -1691,7 +1770,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_cross_repo_links",
@@ -1712,7 +1792,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_status",
@@ -1733,7 +1814,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_clusters",
@@ -1754,7 +1836,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_cluster_detail",
@@ -1775,7 +1858,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_security",
@@ -1796,7 +1880,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_metrics",
@@ -1817,7 +1902,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_hotspots",
@@ -1838,7 +1924,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_fleet_health",
@@ -1859,7 +1946,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_archival_candidates",
@@ -1880,7 +1968,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_analysis_file_hotspot",
@@ -1901,7 +1990,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_schemas_connections",
@@ -1922,7 +2012,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 5
     },
     {
       "name": "devworks_schemas_objects",
@@ -1943,7 +2034,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 5
     },
     {
       "name": "devworks_schemas_relationships",
@@ -1964,7 +2056,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 5
     },
     {
       "name": "devworks_schemas_code_references",
@@ -1985,7 +2078,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_search",
@@ -2006,7 +2100,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_read",
@@ -2027,7 +2122,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_record",
@@ -2048,7 +2144,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_revise",
@@ -2069,7 +2166,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_relate",
@@ -2090,7 +2188,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_tag",
@@ -2111,7 +2210,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_verify",
@@ -2132,7 +2232,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_retract",
@@ -2153,7 +2254,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_scope",
@@ -2174,7 +2276,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_diagnostics",
@@ -2195,7 +2298,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_knowledge_delete_by_source",
@@ -2216,7 +2320,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_knowledge_delete_selected",
@@ -2237,7 +2342,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_knowledge_write_status",
@@ -2258,7 +2364,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_subgraph",
@@ -2279,7 +2386,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_entity_bundle",
@@ -2300,7 +2408,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_entity_graph",
@@ -2321,7 +2430,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_claim_bundle",
@@ -2342,7 +2452,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_expand_frontier",
@@ -2363,7 +2474,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_render_summary",
@@ -2384,7 +2496,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_knowledge_query",
@@ -2405,7 +2518,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_knowledge_promote",
@@ -2426,7 +2540,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_challenge",
@@ -2447,7 +2562,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 2
     },
     {
       "name": "devworks_knowledge_tagged_lessons",
@@ -2468,7 +2584,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 8
     },
     {
       "name": "devworks_documents_import",
@@ -2489,7 +2606,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 13
     },
     {
       "name": "devworks_documents_list",
@@ -2510,7 +2628,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 13
     },
     {
       "name": "devworks_documents_read",
@@ -2531,7 +2650,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 13
     },
     {
       "name": "devworks_documents_search",
@@ -2549,7 +2669,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_documents_index",
@@ -2570,7 +2691,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 12
     },
     {
       "name": "devworks_documents_retry",
@@ -2591,7 +2713,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_documents_disable_retrieval",
@@ -2612,7 +2735,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 13
     },
     {
       "name": "devworks_documents_remove_index",
@@ -2633,7 +2757,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 13
     },
     {
       "name": "devworks_artifacts_list",
@@ -2654,7 +2779,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 4
     },
     {
       "name": "devworks_artifacts_read",
@@ -2675,7 +2801,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 4
     },
     {
       "name": "devworks_artifacts_preview",
@@ -2696,7 +2823,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_artifacts_export",
@@ -2717,7 +2845,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_conventions_list",
@@ -2738,7 +2867,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 4
     },
     {
       "name": "devworks_conventions_read",
@@ -2759,7 +2889,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_edit",
@@ -2780,7 +2911,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_version",
@@ -2801,7 +2933,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 4
     },
     {
       "name": "devworks_conventions_applicability",
@@ -2822,7 +2955,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_retire",
@@ -2843,7 +2977,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_index",
@@ -2864,7 +2999,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_import",
@@ -2885,7 +3021,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_delete",
@@ -2906,7 +3043,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_move",
@@ -2927,7 +3065,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_resources",
@@ -2948,7 +3087,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 4
     },
     {
       "name": "devworks_conventions_delete_resource",
@@ -2969,7 +3109,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_conventions_search",
@@ -2990,7 +3131,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 4
     },
     {
       "name": "devworks_help_search",
@@ -3011,7 +3153,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_help_read",
@@ -3032,7 +3175,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_help_topic_for_screen",
@@ -3053,7 +3197,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_help_package_guides",
@@ -3074,7 +3219,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_repositories_list",
@@ -3095,7 +3241,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_repositories_get",
@@ -3116,7 +3263,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_repositories_nodes",
@@ -3137,7 +3285,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 3
     },
     {
       "name": "devworks_repositories_remove_index",
@@ -3158,7 +3307,8 @@
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_repositories_readme",
@@ -3179,7 +3329,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_repositories_summary",
@@ -3200,7 +3351,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     },
     {
       "name": "devworks_repositories_search",
@@ -3221,7 +3373,8 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.",
+      "schemaRevision": 1
     }
   ],
   "dispositions": [
