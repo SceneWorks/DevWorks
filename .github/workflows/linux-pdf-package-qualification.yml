@@ -1,0 +1,152 @@
+name: DW-59 installed Linux PDF package qualification
+
+on:
+  push:
+    branches: [codex/dw-59-linux-package-proof]
+    paths:
+      - .github/workflows/linux-pdf-package-qualification.yml
+      - tools/ci/qualify-linux-pdf-package.sh
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  WORKER_RUN: '45090958551'
+  WORKER_HEAD: 65dcc58e3eb89d050478074806d6952557ae3435
+
+jobs:
+  package:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Admit the exact successful worker target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          gh run view "$WORKER_RUN" --repo "$GITHUB_REPOSITORY" --json headSha,jobs |
+            jq -e --arg head "$WORKER_HEAD" --arg job "Native PDF worker ($TARGET)" \
+              '.headSha == $head and any(.jobs[]; .name == $job and .conclusion == "success")'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: devworks-native-pdf-${{ matrix.target }}
+          path: ${{ runner.temp }}/pdf
+          run-id: ${{ env.WORKER_RUN }}
+          github-token: ${{ github.token }}
+      - name: Assemble a qualification deb and preserve the exact relocatable archive
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: tools/ci/qualify-linux-pdf-package.sh stage "$RUNNER_TEMP/pdf" "$TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: devworks-qualification-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/pdf/qualification.json
+            ${{ runner.temp }}/pdf/devworks-native-pdf-${{ matrix.target }}.tar.gz
+            ${{ runner.temp }}/pdf/devworks-qualification.deb
+          if-no-files-found: error
+          retention-days: 3
+
+  installed:
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: ubuntu-26.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: devworks-qualification-${{ matrix.target }}
+          path: ${{ runner.temp }}/pdf
+      - name: Install the same package on a fresh host and exercise X11 and Wayland
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: tools/ci/qualify-linux-pdf-package.sh verify "$RUNNER_TEMP/pdf" "$TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: native-pdf-package-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/pdf/results/*.log
+            ${{ runner.temp }}/pdf/results/*.png
+          if-no-files-found: ignore
+          retention-days: 3
+
+  debian-userspace:
+    name: Debian 13 userspace (${{ matrix.target }})
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: devworks-qualification-${{ matrix.target }}
+          path: ${{ runner.temp }}/pdf
+      - name: Check exact deb and relocated archive in Debian 13 userspace
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          docker pull debian:13-slim
+          image=$(docker image inspect --format '{{index .RepoDigests 0}}' debian:13-slim)
+          printf 'Debian container image %s on host %s\n' "$image" "$(uname -r)"
+          docker run --rm --env TARGET \
+            --mount "type=bind,source=$RUNNER_TEMP/pdf,target=/proof" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tools/ci/qualify-linux-pdf-package.sh,target=/qualification,readonly" \
+            "$image" bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends jq python3 sudo passwd
+              useradd -m -s /bin/bash -u 1001 qualification
+              printf "%s\n" "qualification ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/qualification
+              chmod 440 /etc/sudoers.d/qualification
+              chown -R qualification:qualification /proof
+              runuser -u qualification -- /qualification verify /proof "$TARGET"
+            '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: native-pdf-package-debian-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/pdf/results/*.log
+            ${{ runner.temp }}/pdf/results/*.png
+          if-no-files-found: ignore
+          retention-days: 3
