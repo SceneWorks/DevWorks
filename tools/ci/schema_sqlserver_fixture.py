@@ -77,6 +77,16 @@ def qualify_data():
             INSERT dbo.dw_public VALUES(1,'public'),(2,'next');
             CREATE TABLE dbo.dw_private(id int NOT NULL PRIMARY KEY, secret varchar(40) NOT NULL);
             INSERT dbo.dw_private VALUES(1,'private');
+            CREATE TABLE dbo.dw_nullable_integers(
+                id int NOT NULL PRIMARY KEY,
+                tiny_value tinyint NULL, small_value smallint NULL,
+                int_value int NULL, big_value bigint NULL
+            );
+            INSERT dbo.dw_nullable_integers VALUES
+                (1,42,-42,-42000,4200000000),
+                (2,0,-32768,-2147483648,-9223372036854775808),
+                (3,255,32767,2147483647,9223372036854775807),
+                (4,NULL,NULL,NULL,NULL);
         """)
         for statement in (
             'CREATE VIEW dbo.dw_view AS SELECT secret FROM dbo.dw_private',

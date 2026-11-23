@@ -144,6 +144,37 @@ fn fixture(engine: DbEngine, bind: &str) {
             Err(failure) => panic!("checked nested view: {failure:?}"),
             _ => panic!("checked view returned a mutation"),
         }
+
+        let mut query = request(
+            &engine,
+            DataMode::Read,
+            "SELECT tiny_value, small_value, int_value, big_value FROM dbo.dw_nullable_integers ORDER BY id",
+            vec![],
+        );
+        query.limits.rows = 4;
+        let result =
+            runtime.block_on(NetworkDataAdapter.execute(query, Arc::new(Guard::default())));
+        let rows = match result {
+            Ok(DataOutcome::Read(rows)) => rows,
+            Err(failure) => panic!("nullable integer read: {failure:?}"),
+            _ => panic!("nullable integer read returned a mutation"),
+        };
+        assert!(!rows.truncated);
+        assert!(
+            rows.rows
+                == [
+                    [42, -42, -42_000, 4_200_000_000]
+                        .map(Scalar::Integer)
+                        .to_vec(),
+                    [0, i16::MIN.into(), i32::MIN.into(), i64::MIN]
+                        .map(Scalar::Integer)
+                        .to_vec(),
+                    [u8::MAX.into(), i16::MAX.into(), i32::MAX.into(), i64::MAX]
+                        .map(Scalar::Integer)
+                        .to_vec(),
+                    vec![Scalar::Null; 4],
+                ]
+        );
     }
     if matches!(&engine, DbEngine::Postgres) {
         for sql in [

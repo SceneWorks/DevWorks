@@ -9,7 +9,7 @@ use devworks_core::services::database::statement::{CheckedStatement, DataMode};
 use futures_util::TryStreamExt;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use tiberius::numeric::Numeric;
-use tiberius::{Client, ColumnType, Query, QueryItem, Row};
+use tiberius::{Client, ColumnData, ColumnType, Query, QueryItem, Row};
 use tokio::net::TcpStream;
 use tokio_util::compat::Compat;
 
@@ -501,10 +501,18 @@ fn decode(row: &Row, index: usize, kind: ColumnType) -> Result<Scalar, DataFailu
             .try_get::<i32, _>(index)
             .map_err(bad)?
             .map(|number| Scalar::Integer(number.into())),
-        ColumnType::Int8 | ColumnType::Intn => row
+        ColumnType::Int8 => row
             .try_get::<i64, _>(index)
             .map_err(bad)?
             .map(Scalar::Integer),
+        // Intn carries the integer width in the decoded cell.
+        ColumnType::Intn => match row.get_column_data(index).map_err(bad)? {
+            ColumnData::U8(number) => number.map(|number| Scalar::Integer(number.into())),
+            ColumnData::I16(number) => number.map(|number| Scalar::Integer(number.into())),
+            ColumnData::I32(number) => number.map(|number| Scalar::Integer(number.into())),
+            ColumnData::I64(number) => number.map(Scalar::Integer),
+            _ => return Err(refused(FailureKind::UnsupportedValue)),
+        },
         ColumnType::BigVarChar
         | ColumnType::BigChar
         | ColumnType::NVarchar
@@ -525,4 +533,58 @@ fn decode(row: &Row, index: usize, kind: ColumnType) -> Result<Scalar, DataFailu
         _ => return Err(refused(FailureKind::UnsupportedValue)),
     };
     Ok(value.unwrap_or(Scalar::Null))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn intn_decodes_each_cell_width_and_its_null() {
+        let values = [
+            (
+                ColumnData::U8(Some(u8::MIN)),
+                Scalar::Integer(u8::MIN.into()),
+            ),
+            (
+                ColumnData::U8(Some(u8::MAX)),
+                Scalar::Integer(u8::MAX.into()),
+            ),
+            (
+                ColumnData::I16(Some(i16::MIN)),
+                Scalar::Integer(i16::MIN.into()),
+            ),
+            (
+                ColumnData::I16(Some(i16::MAX)),
+                Scalar::Integer(i16::MAX.into()),
+            ),
+            (
+                ColumnData::I32(Some(i32::MIN)),
+                Scalar::Integer(i32::MIN.into()),
+            ),
+            (
+                ColumnData::I32(Some(i32::MAX)),
+                Scalar::Integer(i32::MAX.into()),
+            ),
+            (ColumnData::I64(Some(i64::MIN)), Scalar::Integer(i64::MIN)),
+            (ColumnData::I64(Some(i64::MAX)), Scalar::Integer(i64::MAX)),
+            (ColumnData::U8(None), Scalar::Null),
+            (ColumnData::I16(None), Scalar::Null),
+            (ColumnData::I32(None), Scalar::Null),
+            (ColumnData::I64(None), Scalar::Null),
+        ];
+        for (value, expected) in values {
+            let row = Row::builder()
+                .column("number", ColumnType::Intn, value)
+                .build();
+            assert!(decode(&row, 0, ColumnType::Intn).unwrap() == expected);
+        }
+        let row = Row::builder()
+            .column("number", ColumnType::Intn, ColumnData::Bit(Some(true)))
+            .build();
+        assert!(matches!(
+            decode(&row, 0, ColumnType::Intn),
+            Err(DataFailure::Refused(FailureKind::UnsupportedValue))
+        ));
+    }
 }
