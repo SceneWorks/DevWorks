@@ -374,7 +374,7 @@ fn issue_command_requires_the_explicit_repository_and_the_issues_project() {
             tx.work().insert_work(&StoredWork {
                 id: id(issue),
                 project_id,
-                kind: "issue".into(),
+                kind: devworks_core::ports::storage::TASK.into(),
                 parent_feature_id: None,
                 status_id: None,
                 title: issue.into(),
