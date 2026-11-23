@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory)][string]$Package,
     [Parameter(Mandatory)][string]$Tests,
     [Parameter(Mandatory)][string]$Output,
-    [Parameter(Mandatory)][string]$Source
+    [Parameter(Mandatory)][string]$Source,
+    [Parameter(Mandatory)][ValidateSet('76', '78')][int]$ExpectedSchema,
+    [switch]$ProbeIncomingMcp
 )
 
 . (Join-Path $PSScriptRoot 'windows-test-installer.ps1')
@@ -68,7 +70,7 @@ $evidenceText = & $desktop --release-evidence
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read the installed runtime identity' }
 $evidence = $evidenceText | ConvertFrom-Json -AsHashtable
 if ($evidence.target -cne 'x86_64-pc-windows-msvc' -or $evidence.build -cne $Source -or
-    $evidence.migrations.Count -ne 76) { throw 'Unexpected installed build or migration catalogue' }
+    $evidence.migrations.Count -ne $ExpectedSchema) { throw 'Unexpected installed build or migration catalogue' }
 $releaseJson = Join-Path $work 'release-evidence.json'
 $evidenceText | Set-Content -LiteralPath $releaseJson -Encoding utf8NoBOM
 @'
@@ -77,19 +79,50 @@ import sqlite3
 import sys
 from pathlib import Path
 
-profile, release = (Path(value) for value in sys.argv[1:])
+profile, release = (Path(value) for value in sys.argv[1:3])
+schema = int(sys.argv[3])
 expected = json.loads(release.read_text(encoding="utf-8"))["migrations"]
 database = sqlite3.connect((profile / "workspace.sqlite").resolve().as_uri() + "?mode=ro", uri=True)
-assert database.execute("SELECT schema_version, minimum_writer, minimum_reader FROM store_meta").fetchone() == (76, 76, 68)
-assert database.execute("PRAGMA user_version").fetchone() == (76,)
+assert database.execute("SELECT schema_version, minimum_writer, minimum_reader FROM store_meta").fetchone() == (schema, schema, 68)
+assert database.execute("PRAGMA user_version").fetchone() == (schema,)
 assert database.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall() == [
     (row["version"], row["checksum"]) for row in expected
 ]
 assert database.execute("SELECT shutdown_state FROM app_boots ORDER BY started_at DESC LIMIT 2").fetchall() == [
     ("Clean",), ("Clean",)
 ]
-'@ | python -I - $profile $releaseJson
+'@ | python -I - $profile $releaseJson $ExpectedSchema
 if ($LASTEXITCODE -ne 0) { throw 'Installed profile or boot evidence did not verify' }
+
+if ($ProbeIncomingMcp) {
+    $database = Join-Path $profile 'workspace.sqlite'
+    $databaseHash = Get-Sha256 $database
+    $probe = [Diagnostics.ProcessStartInfo]::new($desktop)
+    $probe.UseShellExecute = $false
+    $probe.CreateNoWindow = $true
+    $probe.RedirectStandardOutput = $true
+    $probe.RedirectStandardError = $true
+    $probe.ArgumentList.Add('mcp')
+    $probe.ArgumentList.Add('--data-dir')
+    $probe.ArgumentList.Add($profile)
+    $probe.Environment['DEVWORKS_MCP_TOKEN'] = 'unregistered-package-probe'
+    $bridge = [Diagnostics.Process]::Start($probe)
+    try {
+        $stdout = $bridge.StandardOutput.ReadToEndAsync()
+        $stderr = $bridge.StandardError.ReadToEndAsync()
+        if (-not $bridge.WaitForExit(15000)) {
+            $bridge.Kill()
+            $bridge.WaitForExit()
+            throw 'Installed MCP bridge survived without the desktop'
+        }
+        if ($bridge.ExitCode -eq 0 -or $stdout.Result.Length -ne 0 -or
+            $stderr.Result -notmatch 'devworks mcp:' -or (Get-Sha256 $database) -cne $databaseHash) {
+            throw 'Installed MCP bridge did not fail closed without changing the store'
+        }
+    } finally {
+        $bridge.Dispose()
+    }
+}
 
 $env:DEVWORKS_PDF_PACKAGED_DESKTOP = $desktop
 & (Join-Path $Tests 'pdf_worker.exe') --skip native_crash_timeout_and_cancel_reap_the_worker --nocapture
@@ -118,13 +151,16 @@ $signed.qualification = [ordered]@{
     osBuild = $os.BuildNumber
     architecture = 'x64'
     scope = 'per-user'
-    schemaVersion = 76
+    schemaVersion = $ExpectedSchema
     startShortcutOpenedAndClosedCleanly = $true
     startLauncherSubsystem = 'Windows GUI'
     renderedAndClosedCleanly = $true
     installedPdfWorker = 'passed'
     installedDocuments = 'passed'
     uninstallPreservedProfile = $true
+}
+if ($ProbeIncomingMcp) {
+    $signed.qualification.closedDesktopMcpBridge = 'passed'
 }
 $signed | ConvertTo-Json -Depth 8 |
     Set-Content -LiteralPath (Join-Path $Output 'qualification.json') -Encoding utf8NoBOM

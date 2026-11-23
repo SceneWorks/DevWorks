@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Accepted DW-414 commit on feature/dw-f12
+        description: Exact qualified commit listed by this workflow
         required: true
         type: string
   pull_request:
@@ -34,6 +34,14 @@ jobs:
           ref: c80ce75ff0e88d94c2e31303f1ef0b363f14b526 # recipe for the original signed MSI
           path: previous
           persist-credentials: false
+      - name: Parse the installed acceptance script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $script = (Resolve-Path 'tools/ci/test-installed-devworks.ps1').Path
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw ($errors -join [Environment]::NewLine) }
       - name: Seed the original MSI registration and test profile
         shell: pwsh
         run: |
@@ -121,18 +129,29 @@ jobs:
       contents: read
     outputs:
       source: ${{ steps.source.outputs.source }}
+      schema: ${{ steps.source.outputs.schema }}
+      incoming_mcp: ${{ steps.source.outputs.incoming_mcp }}
     steps:
       - id: source
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           ACCEPTED_DW414: 1ae1be523bd7202900904fb9d1b173d1caa07996
+          ACCEPTED_DW62: 23751f08d9c7f2a1d8bb793ef9463b9faa4599bc
         run: |
           set -euo pipefail
-          test "$SOURCE_SHA" = "$ACCEPTED_DW414"
-          published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/feature/dw-f12" --jq .object.sha)"
+          case "$SOURCE_SHA" in
+            "$ACCEPTED_DW414") branch=feature/dw-f12; schema=76; incoming_mcp=false ;;
+            "$ACCEPTED_DW62") branch=codex/dw-62-composed-analysis; schema=78; incoming_mcp=true ;;
+            *) echo 'The requested source is not approved for this installer.' >&2; exit 1 ;;
+          esac
+          published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq .object.sha)"
           test "$SOURCE_SHA" = "$published"
-          printf 'source=%s\n' "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          {
+            printf 'source=%s\n' "$SOURCE_SHA"
+            printf 'schema=%s\n' "$schema"
+            printf 'incoming_mcp=%s\n' "$incoming_mcp"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build the exact Windows x64 payload and tests
@@ -434,12 +453,16 @@ jobs:
         shell: pwsh
         env:
           SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+          EXPECTED_SCHEMA: ${{ needs.preflight.outputs.schema }}
+          PROBE_INCOMING_MCP: ${{ needs.preflight.outputs.incoming_mcp }}
         run: |
           $arguments = @{
             Package = Join-Path $env:RUNNER_TEMP 'package'
             Tests = Join-Path $env:RUNNER_TEMP 'tests'
             Output = Join-Path $env:RUNNER_TEMP 'verified'
             Source = $env:SOURCE_SHA
+            ExpectedSchema = [int]$env:EXPECTED_SCHEMA
+            ProbeIncomingMcp = $env:PROBE_INCOMING_MCP -ceq 'true'
           }
           ./tools/ci/test-installed-devworks.ps1 @arguments
       - name: Encrypt the qualified installer for the owner
