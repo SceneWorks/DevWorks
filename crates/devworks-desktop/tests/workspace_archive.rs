@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use devworks_core::ports::secrets::{Secret, SecretError, SecretKey, SecretStore, SessionSecrets};
 use devworks_core::ports::storage::{ArchiveAction, ArchivePhase, Cancellation, WorkspaceArchive};
-use devworks_core::protocol::records::McpClientAccess;
+use devworks_core::protocol::records::{DocumentResult, McpClientAccess};
 use devworks_core::protocol::results::{DomainDecision, OperationCompletion, OperationResult};
 use devworks_core::protocol::{CommandReply, Id, ProjectId, Revision};
 use devworks_core::services::mcp_inbound::{Binding, CredentialError, Credentials};
@@ -176,7 +176,7 @@ fn allow_document_commands(b: &dyn Backend, registration: &McpClientAccess) -> M
             "kind":"Replace","clientId":registration.client_id,"expectedRevision":registration.revision,
             "name":registration.name,"enabled":true,"projectIds":["archive-project"],
             "repositoryIds":[],"worktreeIds":[],"readOperations":[],
-            "commandOperations":["documents.import"]
+            "commandOperations":["documents.import","documents.disable_retrieval","documents.remove_index","documents.index","documents.retry"]
         }}),
     ) else {
         panic!("MCP grant reply")
@@ -271,11 +271,64 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
                 .command(&context, "documents.import", &frame)
         };
         let result = ops::command_result(import()).unwrap();
-        assert!(matches!(result, OperationResult::DocumentsImport { .. }));
+        let OperationResult::DocumentsImport {
+            value: DocumentResult::Legacy(initial),
+        } = result
+        else {
+            panic!("typed legacy document import reply")
+        };
         assert!(matches!(
             import(),
             Ok(CommandReply::Recorded { replayed: true, .. })
         ));
+
+        let change = |operation: &str, kind, revision| {
+            let frame = json!({
+                "protocol":"1.0-draft.1", "requestKey":b.token("document-access"),
+                "command":{"kind":kind,"artifactId":initial.id,"expectedRevision":revision}
+            });
+            app.host()
+                .runtime()
+                .command(&context, operation, frame.to_string().as_bytes())
+        };
+        let OperationResult::DocumentsDisableRetrieval {
+            value: DocumentResult::Legacy(disabled),
+        } = ops::command_result(change(
+            "documents.disable_retrieval",
+            "DisableRetrieval",
+            &initial.revision,
+        ))
+        .unwrap()
+        else {
+            panic!("typed disable reply")
+        };
+        assert!(!disabled.retrieval_enabled);
+        assert_ne!(disabled.revision, initial.revision);
+        assert!(matches!(
+            ops::command_result(change(
+                "documents.remove_index",
+                "RemoveIndex",
+                &disabled.revision
+            )),
+            Ok(OperationResult::DocumentsRemoveIndex { .. })
+        ));
+        // A stale frame must fail before the service can start extraction or inference.
+        for operation in ["documents.index", "documents.retry"] {
+            let frame = fixture::command(
+                b,
+                operation,
+                json!({
+                    "documentId":initial.id, "versionId":initial.current_version.version_id,
+                    "expectedRevision":initial.revision
+                }),
+            );
+            assert!(matches!(
+                app.host().runtime().command(&context, operation, &frame),
+                Ok(CommandReply::Recorded { receipt, .. })
+                    if matches!(receipt.decision, DomainDecision::Refused { fault }
+                        if fault.code == devworks_core::protocol::DomainErrorCode::Conflict)
+            ));
+        }
     }
     let original_token = credentials(&app, &vault)
         .provision(app.host().user(), &pairing.client_id, &pairing.revision)
