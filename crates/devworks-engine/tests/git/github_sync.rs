@@ -687,7 +687,7 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
             result: exchange(502, Value::Null, &[]),
         },
         Request {
-            path: "/repos/Acme/kit/issues",
+            path: "/repositories/12/issues",
             query: "state=all",
             result: exchange(200, json!([matching]), &[]),
         },
