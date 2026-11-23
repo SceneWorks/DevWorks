@@ -125,8 +125,33 @@ def state(db):
     return json.loads(row[0]) if row else {}
 
 
-def evidence(image):
-    return json.loads(subprocess.check_output([image, "--release-evidence"], timeout=20))
+def native_output(image, argument, machine):
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    query = kernel.IsWow64Process2
+    query.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.USHORT), ctypes.POINTER(wintypes.USHORT)]
+    query.restype = wintypes.BOOL
+    with subprocess.Popen([image, argument], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
+        try:
+            process_machine = wintypes.USHORT()
+            native_machine = wintypes.USHORT()
+            # CPython retains the exact CreateProcess handle even if this probe exits quickly.
+            if not query(int(child._handle), ctypes.byref(process_machine), ctypes.byref(native_machine)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            assert (process_machine.value, native_machine.value) == (0, machine), (
+                image.name, hex(process_machine.value), hex(native_machine.value)
+            )
+            output, errors = child.communicate(timeout=25)
+        except BaseException:
+            child.kill()
+            child.communicate()
+            raise
+    if child.returncode != 0:
+        raise subprocess.CalledProcessError(child.returncode, child.args, output, errors)
+    print(f"{image.name} launched natively on Windows PE machine {machine:#06x}", flush=True)
+    return output
 
 
 def signed_stage(profile, image, release, key, mode):
@@ -315,16 +340,22 @@ def one_case(case, root, older, newer, key, next_release, wanted):
     print(json.dumps({"case": case.name, "journal": wanted, "preserved": "authored project"}), flush=True)
 
 
-def exercise(root, local_app_data, key, source):
+def exercise(root, local_app_data, key, source, target):
     if os.name != "nt":
         raise ValueError("native Windows runner required")
     older, newer = root / "older", root / "newer"
     for folder in (older, newer):
         assert {member.name for member in folder.iterdir()} == set(FILES)
-    old, new = evidence(older / ENTRY), evidence(newer / ENTRY)
+    machine = {"x86_64-pc-windows-msvc": 0x8664, "aarch64-pc-windows-msvc": 0xAA64}[target]
+    old, new = (
+        json.loads(native_output(folder / ENTRY, "--release-evidence", machine))
+        for folder in (older, newer)
+    )
+    for folder in (older, newer):
+        native_output(folder / FILES[1], "--check-pdf-worker-memory", machine)
     assert (old["version"], new["version"]) == ("0.1.0", "0.1.1")
     assert old["build"] == new["build"] == source
-    assert old["target"] == new["target"] == "x86_64-pc-windows-msvc"
+    assert old["target"] == new["target"] == target
     assert old["migrations"] == new["migrations"]
     programs = local_app_data / "Programs"
     programs.mkdir(exist_ok=True)
@@ -347,11 +378,13 @@ def main():
     run.add_argument("local_app_data", type=Path)
     run.add_argument("key", type=Path)
     run.add_argument("source")
+    run.add_argument("--target", choices=("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"),
+                     default="x86_64-pc-windows-msvc")
     args = parser.parse_args()
     if args.command == "prepare":
         prepare_source(args.checkout)
     else:
-        exercise(args.root, args.local_app_data, args.key, args.source)
+        exercise(args.root, args.local_app_data, args.key, args.source, args.target)
 
 
 if __name__ == "__main__":
