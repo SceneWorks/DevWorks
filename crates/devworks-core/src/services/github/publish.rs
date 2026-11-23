@@ -474,7 +474,16 @@ fn dispatch_preflight(
     job: &Publication,
     reconcile: bool,
 ) -> Result<bool, StorageError> {
-    let authorization = Authorization::direct().fenced_by(job.authority_fences.clone());
+    // A dispatched write may have succeeded before the client was revoked. The owning
+    // GitHub service may read the original remote target to settle its journal, while a
+    // new dispatch and any client-visible operation result still require live client authority.
+    let fences = job
+        .authority_fences
+        .iter()
+        .filter(|fence| !reconcile || !matches!(fence, AuthorityFence::ExternalMcp(_)))
+        .cloned()
+        .collect();
+    let authorization = Authorization::direct().fenced_by(fences);
     if snapshot.stamp().restore_epoch != job.restore_epoch
         || !authorization_holds(snapshot, &authorization)?
         || !snapshot.projects().project(&job.project)?.is_some_and(|p| {

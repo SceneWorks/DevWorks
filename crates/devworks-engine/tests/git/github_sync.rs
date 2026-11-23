@@ -763,6 +763,21 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
     })
     .unwrap();
     assert_eq!(after.state, OperationState::OutcomeUnknown);
+    change_access(
+        "mcp-rotate",
+        "mcp_server.set_client_access",
+        json!({"action":{
+            "kind":"RotateCredential","clientId":active.client_id,"expectedRevision":active.revision
+        }}),
+    );
+    assert!(
+        credentials
+            .authenticate(
+                devworks_core::services::mcp_inbound::Binding::LocalIpc,
+                &token,
+            )
+            .is_err()
+    );
     runtime().block_on(outbox.observe_unknown()).unwrap();
     runtime().block_on(outbox.run_until_idle()).unwrap();
     let confirmed = read(store.as_ref(), |snapshot| {
