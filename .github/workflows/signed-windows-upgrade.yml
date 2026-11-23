@@ -40,7 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.source_sha }}
-          APPROVED: 1d3a47668e4a5b0a6d171c6afbdca2fa77718502
+          APPROVED: bfe84f3e6183074ef23df7af0fd39e31af78fd8b
         run: |
           set -euo pipefail
           test "$REQUESTED" = "$APPROVED"
