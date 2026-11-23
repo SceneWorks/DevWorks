@@ -480,8 +480,8 @@ impl CoreServices {
 /// composition scripts one of its operations is [`crate::TestOverrides`].
 pub(crate) fn owned_operation(use_cases: &UseCases) -> Option<(&'static str, &'static str)> {
     use devworks_core::services::{
-        AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, mcp_inbound, packages, resources,
-        router, runs, sessions, web, workspace_archive,
+        AGENT_OPERATIONS, artifacts, diagnostics, history, knowledge, mcp, mcp_inbound, packages,
+        resources, router, runs, sessions, web, workspace_archive,
     };
     let families: [(&'static str, &[&str]); 17] = [
         ("artifacts", &artifacts::OPERATIONS),

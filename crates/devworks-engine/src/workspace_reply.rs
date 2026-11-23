@@ -1112,7 +1112,8 @@ fn prepare_prompt(
         tool_count > 0,
         images,
     )?;
-    let (binding, headroom, _) = crate::agent_turns::initial_route_binding(engine, session, &route)?;
+    let (binding, headroom, _) =
+        crate::agent_turns::initial_route_binding(engine, session, &route)?;
     let mut instructions: Vec<_> = (!role.text.is_empty())
         .then_some(TextBlock {
             text: role.text,

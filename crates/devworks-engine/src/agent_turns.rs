@@ -563,7 +563,13 @@ async fn run_native_loop(
                         tools_required,
                         needs_images,
                     )?;
-                    Ok::<_, TurnError>(publish_first_context_until(&engine, &ctx, &agent, &route, &|| stopped.is_cancelled())?)
+                    Ok::<_, TurnError>(publish_first_context_until(
+                        &engine,
+                        &ctx,
+                        &agent,
+                        &route,
+                        &|| stopped.is_cancelled(),
+                    )?)
                 })
                 .await
                 .map_err(|error| TurnError::Worker(format!("initial context worker: {error}")))??;

@@ -383,8 +383,7 @@ impl Gateway<'_> {
                     .map_or(Ok(None), |check| check(ctx, &admitted, answer, s))
                     .map(|refusal| (true, refusal))
             });
-            if !crate::services::mcp_inbound::access::request_live(ctx)
-            {
+            if !crate::services::mcp_inbound::access::request_live(ctx) {
                 return Ok(self.query_fault(
                     admitted.query_id,
                     DomainErrorCode::PermissionDenied,
