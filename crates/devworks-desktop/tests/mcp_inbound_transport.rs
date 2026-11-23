@@ -340,7 +340,6 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
         400
     );
 
-    #[cfg(unix)]
     for version in [LEGACY, MODERN] {
         stdio(&root.0, &token, version, &project.id.0);
     }
@@ -461,7 +460,6 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
     assert!(engine.shutdown().is_some());
 }
 
-#[cfg(unix)]
 #[test]
 fn bridge_child_uses_the_test_desktop_image() {
     if let Some(root) = std::env::var_os("DEVWORKS_MCP_WIRE_TEST_ROOT") {
@@ -489,7 +487,6 @@ fn cli_bridge_leaves_a_missing_profile_untouched() {
     assert!(!absent.exists());
 }
 
-#[cfg(unix)]
 fn stdio(root: &std::path::Path, token: &Secret, version: &str, project: &Id) {
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
@@ -548,7 +545,6 @@ fn stdio(root: &std::path::Path, token: &Secret, version: &str, project: &Id) {
         reply["result"]["structuredContent"]["result"]["value"]["name"], "MCP wire project",
         "{reply}"
     );
-    drop(send);
     drop(stdin);
     let until = Instant::now() + WAIT;
     loop {
