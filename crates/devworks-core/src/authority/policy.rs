@@ -464,7 +464,7 @@ pub fn registered_tool_visibility(
     let class = selected.authority;
     let command = selected.mode == Mode::Command;
     let agent = kind == PrincipalKind::Agent;
-    if crate::services::indexing::assigned::applies(ctx)
+    if crate::kernel::checkout::applies(ctx)
         && fam == "indexing"
         && (ctx.worktree().is_none()
             || !matches!(op, "indexing.refresh_overlay" | "indexing.status"))

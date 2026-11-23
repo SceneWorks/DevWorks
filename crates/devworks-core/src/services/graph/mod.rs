@@ -2,9 +2,6 @@
 mod analysis;
 mod budget;
 mod cursor;
-pub(crate) fn cursor_pin(cursor: &str) -> Option<crate::protocol::Id> {
-    cursor::Cursors::pin(cursor).ok().flatten()
-}
 mod dataset;
 mod impact;
 mod incident;
@@ -34,7 +31,6 @@ mod source;
 
 mod service;
 pub use service::{GraphService, OPERATIONS};
-pub(crate) use service::{graph_input, target_repository};
 
 mod packages;
 

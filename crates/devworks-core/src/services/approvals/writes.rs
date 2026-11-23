@@ -437,7 +437,7 @@ pub(crate) fn stage_saved_as(
     preview: &OwnerPreview,
     id: Option<Id>,
 ) -> Result<StoredApproval, Failure> {
-    let scoped = crate::services::database::authority_scope(ctx, &request.input)
+    let scoped = crate::authority::database::authority_scope(ctx, &request.input)
         .map_err(|_| denied("approval_scope"))?;
     let ctx = scoped.as_ref().unwrap_or(ctx);
     if request.fingerprint.as_str() != i.content_digest.0

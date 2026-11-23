@@ -34,6 +34,7 @@ use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::kernel::failure::{Refusal as UseCaseRefusal, storage_fault};
+use crate::kernel::{checkout, graph_request};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
@@ -259,9 +260,9 @@ impl Gateway<'_> {
         input: &OperationInput,
         options: &ReadOptions,
     ) -> Result<Option<InvocationContext>, StorageError> {
-        if !crate::services::indexing::assigned::applies(ctx)
+        if !checkout::applies(ctx)
             || ctx.worktree().is_some()
-            || !(crate::services::graph::OPERATIONS.contains(&operation)
+            || !(graph_request::is_graph_read(input)
                 || matches!(
                     operation,
                     "indexing.status" | "indexing.refresh_overlay" | "git.cleanup"
@@ -270,9 +271,9 @@ impl Gateway<'_> {
             return Ok(None);
         }
         read_snapshot(self.store, options, |read| {
+            use crate::kernel::checkout::AssignmentCheckout;
             use crate::operations::{git, indexing, repositories};
             use crate::protocol::data::{GitCommand, IndexCommand, ViewSelection};
-            use crate::services::{git::context::AssignmentCheckout, graph};
             let (repository, worktree) = match input {
                 OperationInput::Indexing(indexing::Input::RefreshOverlay(request)) => {
                     let IndexCommand::RefreshOverlay {
@@ -306,10 +307,10 @@ impl Gateway<'_> {
                 }
                 operation => {
                     let (view, repository, cursor) =
-                        if let Some(request) = graph::graph_input(operation) {
+                        if let Some(request) = graph_request::graph_input(operation) {
                             (
                                 request.view.as_ref(),
-                                graph::target_repository(&request.query),
+                                graph_request::target_repository(&request.query),
                                 request.cursor.as_deref(),
                             )
                         } else if let OperationInput::Repositories(repositories::Input::Nodes(
@@ -324,7 +325,8 @@ impl Gateway<'_> {
                         } else {
                             return Ok(None);
                         };
-                    let cursor_pin = cursor.and_then(graph::cursor_pin);
+                    let cursor_pin =
+                        cursor.and_then(|cursor| graph_request::cursor_pin(cursor).ok().flatten());
                     let pin = cursor_pin.as_ref().or(match view {
                         Some(ViewSelection::Pinned { pin_id }) => Some(pin_id),
                         _ => None,
@@ -360,7 +362,7 @@ impl Gateway<'_> {
                     (repository.cloned(), worktree)
                 }
             };
-            crate::services::git::context::assignment_worktree(
+            checkout::assignment_worktree(
                 read,
                 ctx,
                 AssignmentCheckout {
@@ -500,9 +502,8 @@ impl Gateway<'_> {
         // Publication point: authority that was revoked or narrowed while the answer was being
         // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
         let scoped_worktree = ctx.worktree().is_some()
-            && crate::services::indexing::assigned::applies(ctx)
-            && (crate::services::graph::OPERATIONS.contains(&operation)
-                || operation == "indexing.status");
+            && checkout::applies(ctx)
+            && (graph_request::is_graph_read(&admitted.input) || operation == "indexing.status");
         if matches!(answered, Ok(Some((Ok(_), _))))
             && (scoped_worktree
                 || !authorization.fences().is_empty()
@@ -510,8 +511,7 @@ impl Gateway<'_> {
         {
             let holds = read_snapshot(self.store, &options, |s| {
                 Ok(crate::authority::authorization_holds(s, &authorization)?
-                    && (!scoped_worktree
-                        || crate::services::indexing::assigned::live_custody(s, ctx)?))
+                    && (!scoped_worktree || checkout::live_custody(s, ctx)?))
             });
             if !matches!(holds, Ok(true)) {
                 return Ok(self.query_fault(

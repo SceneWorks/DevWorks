@@ -264,26 +264,7 @@ impl Selected {
     }
 }
 
-pub(super) fn scope_context(
-    context: &InvocationContext,
-    scope: Option<&crate::protocol::data::DataScope>,
-) -> Result<InvocationContext, StorageError> {
-    use crate::protocol::data::DataScope;
-    match scope {
-        Some(DataScope::Workspace) if context.project_id().is_some() => {
-            Err(StorageError::ScopeDenied)
-        }
-        Some(DataScope::Project { project_id })
-            if context
-                .project_id()
-                .is_some_and(|current| current != project_id) =>
-        {
-            Err(StorageError::ScopeDenied)
-        }
-        Some(DataScope::Project { project_id }) => Ok(context.in_project(project_id.clone())),
-        _ => Ok(context.clone()),
-    }
-}
+pub(super) use crate::authority::database::scope_context;
 
 pub(super) fn check_fences(
     read: &dyn ReadSnapshot,

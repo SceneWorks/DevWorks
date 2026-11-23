@@ -1,7 +1,12 @@
 //! An assignment can address only the indexing layer of its currently owned checkout.
 
-use super::{IndexEnv, discover, overlay, paths, section_config, section_key};
-use crate::context::{InvocationContext, PrincipalKind};
+use super::{IndexEnv, overlay, section_config, section_key};
+use crate::context::InvocationContext;
+use crate::kernel::checkout::live_custody;
+pub(crate) use crate::kernel::checkout::worktree_for_write;
+pub(crate) use crate::kernel::checkout::{
+    applies, indexed_id, owned, refresh_target, status_target,
+};
 use crate::ports::storage::*;
 use crate::protocol::{
     DomainErrorCode, Id,
@@ -11,109 +16,6 @@ use crate::services::kernel::{Failure, Refusal};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub(crate) fn applies(ctx: &InvocationContext) -> bool {
-    ctx.principal_kind() == PrincipalKind::Agent && ctx.assignment_id().is_some()
-}
-
-pub(crate) fn indexed_id(tree: &StoredGitWorktree) -> Id {
-    discover::worktree_id(
-        &tree.repository_id,
-        &paths::native_location(&tree.path, cfg!(windows)),
-    )
-}
-
-pub(crate) fn owned(
-    git: &dyn GitRead,
-    ctx: &InvocationContext,
-) -> Result<Option<StoredGitWorktree>, StorageError> {
-    let Some(bound) = ctx.worktree().filter(|_| applies(ctx)) else {
-        return Ok(None);
-    };
-    Ok(git.git_worktree(bound.id())?.filter(|tree| {
-        !tree.removed
-            && tree.pending_operation_id.is_none()
-            && &tree.owner == ctx.principal()
-            && tree.owner_root_id.as_ref() == ctx.root_id()
-            && tree.owner_assignment_id.as_ref() == ctx.assignment_id()
-            && &tree.repository_id == bound.repository_id()
-            && &tree.work_id == bound.work_id()
-            && tree.ownership_revision == bound.ownership_revision()
-    }))
-}
-
-fn live(
-    assignment: Option<StoredAssignment>,
-    session: Option<StoredSession>,
-    ctx: &InvocationContext,
-) -> bool {
-    assignment
-        .zip(session)
-        .is_some_and(|(assignment, session)| {
-            crate::services::git::context::live_assignment(&assignment, &session, ctx)
-        })
-}
-
-/// Check exact custody and live lineage against the snapshot that will publish a query.
-pub(crate) fn live_custody(
-    read: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-) -> Result<bool, StorageError> {
-    let Some((assignment, session)) = ctx.assignment_id().zip(ctx.session_id()) else {
-        return Ok(false);
-    };
-    let Some(tree) = owned(read.git(), ctx)? else {
-        return Ok(false);
-    };
-    let work = read.work().work(&tree.work_id)?;
-    Ok(live(
-        read.runs().assignment(assignment)?,
-        read.sessions().session(session)?,
-        ctx,
-    ) && work.is_some_and(|work| Some(&work.project_id) == ctx.project_id())
-        && read
-            .work()
-            .work_repositories(&tree.work_id)?
-            .contains(&tree.repository_id)
-        && read
-            .projects()
-            .repository_projects(&tree.repository_id)?
-            .iter()
-            .any(|project| Some(project) == ctx.project_id()))
-}
-
-pub(crate) fn worktree_for_write(
-    tx: &mut dyn WriteTransaction,
-    ctx: &InvocationContext,
-) -> Result<Option<StoredGitWorktree>, StorageError> {
-    let Some((assignment, session)) = ctx.assignment_id().zip(ctx.session_id()) else {
-        return Ok(None);
-    };
-    let Some(tree) = owned(tx.git(), ctx)? else {
-        return Ok(None);
-    };
-    if !live(
-        tx.runs().assignment(assignment)?,
-        tx.sessions().session(session)?,
-        ctx,
-    ) || tx
-        .work()
-        .work(&tree.work_id)?
-        .is_none_or(|work| Some(&work.project_id) != ctx.project_id())
-        || !tx
-            .work()
-            .work_repositories(&tree.work_id)?
-            .contains(&tree.repository_id)
-        || !tx
-            .projects()
-            .repository_projects(&tree.repository_id)?
-            .iter()
-            .any(|project| Some(project) == ctx.project_id())
-    {
-        return Ok(None);
-    }
-    Ok(Some(tree))
-}
-
 pub(crate) fn capture_matches(observed: &overlay::Observed, checkout: &StoredGitWorktree) -> bool {
     checkout.location.is_some()
         && observed
@@ -122,44 +24,6 @@ pub(crate) fn capture_matches(observed: &overlay::Observed, checkout: &StoredGit
             .ok()
             .and_then(|capture| capture.owned_checkout.as_ref())
             == Some(checkout)
-}
-
-pub(crate) fn refresh_target(
-    git: &dyn GitRead,
-    ctx: &InvocationContext,
-    repository: &Id,
-    requested: Option<&Id>,
-    has_ref: bool,
-) -> Result<Option<Id>, StorageError> {
-    let Some(tree) = owned(git, ctx)? else {
-        return Ok(None);
-    };
-    let indexed = indexed_id(&tree);
-    Ok((!has_ref
-        && &tree.repository_id == repository
-        && requested.is_some_and(|id| id == &indexed || id == &tree.id))
-    .then_some(indexed))
-}
-
-pub(crate) fn status_target(
-    read: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-    repository: Option<&Id>,
-    overlay: Option<&Id>,
-) -> Result<(Id, Option<StoredOverlay>), StorageError> {
-    let Some(tree) = owned(read.git(), ctx)? else {
-        return Err(StorageError::ScopeDenied);
-    };
-    if repository.is_some_and(|id| id != &tree.repository_id) {
-        return Err(StorageError::ScopeDenied);
-    }
-    let current = read
-        .indexing()
-        .overlay_for(&tree.repository_id, &indexed_id(&tree))?;
-    if overlay.is_some_and(|id| !current.as_ref().is_some_and(|own| &own.id == id)) {
-        return Err(StorageError::ScopeDenied);
-    }
-    Ok((tree.repository_id, current))
 }
 
 /// Queue the same derived index run as an explicit refresh and wait only within the graph

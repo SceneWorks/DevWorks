@@ -89,6 +89,7 @@ pub mod worker;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+pub use crate::kernel::index_config::{section_config, section_key};
 use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, indexing as iops};
 use crate::ports::indexing::{SemanticCatalog, SemanticEnricher, SourceTree, StructuralParser};
@@ -253,21 +254,6 @@ impl IndexEnv {
 
 fn refuse(code: DomainErrorCode, kind: &'static str, id: Option<&Id>) -> Failure {
     Refusal::new(code, kind, id.cloned()).into()
-}
-
-/// The section key of a scope.
-pub fn section_key(scope: Option<&ProjectId>) -> String {
-    scope.map_or_else(
-        || WORKSPACE_SCOPE_KEY.to_owned(),
-        |p| p.0.as_str().to_owned(),
-    )
-}
-
-/// A section's stored configuration or its defaults.
-pub fn section_config(read: &dyn IndexRead, key: &str) -> Result<StoredSourceConfig, StorageError> {
-    Ok(read
-        .source_config(key)?
-        .unwrap_or_else(|| default_config(key)))
 }
 
 /// The effective configuration of a repository (workspace plus every project it belongs to).

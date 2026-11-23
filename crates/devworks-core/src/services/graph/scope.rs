@@ -1,16 +1,14 @@
 //! Resolve repository authority before selecting or expanding any graph rows.
 use crate::context::InvocationContext;
+use crate::kernel::graph_view::authorize_worktree_view;
+pub(super) use crate::kernel::graph_view::{authorize, owned, retained, unavailable};
 use crate::ports::storage::*;
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::protocol::{DomainErrorCode, Id};
-use crate::services::indexing::{self, assigned, status, views};
+use crate::services::indexing::{self, status, views};
 use crate::services::kernel::{Failure, Refusal};
 use crate::services::projects::{visible_project, visible_repository};
 use std::collections::BTreeSet;
-
-pub(super) fn unavailable(id: Option<Id>) -> Failure {
-    Refusal::new(DomainErrorCode::ViewUnavailable, "graph_view", id).into()
-}
 
 pub(super) fn overlay(view: &StoredView) -> bool {
     view.coverage.get("head").is_some()
@@ -116,131 +114,6 @@ pub(super) fn witness(
         }
     }
     Err(unavailable(Some(view.view_id.clone())))
-}
-
-pub(super) fn retained(
-    read: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-    scope: &DataScope,
-    pin: &StoredGraphReadPin,
-    binding: &GraphViewBinding,
-    now: i64,
-) -> Result<views::ViewLayers, Failure> {
-    let selected = views::layers(read.indexing(), &binding.view_id)?;
-    authorize(read, ctx, scope, &selected.view.repository_id)?;
-    authorize_worktree_view(read, ctx, &selected.view)?;
-    let proof = pin
-        .view_witnesses
-        .iter()
-        .find(|w| w.view_id == binding.view_id)
-        .ok_or_else(|| unavailable(Some(pin.id.clone())))?;
-    if let Some(id) = &proof.overlay_id
-        && read
-            .indexing()
-            .overlay(id)?
-            .is_none_or(|row| row.state == OVERLAY_UNAVAILABLE)
-    {
-        return Err(unavailable(Some(pin.id.clone())));
-    }
-    if selected.view.repository_id != binding.repository_id
-        || selected.view.view_digest != binding.view_digest
-        || proof.expires_at_ms.is_some_and(|expiry| now >= expiry)
-    {
-        return Err(unavailable(Some(pin.id.clone())));
-    }
-    Ok(selected)
-}
-
-/// Current durable custody is checked even for metadata-only status and retained pins.
-pub(super) fn owned(
-    read: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-) -> Result<Option<StoredGitWorktree>, Failure> {
-    let Some(bound) = ctx.worktree() else {
-        return Ok(None);
-    };
-    let denied = || {
-        Refusal::new(
-            DomainErrorCode::PermissionDenied,
-            "graph_owned_context",
-            Some(bound.id().clone()),
-        )
-    };
-    let tree = read.git().git_worktree(bound.id())?.ok_or_else(denied)?;
-    let work = read.work().work(bound.work_id())?.ok_or_else(denied)?;
-    if tree.removed
-        || tree.id != *bound.id()
-        || tree.repository_id != *bound.repository_id()
-        || tree.work_id != *bound.work_id()
-        || tree.ownership_revision != bound.ownership_revision()
-        || ctx.project_id() != Some(&work.project_id)
-        || !ctx.root_id().is_some_and(|root| {
-            root.0 == work.id || work.parent_feature_id.as_ref() == Some(&root.0)
-        })
-        || !read
-            .work()
-            .work_repositories(&work.id)?
-            .contains(bound.repository_id())
-        || !read
-            .projects()
-            .members(&work.project_id)?
-            .contains(bound.repository_id())
-    {
-        return Err(denied().into());
-    }
-    Ok(Some(tree))
-}
-
-pub(super) fn authorize(
-    read: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-    scope: &DataScope,
-    repository: &Id,
-) -> Result<(), Failure> {
-    visible_repository(read.projects(), ctx, repository)?;
-    if let DataScope::Project { project_id } = scope {
-        visible_project(read.projects(), ctx, project_id)?;
-        if !read.projects().members(project_id)?.contains(repository) {
-            return Err(Refusal::new(
-                DomainErrorCode::NotFound,
-                "repository",
-                Some(repository.clone()),
-            )
-            .into());
-        }
-    }
-    Ok(())
-}
-
-/// A caller-supplied overlay view or a retained pin must not select a sibling's local files.
-fn authorize_worktree_view(
-    read: &dyn ReadSnapshot,
-    ctx: &InvocationContext,
-    view: &StoredView,
-) -> Result<Option<Id>, Failure> {
-    if !assigned::applies(ctx) {
-        return Ok(None);
-    }
-    let worktree = view
-        .coverage
-        .get("worktreeId")
-        .and_then(serde_json::Value::as_str);
-    if worktree.is_none() && view.worktree_id.is_none() {
-        return Ok(None);
-    }
-    if let Some(id) = assigned::owned(read.git(), ctx)?
-        .filter(|tree| tree.repository_id == view.repository_id)
-        .map(|tree| assigned::indexed_id(&tree))
-        .filter(|id| Some(id.as_str()) == worktree)
-    {
-        return Ok(Some(id));
-    }
-    Err(Refusal::new(
-        DomainErrorCode::PermissionDenied,
-        "graph_owned_context",
-        None,
-    )
-    .into())
 }
 
 /// Rechecks the effective expiry of an explicit overlay without substituting today's view.

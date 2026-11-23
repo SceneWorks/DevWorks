@@ -6,6 +6,7 @@
 //! anything outside its repository on any platform. On case-insensitive file systems two keys
 //! that differ only by case name the same file; [`fold`] detects that collision.
 use crate::fingerprint::sha256_hex;
+pub use crate::kernel::checkout::{VERBATIM_MIN, native_location};
 use crate::ports::indexing::SourceTree;
 use std::path::Path;
 
@@ -64,46 +65,6 @@ pub fn symbol_id(repository: &str, name: &str) -> String {
 /// The parent directory of a unit key (`""` at the root).
 pub fn parent(p: &str) -> &str {
     p.rfind('/').map_or("", |i| &p[..i])
-}
-
-/// Paths at least this long keep the Windows verbatim prefix (the file APIs need it beyond the
-/// classic 260-character limit).
-pub const VERBATIM_MIN: usize = 248;
-
-/// The identity form of a native absolute path (a registration location or a worktree path),
-/// so a path reaching the indexer from the file system (`canonicalize`: `\\?\C:\x`) and one from
-/// Git's output (`C:/x`, `//?/C:/x`) compare equal. On Windows: `/` becomes `\`, a verbatim
-/// prefix is dropped while the path is shorter than [`VERBATIM_MIN`] (`\\?\UNC\server\share`
-/// becomes `\\server\share`), the drive letter is upper case and a trailing separator is
-/// removed (except at a drive root). Elsewhere the path is unchanged. `windows` is the target
-/// platform (`cfg!(windows)`), a parameter so every platform tests the Windows rules.
-pub fn native_location(raw: &str, windows: bool) -> String {
-    if !windows {
-        return raw.to_owned();
-    }
-    let mut s = raw.replace('/', "\\");
-    if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
-        if rest.len() + 2 < VERBATIM_MIN {
-            s = format!("\\\\{rest}");
-        }
-    } else if let Some(rest) = s.strip_prefix("\\\\?\\")
-        && rest.as_bytes().get(1) == Some(&b':')
-        && rest.len() < VERBATIM_MIN
-    {
-        s = rest.to_owned();
-    }
-    // The drive letter: `c:\x` and `C:\x` name one directory.
-    let drive_at = if s.starts_with("\\\\?\\") { 4 } else { 0 };
-    if s.as_bytes().get(drive_at + 1) == Some(&b':')
-        && let Some(c) = s.get(drive_at..drive_at + 1)
-    {
-        let upper = c.to_ascii_uppercase();
-        s.replace_range(drive_at..drive_at + 1, &upper);
-    }
-    while s.len() > 3 && s.ends_with('\\') && !s.ends_with(":\\") {
-        s.pop();
-    }
-    s
 }
 
 /// The stored identity of a directory (a registration location or a worktree path), the one

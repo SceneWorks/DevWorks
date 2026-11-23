@@ -1,20 +1,25 @@
 //! Select and retain analysis inputs through the same authority as exact graph reads.
-use super::super::{lease, model, scope};
+use super::super::{lease, scope};
 use crate::context::InvocationContext;
-use crate::fingerprint::sha256_hex;
+use crate::kernel::analysis::{
+    REPORT_ALGORITHM_REVISION, binding_key, check_worktree_layers, checked_views,
+    hide_view_identity, normalize_selection, resolve_pinned,
+};
+pub(super) use crate::kernel::analysis::{
+    configuration_revision, digest, unavailable, validate_worktree_in,
+};
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    GraphScope, GraphUnavailableRepository, GraphViewBinding, GraphViewWitness, IndexRead,
-    ReadSnapshot, StoredAnalysisRun, StoredGitWorktree, StoredGraphReadPin, WriteTransaction,
+    GraphScope, GraphUnavailableRepository, GraphViewBinding, GraphViewWitness, ReadSnapshot,
+    StoredAnalysisRun, StoredGraphReadPin, WriteTransaction,
 };
 use crate::protocol::data::{DataScope, ViewSelection};
 use crate::protocol::records::AnalysisViewBinding;
 use crate::protocol::{DomainErrorCode, Id};
-use crate::services::indexing::{self, views::ViewLayers};
+use crate::services::indexing::views::ViewLayers;
 use crate::services::kernel::{Failure, Refusal};
 use serde_json::json;
 
-const REPORT_ALGORITHM_REVISION: u32 = 1;
 const PIN_TTL_MS: i64 = 300_000;
 pub(super) const MAX_COMMAND_REPOSITORIES: usize = 32;
 
@@ -31,21 +36,6 @@ pub(super) struct Selection {
     published: bool,
 }
 
-pub(super) fn unavailable() -> Failure {
-    Refusal::new(DomainErrorCode::ViewUnavailable, "analysis_view", None).into()
-}
-
-pub(super) fn configuration_revision(
-    read: &dyn IndexRead,
-    scope: &DataScope,
-) -> Result<i64, Failure> {
-    let project = match scope {
-        DataScope::Project { project_id } => Some(project_id),
-        DataScope::Workspace => None,
-    };
-    Ok(indexing::section_config(read, &indexing::section_key(project))?.revision)
-}
-
 impl Selection {
     pub(super) fn resolve(
         read: &dyn ReadSnapshot,
@@ -59,33 +49,20 @@ impl Selection {
                 Refusal::new(DomainErrorCode::PermissionDenied, "workspace_scope", None).into(),
             );
         }
-        let owned = scope::owned(read, ctx)
-            .map_err(hide_view_identity)?
-            .filter(|tree| &tree.owner == ctx.principal());
         if let ViewSelection::Pinned { pin_id } = requested {
-            let pin = read.graph().graph_pin(pin_id)?.ok_or_else(unavailable)?;
-            lease::check_pin(&pin, ctx, data_scope, now).map_err(hide_view_identity)?;
-            let mut layers = Vec::with_capacity(pin.scope.views.len());
-            for binding in &pin.scope.views {
-                layers.push(
-                    scope::retained(read, ctx, data_scope, &pin, binding, now)
-                        .map_err(hide_view_identity)?,
-                );
-            }
-            for missing in &pin.unavailable_repositories {
-                scope::authorize(read, ctx, data_scope, &missing.repository_id)
-                    .map_err(hide_view_identity)?;
-            }
-            check_worktree_layers(&layers, owned.as_ref())?;
+            let pin = resolve_pinned(read, ctx, data_scope, pin_id, now)?;
             return Self::capture(
                 read,
                 data_scope,
-                layers,
-                pin.view_witnesses,
-                pin.unavailable_repositories,
+                pin.layers,
+                pin.witnesses,
+                pin.unavailable,
                 false,
             );
         }
+        let owned = scope::owned(read, ctx)
+            .map_err(hide_view_identity)?
+            .filter(|tree| &tree.owner == ctx.principal());
         let resolved = if let ViewSelection::Published { repository_ids } = requested {
             let mut layers = Vec::new();
             let mut unavailable = Vec::new();
@@ -205,28 +182,8 @@ impl Selection {
         mut unavailable: Vec<GraphUnavailableRepository>,
         published: bool,
     ) -> Result<Self, Failure> {
-        layers.sort_by(|a, b| {
-            a.view
-                .repository_id
-                .as_str()
-                .cmp(b.view.repository_id.as_str())
-        });
-        witnesses.sort_by(|a, b| a.view_id.as_str().cmp(b.view_id.as_str()));
-        unavailable.sort_by(|a, b| a.repository_id.as_str().cmp(b.repository_id.as_str()));
-        let views = layers
-            .iter()
-            .map(|layer| {
-                let view = &layer.view;
-                let snapshot = model::snapshot(view).map_err(hide_view_identity)?;
-                snapshot.validate().map_err(|_| self::unavailable())?;
-                Ok(AnalysisViewBinding {
-                    repository_id: view.repository_id.clone(),
-                    view_id: view.view_id.clone(),
-                    view_digest: model::text(&view.view_digest)?,
-                    snapshot,
-                })
-            })
-            .collect::<Result<Vec<_>, Failure>>()?;
+        normalize_selection(&mut layers, &mut witnesses, &mut unavailable);
+        let views = checked_views(&layers)?;
         let configuration_revision = configuration_revision(read.indexing(), scope)?;
         let lineage = layers
             .iter()
@@ -251,13 +208,7 @@ impl Selection {
                 })
             })
             .collect::<Vec<_>>();
-        let binding_key = digest(&json!({
-            "algorithm": REPORT_ALGORITHM_REVISION,
-            "scope": scope,
-            "views": views,
-            "unavailable": unavailable,
-            "configuration": configuration_revision,
-        }));
+        let binding_key = binding_key(scope, &views, &unavailable, configuration_revision);
         let lineage_key = digest(&json!({
             "algorithm": REPORT_ALGORITHM_REVISION,
             "scope": scope,
@@ -467,134 +418,5 @@ impl Selection {
 
     pub(super) fn witnesses(&self) -> &[GraphViewWitness] {
         &self.witnesses
-    }
-}
-
-fn check_worktree_layers(
-    layers: &[ViewLayers],
-    owned: Option<&StoredGitWorktree>,
-) -> Result<(), Failure> {
-    for layer in layers {
-        let snapshot = model::snapshot(&layer.view).map_err(hide_view_identity)?;
-        if let Some(worktree) = &snapshot.worktree_id
-            && owned.is_none_or(|tree| {
-                &tree.id != worktree || tree.repository_id != snapshot.repository_id
-            })
-        {
-            return Err(unavailable());
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn validate_worktree_in(
-    tx: &mut dyn WriteTransaction,
-    ctx: &InvocationContext,
-    views: &[AnalysisViewBinding],
-) -> Result<(), Failure> {
-    for view in views {
-        let Some(id) = &view.snapshot.worktree_id else {
-            continue;
-        };
-        let bound = ctx
-            .worktree()
-            .filter(|bound| bound.id() == id && bound.repository_id() == &view.repository_id)
-            .ok_or_else(unavailable)?;
-        let tree = tx.git().git_worktree(id)?.ok_or_else(unavailable)?;
-        let work = tx.work().work(bound.work_id())?.ok_or_else(unavailable)?;
-        if tree.removed
-            || &tree.owner != ctx.principal()
-            || tree.repository_id != view.repository_id
-            || tree.work_id != *bound.work_id()
-            || tree.ownership_revision != bound.ownership_revision()
-            || ctx.project_id() != Some(&work.project_id)
-            || !ctx.root_id().is_some_and(|root| {
-                root.0 == work.id || work.parent_feature_id.as_ref() == Some(&root.0)
-            })
-            || !tx
-                .work()
-                .work_repositories(&work.id)?
-                .contains(&view.repository_id)
-            || !tx
-                .projects()
-                .members(&work.project_id)?
-                .contains(&view.repository_id)
-        {
-            return Err(unavailable());
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn digest(value: &serde_json::Value) -> String {
-    sha256_hex(value.to_string().as_bytes())
-}
-
-/// One inaccessible member cannot reveal the presence or identity of other
-/// constituents of a saved view set.
-fn hide_view_identity(error: Failure) -> Failure {
-    match error {
-        Failure::Refused(r)
-            if matches!(
-                r.code,
-                DomainErrorCode::NotFound
-                    | DomainErrorCode::PermissionDenied
-                    | DomainErrorCode::ViewUnavailable
-            ) =>
-        {
-            unavailable()
-        }
-        other => other,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ports::storage::StoredView;
-    use crate::protocol::ActorId;
-
-    #[test]
-    fn exact_worktree_view_requires_matching_owned_capture() {
-        let id = |name| Id::new(name).unwrap();
-        let repo = id("repo");
-        let baseline = id("baseline");
-        let own_capture = id("own-capture");
-        let oid = "a".repeat(40);
-        let overlay = ViewLayers {
-            view: StoredView {
-                view_id: id("captured-view"),
-                repository_id: repo.clone(),
-                view_digest: "b".repeat(64),
-                baseline_id: baseline.clone(),
-                branch_id: None,
-                worktree_id: Some(id("tree-layer")),
-                coverage: json!({"commit": oid, "worktreeId": own_capture, "captureDigest": "c".repeat(64)}),
-            },
-            layers: vec![id("tree-layer"), baseline],
-        };
-        let mut owner = StoredGitWorktree {
-            id: id("a-different-capture"),
-            repository_id: repo,
-            work_id: id("work"),
-            owner: ActorId(id("agent")),
-            ownership_revision: 1,
-            owner_root_id: None,
-            owner_assignment_id: None,
-            registered_root_id: id("local-root"),
-            path: "test-source".into(),
-            branch: "test".into(),
-            head: model::snapshot(&overlay.view).unwrap().head,
-            revision: 1,
-            removed: false,
-            location: None,
-            pending_operation_id: None,
-            last_operation_id: None,
-            last_result: None,
-        };
-        assert!(check_worktree_layers(std::slice::from_ref(&overlay), None).is_err());
-        assert!(check_worktree_layers(std::slice::from_ref(&overlay), Some(&owner)).is_err());
-        owner.id = own_capture;
-        assert!(check_worktree_layers(&[overlay], Some(&owner)).is_ok());
     }
 }

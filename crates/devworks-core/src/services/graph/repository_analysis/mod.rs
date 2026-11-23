@@ -25,10 +25,9 @@ pub use modeling::{
     AnalysisModel, AnalysisModelInput, MAX_OUTPUT_TOKENS, Observation as ModelObservation,
     ProviderAnalysis,
 };
-pub use service::{
-    AnalysisService, COMMANDS, Execution, QUERIES, authorize_model_request, dispatch_binding_in,
-    dispatch_binding_snapshot,
-};
+pub use service::{AnalysisService, COMMANDS, Execution, QUERIES, authorize_model_request};
 mod auto;
 pub use auto::INDEX_CONSUMER;
 mod retention;
+
+pub use crate::kernel::analysis::{dispatch_binding_in, dispatch_binding_snapshot};

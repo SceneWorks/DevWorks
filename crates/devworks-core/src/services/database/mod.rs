@@ -7,7 +7,7 @@ mod read;
 mod rules;
 pub mod sensitive;
 pub mod sql_server_view;
-pub mod statement;
+pub use crate::ports::database::statement;
 
 pub use executor::{DataExecutor, DatabaseReadRunner};
 use executor::{Selected, check_fences};
@@ -61,60 +61,4 @@ fn native_failure(error: DataFailure) -> DomainErrorCode {
         FailureKind::Cancelled | FailureKind::Deadline => DomainErrorCode::Cancelled,
         FailureKind::Unavailable => DomainErrorCode::ExternalFailure,
     }
-}
-
-/// Applies the selected data scope before the generic authority policy is evaluated.
-pub(crate) fn authority_scope(
-    context: &crate::context::InvocationContext,
-    input: &crate::operations::OperationInput,
-) -> Result<Option<crate::context::InvocationContext>, StorageError> {
-    use crate::operations::{OperationInput, database::Input};
-    let scope = match input {
-        OperationInput::Database(Input::Read(input)) => input.scope.as_ref(),
-        OperationInput::Database(Input::MysqlReadonlyQuery(input)) => input.scope.as_ref(),
-        OperationInput::Database(Input::ExecuteWrite(input)) => input.scope.as_ref(),
-        OperationInput::Database(Input::ApplyMigration(input)) => input.scope.as_ref(),
-        OperationInput::Database(Input::DirectSchemaChange(input)) => input.scope.as_ref(),
-        _ => None,
-    };
-    scope
-        .map(|scope| executor::scope_context(context, Some(scope)))
-        .transpose()
-}
-
-/// Source permission is checked before a command's receipt lookup, including replay-only grants.
-pub(crate) fn mutation_fence(
-    snapshot: &dyn crate::ports::storage::ReadSnapshot,
-    ctx: &crate::context::InvocationContext,
-    input: &crate::operations::OperationInput,
-) -> Result<Option<crate::ports::AuthorityFence>, StorageError> {
-    use crate::operations::{OperationInput, database::Input};
-    use crate::services::schemas::data;
-    use statement::DataMode;
-    let (id, mode, scope) = match input {
-        OperationInput::Database(Input::ExecuteWrite(input)) => {
-            (&input.connection_id, DataMode::Write, input.scope.as_ref())
-        }
-        OperationInput::Database(Input::ApplyMigration(input)) => (
-            &input.connection_id,
-            DataMode::Migration,
-            input.scope.as_ref(),
-        ),
-        OperationInput::Database(Input::DirectSchemaChange(input)) => {
-            (&input.connection_id, DataMode::Schema, input.scope.as_ref())
-        }
-        _ => return Ok(None),
-    };
-    let ctx = executor::scope_context(ctx, scope)?;
-    let revision = snapshot
-        .schemas()
-        .schema_source(id)?
-        .ok_or(StorageError::ScopeDenied)?
-        .connection
-        .revision;
-    data::source(snapshot, &ctx, id, &revision, mode)?;
-    Ok(Some(crate::ports::AuthorityFence::DatabaseSource {
-        id: id.clone(),
-        revision: revision.get(),
-    }))
 }

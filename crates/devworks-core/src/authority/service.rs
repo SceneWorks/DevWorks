@@ -754,9 +754,9 @@ fn agent_assignment_scope(
             },
         },
         OperationInput::Indexing(input) => {
+            use crate::kernel::checkout;
             use crate::operations::indexing::Input;
             use crate::protocol::data::IndexCommand;
-            use crate::services::indexing::assigned;
             match input {
                 Input::RefreshOverlay(input) => match &input.command {
                     IndexCommand::RefreshOverlay {
@@ -764,7 +764,7 @@ fn agent_assignment_scope(
                         worktree_id,
                         git_ref,
                         ..
-                    } => assigned::refresh_target(
+                    } => checkout::refresh_target(
                         s.git(),
                         ctx,
                         repository_id,
@@ -775,7 +775,7 @@ fn agent_assignment_scope(
                     .is_some(),
                     _ => false,
                 },
-                Input::Status(input) => match assigned::status_target(
+                Input::Status(input) => match checkout::status_target(
                     s,
                     ctx,
                     input.repository_id.as_ref(),
@@ -839,7 +839,7 @@ pub(crate) fn decide_in(
     {
         return Err(deny(DenialReason::UnregisteredPrincipal));
     }
-    let selected = crate::services::database::authority_scope(ctx, request.input)
+    let selected = crate::authority::database::authority_scope(ctx, request.input)
         .map_err(|_| deny(DenialReason::OutOfProjectScope))?;
     let ctx = selected.as_ref().unwrap_or(ctx);
     let binding = bound(s, ctx).map_err(unavailable)?;
@@ -891,7 +891,7 @@ pub(crate) fn decide_in(
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
     if !matches!(verdict, Verdict::Deny(_))
-        && let Some(fence) = crate::services::database::mutation_fence(s, ctx, request.input)
+        && let Some(fence) = crate::authority::database::mutation_fence(s, ctx, request.input)
             .map_err(|error| {
                 if matches!(error, StorageError::ScopeDenied) {
                     deny(DenialReason::OutOfProjectScope)
@@ -1088,9 +1088,7 @@ pub fn fences_hold(
     for fence in fences {
         let holds = match fence {
             AuthorityFence::AnalysisRequest { operation, request } => {
-                crate::services::graph::repository_analysis::dispatch_binding_in(
-                    tx, operation, request,
-                )?
+                crate::kernel::analysis::dispatch_binding_in(tx, operation, request)?
             }
             AuthorityFence::DatabaseSource { id, revision } => {
                 tx.schemas().schema_source(id)?.is_some_and(|source| {
@@ -1150,9 +1148,7 @@ pub fn authorization_holds(
     for fence in authorization.fences() {
         let holds = match fence {
             AuthorityFence::AnalysisRequest { operation, request } => {
-                crate::services::graph::repository_analysis::dispatch_binding_snapshot(
-                    s, operation, request,
-                )?
+                crate::kernel::analysis::dispatch_binding_snapshot(s, operation, request)?
             }
             AuthorityFence::DatabaseSource { id, revision } => {
                 s.schemas().schema_source(id)?.is_some_and(|source| {

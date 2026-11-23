@@ -158,6 +158,7 @@ pub(crate) fn consume_resume_grant(
     tx.grant_writes(&CAPABILITY, actor)?.consume(grant, actor)
 }
 
+pub(crate) mod database;
 pub mod deletion;
 pub mod destructive;
 pub mod disclosure;

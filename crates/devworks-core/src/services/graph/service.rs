@@ -7,6 +7,7 @@ use super::{
     read::{Metadata, Position, Reader},
     scope, search, source,
 };
+use crate::kernel::graph_request::graph_input;
 use crate::{
     context::InvocationContext,
     gateway::{AdmittedCommand, AdmittedQuery},
@@ -92,59 +93,6 @@ struct ReadPrepared {
     source: Option<source::Source>,
     source_budget: Option<Budget>,
 }
-pub(crate) fn graph_input(input: &OperationInput) -> Option<&GraphReadRequest> {
-    use operations::code::Input::*;
-    match input {
-        OperationInput::Code(
-            Search(i)
-            | Architecture(i)
-            | Dependency(i)
-            | Impact(i)
-            | Source(i)
-            | Traverse(i)
-            | GraphScopeStatus(i)
-            | Overview(i)
-            | NodesByFile(i)
-            | NodeDetail(i)
-            | FileImpact(i)
-            | GraphSchema(i)
-            | CallPath(i)
-            | DataLineage(i)
-            | Consumers(i)
-            | Publishers(i)
-            | Snippet(i)
-            | RepositoryDependencies(i),
-        ) => Some(i),
-        _ => None,
-    }
-}
-
-pub(crate) fn target_repository(query: &GraphQuery) -> Option<&Id> {
-    match query {
-        GraphQuery::Search { selection, .. } => selection.as_ref()?.repository_id.as_ref(),
-        GraphQuery::Source {
-            selection: Some(CodeSourceSelection::File { repository_id, .. }),
-            ..
-        }
-        | GraphQuery::RepositoryDependencies { repository_id } => Some(repository_id),
-        GraphQuery::Overview { repository_id } => repository_id.as_ref(),
-        GraphQuery::FileImpact {
-            repository_id,
-            selection,
-            ..
-        }
-        | GraphQuery::NodesByFile {
-            repository_id,
-            selection,
-            ..
-        } => selection
-            .as_ref()
-            .map(|target| &target.repository_id)
-            .or(repository_id.as_ref()),
-        _ => None,
-    }
-}
-
 fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRequest, Failure> {
     if let Some(input) = graph_input(query.input()) {
         return Ok(input.clone());

@@ -18,7 +18,7 @@ use crate::protocol::{
 use crate::services::kernel::{Failure, Refusal, decided, rev};
 use serde_json::json;
 
-pub const CONSUMER: &str = "RepositoryAnalysis";
+pub use crate::kernel::analysis::CONSUMER;
 pub(crate) const AGGREGATE: &str = "analysis_run";
 const MAX_ACTIVE_MODEL_RUNS: usize = 32;
 

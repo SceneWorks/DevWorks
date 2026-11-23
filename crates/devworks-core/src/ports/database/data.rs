@@ -2,9 +2,9 @@
 //! rows to the index or grant authority from observed target data.
 use super::super::secrets::Secret;
 use super::super::storage::Cancellation;
+use super::statement::{CheckedStatement, DataMode, Relation};
 use crate::protocol::Id;
 use crate::protocol::records::ConnectionConfig;
-use crate::services::database::statement::{CheckedStatement, DataMode};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -111,7 +111,7 @@ pub struct DataRequest {
     pub parameters: Vec<Scalar>,
     pub expected_schema_digest: Option<String>,
     pub include_schema_digest: bool,
-    pub schema_targets: Vec<crate::services::database::statement::Relation>,
+    pub schema_targets: Vec<Relation>,
     pub limits: DataLimits,
     pub cancellation: Cancellation,
     /// Protected app-owned locations and the identity of a selected existing file.
