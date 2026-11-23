@@ -59,10 +59,10 @@ impl<E: JournaledEffect> Effects<E> {
         operation: OperationRecord,
         panicked: &'static str,
         call: fn(&E, &OperationRecord, &Cancellation) -> EffectOutcome,
+        token: Cancellation,
     ) -> EffectFuture {
         let effect = self.effect.clone();
         Box::pin(async move {
-            let token = Cancellation::new();
             let _abandoned = CancelOnDrop(token.clone());
             match tokio::task::spawn_blocking(move || call(&effect, &operation, &token)).await {
                 Ok(outcome) => result(outcome),
@@ -73,11 +73,40 @@ impl<E: JournaledEffect> Effects<E> {
 }
 
 impl<E: JournaledEffect> EffectExecutor for Effects<E> {
+    fn observes_delivery_cancellation(&self) -> bool {
+        self.effect.observes_delivery_cancellation()
+    }
     fn execute(&self, operation: OperationRecord) -> EffectFuture {
-        self.run(operation, self.panics.execute, E::execute_cancellable)
+        self.run(
+            operation,
+            self.panics.execute,
+            E::execute_cancellable,
+            Cancellation::new(),
+        )
+    }
+    fn execute_cancellable(
+        &self,
+        operation: OperationRecord,
+        cancellation: Cancellation,
+    ) -> EffectFuture {
+        if self.effect.observes_delivery_cancellation() {
+            self.run(
+                operation,
+                self.panics.execute,
+                E::execute_cancellable,
+                cancellation,
+            )
+        } else {
+            self.execute(operation)
+        }
     }
     fn observe(&self, operation: OperationRecord) -> EffectFuture {
-        self.run(operation, self.panics.observe, E::observe_cancellable)
+        self.run(
+            operation,
+            self.panics.observe,
+            E::observe_cancellable,
+            Cancellation::new(),
+        )
     }
     fn ready(&self, operation: &OperationRecord) -> Option<ReadyFuture> {
         self.effect.wait_bound(operation)?;

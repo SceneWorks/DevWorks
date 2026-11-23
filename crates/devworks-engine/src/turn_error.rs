@@ -9,6 +9,8 @@ use devworks_core::services::usage::accounting::AttemptEnd;
 
 #[derive(Debug)]
 pub enum TurnError {
+    /// The feature's review failed and the coordinator must preserve held work for Continue.
+    PlanReviewUnavailable { independent_scope: bool },
     /// A store read or write failed, including an artifact read (see [`artifact_read_fault`]).
     Store(StorageError),
     /// The provider attempt ended without a settled continuation. `faults` are the recorded
@@ -20,6 +22,10 @@ pub enum TurnError {
     /// A command the turn issued for itself was refused, rejected or left unconfirmed; the
     /// gateway's retry advice decides.
     Command { detail: String, retry: RetryAdvice },
+    /// The chosen tier has no available model, and the router knows when to recheck.
+    Cooling { until_ms: i64 },
+    /// A manual route change raced a native route read. Re-read before generating.
+    RouteChanged,
     /// A blocking worker the turn waited on panicked or was aborted.
     Worker(String),
 }
@@ -38,10 +44,11 @@ impl TurnError {
     /// Repeating the turn may succeed: the activation retries with backoff.
     pub fn retryable(&self) -> bool {
         match self {
+            Self::PlanReviewUnavailable { .. } => false,
             Self::Store(error) => storage_retryable(error),
             Self::Provider { outcome, faults } => provider_retryable(*outcome, faults),
             Self::Command { retry, .. } => *retry != RetryAdvice::Never,
-            Self::Worker(_) => true,
+            Self::Cooling { .. } | Self::RouteChanged | Self::Worker(_) => true,
         }
     }
 

@@ -200,6 +200,13 @@ macro_rules! read_impls {
             ) -> Result<Option<QueueEntry>, StorageError> {
                 delivery(self.conn, consumer, event)
             }
+            fn partition_head(
+                &self,
+                consumer: &str,
+                partition: &str,
+            ) -> Result<Option<QueueEntry>, StorageError> {
+                queue::partition_head(self.conn, consumer, partition)
+            }
             fn status(&self, consumer: &str) -> Result<QueueStatus, StorageError> {
                 status(self.conn, consumer)
             }

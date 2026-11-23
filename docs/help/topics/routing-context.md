@@ -8,7 +8,9 @@ A tier is a configured pool; a named model identifies a concrete catalog entry o
 
 The eight stable family aliases are astra-latest, sol-latest, terra-latest, luna-latest, fable-latest, opus-latest, sonnet-latest, and haiku-latest. Each selects the highest listed numeric version within its configured profile/connection/namespace. A concrete pin preserves its exact upstream snapshot rather than following an edited catalog row. A missing model becomes unavailable without destroying user settings; a returning model does not re-enable one the user disabled.
 
-Provider lists refresh hourly while open, manually, and when overdue after reopening. A failed or incomplete refresh preserves the last complete inventory. Subscription and API billing never cross automatically. OpenRouter's exact upstream IDs `openrouter/auto` and `openrouter/auto-beta` retain distinct provider plugins. They are distinct from DevWorks Auto classification; a listed Auto option is not proof that first-turn classification is installed. SystemOne decision models, when available, are explicit IDs outside conversational tiers.
+Provider lists refresh hourly while open, manually, and when overdue after reopening. A failed or incomplete refresh preserves the last complete inventory. Subscription and API billing never cross automatically. OpenRouter's exact upstream IDs `openrouter/auto` and `openrouter/auto-beta` retain distinct provider plugins. They are distinct from DevWorks Auto classification; a listed Auto option is not proof that first-turn classification is installed.
+
+SystemOne decisions use an exact configured model ID or the separate decision pool. The pool allocates each new request across eligible models and keeps its position across restarts. A recorded request keeps its allocation on replay. See [Provider connection setup and credential recovery](help:settings-connections).
 
 ## Context and caching
 

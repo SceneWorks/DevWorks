@@ -367,6 +367,9 @@ jobs:
         with:
           shared-key: test-foundation
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Exercise the Windows dev-host broker across accounts
+        shell: powershell
+        run: .\tools\ci\test-windows-disk-budget.ps1
       - name: Run complete foundation partition
         shell: bash
         run: bash tools/ci/native-tests.sh foundation

@@ -35,7 +35,7 @@ impl HttpTransport for OpenRouter {
         {
             return Ok(HttpResponse {
                 status: 200,
-                body: br#"{"data":[{"id":"openrouter/auto"},{"id":"a/b","context_length":8000},{"id":"c/d","context_length":4000},{"id":"openai/gpt-6.1-sol","context_length":100000}]}"#.to_vec(),
+                body: br#"{"data":[{"id":"openrouter/auto"},{"id":"a/b","context_length":8000},{"id":"c/d","context_length":4000},{"id":"openai/gpt-6.1-sol","context_length":100000,"supported_parameters":["tools"]}]}"#.to_vec(),
             });
         }
         Ok(HttpResponse {

@@ -3,6 +3,8 @@
 mod common;
 #[path = "providers/repository_analysis.rs"]
 mod repository_analysis;
+#[path = "providers/systemone.rs"]
+mod systemone;
 use common::*;
 use devworks_adapters::fs::{
     NativeFilesystem, artifacts::NativeArtifactFiles, sources::HostArtifactSources,
@@ -68,7 +70,9 @@ impl Entropy for EntropyFixture {
 }
 struct Script {
     status: u16,
+    statuses: VecDeque<u16>,
     body: VecDeque<Vec<u8>>,
+    repeat_body: Option<Vec<u8>>,
     content_type: &'static str,
     requests: Arc<Mutex<Vec<HttpRequest>>>,
     closed: Arc<AtomicBool>,
@@ -84,7 +88,9 @@ impl Script {
     fn sse(body: &str) -> Self {
         Self {
             status: 200,
+            statuses: VecDeque::new(),
             body: VecDeque::from([body.as_bytes().to_vec()]),
+            repeat_body: None,
             content_type: "text/event-stream",
             requests: Default::default(),
             closed: Default::default(),
@@ -128,14 +134,19 @@ impl StreamingHttp for ScriptHttp {
         if let Some(f) = &script.after_open {
             f();
         }
+        let body = match &script.repeat_body {
+            Some(body) => VecDeque::from([body.clone()]),
+            None => std::mem::take(&mut script.body),
+        };
+        let status = script.statuses.pop_front().unwrap_or(script.status);
         Ok(Box::new(Stream {
             head: ResponseHead {
-                status: script.status,
+                status,
                 headers: std::iter::once(("content-type".into(), script.content_type.into()))
                     .chain(script.headers.clone())
                     .collect(),
             },
-            body: std::mem::take(&mut script.body),
+            body,
             closed: script.closed.clone(),
             reads: script.reads.clone(),
             close_gate: script.close_gate.clone(),

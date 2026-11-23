@@ -6,6 +6,11 @@ impl WorkCtl<'_, '_> {
     pub(super) fn apply_work(&mut self, slot: WorkSlot, reply: Reply) -> Option<(WorkSlot, Reply)> {
         let (slot, reply) = self.apply_workflow(slot, reply)?;
         match (slot, reply) {
+            (WorkSlot::KeepWorking(project), Reply::Task(result)) => {
+                if self.selected_project.as_deref() == Some(project.as_str()) {
+                    self.work.message = result.err().map(|error| (Tone::Attention, error));
+                }
+            }
             (WorkSlot::WorkMessagesHistory(project), Reply::Query(reply)) => {
                 if self.work.messages.project.as_deref() != Some(project.as_str()) {
                     return None;
@@ -208,6 +213,26 @@ impl WorkCtl<'_, '_> {
                 self.work
                     .git_inspections
                     .insert(tree, ops::git_inspected(q).map_err(|e| e.describe()));
+            }
+            (WorkSlot::ReadinessHistory(id, generation), Reply::Query(q)) => {
+                let page = wops::readiness_history_result(q)
+                    .map(|page| {
+                        Page::new(
+                            page.items
+                                .0
+                                .into_iter()
+                                .filter(|row| row.kind.0 == "readiness_finding")
+                                .collect(),
+                            page.next_cursor.map(|c| c.0),
+                        )
+                    })
+                    .map_err(|e| e.describe());
+                if let Some(list) = self.work.readiness_history.get_mut(&id)
+                    && let Applied::Continue(fetch) =
+                        list.apply_unique(generation, page, |row| row.id.as_str().to_owned())
+                {
+                    self.request_readiness_history(&id, fetch);
+                }
             }
             (WorkSlot::WorkGit(id), Reply::Query(q)) => {
                 let page = wops::git_links_result(q)

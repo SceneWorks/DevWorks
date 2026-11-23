@@ -47,6 +47,15 @@ pub(super) fn clear_profile_cooldowns(
     tx: &mut dyn WriteTransaction,
     c: &StoredConnection,
 ) -> Result<(), StorageError> {
+    if c.profile == "SystemOne" {
+        for model in super::all_decision_models(tx.router())?
+            .into_iter()
+            .filter(|model| model.connection_id == c.id)
+        {
+            tx.router().clear_cooldown(&model.id)?;
+        }
+        return Ok(());
+    }
     let models = all_models(tx.router())?;
     for m in models.iter().filter(|m| {
         m.endpoint_profile == c.profile && m.connection_id.as_ref().is_none_or(|b| b == &c.id)
@@ -110,6 +119,12 @@ pub(super) fn apply_check(
                     "the endpoint refused a request without a key (HTTP {status}); add its API key"
                 )
             });
+        }
+        Err(e @ ListFailure::Malformed(_))
+            if next.profile == "SystemOne" && next.discovered.is_some() =>
+        {
+            // A response arrived but was insufficient to replace the last complete inventory.
+            next.state_reason = Some(e.reason());
         }
         Err(e) => {
             // An availability event, not a revocation: the last good list is kept.

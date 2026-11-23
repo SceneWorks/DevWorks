@@ -822,6 +822,35 @@ fn open_router_auto_beta_keeps_its_exact_identity_and_provider_filter_exemptions
         model_of(fx.route("s2", auto(), "Default", &[])),
         "saved-beta"
     );
+    let legacy_pin = fx.pin_row("s2").unwrap();
+    let current = |key, session, intent| {
+        fx.command_keyed_at(
+            &fx.user(),
+            "router.route",
+            key,
+            json!({"sessionId":session,"expectedContextEpoch":"0","intent":intent,
+            "effort":"Default","requiredCapabilities":[]}),
+            3,
+        )
+    };
+    assert_eq!(
+        refused(current("new-exact-auto", "s3", auto())).code,
+        DomainErrorCode::UnsupportedCapability
+    );
+    assert_eq!(
+        model_of(current(
+            "new-exact-beta",
+            "s3",
+            json!({"kind":"OpenRouterAutoBeta"})
+        )),
+        "saved-beta"
+    );
+    assert_eq!(
+        chosen(current("preserve-legacy-beta-pin", "s2", auto()))
+            .0
+            .pin_id,
+        legacy_pin.pin_id
+    );
     fx.dir.set(
         "OpenRouterChat",
         "conn-or",

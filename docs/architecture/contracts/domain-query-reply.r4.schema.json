@@ -5886,7 +5886,7 @@
       ],
       "type": "object"
     },
-    "DecisionModel": {
+    "DecisionCatalogModel": {
       "additionalProperties": false,
       "properties": {
         "acceptsImages": {
@@ -5895,8 +5895,20 @@
         "acceptsVideos": {
           "type": "boolean"
         },
+        "availabilityReason": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 4
+        },
+        "available": {
+          "type": "boolean",
+          "x-since": 4
+        },
         "connectionId": {
           "$ref": "#/$defs/Id"
+        },
+        "decisionPolicy": {
+          "$ref": "#/$defs/DecisionPolicy",
+          "x-since": 4
         },
         "displayName": {
           "$ref": "#/$defs/Text1To256"
@@ -5915,6 +5927,10 @@
         },
         "resultSchema": {
           "$ref": "#/$defs/SchemaRef"
+        },
+        "retryAtMs": {
+          "$ref": "#/$defs/Counter",
+          "x-since": 4
         },
         "revision": {
           "$ref": "#/$defs/Revision"
@@ -5935,6 +5951,30 @@
         "enabled",
         "extensionQuestionSchemas",
         "resultSchema"
+      ],
+      "type": "object"
+    },
+    "DecisionPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "maxBatchBytes": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "maxInputBytes": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "maxQuestionCount": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "poolMember": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "poolMember",
+        "maxInputBytes",
+        "maxQuestionCount",
+        "maxBatchBytes"
       ],
       "type": "object"
     },
@@ -11289,9 +11329,9 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_DecisionModel_0_500": {
+    "List_DecisionCatalogModel_0_500": {
       "items": {
-        "$ref": "#/$defs/DecisionModel"
+        "$ref": "#/$defs/DecisionCatalogModel"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -20744,7 +20784,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DecisionModel_0_500"
+          "$ref": "#/$defs/List_DecisionCatalogModel_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -23535,6 +23575,34 @@
             "kind"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "DevWorksAuto",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 3
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "OpenRouterAutoBeta",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 3
         }
       ]
     },

@@ -56,12 +56,17 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// foreign key to instruction_revisions and one to knowledge_claims, and no other table changes.
 /// Migration 63 adds file scan progress to watchers. The watcher retains its existing project
 /// and session ownership. The new column adds no reference to another row.
-/// Migration 64 adds analysis_runs and its four indexes. Project runs follow their recorded
+/// Migration 64 adds one decision policy column on the globally owned model and a workspace
+/// cursor. Migration 65 adds an automatic-claim flag and replaces an allocation uniqueness index
+/// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
+/// routing source linked to its owning session. The linked input artifact follows the ordinary
+/// project artifact ownership and the operation journal follows its existing scope.
+/// Migration 67 adds analysis_runs and its four indexes. Project runs follow their recorded
 /// scope key. Workspace runs and ordinary repository index views keep their independent ownership.
-/// Migration 65 adds database_sensitive_policies. Rules follow the workspace or shared schema
+/// Migration 68 adds database_sensitive_policies. Rules follow the workspace or shared schema
 /// source. Project purge removes only the project's existing access to that shared source.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "be1704e7d4244eef2f771fe2bd5c1f9cdb9d8bd8d8649283d47bea31fef0be77";
+    "bed9baac9e211f99a516787c0626600d8439b1a49f6b158149cdfd402b12a23c";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

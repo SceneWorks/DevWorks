@@ -147,6 +147,7 @@ impl ExecutionScope for RecordedScope {
                         a,
                         p.pending_revision,
                         p.readiness.as_ref(),
+                        &p.published_plan_views,
                     )
                 }) =>
             {

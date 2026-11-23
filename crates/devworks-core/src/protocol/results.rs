@@ -660,7 +660,7 @@ pub enum OperationResult {
     #[serde(rename = "router.configure")]
     RouterConfigure { value: MutationSummary },
     #[serde(rename = "router.decision_models")]
-    RouterDecisionModels { value: Page<DecisionModel> },
+    RouterDecisionModels { value: Page<DecisionCatalogModel> },
     #[serde(rename = "router.decide")]
     RouterDecide { value: DecisionResult },
     #[schemars(extend("x-since" = 3))]
@@ -1789,6 +1789,7 @@ impl Revisioned for OperationResult {
             Self::RouterUsage { value } => value.retain_revision(revision),
             Self::RouterPriceStatus { value } => value.retain_revision(revision),
             Self::RouterPriceOverride { value } => value.retain_revision(revision),
+            Self::RouterDecisionModels { value } => value.retain_revision(revision),
             Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
             Self::McpServers { value } => value.retain_revision(revision),
             Self::McpConfigure { value } => value.retain_revision(revision),
@@ -1939,6 +1940,16 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::JobsList { value } => value.check_revision(revision),
+            Self::JobsCreate { value } => value.check_revision(revision),
+            Self::JobsEdit { value } => value.check_revision(revision),
+            Self::JobsEnable { value } => value.check_revision(revision),
+            Self::JobsInspect { value } => value.check_revision(revision),
+            Self::JobsDelete { value } => value.check_revision(revision),
+            Self::JobsDisable { value } => value.check_revision(revision),
+            Self::RouterRoute { value } => value.check_revision(revision),
+            Self::RouterPin { value } => value.check_revision(revision),
+            Self::RouterAvailability { value } => value.check_revision(revision),
             Self::RouterUsage { value } => value.check_revision(revision),
             Self::RouterPriceStatus { value } => value.check_revision(revision),
             Self::RouterPriceOverride { value } => value.check_revision(revision),

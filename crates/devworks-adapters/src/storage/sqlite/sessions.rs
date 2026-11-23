@@ -737,7 +737,10 @@ fn lineage(
            SELECT 0 AS seq,0 AS src,id FROM work_items WHERE id=(SELECT parent_feature_id FROM work_items WHERE id=?1)
            UNION ALL SELECT 0,0,id FROM work_items WHERE parent_feature_id=?1
            UNION ALL SELECT seq,1,id FROM history_links WHERE root_id=?1
-           UNION ALL SELECT seq,2,id FROM events WHERE root_id=?1 AND aggregate_kind IN ({LINEAGE_EVENT_AGGREGATES})
+           UNION ALL SELECT seq,2,id FROM events WHERE root_id=?1
+             AND (aggregate_kind IN ({LINEAGE_EVENT_AGGREGATES})
+                  OR (aggregate_kind='feature_readiness'
+                      AND kind IN ('ReadinessFindingArchived','ReadinessFindingArchiveContinued')))
          ) WHERE seq>?2 OR (seq=?2 AND (src>?3 OR (src=?3 AND id>?4)))
          ORDER BY seq,src,id LIMIT ?5"
     );
@@ -1460,6 +1463,28 @@ impl SessionRepository for Unit<'_> {
             });
         }
         Ok(())
+    }
+
+    fn adopt_workspace_coordinator(
+        &mut self,
+        session: &Id,
+        expected_revision: i64,
+        creator: &ActorId,
+        coordinator: &ActorId,
+    ) -> Result<bool, StorageError> {
+        let changed = db(self.conn.execute(
+            "UPDATE sessions SET agent_id=?4
+             WHERE id=?1 AND revision=?2 AND created_by=?3
+             AND agent_id=?3 AND closed_at IS NULL AND root_id IS NULL AND project_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM assignments WHERE session_id=?1)",
+            params![
+                session.as_str(),
+                expected_revision,
+                creator.0.as_str(),
+                coordinator.0.as_str()
+            ],
+        ))?;
+        Ok(changed == 1)
     }
 
     fn touch_session_activity(&mut self, id: &Id, at_ms: i64) -> Result<(), StorageError> {

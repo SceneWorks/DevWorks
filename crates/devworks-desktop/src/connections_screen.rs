@@ -18,8 +18,9 @@ use devworks_core::protocol::helpers::profiles::{
     Auth, PROFILES, Profile, RISK_NOTICE, profile, risk_notice_sha256,
 };
 use devworks_core::protocol::records::{
-    AccountAction, ConnectionRecord, OpenRouterConstraints, OpenRouterProviderRouting,
-    RouteCatalogModel, RouteModel, RouterConfigAction,
+    AccountAction, ConnectionRecord, DecisionCatalogModel, DecisionModel, DecisionPolicy,
+    DecisionQuestionType, OpenRouterConstraints, OpenRouterProviderRouting, RouteCatalogModel,
+    RouteModel, RouterConfigAction,
 };
 use devworks_core::protocol::support::BoundedList;
 use devworks_core::protocol::wire_name;
@@ -47,6 +48,8 @@ pub enum ConnectionAction {
     },
     EmbeddingSetup,
     EmbeddingPrice(String),
+    Decide(Box<devworks_core::operations::router::DecideInput>),
+    DecisionCompletion(devworks_core::protocol::OperationId),
     /// A `router.configure` action; `key` (an API key the user typed) is staged in the OS secret
     /// store first and its handle set as the action's `credentialRef`; `code` (a pasted
     /// `code#state`) is attached to the open sign-in `flow` first.
@@ -106,6 +109,158 @@ pub(crate) struct ModelEdit {
     pub(crate) enabled: bool,
 }
 
+const DECISION_KINDS: [DecisionQuestionType; 4] = [
+    DecisionQuestionType::Choice,
+    DecisionQuestionType::Noul,
+    DecisionQuestionType::Score,
+    DecisionQuestionType::Box,
+];
+
+struct DecisionDraft {
+    id: String,
+    name: String,
+    upstream: String,
+    connection: Id,
+    revision: Option<Revision>,
+    kinds: [bool; 4],
+    images: bool,
+    videos: bool,
+    enabled: bool,
+    pooled: bool,
+    input_limit: String,
+    question_limit: String,
+    batch_limit: String,
+    extensions: Vec<devworks_core::protocol::provider::SchemaRef>,
+    result: devworks_core::protocol::provider::SchemaRef,
+}
+
+impl DecisionDraft {
+    fn new(connection: Id) -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            upstream: String::new(),
+            connection,
+            revision: None,
+            kinds: [false; 4],
+            images: false,
+            videos: false,
+            enabled: true,
+            pooled: false,
+            input_limit: String::new(),
+            question_limit: String::new(),
+            batch_limit: String::new(),
+            extensions: Vec::new(),
+            result: devworks_core::providers::systemone::result_reference(),
+        }
+    }
+
+    fn from_model(model: &DecisionCatalogModel) -> Self {
+        let mut draft = Self::new(model.connection_id.clone());
+        draft.id = model.id.as_str().to_owned();
+        draft.name.clone_from(&model.display_name.0);
+        draft.upstream.clone_from(&model.upstream_model_id.0);
+        draft.revision = Some(model.revision.clone());
+        for (index, kind) in DECISION_KINDS.iter().enumerate() {
+            draft.kinds[index] = model
+                .question_types
+                .0
+                .iter()
+                .any(|other| wire_name(other) == wire_name(kind));
+        }
+        draft.images = model.accepts_images;
+        draft.videos = model.accepts_videos;
+        draft.enabled = model.enabled;
+        draft
+            .extensions
+            .clone_from(&model.extension_question_schemas.0);
+        draft.result = model.result_schema.clone();
+        if let Some(policy) = &model.decision_policy {
+            draft.pooled = policy.pool_member;
+            draft.input_limit.clone_from(&policy.max_input_bytes.0);
+            draft
+                .question_limit
+                .clone_from(&policy.max_question_count.0);
+            draft.batch_limit.clone_from(&policy.max_batch_bytes.0);
+        }
+        draft
+    }
+
+    fn action(&self) -> Option<RouterConfigAction> {
+        use devworks_core::protocol::support::{BoundedText, Check};
+        let limit = |value: &str| {
+            if value
+                .parse::<u64>()
+                .is_ok_and(|n| n > 0 && n <= i64::MAX as u64)
+            {
+                serde_json::from_value(serde_json::json!(value)).ok()
+            } else {
+                None
+            }
+        };
+        let policy = if self.pooled
+            || !self.input_limit.is_empty()
+            || !self.question_limit.is_empty()
+            || !self.batch_limit.is_empty()
+        {
+            Some(DecisionPolicy {
+                pool_member: self.pooled,
+                max_input_bytes: limit(&self.input_limit)?,
+                max_question_count: limit(&self.question_limit)?,
+                max_batch_bytes: limit(&self.batch_limit)?,
+            })
+        } else {
+            None
+        };
+        let kinds: Vec<_> = DECISION_KINDS
+            .iter()
+            .zip(self.kinds)
+            .filter(|(_, enabled)| *enabled)
+            .map(|(kind, _)| kind.clone())
+            .collect();
+        let name = self.name.trim();
+        let upstream = self.upstream.trim();
+        if name.is_empty()
+            || name.chars().count() > 256
+            || upstream.is_empty()
+            || upstream.chars().count() > 4096
+            || kinds.is_empty()
+        {
+            return None;
+        }
+        let model = DecisionModel {
+            id: Id::new(self.id.trim()).ok()?,
+            revision: self
+                .revision
+                .clone()
+                .unwrap_or_else(|| Revision::new(1).expect("first revision")),
+            display_name: BoundedText(name.to_owned()),
+            connection_id: self.connection.clone(),
+            upstream_model_id: BoundedText(upstream.to_owned()),
+            question_types: BoundedList(kinds),
+            accepts_images: self.images,
+            accepts_videos: self.videos,
+            enabled: self.enabled,
+            extension_question_schemas: BoundedList(self.extensions.clone()),
+            result_schema: self.result.clone(),
+            decision_policy: policy,
+        };
+        model.check().ok()?;
+        Some(RouterConfigAction::DecisionModel {
+            model,
+            expected_revision: self.revision.clone(),
+        })
+    }
+}
+
+fn decision_field(ui: &mut Ui, label: &str, value: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.text_edit_singleline(value)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, label));
+    });
+}
+
 #[derive(Default)]
 pub struct ConnectionsPanel {
     pub embedding_spaces: crate::embedding_spaces_screen::EmbeddingSpacesPanel,
@@ -113,6 +268,11 @@ pub struct ConnectionsPanel {
     /// replaces what is shown.
     pub connections: Paged<ConnectionRecord>,
     pub catalog: Paged<RouteCatalogModel>,
+    pub decision_models: Paged<DecisionCatalogModel>,
+    decision_draft: Option<DecisionDraft>,
+    decision_request: Option<String>,
+    pub(crate) decision_operation: Option<devworks_core::protocol::OperationId>,
+    pub(crate) decision_output: Option<String>,
     pub message: Option<(Tone, String)>,
     /// Commands submitted and not answered yet (their labels).
     pub busy: Vec<(u64, String)>,
@@ -481,6 +641,8 @@ impl ConnectionsPanel {
                 self.add_ui(ui, &mut scroll_actions);
                 self.embedding_spaces
                     .ui(ui, &records, self.busy.is_empty(), &mut scroll_actions);
+                self.decision_models_ui(ui, &records, &mut scroll_actions);
+                self.decision_request_ui(ui, &mut scroll_actions);
                 widgets::divider(ui);
                 self.catalog_ui(ui, &mut scroll_actions);
             });
@@ -683,6 +845,154 @@ impl ConnectionsPanel {
                 self.editor_ui(ui, r, p, &id, &revision, actions);
             }
         });
+    }
+
+    fn decision_request_ui(&mut self, ui: &mut Ui, actions: &mut Vec<ConnectionAction>) {
+        ui.collapsing("Run a SystemOne decision", |ui| {
+            let raw = self.decision_request.get_or_insert_with(|| {
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "usePool":true, "state":"", "questions":[{"name":"answer", "question":{"kind":"Noul","instructions":""}}],
+                    "images":[], "videos":[], "timeoutMs":"30000"
+                })).expect("decision request template")
+            });
+            ui.label("Decision request JSON");
+            ui.add(egui::TextEdit::multiline(raw).code_editor().desired_rows(8));
+            let input = serde_json::from_str::<devworks_core::operations::router::DecideInput>(raw);
+            if let Err(error) = &input { ui.label(error.to_string()); }
+            if ui.add_enabled(input.is_ok() && self.decision_operation.is_none(), egui::Button::new("Run decision")).clicked()
+                && let Ok(input) = input
+            {
+                actions.push(ConnectionAction::Decide(Box::new(input)));
+            }
+            if let Some(operation) = &self.decision_operation
+                && ui.button("Check decision result").clicked()
+            {
+                actions.push(ConnectionAction::DecisionCompletion(operation.clone()));
+            }
+            if let Some(output) = &self.decision_output { ui.label(output); }
+        });
+    }
+
+    fn decision_models_ui(
+        &mut self,
+        ui: &mut Ui,
+        connections: &[ConnectionRecord],
+        actions: &mut Vec<ConnectionAction>,
+    ) {
+        widgets::divider(ui);
+        ui.label(RichText::new("SystemOne decision models").strong());
+        if let Some(error) = &self.decision_models.error {
+            chip(ui, error.clone(), Tone::Bad);
+        }
+        for model in &self.decision_models.items {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(&model.display_name.0);
+                ui.label(model.id.as_str());
+                ui.label(format!("Revision {}", model.revision.get()));
+                chip(
+                    ui,
+                    if model.available == Some(true) {
+                        "Available"
+                    } else {
+                        model
+                            .availability_reason
+                            .as_ref()
+                            .map_or("Unavailable", |reason| reason.0.as_str())
+                    },
+                    if model.available == Some(true) {
+                        Tone::Good
+                    } else {
+                        Tone::Neutral
+                    },
+                );
+                if let Some(retry) = &model.retry_at_ms {
+                    ui.label(format!(
+                        "Retry after {}",
+                        crate::widgets::local_time_seconds(retry.get())
+                    ));
+                }
+                if model
+                    .decision_policy
+                    .as_ref()
+                    .is_some_and(|policy| policy.pool_member)
+                {
+                    ui.label("In decision pool");
+                }
+                if ui
+                    .button(format!("Edit {}", model.display_name.0))
+                    .clicked()
+                {
+                    self.decision_draft = Some(DecisionDraft::from_model(model));
+                }
+            });
+        }
+        let serving: Vec<_> = connections
+            .iter()
+            .filter(|connection| wire_name(&connection.profile) == "SystemOne")
+            .collect();
+        if ui
+            .add_enabled(!serving.is_empty(), egui::Button::new("Add decision model"))
+            .clicked()
+        {
+            self.decision_draft = Some(DecisionDraft::new(serving[0].id.clone()));
+        }
+        let Some(draft) = &mut self.decision_draft else {
+            return;
+        };
+        let mut close = false;
+        ui.group(|ui| {
+            ui.add_enabled_ui(draft.revision.is_none(), |ui| {
+                decision_field(ui, "Model ID", &mut draft.id)
+            });
+            decision_field(ui, "Display name", &mut draft.name);
+            decision_field(ui, "Upstream model ID", &mut draft.upstream);
+            egui::ComboBox::from_id_salt("decision-connection")
+                .selected_text(draft.connection.as_str())
+                .show_ui(ui, |ui| {
+                    for connection in serving {
+                        ui.selectable_value(
+                            &mut draft.connection,
+                            connection.id.clone(),
+                            &connection.name.0,
+                        );
+                    }
+                });
+            ui.horizontal_wrapped(|ui| {
+                for (index, name) in ["Choice", "Noul", "Score", "Box"].into_iter().enumerate() {
+                    ui.checkbox(&mut draft.kinds[index], name);
+                }
+                ui.checkbox(&mut draft.images, "Images");
+                ui.checkbox(&mut draft.videos, "Videos");
+            });
+            ui.checkbox(&mut draft.enabled, "Enabled");
+            ui.checkbox(&mut draft.pooled, "Include in decision pool");
+            decision_field(ui, "Maximum input bytes", &mut draft.input_limit);
+            decision_field(ui, "Maximum questions", &mut draft.question_limit);
+            decision_field(ui, "Maximum batch bytes", &mut draft.batch_limit);
+            let action = draft.action();
+            if ui
+                .add_enabled(
+                    action.is_some() && self.busy.is_empty(),
+                    egui::Button::new("Save decision model"),
+                )
+                .clicked()
+                && let Some(action) = action
+            {
+                actions.push(ConnectionAction::Configure {
+                    label: "Saving decision model".into(),
+                    action,
+                    key: None,
+                    code: None,
+                });
+                close = true;
+            }
+            if ui.button("Close decision model editor").clicked() {
+                close = true;
+            }
+        });
+        if close {
+            self.decision_draft = None;
+        }
     }
 
     fn risk_ui(

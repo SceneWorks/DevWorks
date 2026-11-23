@@ -1,5 +1,5 @@
 {
-  "schema": 64,
+  "schema": 67,
   "policy": "dw29-analysis-runs-v1",
   "additionalTables": [
     {
@@ -9,6 +9,6 @@
       "purpose": "A run belongs to the project recorded by scope_key. Project-scoped requests, phase checkpoints, and report references leave with that owner's project. Workspace analyses use the workspace scope key and contain only source and report evidence independently owned in the workspace. Artifact ownership and any sharing must still be reviewed by the existing artifact policy."
     }
   ],
-  "readerFloor": 57,
-  "writerFloor": 63
+  "readerFloor": 66,
+  "writerFloor": 67
 }

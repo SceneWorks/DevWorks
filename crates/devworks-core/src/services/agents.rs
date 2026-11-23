@@ -558,7 +558,7 @@ impl AgentService {
         // Redirects received before a coordinator existed have no transcript session link.
         // Materialization grants their validated versions to this coordinator's session.
         link_unlinked_redirect_attachments(tx, host, &root.id, &root.project_id, &session.id)?;
-        bind_role_authority(tx, host, &session.agent_id, role, &root.project_id)?;
+        bind_role_authority(tx, host, &session.agent_id, role, Some(&root.project_id))?;
         let assignment = if assignment.state == AssignmentState::Active {
             assignment
         } else {
@@ -755,6 +755,34 @@ impl AgentService {
                 "the child is not ready under this activation".into(),
             )));
         }
+        let assignment_context = tx
+            .runs()
+            .agent_assignment_context(assignment_id)?
+            .ok_or_else(|| corrupt("assignment context"))?;
+        if assignment_context.role_id.as_str() == AgentRole::PlanReviewer.as_str()
+            && !crate::services::work::plan_review::owns_attempt(
+                tx.work(),
+                &assignment.root_id.0,
+                &assignment.id,
+                &assignment.session_id,
+                activation_id,
+                owner_epoch,
+            )?
+        {
+            self.runs
+                .set_assignment_state(
+                    tx,
+                    host.principal(),
+                    assignment_id,
+                    assignment.revision,
+                    AssignmentState::Superseded,
+                    None,
+                )?
+                .map_err(crate::services::agents::fenced)?;
+            return Ok(Err(Fenced::NotFound(
+                "the plan review attempt was superseded",
+            )));
+        }
         if let Err(fenced) = self.runs.begin_dispatch(
             tx,
             &crate::services::runs::substrate::DispatchRequest {
@@ -804,19 +832,21 @@ impl AgentService {
             Ok(active) => active,
             Err(fenced) => return Ok(Err(fenced)),
         };
-        let root = tx
-            .sessions()
-            .work_root(&active.root_id)?
-            .ok_or_else(|| denied("root"))?;
-        link_unlinked_redirect_attachments(
-            tx,
-            host,
-            &root.id,
-            &root.project_id,
-            &active.session_id,
-        )?;
         bind_child_authority(tx, host, assignment_id)?;
-        retained::handover_item(tx, assignment_id)?;
+        if assignment_context.role_id.as_str() != AgentRole::PlanReviewer.as_str() {
+            let root = tx
+                .sessions()
+                .work_root(&active.root_id)?
+                .ok_or_else(|| denied("root"))?;
+            link_unlinked_redirect_attachments(
+                tx,
+                host,
+                &root.id,
+                &root.project_id,
+                &active.session_id,
+            )?;
+            retained::handover_item(tx, assignment_id)?;
+        }
         Ok(Ok(agent_record(tx.runs(), &active)?))
     }
 
@@ -853,6 +883,51 @@ impl AgentService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         input: &ops::DelegateInput,
+    ) -> Result<AgentRecord, Failure> {
+        self.delegate_for_purpose(tx, ctx, input, false)
+    }
+
+    /// The native supervisor is the only caller that may create a plan reviewer.
+    pub fn delegate_plan_review(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        target: &crate::services::work::plan_review::ReviewTarget,
+    ) -> Result<AgentRecord, Failure> {
+        let root_id = ctx.root_id().ok_or(StorageError::ScopeDenied)?.clone();
+        let control = runs::control_of(tx.runs(), &root_id)?;
+        let input = ops::DelegateInput {
+            root_id,
+            expected_control_revision: rev(control.revision),
+            task_ids: crate::protocol::support::BoundedList(Vec::new()),
+            role_id: crate::protocol::Id::new(AgentRole::PlanReviewer.as_str()).expect("role id"),
+            instruction: crate::services::kernel::content(
+                "Independently review this exact feature plan.",
+            ),
+            source_checkpoint_id: None,
+        };
+        let reviewer = self.delegate_for_purpose(tx, ctx, &input, true)?;
+        let session = tx
+            .runs()
+            .assignment(&reviewer.assignment_id)?
+            .ok_or(StorageError::ScopeDenied)?
+            .session_id;
+        crate::services::work::plan_review::attach(
+            tx,
+            ctx,
+            target,
+            reviewer.assignment_id.clone(),
+            session,
+        )?;
+        Ok(reviewer)
+    }
+
+    fn delegate_for_purpose(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        input: &ops::DelegateInput,
+        plan_review: bool,
     ) -> Result<AgentRecord, Failure> {
         let root = tx.sessions().work_root(&input.root_id)?.ok_or_else(|| {
             Refusal::new(
@@ -895,11 +970,17 @@ impl AgentService {
             .ok_or_else(|| corrupt("assignment context"))?;
         let parent_role = AgentRole::parse(parent_context.role_id.as_str())
             .ok_or_else(|| corrupt("assignment role"))?;
-        let allowed = matches!(role, AgentRole::Worker | AgentRole::CodeReviewer)
-            && matches!(
-                parent_role,
-                AgentRole::FeatureCoordinator | AgentRole::IssueCoordinator | AgentRole::Worker
-            );
+        let allowed = if plan_review {
+            root.kind == "feature"
+                && parent_role == AgentRole::FeatureCoordinator
+                && role == AgentRole::PlanReviewer
+        } else {
+            matches!(role, AgentRole::Worker | AgentRole::CodeReviewer)
+                && matches!(
+                    parent_role,
+                    AgentRole::FeatureCoordinator | AgentRole::IssueCoordinator | AgentRole::Worker
+                )
+        };
         if !allowed {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,
@@ -975,17 +1056,28 @@ impl AgentService {
                 .into());
             }
         }
-        let instructions = crate::settings::service::role_instructions(
-            tx.configuration(),
-            role,
-            Some(&root.project_id),
-        )
-        .map_err(|error| match error {
-            crate::settings::service::Failure::Storage(error) => Failure::Storage(error),
-            crate::settings::service::Failure::Refused(refusal) => {
-                Refusal::new(refusal.code, refusal.target_kind, refusal.target_id).into()
-            }
-        })?;
+        let (role_instructions, role_revisions) = if plan_review {
+            (
+                String::new(),
+                crate::settings::service::current_revisions(
+                    tx.configuration(),
+                    Some(&root.project_id),
+                )?,
+            )
+        } else {
+            let instructions = crate::settings::service::role_instructions(
+                tx.configuration(),
+                role,
+                Some(&root.project_id),
+            )
+            .map_err(|error| match error {
+                crate::settings::service::Failure::Storage(error) => Failure::Storage(error),
+                crate::settings::service::Failure::Refused(refusal) => {
+                    Refusal::new(refusal.code, refusal.target_kind, refusal.target_id).into()
+                }
+            })?;
+            (instructions.text, instructions.revisions)
+        };
         let actor = ActorId(tx.new_id(IdKind::Link));
         tx.actors()
             .register(&actor, PrincipalKind::Agent, role.as_str())?;
@@ -1007,43 +1099,48 @@ impl AgentService {
             checkpoint_sequence: 0,
         };
         tx.sessions().insert_session(&session)?;
-        retained::handover_direct(tx, &session.id)?;
-        let assignment = self
-            .runs
-            .register_child_assignment(
-                tx,
-                ctx.principal(),
-                NewRunAssignment {
-                    root: root.id.clone(),
-                    work: input
-                        .task_ids
-                        .0
-                        .first()
-                        .cloned()
-                        .map(crate::protocol::RootId)
-                        .unwrap_or_else(|| root.id.clone()),
-                    parent: Some(parent),
-                    session: session.id,
-                    scope_key: None,
-                },
-            )?
-            .map_err(fenced)?;
+        if !plan_review {
+            retained::handover_direct(tx, &session.id)?;
+        }
+        let assignment = NewRunAssignment {
+            root: root.id.clone(),
+            work: input
+                .task_ids
+                .0
+                .first()
+                .cloned()
+                .map(crate::protocol::RootId)
+                .unwrap_or_else(|| root.id.clone()),
+            parent: Some(parent),
+            session: session.id,
+            scope_key: None,
+        };
+        let assignment = if plan_review {
+            self.runs
+                .register_plan_review_assignment(tx, ctx.principal(), assignment)
+        } else {
+            self.runs
+                .register_child_assignment(tx, ctx.principal(), assignment)
+        }?
+        .map_err(fenced)?;
         tx.runs().insert_agent_assignment_context(&StoredAgentAssignmentContext {
             assignment_id:assignment.id.clone(),project_id:root.project_id.clone(),
-            role_id,role_instructions:instructions.text,
-            role_revisions:serde_json::json!({"workspace":instructions.revisions.workspace,"project":instructions.revisions.project}),
+            role_id,role_instructions,
+            role_revisions:serde_json::json!({"workspace":role_revisions.workspace,"project":role_revisions.project}),
             brief:input.instruction.0.clone(),
             task_ids:serde_json::to_value(&input.task_ids.0).map_err(|_|StorageError::InvalidRecord("task references".into()))?,
             source_checkpoint_id:input.source_checkpoint_id.clone(),created_at_ms:now,
         })?;
-        link_unlinked_redirect_attachments(
-            tx,
-            ctx,
-            &root.id,
-            &root.project_id,
-            &assignment.session_id,
-        )?;
-        retained::handover_item(tx, &assignment.id)?;
+        if !plan_review {
+            link_unlinked_redirect_attachments(
+                tx,
+                ctx,
+                &root.id,
+                &root.project_id,
+                &assignment.session_id,
+            )?;
+            retained::handover_item(tx, &assignment.id)?;
+        }
         Ok(agent_record(tx.runs(), &assignment)?)
     }
 }
@@ -1858,7 +1955,7 @@ fn bind_role_authority(
     host: &InvocationContext,
     actor: &ActorId,
     role: AgentRole,
-    project: &ProjectId,
+    project: Option<&ProjectId>,
 ) -> Result<(), Failure> {
     if host.principal_kind() != PrincipalKind::Host {
         return Err(Refusal::new(DomainErrorCode::PermissionDenied, "host", None).into());
@@ -1867,7 +1964,7 @@ fn bind_role_authority(
         if existing.active
             && existing.kind == PrincipalKind::Agent
             && existing.role == Some(role)
-            && existing.project_id.as_ref() == Some(project)
+            && existing.project_id.as_ref() == project
         {
             return Ok(());
         }
@@ -1885,7 +1982,7 @@ fn bind_role_authority(
             actor: actor.clone(),
             kind: PrincipalKind::Agent,
             role: Some(role),
-            project_id: Some(project.clone()),
+            project_id: project.cloned(),
             tool_families: None,
             bound_by: host.principal().clone(),
         },
@@ -1901,6 +1998,44 @@ fn bind_role_authority(
         }
     })?;
     Ok(())
+}
+
+/// Enroll the application-configured workspace coordinator before opening the native session
+/// handler. It is a rootless workspace agent with ordinary selected-tool policy.
+pub fn bind_workspace_coordinator(
+    tx: &mut dyn WriteTransaction,
+    host: &InvocationContext,
+    actor: &ActorId,
+) -> Result<(), StorageError> {
+    if host.principal_kind() != PrincipalKind::Host
+        || host.principal() != &tx.store().host_actor
+        || host.store_id() != &tx.store().store_id
+        || host.restore_epoch().get() != tx.store().restore_epoch
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    match tx.actors().actor_kind(actor)? {
+        None => tx
+            .actors()
+            .register(actor, PrincipalKind::Agent, "Workspace coordinator")?,
+        Some(PrincipalKind::Agent) => {}
+        Some(_) => return Err(StorageError::ScopeDenied),
+    }
+    if tx.authority().principal(actor)?.is_some_and(|binding| {
+        !binding.active
+            && binding.kind == PrincipalKind::Agent
+            && binding.role == Some(AgentRole::WorkspaceCoordinator)
+            && binding.project_id.is_none()
+    }) {
+        // A person may revoke this agent without disabling the rest of the application.
+        return Ok(());
+    }
+    bind_role_authority(tx, host, actor, AgentRole::WorkspaceCoordinator, None).map_err(|error| {
+        match error {
+            Failure::Storage(error) => error,
+            Failure::Refused(_) => StorageError::ScopeDenied,
+        }
+    })
 }
 
 /// Trusted host materialization of a recorded child intent. An agent's delegate command cannot
@@ -1951,7 +2086,7 @@ pub fn bind_child_authority(
     if tx.actors().actor_kind(&actor)? != Some(PrincipalKind::Agent) {
         return Err(denied("session").into());
     }
-    bind_role_authority(tx, host, &actor, role, &root.project_id)?;
+    bind_role_authority(tx, host, &actor, role, Some(&root.project_id))?;
     Ok(actor)
 }
 

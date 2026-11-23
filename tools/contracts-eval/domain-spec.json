@@ -2427,7 +2427,13 @@
         "Model": {
           "model_id": "Id"
         },
-        "OpenRouterAuto": {}
+        "OpenRouterAuto": {},
+        "DevWorksAuto": {},
+        "OpenRouterAutoBeta": {}
+      },
+      "introducedVariants": {
+        "DevWorksAuto": 3,
+        "OpenRouterAutoBeta": 3
       }
     },
     "RouteModel": {
@@ -2617,6 +2623,15 @@
         "source_url": "?Url"
       }
     },
+    "DecisionPolicy": {
+      "kind": "record",
+      "fields": {
+        "pool_member": "bool",
+        "max_input_bytes": "PositiveCounter",
+        "max_question_count": "PositiveCounter",
+        "max_batch_bytes": "PositiveCounter"
+      }
+    },
     "DecisionModel": {
       "kind": "record",
       "fields": {
@@ -2630,7 +2645,39 @@
         "accepts_videos": "bool",
         "enabled": "bool",
         "extension_question_schemas": "Items<SchemaRef>",
-        "result_schema": "SchemaRef"
+        "result_schema": "SchemaRef",
+        "decision_policy": "?DecisionPolicy"
+      },
+      "since": {
+        "decision_policy": 4
+      }
+    },
+    "DecisionCatalogModel": {
+      "kind": "record",
+      "earlierName": "DecisionModel",
+      "earlierBefore": 4,
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "display_name": "Label",
+        "connection_id": "Id",
+        "upstream_model_id": "Text",
+        "question_types": "Items<DecisionQuestionType>",
+        "accepts_images": "bool",
+        "accepts_videos": "bool",
+        "enabled": "bool",
+        "extension_question_schemas": "Items<SchemaRef>",
+        "result_schema": "SchemaRef",
+        "decision_policy": "?DecisionPolicy",
+        "available": "?bool",
+        "availability_reason": "?Label",
+        "retry_at_ms": "?Counter"
+      },
+      "since": {
+        "decision_policy": 4,
+        "available": 4,
+        "availability_reason": 4,
+        "retry_at_ms": 4
       }
     },
     "DecisionCriterion": {
@@ -2645,22 +2692,32 @@
       "variants": {
         "Choice": {
           "instructions": "Content",
-          "criteria": "NonEmpty<DecisionCriterion>"
+          "criteria": "NonEmpty<DecisionCriterion>",
+          "instruction_parts": "?DynamicJson"
         },
         "Noul": {
-          "instructions": "Content"
+          "instructions": "Content",
+          "instruction_parts": "?DynamicJson"
         },
         "Score": {
           "instructions": "Content",
-          "criteria": "NonEmpty<Label>"
+          "criteria": "NonEmpty<Label>",
+          "instruction_parts": "?DynamicJson"
         },
         "Box": {
-          "instructions": "Content"
+          "instructions": "Content",
+          "instruction_parts": "?DynamicJson"
         },
         "Extension": {
           "schema": "SchemaRef",
           "payload": "DynamicJson"
         }
+      },
+      "variantSince": {
+        "Choice": {"instruction_parts": 4},
+        "Noul": {"instruction_parts": 4},
+        "Score": {"instruction_parts": 4},
+        "Box": {"instruction_parts": 4}
       }
     },
     "NamedQuestion": {
@@ -10698,7 +10755,11 @@
         "expected_context_epoch": "Counter",
         "intent": "RouteIntent",
         "effort": "EffortName",
-        "required_capabilities": "Items<Label>"
+        "required_capabilities": "Items<Label>",
+        "expected_pin_revision": "?Counter"
+      },
+      "since": {
+        "expected_pin_revision": 3
       },
       "result": "RouteChoice",
       "effect": "Journaled",
@@ -10856,27 +10917,35 @@
         "page": "PageRequest",
         "include_disabled": "bool"
       },
-      "result": "Page<DecisionModel>",
+      "result": "Page<DecisionCatalogModel>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Selectable results require a usable serving connection and enabled model and exclude active cooldowns. Inspection includes retained configured models. Revision 4 exposes current availability, reason and retry time without changing configuration. Authoritative omissions are scoped to the serving connection."
     },
     "router.decide": {
       "operation": "router.decide",
       "mode": "Command",
       "fields": {
-        "model_id": "Id",
-        "expected_model_revision": "Revision",
+        "model_id": "?Id",
+        "expected_model_revision": "?Revision",
         "state": "DynamicJson",
         "questions": "NonEmpty<NamedQuestion>",
         "images": "Items<MediaRef>",
         "videos": "Items<MediaRef>",
-        "timeout_ms": "PositiveCounter"
+        "timeout_ms": "PositiveCounter",
+        "use_pool": "?bool"
       },
+      "since": {"use_pool": 4},
+      "fieldSchema": {"use_pool": {"const": true}},
+      "inputAlternatives": [
+        {"members": ["model_id", "expected_model_revision"], "until": 4},
+        {"members": ["model_id", "expected_model_revision"], "since": 4, "forbid": ["use_pool"]},
+        {"members": ["use_pool"], "since": 4, "forbid": ["model_id", "expected_model_revision"]}
+      ],
       "result": "DecisionResult",
       "effect": "Inference",
       "authority": "Scoped",
-      "rules": "Host verifies attribution and model revision, supported question/media incl nested state parts, schema-bound extensions and output. Exact upstream/credential. Unknown request tail is not automatically retried; results/probabilities grant no execution/approval authority."
+      "rules": "Host verifies attribution and model revision, supported question/media including nested state and instruction parts, schema-bound extensions and output. Exact upstream/credential. Revision 4 selects the independent pool by usePool instead of modelId and expectedModelRevision. One new pool allocation advances rotation; explicit calls, retries and replays do not. Unknown request tail is not automatically retried; results/probabilities grant no execution/approval authority."
     },
     "mcp.servers": {
       "operation": "mcp.servers",
@@ -12178,7 +12247,8 @@
     ],
     "sessions.append_message": [
       1,
-      2
+      2,
+      3
     ],
     "sessions.start": [
       1,
@@ -12399,7 +12469,16 @@
     "router.configure": [
       1,
       2,
-      3
+      3,
+      4
+    ],
+    "router.decision_models": [
+      1,
+      4
+    ],
+    "router.decide": [
+      1,
+      4
     ],
     "knowledge.search": [
       1,
@@ -12622,27 +12701,33 @@
     ],
     "jobs.list": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.create": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.edit": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.enable": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.disable": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.delete": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.run_now": [
       1,
@@ -12650,7 +12735,8 @@
     ],
     "jobs.inspect": [
       1,
-      2
+      2,
+      3
     ],
     "jobs.cancel": [
       1,

@@ -135,6 +135,172 @@ impl OwnedInferenceSink for DiscardingSink {
     }
 }
 
+#[test]
+fn a_stale_assignment_dispatch_releases_the_reservation_in_the_same_boot() {
+    use devworks_core::ports::usage::PriceResolver;
+    use devworks_core::services::prices::CatalogPriceResolver;
+
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    let router = router(&f);
+    seed_usage_prices(&f);
+    let host = AttemptHost::new(f.store.clone(), f.service.clone(), router);
+    applied(&f.start(&f.user, "root-f", 1, 1));
+    let activation = f.launch("usage-supervisor");
+    let assignment = f.assign("root-f", "root-f", None, None);
+    let begin_turn = || {
+        let assignment = assignment.clone();
+        let activation = activation.clone();
+        f.tx(move |service, tx| {
+            service
+                .begin_turn(
+                    tx,
+                    &assignment.session_id,
+                    &assignment.id,
+                    &activation.id,
+                    activation.owner_epoch,
+                )
+                .map(|gate| gate.unwrap())
+        })
+    };
+    let boot = f.store.info().boot_id;
+    let admit = |n, turn: &StoredTurn, generation| {
+        let (context, mut logical, mut request) = host_attempt(&f, n);
+        let project = ProjectId(id("project-a"));
+        let context = context
+            .with_lineage(
+                Some(project.clone()),
+                Some(assignment.root_id.clone()),
+                None,
+            )
+            .with_session(assignment.session_id.clone());
+        logical.project_id = Some(project);
+        logical.root_id = Some(assignment.work_id.clone());
+        logical.session_id = Some(assignment.session_id.clone());
+        request.work_id = Some(assignment.work_id.0.clone());
+        request.expected_context_epoch = Some(0);
+        request.quote = read(f.store.as_ref(), |s| {
+            CatalogPriceResolver.quote(s, &request.query)
+        });
+        request.override_revision = 2;
+        request.dispatch = Some(DispatchIdentity {
+            root_id: assignment.root_id.clone(),
+            execution_id: activation.id.clone(),
+            owner_epoch: activation.owner_epoch,
+            assignment_id: None,
+            assignment_generation: generation,
+            turn_id: turn.turn_id.clone(),
+            implementation: false,
+        });
+        host.admit_fenced(context, logical, ReportCategory::Assistant, request, vec![])
+            .unwrap()
+    };
+    let turn = begin_turn();
+    let Admission::Admitted { attempt, .. } = admit(1, &turn, assignment.generation) else {
+        panic!("initial turn was not admitted");
+    };
+    let read_balance = || {
+        read(f.store.as_ref(), |s| {
+            s.usage().attempt_balance(&attempt.attempt_id)
+        })
+        .unwrap()
+    };
+    assert_eq!(read_balance().reserved_micro_usd, Some(30));
+
+    let assignment_id = assignment.id.clone();
+    let generation = f.tx(move |_, tx| {
+        let mut current = tx.runs().assignment(&assignment_id)?.unwrap();
+        let revision = current.revision;
+        current.revision += 1;
+        current.generation += 1;
+        tx.runs().update_assignment(&current, revision)?;
+        Ok(current.generation)
+    });
+    assert!(matches!(
+        host.drive_with_sink(
+            attempt.attempt_id.clone(),
+            Box::new(StreamingSource { frames: 0 }),
+            Some(Box::new(DiscardingSink)),
+            Cancellation::new(),
+        ),
+        Err(StorageError::ScopeDenied)
+    ));
+    let state = read(f.store.as_ref(), |s| {
+        s.usage().inference_attempt(&attempt.attempt_id)
+    })
+    .unwrap();
+    assert_eq!(state.state, AttemptState::CancelledBeforeDispatch);
+    let released = read_balance();
+    assert_eq!(released.reserved_micro_usd, None);
+    assert!(released.local_quiescent);
+
+    let session_id = assignment.session_id.clone();
+    f.tx(move |service, tx| {
+        service
+            .end_turn(tx, &session_id, &turn.turn_id, false)
+            .map(|gate| gate.unwrap())
+    });
+    let next = begin_turn();
+    let admission = admit(2, &next, generation);
+    assert!(
+        matches!(admission, Admission::Admitted { .. }),
+        "{admission:?}"
+    );
+    assert_eq!(f.store.info().boot_id, boot);
+}
+
+#[test]
+fn a_busy_dispatch_can_retry_the_same_admission() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    let store = devworks_test_support::LoseAcks::over(f.store.clone());
+    let host = AttemptHost::new(store.clone(), f.service.clone(), router(&f));
+    let (context, logical, request) = host_attempt(&f, 1);
+    let admit = || {
+        host.admit(
+            context.clone(),
+            logical.clone(),
+            ReportCategory::Other,
+            request.clone(),
+        )
+        .unwrap()
+    };
+    let Admission::Admitted { attempt, .. } = admit() else {
+        panic!("initial attempt was not admitted");
+    };
+    let busy = AtomicBool::new(true);
+    store.lose_when_around(move |tx, run| {
+        if busy.swap(false, Ordering::SeqCst) {
+            return Err(StorageError::Busy);
+        }
+        run(tx)?;
+        Ok(false)
+    });
+    let drive = |id| {
+        host.drive(
+            id,
+            Box::new(StreamingSource { frames: 0 }),
+            Cancellation::new(),
+        )
+    };
+    assert!(matches!(
+        drive(attempt.attempt_id.clone()),
+        Err(StorageError::Busy)
+    ));
+    let Admission::Admitted {
+        attempt: retry,
+        reused: true,
+    } = admit()
+    else {
+        panic!("retry did not reuse the admission");
+    };
+    assert_eq!(retry.attempt_id, attempt.attempt_id);
+    assert!(matches!(
+        drive(retry.attempt_id).unwrap(),
+        DriveOutcome::Settled(_)
+    ));
+}
+
 /// AC2 and the recovery scan: a drive opens the same read snapshots and does the same read
 /// work for 3 frames as for 30, and a recovery page costs the same behind 10 or 100 settled
 /// attempts.

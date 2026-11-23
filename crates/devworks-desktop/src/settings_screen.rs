@@ -437,6 +437,17 @@ impl SettingsScreen {
                 if key == "containers.preferredRuntime" {
                     self.container_status_ui(ui, actions);
                 }
+                if key == devworks_core::settings::catalog::MANAGED_AUTO_KEY {
+                    use devworks_core::services::router::auto_routing::{RUBRIC, RUBRIC_VERSION};
+                    egui::CollapsingHeader::new(format!(
+                        "DevWorks Auto rubric (version {RUBRIC_VERSION})"
+                    ))
+                    .show(ui, |ui| {
+                        for (tier, description) in RUBRIC {
+                            ui.label(format!("{tier} · {description}"));
+                        }
+                    });
+                }
                 ui.add_space(8.0);
             }
             if matches!(self.category, None | Some(Category::General))

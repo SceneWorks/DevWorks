@@ -62,6 +62,20 @@ impl InstructionGuard {
         context
             .validate()
             .map_err(|e| StorageError::InvalidRecord(format!("instruction context: {e:?}")))?;
+        if crate::plan_review::isolated_role(self.store.as_ref(), ctx)? {
+            // This role's host-authored context deliberately carries no repository
+            // instructions or skills from the coordinating workspace.
+            return if crate::plan_review::attempt_is_current(self.store.as_ref(), ctx)?
+                && context.instruction_stamps.is_empty()
+                && context.skill_stamp.is_none()
+                && expected.is_none_or(<[_]>::is_empty)
+                && ctx.worktree().is_none()
+            {
+                Ok(())
+            } else {
+                Err(StorageError::ScopeDenied)
+            };
+        }
         let (required, project_scope, skill_project) =
             devworks_core::ports::storage::read_snapshot(
                 self.store.as_ref(),

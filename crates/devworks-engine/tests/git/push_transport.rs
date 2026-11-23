@@ -416,7 +416,28 @@ pub(super) fn exercise(f: Fixture<'_>) {
     let url = git(path, &["remote", "get-url", "--push", "origin"]);
     let local = Path::new(&url).is_absolute();
     let server_marker = f.remote.join("approved-server-hook-marker");
+    let client_marker = f.state.home.join("unreviewed-client-hook-marker");
     if local {
+        let hooks = git(
+            path,
+            &["rev-parse", "--path-format=absolute", "--git-path", "hooks"],
+        );
+        std::fs::create_dir_all(&hooks).unwrap();
+        let client_hook = Path::new(&hooks).join("pre-push");
+        std::fs::write(
+            &client_hook,
+            format!(
+                "#!/bin/sh\nprintf client > {}\n",
+                shell_word(&client_marker)
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&client_hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
         let hook = f.remote.join("hooks/pre-receive");
         std::fs::write(
             &hook,
@@ -559,6 +580,10 @@ pub(super) fn exercise(f: Fixture<'_>) {
     assert!(f.state.injected.load(Ordering::SeqCst));
     assert!(!f.state.marker.exists());
     assert!(
+        !client_marker.exists(),
+        "reviewed push executes no client pre-push hook"
+    );
+    assert!(
         matches!(
             outcome,
             devworks_core::services::effect::EffectOutcome::Unknown(_)
@@ -603,12 +628,23 @@ pub(super) fn exercise(f: Fixture<'_>) {
         command.args(["ls-remote", "--", &url]);
     }
     let output = command.output().unwrap();
-    if !local {
+    if local {
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            client_marker.is_file(),
+            "unconfined Git executes its executable client hook"
+        );
+        std::fs::remove_file(&client_marker).unwrap();
+    } else {
         assert!(!output.status.success());
     }
     // The local control injects a configuration-defined hook (`hook.<name>.command`), which only
-    // a Git that supports such hooks runs (Git 2.54 does, 2.53 does not). Where the installed Git
-    // cannot run it, the injection is no attack on that Git, so there is nothing to show unconfined.
+    // Git 2.54 and later can run. The executable hook above is a separate positive control
+    // on every supported Git version.
     let control_applies = !local || runs_configured_hooks(&f.state.home, &environment);
     if control_applies {
         assert!(
@@ -657,6 +693,10 @@ pub(super) fn exercise(f: Fixture<'_>) {
         "recovery observes and never repeats push"
     );
     assert!(!f.state.marker.exists());
+    assert!(
+        !client_marker.exists(),
+        "recovery executes no client pre-push hook"
+    );
     f.state.assert_fake_recorded(local);
 }
 

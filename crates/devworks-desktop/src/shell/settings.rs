@@ -562,6 +562,8 @@ impl SettingsCtl<'_, '_> {
         self.send_connections(fetch);
         let fetch = self.settings.connections.catalog.reload_all();
         self.send_connection_catalog(fetch);
+        let fetch = self.settings.connections.decision_models.reload_all();
+        self.send_decision_models(fetch);
         self.load_embedding_spaces(None);
     }
 
@@ -585,6 +587,18 @@ impl SettingsCtl<'_, '_> {
             "Loading models",
             "router.catalog",
             ops::router_catalog_all,
+        );
+    }
+
+    fn send_decision_models(&mut self, fetch: crate::paged::Fetch) {
+        let slot = SettingsSlot::DecisionModels(fetch.generation);
+        self.cx.paged(
+            &mut self.settings.connections.decision_models,
+            fetch,
+            slot,
+            "Loading decision models",
+            "router.decision_models",
+            ops::router_decision_models,
         );
     }
 
@@ -615,6 +629,34 @@ impl SettingsCtl<'_, '_> {
                 self.effects.push(Effect::OpenPrices(model));
             }
             A::EmbeddingSpaces { cursor } => self.load_embedding_spaces(cursor),
+            A::Decide(input) => {
+                let slot = SettingsSlot::SystemOneDecide;
+                if !self.cx.waiting(&slot)
+                    && self
+                        .cx
+                        .command(slot, "Submitting decision", "router.decide", move |b| {
+                            ops::router_decide(b, *input)
+                        })
+                {
+                    self.settings.connections.decision_output = Some("Submitting decision…".into());
+                }
+            }
+            A::DecisionCompletion(operation) => {
+                if let Some(client) = self.client.as_deref_mut() {
+                    client.task(
+                        SettingsSlot::SystemOneCompletion.into(),
+                        "Reading decision result",
+                        move |backend| {
+                            backend
+                                .systemone_completion(&operation)
+                                .map(|completion| {
+                                    TaskOutput::SystemOneCompletion(Box::new(completion))
+                                })
+                                .map_err(|fault| ops::Failure::Refused(*fault).describe())
+                        },
+                    );
+                }
+            }
             A::UseSessionOnly => {
                 if let Some(b) = self.backend() {
                     match b.use_session_only_secrets() {
@@ -1104,6 +1146,51 @@ impl SettingsCtl<'_, '_> {
                     Applied::Stale => return None,
                     Applied::Failed | Applied::Appended | Applied::Fenced => {}
                 }
+            }
+            (SettingsSlot::DecisionModels(g), Reply::Query(q)) => {
+                let page = ops::decision_model_records(q).map_err(|e| e.describe());
+                match self.settings.connections.decision_models.apply(g, page) {
+                    Applied::Stale => return None,
+                    Applied::Continue(fetch) => self.send_decision_models(fetch),
+                    _ => {}
+                }
+            }
+            (SettingsSlot::SystemOneDecide, Reply::Command(outcome)) => {
+                let panel = &mut self.settings.connections;
+                panel.decision_output = Some(match ops::accepted_decision(outcome) {
+                    Ok(id) => {
+                        panel.decision_operation = Some(id);
+                        "Decision accepted".into()
+                    }
+                    Err(error) => error.describe(),
+                });
+            }
+            (
+                SettingsSlot::SystemOneCompletion,
+                Reply::Task(Ok(TaskOutput::SystemOneCompletion(completion))),
+            ) => {
+                use devworks_core::protocol::results::{OperationCompletion, OperationResult};
+                let panel = &mut self.settings.connections;
+                panel.decision_output = Some(match *completion {
+                    None => "Decision pending".into(),
+                    Some(complete) => {
+                        panel.decision_operation = None;
+                        match complete {
+                            OperationCompletion::Succeeded {
+                                result: OperationResult::RouterDecide { value },
+                                ..
+                            } => serde_json::to_string_pretty(&value.output.value.0)
+                                .unwrap_or_default(),
+                            OperationCompletion::Failed { fault, .. } => {
+                                ops::Failure::Refused(fault).describe()
+                            }
+                            OperationCompletion::OutcomeUnknown { .. } => {
+                                "Decision outcome is unknown".into()
+                            }
+                            _ => "Unexpected decision result".into(),
+                        }
+                    }
+                });
             }
             (SettingsSlot::ConnectionCatalog(g), Reply::Query(q)) => {
                 let page = ops::route_models(q)

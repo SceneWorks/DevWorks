@@ -605,7 +605,12 @@ impl WorkService {
         schema: u32,
         filters: &Filters,
     ) -> R<DomainDecision> {
-        open_project(tx, ctx, project)?;
+        let open = open_project(tx, ctx, project)?;
+        if let Some((id, epoch)) = ctx.keep_working_project()
+            && (*id != open.id || epoch != open.archive_epoch || feature.is_some())
+        {
+            return Err(StorageError::ScopeDenied.into());
+        }
         if let Some(session) = ctx.session_id() {
             let session = tx
                 .sessions()
@@ -674,8 +679,11 @@ impl WorkService {
         }
         let (_, mut candidates) =
             super::queue::actionable(tx.work(), project, feature.map(|f| &f.id))?;
-        // Retained Next behavior: recover interrupted in-progress work before new Ready work.
-        candidates.sort_by_key(|c| c.semantic != super::workflow::IN_PROGRESS);
+        if ctx.keep_working_project().is_none() {
+            // Retained Next behavior: recover interrupted In Progress work before Ready work.
+            // An explicitly enabled keep-working project uses the queue's priority order.
+            candidates.sort_by_key(|c| c.semantic != super::workflow::IN_PROGRESS);
+        }
         // Why each skipped candidate was skipped, reported when nothing is eligible (WORK-10).
         let mut reasons = std::collections::BTreeSet::new();
         for c in candidates {
@@ -757,6 +765,7 @@ impl WorkService {
                 work_id: w.id.clone(),
                 kind: w.kind.clone(),
                 queue_key: key.clone(),
+                automatic: ctx.keep_working_project().is_some(),
                 owner_id: ctx.principal().clone(),
                 session_id: ctx.session_id().cloned(),
                 ingress_namespace: ctx.ingress_namespace().clone(),
@@ -986,20 +995,49 @@ pub fn check_start(
     ctx: &InvocationContext,
     w: &WorkRoot,
 ) -> R<()> {
+    let automatic = ctx.keep_working_project().is_some();
+    if let Some((project, epoch)) = ctx.keep_working_project()
+        && (*project != w.project_id
+            || !tx.projects().project(project)?.is_some_and(|current| {
+                current.lifecycle == ACTIVE && current.archive_epoch == epoch
+            }))
+    {
+        return Err(StorageError::ScopeDenied.into());
+    }
     let Some(work) = tx.work().work(&w.id.0)? else {
+        if automatic {
+            return Err(StorageError::ScopeDenied.into());
+        }
         return Ok(());
     };
     let all = claims(tx.work(), &w.project_id)?;
+    if automatic
+        && !all.iter().any(|claim| {
+            claim.work_id == work.id
+                && claim.queue_key == PROJECT_QUEUE
+                && claim.automatic
+                && claim.state == ClaimState::Active
+                && owned(claim, ctx)
+        })
+    {
+        return Err(super::refuse(
+            DomainErrorCode::LeaseLost,
+            "claim",
+            Some(&work.id),
+        ));
+    }
     if all.iter().any(|c| {
         c.queue_key == PROJECT_QUEUE
+            && c.automatic == automatic
             && c.root_id != w.id
             && matches!(c.state, ClaimState::Transferred | ClaimState::Yielding)
     }) {
         return Err(conflict("project_execution_owned", &w.project_id.0));
     }
-    if all
-        .iter()
-        .any(|c| c.work_id == w.id.0 && c.state == ClaimState::Active)
+    if !automatic
+        && all
+            .iter()
+            .any(|c| c.work_id == w.id.0 && !c.automatic && c.state == ClaimState::Active)
     {
         let mut after = None;
         loop {
@@ -1007,7 +1045,12 @@ pub fn check_start(
                 .runs()
                 .project_roots(&w.project_id, after.as_ref(), MAX_PAGE)?;
             for other in &page {
-                if *other != w.id && tx.runs().live_activation(other)?.is_some() {
+                if *other != w.id
+                    && let Some(activation) = tx.runs().live_activation(other)?
+                    && !all.iter().any(|claim| {
+                        claim.automatic && claim.execution_id.as_ref() == Some(&activation.id)
+                    })
+                {
                     return Err(conflict("project_execution_owned", &w.project_id.0));
                 }
             }

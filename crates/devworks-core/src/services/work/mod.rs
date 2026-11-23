@@ -98,6 +98,7 @@ pub mod deps;
 pub mod items;
 pub mod membership;
 pub mod model;
+pub mod plan_review;
 pub mod plans;
 pub mod queue;
 pub mod readiness;
@@ -365,6 +366,7 @@ pub struct WorkService {
     /// Reads the plan document a saved draft names, to refuse one holding a secret.
     documents: Option<Arc<dyn plans::StagedPlans>>,
     clock: Option<Arc<dyn crate::ports::Clock>>,
+    native_plan_review: bool,
 }
 
 impl WorkService {
@@ -376,6 +378,7 @@ impl WorkService {
             staged: None,
             documents: None,
             clock: None,
+            native_plan_review: false,
         }
     }
     /// Reads each plan document a saved draft names (artifact content) through `documents`, so
@@ -393,6 +396,12 @@ impl WorkService {
     /// Supplies the host clock for current lease inspection; no wire argument can supply time.
     pub fn with_clock(mut self, clock: Arc<dyn crate::ports::Clock>) -> Self {
         self.clock = Some(clock);
+        self
+    }
+    /// The native runtime has a supervisor that obtains independent review evidence
+    /// for newly authored feature plans.
+    pub fn with_native_plan_review(mut self) -> Self {
+        self.native_plan_review = true;
         self
     }
     pub(crate) fn correlation(&self) -> CorrelationId {

@@ -114,6 +114,15 @@ pub struct WebPorts {
     pub secrets: Arc<dyn SecretResolver>,
 }
 
+pub struct DecisionMedia<'a> {
+    pub url: &'a str,
+    pub video: bool,
+    pub declared: Option<&'a str>,
+    pub deadline: Instant,
+    pub cancellation: &'a Cancellation,
+    pub remaining_bytes: usize,
+}
+
 /// The web tools' domain service.
 pub struct WebService {
     store: Arc<dyn ApplicationStore>,
@@ -127,6 +136,148 @@ pub struct WebService {
 }
 
 impl WebService {
+    /// Resolves media before passing it to a provider. The local egress owner checks every
+    /// address and redirect, and the provider receives bytes instead of an unchecked URL.
+    pub fn decision_media(
+        &self,
+        ctx: &InvocationContext,
+        authority: &dyn crate::ports::AuthorityPort,
+        input: DecisionMedia<'_>,
+    ) -> Result<String, crate::providers::ProviderError> {
+        use crate::providers::{ProviderError, systemone};
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use std::io::Read as _;
+
+        let unavailable = || ProviderError::MaterialUnavailable;
+        let policy = crate::ports::storage::read_snapshot(
+            &*self.store,
+            &crate::ports::storage::ReadOptions::default(),
+            |read| read_policy(read.configuration()),
+        )
+        .map_err(|_| unavailable())?;
+        let deadline = input
+            .deadline
+            .min(Instant::now() + Duration::from_millis(policy.timeout_ms));
+        let cancels = vec![self.shutdown.clone(), input.cancellation.clone()];
+        let request = egress::Outgoing {
+            method: "GET",
+            body: &[],
+            deadline,
+            cancel: cancels.clone(),
+            user_agent: USER_AGENT,
+            accept: if input.video { "video/*" } else { "image/*" },
+            headers: &[],
+        };
+        let mut url = egress::parse(input.url).map_err(|_| unavailable())?;
+        for redirects in 0..=policy.max_redirects {
+            self.authorize_decision_media(ctx, authority, url.as_str())?;
+            let port = egress::port(&url);
+            let egress::Admission::Allowed { addrs, .. } = egress::admit_destination(
+                &*self.ports.resolver,
+                &url,
+                port,
+                policy.allow_private,
+                deadline,
+                &cancels,
+            ) else {
+                return Err(unavailable());
+            };
+            let response = egress::send(
+                &*self.ports.transport,
+                &url,
+                port,
+                &addrs,
+                &request,
+                &mut |_, _| {},
+            )
+            .map_err(|_| unavailable())?;
+            if matches!(response.status, 301 | 302 | 303 | 307 | 308)
+                && redirects < policy.max_redirects
+            {
+                url = egress::join(&url, response.header("location").ok_or_else(unavailable)?)
+                    .map_err(|_| unavailable())?;
+                continue;
+            }
+            if !(200..300).contains(&response.status) {
+                return Err(unavailable());
+            }
+            let media = response
+                .header("Content-Type")
+                .and_then(|value| value.split(';').next())
+                .map(str::trim)
+                .filter(|value| systemone::media_supported(value, input.video))
+                .filter(|value| input.declared.is_none_or(|expected| expected == *value))
+                .ok_or_else(unavailable)?
+                .to_owned();
+            let mut bytes = Vec::new();
+            let max = input.remaining_bytes.saturating_sub(media.len() + 13) / 4 * 3;
+            response
+                .body
+                .take(max as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| unavailable())?;
+            if bytes.is_empty() || bytes.len() > max {
+                return Err(ProviderError::TooLarge);
+            }
+            return Ok(format!("data:{media};base64,{}", STANDARD.encode(bytes)));
+        }
+        Err(unavailable())
+    }
+
+    fn authorize_decision_media(
+        &self,
+        ctx: &InvocationContext,
+        authority: &dyn crate::ports::AuthorityPort,
+        url: &str,
+    ) -> Result<(), crate::providers::ProviderError> {
+        use crate::operations::{OperationInput, web};
+        use crate::ports::AuthorityRequest;
+        use crate::protocol::data::DataScope;
+        use crate::registry::{Mode, SchemaRevision};
+        let unavailable = crate::providers::ProviderError::MaterialUnavailable;
+        let operation = crate::registry::find("web.fetch").ok_or_else(|| unavailable.clone())?;
+        let binding = operation
+            .modes
+            .iter()
+            .find(|binding| binding.mode == Mode::Query)
+            .ok_or_else(|| unavailable.clone())?;
+        let body = serde_json::json!({"scope": ctx.project_id().cloned().map_or(DataScope::Workspace, |project_id| DataScope::Project { project_id }),
+            "url":url,"maxBytes":1048576,"timeoutMs":"1000"});
+        let input = OperationInput::Web(web::Input::Fetch(
+            serde_json::from_value(body.clone()).map_err(|_| unavailable.clone())?,
+        ));
+        let fingerprint =
+            crate::fingerprint::compute(operation, Mode::Query, SchemaRevision(1), &body)
+                .map_err(|_| unavailable.clone())?;
+        let authorization = authority
+            .authorize(
+                ctx,
+                &AuthorityRequest {
+                    descriptor: operation,
+                    binding,
+                    effect: binding.effect,
+                    action: None,
+                    input: &input,
+                    fingerprint: &fingerprint,
+                },
+            )
+            .map_err(|_| unavailable.clone())?;
+        let current = crate::ports::storage::read_snapshot(
+            &*self.store,
+            &crate::ports::storage::ReadOptions::default(),
+            |read| crate::authority::service::authorization_holds(read, &authorization),
+        )
+        .map_err(|_| unavailable.clone())?;
+        if !current
+            || authorization.is_replay_only()
+            || !authorization.authority_grants().is_empty()
+            || !authorization.grants().is_empty()
+        {
+            return Err(unavailable);
+        }
+        Ok(())
+    }
+
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         artifacts: Arc<ArtifactService>,
@@ -170,10 +321,11 @@ impl WebService {
 
     /// The end of the request: `limit` from now, earlier when the caller's deadline is.
     fn deadline(&self, env: &Preparation<'_>, limit: Duration) -> Instant {
-        let mut end = Instant::now() + limit;
+        let now = Instant::now();
+        let mut end = now + limit;
         if let Some(d) = env.deadline_ms {
             let left = d.saturating_sub(self.clock.now_ms().get()).max(0) as u64;
-            end = end.min(Instant::now() + Duration::from_millis(left));
+            end = end.min(now + Duration::from_millis(left));
         }
         end
     }

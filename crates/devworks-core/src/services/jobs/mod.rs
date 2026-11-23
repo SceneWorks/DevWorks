@@ -1395,7 +1395,30 @@ impl QueryHandler for JobService {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into())
             }
         };
-        let result = answered.map_err(|f| query_fault(f, JOB, correlation))?;
+        let result = answered.map_err(|f| query_fault(f, JOB, correlation.clone()))?;
+        // An older route union cannot faithfully display an automatic job. Refuse before
+        // projection rather than give an older client a different editable route.
+        use crate::protocol::support::Revisioned;
+        let revision = query.schema_revision().0;
+        let unsupported = match &result {
+            OperationResult::JobsList { value } => value
+                .items
+                .0
+                .iter()
+                .find(|job| job.check_revision(revision).is_err()),
+            OperationResult::JobsInspect { value } => {
+                Some(&value.job).filter(|job| job.check_revision(revision).is_err())
+            }
+            _ => None,
+        };
+        if let Some(job) = unsupported {
+            return Err(Refusal::new(
+                DomainErrorCode::UnsupportedCapability,
+                "job_route_requires_schema_revision_3",
+                Some(job.id.clone()),
+            )
+            .fault(correlation));
+        }
         Ok(QueryAnswer {
             stamp: snapshot
                 .stamp()

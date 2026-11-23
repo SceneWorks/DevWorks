@@ -28,6 +28,29 @@ pub type Waker = Box<dyn Fn() + Send + Sync>;
 
 /// The application operations the shell may use.
 pub trait Backend: Send + Sync {
+    /// Boot-local automatic scheduling state. The native implementation never reads the store
+    /// or waits for a command from the frame thread.
+    fn keep_working_status(
+        &self,
+        _project: &devworks_core::protocol::ProjectId,
+    ) -> Option<devworks_engine::KeepWorkingStatus> {
+        None
+    }
+    fn set_keep_working(
+        &self,
+        _project: &devworks_core::protocol::ProjectId,
+        _enabled: bool,
+        _received: ControlEpoch,
+    ) -> Result<(), String> {
+        Err("Project keep-working is unavailable.".into())
+    }
+    /// Publishes the current host observation without appending a transcript notice.
+    fn publish_current_screen(
+        &self,
+        _screen: Option<(Id, devworks_core::protocol::records::ScreenContext)>,
+        _selection_key: &str,
+    ) {
+    }
     /// Trusted host-only append of the selected coordinator conversation's screen context.
     fn append_coordinator_notice(
         &self,
@@ -87,6 +110,15 @@ pub trait Backend: Send + Sync {
     fn control_epoch(&self) -> ControlEpoch {
         ControlEpoch::UNKNOWN
     }
+    fn systemone_completion(
+        &self,
+        _operation: &devworks_core::protocol::OperationId,
+    ) -> Result<
+        Option<devworks_core::protocol::results::OperationCompletion>,
+        Box<devworks_core::protocol::DomainFault>,
+    > {
+        Ok(None)
+    }
     /// Trusted native user interaction only. Generic commands never select this ingress.
     /// `received` is the control state when the UI received the click.
     fn human_decision(&self, _frame: &[u8], _received: ControlEpoch) -> CommandOutcome {
@@ -136,6 +168,13 @@ pub trait Backend: Send + Sync {
     }
     fn purge_client_freeze(&self, _project: &str, _frozen: bool) -> Result<(), String> {
         Err("Native project purge custody is unavailable".into())
+    }
+    /// Reads the durable reply for the host-bound human's workspace conversation.
+    fn workspace_reply_status(
+        &self,
+        _session: &Id,
+    ) -> Result<Option<devworks_engine::WorkspaceReplyStatus>, String> {
+        Ok(None)
     }
     /// Volatile host-owned response text, authorized against the current session on each read.
     /// This is not a transcript entry or a generic tool operation.
@@ -419,13 +458,15 @@ pub enum TaskOutput {
         size: [usize; 2],
         rgba: Vec<u8>,
     },
+    /// The saved status of a workspace reply.
+    WorkspaceReplyStatus(Option<devworks_engine::WorkspaceReplyStatus>),
     /// An authorized, volatile provider response snapshot.
     TextPreview(Option<devworks_engine::providers::live::LiveTurn>),
     /// A bounded convention editor or transfer task.
     Convention(crate::conventions_ops::TaskResult),
     /// Instruction text read or a staged draft (Roles and skills).
     Instruction(crate::instructions_ops::TaskResult),
-    /// Package runtimes and indexes were refreshed.
+    /// Native host state was refreshed or updated.
     Refreshed,
     PackageViews {
         views: devworks_engine::package_host::native_ui::NativeViews,
@@ -435,6 +476,7 @@ pub enum TaskOutput {
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
     AnalysisEvidence(String),
+    SystemOneCompletion(Box<Option<devworks_core::protocol::results::OperationCompletion>>),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.

@@ -26,7 +26,7 @@ use crate::package_host::{
 };
 use crate::providers::schemas::RegisteredSchemas;
 use devworks_core::authority::authorization_holds;
-use devworks_core::authority::policy::resolve_policy;
+use devworks_core::authority::policy::{AccessProfile, resolve_policy};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::ports::storage::{
@@ -134,6 +134,18 @@ pub fn queue(
     session_id: &Id,
     call: &CompleteToolCall,
 ) -> Result<OperationId, StorageError> {
+    queue_bound(store, schemas, ctx, session_id, call, "package_tool")
+}
+
+/// The native dispatcher supplies the exact wire alias from the saved provider item.
+pub(crate) fn queue_bound(
+    store: &dyn ApplicationStore,
+    schemas: &RegisteredSchemas,
+    ctx: &InvocationContext,
+    session_id: &Id,
+    call: &CompleteToolCall,
+    wire_name: &str,
+) -> Result<OperationId, StorageError> {
     if ctx.session_id() != Some(session_id)
         || !matches!(
             ctx.principal_kind(),
@@ -190,6 +202,9 @@ pub fn queue(
                 .and_then(|p| p.active_digest)
                 .ok_or(StorageError::ScopeDenied)?;
             let policy = resolve_policy(s.configuration(), ctx.project_id())?;
+            if policy.profile != Some(AccessProfile::Full) {
+                return Err(StorageError::ScopeDenied);
+            }
             let mut fences = vec![AuthorityFence::Policy {
                 project_id: ctx.project_id().cloned(),
                 digest: policy.digest(),
@@ -216,7 +231,7 @@ pub fn queue(
                 ctx,
                 &ToolSchema {
                     capability_id: call.capability_id.clone(),
-                    wire_name: "package_tool".into(),
+                    wire_name: wire_name.into(),
                     input_schema: call.input_schema.clone(),
                 },
             )
@@ -405,6 +420,10 @@ fn execute(
                     && request.principal == info.host_actor))
                 && s.actors().actor_kind(&request.principal)? == Some(kind));
         };
+        let policy = resolve_policy(s.configuration(), request.project_id.as_ref())?;
+        if policy.profile != Some(AccessProfile::Full) {
+            return Ok(false);
+        }
         let session = s.sessions().session(session_id)?;
         Ok(session.is_some_and(|session| {
             !session.closed()

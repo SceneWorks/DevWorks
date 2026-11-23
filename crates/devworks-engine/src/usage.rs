@@ -242,6 +242,24 @@ impl UsageRuntime {
         })
         .await
     }
+
+    pub(crate) async fn produce_decision(
+        self: &Arc<Self>,
+        production: crate::providers::systemone::DecisionProduction,
+    ) -> Result<DriveOutcome, StorageError> {
+        self.produce_prepared(Production {
+            source_fences: production.source_fences,
+            context: production.context,
+            logical: production.logical,
+            category: production.category,
+            request: production.request,
+            source: production.source,
+            sink: None,
+            preparation: None,
+            cancellation: Some(production.cancellation),
+        })
+        .await
+    }
     async fn produce_prepared(
         self: &Arc<Self>,
         production: Production,
@@ -299,7 +317,11 @@ impl UsageRuntime {
                             AttemptSelection::NativeGeneration { route, .. } => *route,
                             other => other,
                         };
-                        if matches!(route, AttemptSelection::Conversation { .. }) {
+                        if matches!(
+                            route,
+                            AttemptSelection::Conversation { .. }
+                                | AttemptSelection::TierClassifier { .. }
+                        ) {
                             request.selection = AttemptSelection::NativeGeneration {
                                 route: Box::new(route),
                                 requested_effort: effort.requested.map(|x| x.as_str().into()),

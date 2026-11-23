@@ -61,9 +61,9 @@ use devworks_core::locks::LockExt;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::WriteOptions;
 use devworks_core::ports::storage::{
-    ApplicationStore, AttemptBinding, DeliveryFilter, DeliveryKey, EventRecord, OperationRecord,
-    QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
-    WriteTransaction, cancellation_applies, possibly_dispatched,
+    ApplicationStore, AttemptBinding, Cancellation, DeliveryFilter, DeliveryKey, EventRecord,
+    OperationRecord, QueueEntry, QueueFence, QueueState, RecoveryOutcome, Settlement, StorageError,
+    Wake, WriteTransaction, cancellation_applies, possibly_dispatched,
 };
 use devworks_core::protocol::{Id, OperationId, OperationState};
 use serde_json::{Value, json};
@@ -157,7 +157,8 @@ pub enum EffectResult {
     /// The outcome cannot be established (lost response, timeout, opaque effect).
     Unknown(String),
 }
-pub type EffectFuture = Pin<Box<dyn Future<Output = EffectResult> + Send>>;
+pub type EffectFuture = ScopedEffectFuture<'static>;
+pub type ScopedEffectFuture<'a> = Pin<Box<dyn Future<Output = EffectResult> + Send + 'a>>;
 /// Resolves once an operation may be dispatched (see [`EffectExecutor::ready`]).
 pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -175,9 +176,35 @@ pub trait EffectExecutor: Send + Sync {
     ) -> Result<bool, StorageError> {
         Ok(true)
     }
+    fn observes_delivery_cancellation(&self) -> bool {
+        false
+    }
+    /// Effects that own cancellable I/O can act on the delivery's durable cancellation.
+    fn execute_cancellable(
+        &self,
+        operation: OperationRecord,
+        _cancel: Cancellation,
+    ) -> EffectFuture {
+        self.execute(operation)
+    }
+    /// Effects that await another delivery may lend this worker's permit during the wait.
+    fn execute_with_capacity<'a>(
+        &self,
+        operation: OperationRecord,
+        cancel: Cancellation,
+        _capacity: EffectCapacity<'a>,
+    ) -> ScopedEffectFuture<'a> {
+        self.execute_cancellable(operation, cancel)
+    }
     /// Observes the target for an operation whose outcome is unknown using its saved identity;
     /// it must not perform the effect.
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
+    /// An operation with an established outcome can return to delivery without operator input.
+    /// Consumers opt in only when their observation establishes an exact safe continuation.
+    fn resumes_after_observation(&self) -> bool {
+        false
+    }
+
     /// Resolves once `operation` may be dispatched, for example once the effect it is ordered
     /// behind has settled. Until then the dispatcher keeps the delivery's claim (renewing its
     /// lease) but releases its worker permit, so waiting work never takes capacity from other
@@ -382,14 +409,57 @@ struct Slot {
     idx: usize,
     permit: Option<OwnedSemaphorePermit>,
 }
+impl Slot {
+    fn release_permit(&mut self) {
+        let permit = self.permit.take().expect("running slot holds a permit");
+        self.inner.parked.fetch_add(1, Ordering::SeqCst);
+        drop(permit);
+        self.inner.wake.notify_one();
+    }
+
+    fn restore_permit(&mut self, permit: OwnedSemaphorePermit) {
+        self.permit = Some(permit);
+        self.inner.parked.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 impl Drop for Slot {
     fn drop(&mut self) {
         self.inner.in_flight.locked().remove(&self.id);
         self.inner.consumer_load.locked()[self.idx] -= 1;
-        drop(self.permit.take());
+        if self.permit.take().is_none() {
+            self.inner.parked.fetch_sub(1, Ordering::SeqCst);
+        }
         self.inner.status.send_modify(|v| *v = v.wrapping_add(1));
         // Capacity freed: more ready work may be claimable now.
         self.inner.wake.notify_one();
+    }
+}
+
+/// A dispatched effect's worker permit. Lending it leaves the existing claim and lease intact.
+pub struct EffectCapacity<'a>(&'a mut Slot);
+
+impl EffectCapacity<'_> {
+    pub(crate) async fn while_waiting<T>(
+        &mut self,
+        cancel: &Cancellation,
+        wait: impl Future<Output = T>,
+    ) -> Result<T, StorageError> {
+        self.0.release_permit();
+        let result = wait.await;
+        let wake = Arc::new(Wake::default());
+        cancel.wake_on_cancel(&wake);
+        let before = wake.generation();
+        if cancel.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        let permits = self.0.inner.permits.clone();
+        let permit = tokio::select! {
+            biased;
+            _ = wake.changed_after(before) => return Err(StorageError::Cancelled),
+            permit = permits.acquire_owned() => permit.map_err(|_| StorageError::Cancelled)?,
+        };
+        self.0.restore_permit(permit);
+        Ok(result)
     }
 }
 
@@ -721,7 +791,7 @@ impl Dispatcher {
             tokio::spawn(async move {
                 let mut slot = slot;
                 if me.park(idx, &entry, &mut slot).await {
-                    me.deliver(idx, entry).await;
+                    me.deliver(idx, entry, &mut slot).await;
                 }
             });
         }
@@ -859,10 +929,7 @@ impl Dispatcher {
         let Some(fence) = entry.fence() else {
             return true;
         };
-        drop(slot.permit.take());
-        self.inner.parked.fetch_add(1, Ordering::SeqCst);
-        // Capacity freed: other ready work may be claimed while this one waits.
-        self.inner.wake.notify_one();
+        slot.release_permit();
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
         // Ready, then a worker permit: one wait, so the lease is renewed (and a stop or a lost
@@ -887,7 +954,7 @@ impl Dispatcher {
             );
             match first(&mut admitted, pause).await {
                 Either::Left(Some(p)) => {
-                    slot.permit = Some(p);
+                    slot.restore_permit(p);
                     break;
                 }
                 Either::Left(None) => {
@@ -912,7 +979,6 @@ impl Dispatcher {
                 }
             }
         }
-        self.inner.parked.fetch_sub(1, Ordering::SeqCst);
         self.notify_status();
         proceed && !self.inner.stopping.load(Ordering::SeqCst)
     }
@@ -978,8 +1044,9 @@ impl Dispatcher {
     /// Observes operations whose outcome is unknown behind held deliveries, using each
     /// consumer's executor, and records what the target shows (`ObservedComplete`, `Failed`,
     /// `RetryPending` when it shows the effect did not happen). It never re-executes an effect
-    /// and never redelivers: an explicit `queue.reconcile` decides that. Returns the number of
-    /// operations whose outcome was established.
+    /// and never redelivers it directly. Consumers that can prove safe continuation may
+    /// requeue an established outcome. Other consumers wait for explicit `queue.reconcile`.
+    /// Returns the number of operations whose outcome was established.
     pub async fn observe_unknown(&self) -> Result<usize, StorageError> {
         let mut resolved = 0;
         for consumer in &self.inner.consumers {
@@ -996,26 +1063,26 @@ impl Dispatcher {
             let mut after: Option<DeliveryKey> = None;
             loop {
                 let (f, from) = (filter.clone(), after.clone());
-                let (held, next): (Vec<OperationRecord>, Option<DeliveryKey>) =
-                    store::read(&self.inner.store, move |r| {
-                        let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
-                        let mut ops = Vec::new();
-                        for e in page.entries {
-                            if e.state != QueueState::Reconciling {
-                                continue;
-                            }
-                            if let Some(op) = &e.operation_id
-                                && let Some(rec) = r.operations().operation(op)?
-                                && rec.state == OperationState::OutcomeUnknown
-                            {
-                                ops.push(rec);
-                            }
+                let (held, next) = store::read(&self.inner.store, move |r| {
+                    let page = r.queue().deliveries(&f, from.as_ref(), batch)?;
+                    let mut ops = Vec::new();
+                    for e in page.entries {
+                        if e.state != QueueState::Reconciling {
+                            continue;
                         }
-                        Ok((ops, page.next))
-                    })
-                    .await?;
-                for op in held {
+                        if let Some(op) = &e.operation_id
+                            && let Some(rec) = r.operations().operation(op)?
+                            && rec.state == OperationState::OutcomeUnknown
+                        {
+                            ops.push((e.id, e.revision, rec));
+                        }
+                    }
+                    Ok((ops, page.next))
+                })
+                .await?;
+                for (delivery, delivery_revision, op) in held {
                     let observed = executor.observe(op.clone()).await;
+                    let auto_resume = executor.resumes_after_observation();
                     let established =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
                             let Some(current) = tx.operations().operation(&op.id)? else {
@@ -1036,6 +1103,14 @@ impl Dispatcher {
                                         to,
                                         Some(json!({"reconciliation": note})),
                                     )?;
+                                    if auto_resume
+                                        && tx.queue().entry(&delivery)?.is_some_and(|entry| {
+                                            entry.state == QueueState::Reconciling
+                                                && entry.revision == delivery_revision
+                                        })
+                                    {
+                                        tx.queue().requeue(&delivery, 0)?;
+                                    }
                                     Ok(true)
                                 }
                                 None => {
@@ -1063,6 +1138,7 @@ impl Dispatcher {
         }
         if resolved > 0 {
             self.notify_status();
+            self.wakeup().wake();
         }
         Ok(resolved)
     }
@@ -1071,7 +1147,7 @@ impl Dispatcher {
         self.inner.status.send_modify(|v| *v = v.wrapping_add(1));
     }
 
-    async fn deliver(&self, idx: usize, claimed: QueueEntry) {
+    async fn deliver(&self, idx: usize, claimed: QueueEntry, slot: &mut Slot) {
         let consumer = self.inner.consumers[idx].clone();
         let outcome = match (
             &consumer.async_handler,
@@ -1083,7 +1159,7 @@ impl Dispatcher {
                     .await
             }
             (None, Some(executor), Some(_)) => {
-                self.deliver_effect(&consumer, executor.clone(), claimed.clone())
+                self.deliver_effect(&consumer, executor.clone(), claimed.clone(), slot)
                     .await
             }
             _ => self.deliver_local(&consumer, claimed.clone()).await,
@@ -1268,6 +1344,7 @@ impl Dispatcher {
         consumer: &Consumer,
         executor: Arc<dyn EffectExecutor>,
         claimed: QueueEntry,
+        slot: &mut Slot,
     ) -> Result<Step, StorageError> {
         enum Begin {
             Dispatch(Box<OperationRecord>),
@@ -1343,24 +1420,41 @@ impl Dispatcher {
         };
 
         // The effect runs outside any transaction; the lease is renewed while it runs.
-        let mut effect = executor.execute(operation.clone());
+        let cancellation = Cancellation::new();
+        let mut effect = executor.execute_with_capacity(
+            operation.clone(),
+            cancellation.clone(),
+            EffectCapacity(slot),
+        );
         let lease = self.inner.cfg.lease_ms;
         let every = Duration::from_millis(u64::try_from((lease / 3).max(1)).unwrap_or(1));
         let fence = claimed
             .fence()
             .ok_or_else(|| invalid("claimed entry without fence"))?;
         let result = loop {
-            match tokio::time::timeout(every, &mut effect).await {
-                Ok(r) => break r,
-                Err(_) => {
+            let check = async {
+                if executor.observes_delivery_cancellation() {
+                    let _ = first(self.inner.changed.notified(), tokio::time::sleep(every)).await;
+                } else {
+                    tokio::time::sleep(every).await;
+                }
+            };
+            match first(&mut effect, check).await {
+                Either::Left(result) => break result,
+                Either::Right(_) => {
                     let (id, f) = (claimed.id.clone(), fence.clone());
                     // A lost lease does not stop recording the outcome: the attempt fence still
                     // binds the operation, and the delivery is then reconciled, not replayed.
-                    let _ =
+                    let epoch = claimed.cancellation_epoch;
+                    let cancelled =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
-                            tx.queue().renew(&id, &f, lease)
+                            let entry = tx.queue().renew(&id, &f, lease)?;
+                            Ok(entry.cancel_requested || entry.cancellation_epoch != epoch)
                         })
                         .await;
+                    if matches!(cancelled, Ok(true)) || self.inner.stopping.load(Ordering::SeqCst) {
+                        cancellation.cancel();
+                    }
                 }
             }
         };
@@ -1588,7 +1682,7 @@ fn root_gate(
     let after = tx.queue().hold_for_eligibility(
         &e.id,
         &fence,
-        "the root does not permit dispatch (paused, held or stopped)",
+        "the root does not permit dispatch (paused, held, stopped or awaiting implementation readiness)",
     )?;
     Ok(Some(Step::Settled(after.state)))
 }

@@ -17,6 +17,21 @@ impl WorkCtl<'_, '_> {
         let mut mem = self.routes.remove(&Route::Overview).unwrap_or_default();
         let mut actions: Vec<Action> = Vec::new();
         let project = self.selected_project.clone();
+        let keep_working_pending = project.as_ref().is_some_and(|project| {
+            self.pending(&crate::work_ops::WorkSlot::KeepWorking(project.clone()))
+        });
+        if let Some(project) = &project
+            && let Ok(id) = devworks_core::protocol::Id::new(project)
+            && let Some(backend) = self.backend()
+            && let Some(status) =
+                backend.keep_working_status(&devworks_core::protocol::ProjectId(id))
+        {
+            self.work.keep_working.insert(project.clone(), status);
+        }
+        let keep_working = project
+            .as_ref()
+            .and_then(|project| self.work.keep_working.get(project))
+            .cloned();
         let cols = self
             .work
             .workflows
@@ -94,6 +109,45 @@ impl WorkCtl<'_, '_> {
                 }
                 workflow::controls(ui, work, open, online.is_ok(), actions);
                 if tab == 0 {
+                    if let Some(status) = &keep_working {
+                        ui.horizontal_wrapped(|ui| {
+                            let label = if status.enabled {
+                                "Stop keep-working"
+                            } else {
+                                "Enable keep-working"
+                            };
+                            if ui
+                                .add_enabled(
+                                    open && !keep_working_pending,
+                                    eframe::egui::Button::new(label),
+                                )
+                                .clicked()
+                            {
+                                actions.push(Action::KeepWorking(!status.enabled));
+                            }
+                            if let Some(detail) = &status.detail {
+                                widgets::caption(ui, detail);
+                            } else if status.enabled && status.root.is_none() {
+                                widgets::caption(ui, "Selecting the next eligible item.");
+                            }
+                            if let Some(root) = &status.root {
+                                let title = work
+                                    .features
+                                    .items
+                                    .iter()
+                                    .chain(&work.cards.items)
+                                    .find(|record| record.id == root.0)
+                                    .map_or(root.0.as_str(), |record| record.title.0.as_str());
+                                if ui.link(title).clicked() {
+                                    actions.push(Action::OpenWork(root.0.as_str().to_owned()));
+                                }
+                            }
+                        });
+                        if status.enabled || keep_working_pending {
+                            ui.ctx()
+                                .request_repaint_after(std::time::Duration::from_secs(1));
+                        }
+                    }
                     if !list_state(ui, &work.features, "features")
                         || !list_state(ui, &work.cards, "tasks and issues")
                     {
