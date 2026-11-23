@@ -1,0 +1,117 @@
+name: DW-59 notarized Intel installer qualification
+
+on:
+  push:
+    branches: [codex/dw-59-intel-notarized-check]
+    paths: [.github/workflows/intel-notarized-qualification.yml]
+
+permissions: {}
+
+env:
+  SEALED_SHA256: bec6e7faafa7d437a72d42c67e67a739f86b4227a628f7dfb2412b540ec8cbb5
+  DMG_SHA256: c9ffcd85bbc19a3cabca8a72bb37b6c52d6e32d1d47abf935e6ad96c7eeb725d
+
+jobs:
+  transfer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      # The draft release is only visible to principals with push access.
+      contents: write
+    steps:
+      - name: Copy the one encrypted draft asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = SceneWorks/DevWorks
+          gh api repos/SceneWorks/DevWorks/releases/454915769 --jq '.draft' | grep -Fx true
+          file="$RUNNER_TEMP/intel-qualification.enc"
+          gh api --allow-escape-sequences -H 'Accept: application/octet-stream' \
+            repos/SceneWorks/DevWorks/releases/assets/781205225 > "$file"
+          printf '%s  %s\n' "$SEALED_SHA256" "$file" | sha256sum --check --strict
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sealed-intel-dmg
+          path: ${{ runner.temp }}/intel-qualification.enc
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  install:
+    needs: transfer
+    runs-on: macos-26-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sealed-intel-dmg
+          path: ${{ runner.temp }}/transfer
+      - name: Verify and decrypt the exact notarized DMG
+        shell: bash
+        env:
+          DW59_INTEL_ARCHIVE_KEY: ${{ secrets.DW59_INTEL_ARCHIVE_KEY }}
+        run: |
+          umask 077
+          file="$RUNNER_TEMP/transfer/intel-qualification.enc"
+          printf '%s  %s\n' "$SEALED_SHA256" "$file" | shasum -a 256 -c
+          openssl_path="$(brew --prefix openssl@3)/bin/openssl"
+          test -x "$openssl_path"
+          "$openssl_path" enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:DW59_INTEL_ARCHIVE_KEY -in "$file" -out "$RUNNER_TEMP/qualification.dmg"
+          printf '%s  %s\n' "$DMG_SHA256" "$RUNNER_TEMP/qualification.dmg" | shasum -a 256 -c
+      - name: Clean install and run the signed app without developer tools
+        shell: bash
+        run: |
+          test "$(uname -m)" = x86_64
+          sw_vers
+          dmg="$RUNNER_TEMP/qualification.dmg"
+          xcrun stapler validate "$dmg"
+          codesign --verify --strict "$dmg"
+          mount="$RUNNER_TEMP/read-only-dmg"
+          result="$RUNNER_TEMP/result"
+          installed="$RUNNER_TEMP/installed"
+          mkdir "$mount" "$result" "$installed"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg"
+          trap 'hdiutil detach "$mount" >/dev/null' EXIT
+          app="$installed/DevWorks Combined Qualification.app"
+          ditto "$mount/DevWorks Combined Qualification.app" "$app"
+          codesign --verify --deep --strict "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          executable="$app/Contents/MacOS/devworks-desktop"
+          worker="$app/Contents/MacOS/devworks-pdf-worker"
+          test "$(lipo -archs "$executable")" = x86_64
+          test "$(lipo -archs "$worker")" = x86_64
+          env PATH=/usr/bin:/bin "$worker" --check-pdf-worker-memory
+          python3 -I - "$executable" "$RUNNER_TEMP/native-profile" "$result" <<'PY'
+          from contextlib import closing
+          import os
+          from pathlib import Path
+          import sqlite3
+          import subprocess
+          import sys
+
+          executable, profile, result = (Path(arg) for arg in sys.argv[1:])
+          screenshot = result / "frame.png"
+          with (result / "launch.log").open("xb") as log:
+              subprocess.run(
+                  [executable, "--data-dir", profile, "--screenshot", screenshot, "--close-after-secs", "15"],
+                  env={**os.environ, "PATH": "/usr/bin:/bin"}, stdout=log, stderr=subprocess.STDOUT,
+                  check=True, timeout=75,
+              )
+          png = screenshot.read_bytes()
+          assert png[:8] == bytes.fromhex("89504e470d0a1a0a")
+          assert png.endswith(bytes.fromhex("0000000049454e44ae426082")) and len(png) > 4096
+          db = profile / "workspace.sqlite"
+          with closing(sqlite3.connect(db.as_uri() + "?mode=rw", uri=True)) as store:
+              assert store.execute("SELECT shutdown_state FROM app_boots").fetchall() == [("Clean",)]
+          print("Notarized Intel image rendered a native frame and shut down cleanly")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: notarized-intel-acceptance
+          path: ${{ runner.temp }}/result
+          if-no-files-found: ignore
+          retention-days: 3
