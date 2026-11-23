@@ -121,10 +121,8 @@ COMMAND_OPERATIONS = set('''
     documents.disable_retrieval
     documents.import
     documents.index
-    documents.move
     documents.remove_index
     documents.retry
-    documents.share
     features.create
     features.dependencies
     features.edit
@@ -169,6 +167,11 @@ COMMAND_OPERATIONS = set('''
     workflows.rename_status
 '''.split())
 PRIVATE_MODE_REASONS = {
+    'documents.move': 'Document transfers require the source and destination project coordinators.',
+    'documents.share': 'Document transfers require the source and destination project coordinators.',
+    'documents.transfer_propose': 'Only the native source project coordinator can propose a transfer.',
+    'documents.transfer_respond': 'Only the native destination project coordinator can decide its need.',
+    'documents.transfer_status': 'Private to the authorized native coordinators.',
     'projects.prepare_purge': 'Native project maintenance requires the human confirmation flow.',
     'projects.purge_manifest': 'Private native project purge review and file locations.',
     'projects.purge': 'Native human-only project purge confirmation.',

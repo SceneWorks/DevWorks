@@ -11,9 +11,9 @@
   "counts": {
     "catalogOperations": 382,
     "modeDispositions": 387,
-    "tools": 155,
+    "tools": 153,
     "readTools": 97,
-    "commandTools": 58
+    "commandTools": 56
   },
   "tools": [
     {
@@ -2552,48 +2552,6 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
-      "name": "devworks_documents_share",
-      "operation": "documents.share",
-      "mode": "Command",
-      "inputSchema": "contracts/artifact-command-request.schema.json",
-      "inputSelection": {
-        "pointer": "/command/kind",
-        "equals": "Share"
-      },
-      "resultSchema": "contracts/operation-result.schema.json",
-      "resultSelection": {
-        "pointer": "/kind",
-        "equals": "documents.share"
-      },
-      "authority": "Existing host authority contract",
-      "effect": "Existing journaled command contract",
-      "clientGrant": "ExplicitCommand",
-      "defaultForNewRegistration": false,
-      "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
-    },
-    {
-      "name": "devworks_documents_move",
-      "operation": "documents.move",
-      "mode": "Command",
-      "inputSchema": "contracts/artifact-command-request.schema.json",
-      "inputSelection": {
-        "pointer": "/command/kind",
-        "equals": "Move"
-      },
-      "resultSchema": "contracts/operation-result.schema.json",
-      "resultSelection": {
-        "pointer": "/kind",
-        "equals": "documents.move"
-      },
-      "authority": "Existing host authority contract",
-      "effect": "Existing journaled command contract",
-      "clientGrant": "ExplicitCommand",
-      "defaultForNewRegistration": false,
-      "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
-    },
-    {
       "name": "devworks_documents_index",
       "operation": "documents.index",
       "mode": "Command",
@@ -4332,14 +4290,14 @@
     {
       "operation": "documents.share",
       "mode": "Command",
-      "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus existing domain authority and recovery."
+      "disposition": "InternalOnly",
+      "reason": "Document transfers require the source and destination project coordinators."
     },
     {
       "operation": "documents.move",
       "mode": "Command",
-      "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus existing domain authority and recovery."
+      "disposition": "InternalOnly",
+      "reason": "Document transfers require the source and destination project coordinators."
     },
     {
       "operation": "documents.index",

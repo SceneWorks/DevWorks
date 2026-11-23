@@ -212,6 +212,31 @@ impl Fixture {
 }
 
 #[test]
+fn project_access_does_not_grant_a_document_transfer_decision() {
+    let fx = Fixture::new();
+    fx.configure(8148);
+    let registered = fx.register();
+    for operation in ["documents.share", "documents.move"] {
+        let refusal = fx.command(
+            &fx.human,
+            operation,
+            "mcp_server.set_client_access",
+            1,
+            json!({"action": {
+                "kind": "Replace", "clientId": registered.client_id,
+                "expectedRevision": registered.revision, "name": registered.name,
+                "enabled": true, "projectIds": ["first", "second"], "repositoryIds": [],
+                "worktreeIds": [], "readOperations": [], "commandOperations": [operation]
+            }}),
+        );
+        assert!(matches!(
+            refusal, CommandReply::Recorded { receipt, .. }
+            if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+    }
+}
+
+#[test]
 fn selected_knowledge_command_keeps_authority_and_receipts_in_sqlite() {
     let fx = Fixture::new();
     fx.configure(8147);
