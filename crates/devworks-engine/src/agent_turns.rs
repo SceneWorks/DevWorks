@@ -1579,9 +1579,6 @@ pub(crate) fn publish_compaction_result(
             &source.context,
             &|| cancellation.is_cancelled(),
         );
-        if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled.into());
-        }
         let mut room = 4096;
         for suggestion in suggestions {
             if suggestion.len() + 2 > room {
@@ -1591,6 +1588,9 @@ pub(crate) fn publish_compaction_result(
             summary.push_str("\n\n");
             summary.push_str(&suggestion);
         }
+    }
+    if cancellation.is_some_and(Cancellation::is_cancelled) {
+        return Err(StorageError::Cancelled.into());
     }
     Ok(crate::compaction::publish_compacted(
         store,
