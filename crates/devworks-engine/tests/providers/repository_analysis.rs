@@ -257,12 +257,19 @@ async fn check_agent_analysis(
     );
     let review = principal(f.store.as_ref(), "analysis-reviewer", PrincipalKind::Agent)
         .with_lineage(Some(project.clone()), None, None);
+    let plan_review = principal(
+        f.store.as_ref(),
+        "analysis-plan-reviewer",
+        PrincipalKind::Agent,
+    )
+    .with_lineage(Some(project.clone()), None, None);
     let caller = user.clone();
     let owner = project.clone();
     let members = vec![repository.clone()];
     let bindings = [
         (work.principal().clone(), AgentRole::Worker),
         (review.principal().clone(), AgentRole::CodeReviewer),
+        (plan_review.principal().clone(), AgentRole::PlanReviewer),
     ];
     write(f.store.as_ref(), move |tx| {
         let now = tx.now_ms();
@@ -324,6 +331,9 @@ async fn check_agent_analysis(
         .find(|tool| tool.wire_name == "get_repository_health")
         .unwrap();
     assert!(schemas.tool(&work, alias).is_ok());
+    assert!(schemas.resolve(&work, &alias.input_schema).is_ok());
+    assert!(schemas.tool(&plan_review, alias).is_err());
+    assert!(schemas.resolve(&plan_review, &alias.input_schema).is_err());
 
     let scope = json!({"kind":"Project","projectId":project});
     let views = json!({"kind":"Published","repositoryIds":[repository]});
