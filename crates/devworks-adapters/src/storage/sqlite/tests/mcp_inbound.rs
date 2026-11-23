@@ -905,13 +905,13 @@ fn outgoing_mcp_answer_rechecks_scope_after_gateway_returns() {
             .unwrap(),
         DomainQueryReply::Result { .. }
     ));
-    assert!(publication_allowed(&ctx, &*fx.store, &options));
+    assert!(publication_allowed(&ctx, &*fx.store, &options, &[]));
     fx.admin(
         "revocation",
         "mcp_server.set_client_access",
         json!({"action":{"kind":"Revoke","clientId":active.client_id,"expectedRevision":active.revision}}),
     );
-    assert!(!publication_allowed(&ctx, &*fx.store, &options));
+    assert!(!publication_allowed(&ctx, &*fx.store, &options, &[]));
     assert!(matches!(
         fx.credentials.granted_tools(&client, &options),
         Err(CredentialError::Denied)

@@ -721,6 +721,7 @@ async fn compose(
     );
     let incoming_mcp = crate::mcp_inbound_server::IncomingMcp::start(
         runtime.clone(),
+        authority.clone(),
         credentials,
         ids.clone(),
         &config.data_root,

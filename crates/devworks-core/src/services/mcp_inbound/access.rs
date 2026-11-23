@@ -9,7 +9,10 @@ use crate::authority::DenialReason;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::sha256_hex;
 use crate::kernel::work_brief::WorkBrief;
-use crate::operations::{OperationInput, conventions, features, history, indexing, issues, tasks};
+use crate::operations::{
+    OperationInput, artifacts, conventions, features, history, indexing, issues, knowledge,
+    repositories, tasks,
+};
 use crate::ports::storage::{
     ApplicationStore, ArtifactRead, DELETED, EventFilter, HistoryRead, LedgerEntry, ProjectRead,
     ReadOptions, ReadSnapshot, StorageError, StoredWork, WorkRead, WriteTransaction, read_snapshot,
@@ -20,6 +23,7 @@ use crate::protocol::{
     ActorId, CommandId, Counter, Id, OperationId, ProjectId, Query, Revision, StoreId,
 };
 use crate::registry::{self, Envelope, Mode, OperationDescriptor};
+use crate::services::artifacts::{Viewer, visible};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -82,6 +86,8 @@ pub struct AccessFence {
     worktrees: Vec<WorktreeTarget>,
     #[serde(default)]
     documents: Vec<DocumentTarget>,
+    #[serde(default)]
+    artifact: Option<Id>,
     #[serde(default)]
     index_removal: Option<IndexRemoval>,
     work: Vec<WorkScope>,
@@ -149,6 +155,7 @@ pub fn publication_allowed(
     ctx: &InvocationContext,
     store: &dyn ApplicationStore,
     options: &ReadOptions,
+    artifacts: &[Id],
 ) -> bool {
     let Some(proof) = ctx.mcp_client_proof() else {
         return false;
@@ -158,14 +165,52 @@ pub fn publication_allowed(
     };
     proof.live.0.load(Ordering::Acquire)
         && matches!(
-            read_snapshot(store, options, |snapshot| match mode {
-                Mode::Query => crate::authority::authorization_holds(snapshot, grant),
-                Mode::Command =>
-                    crate::authority::service::command_publication_holds(snapshot, grant),
+            read_snapshot(store, options, |snapshot| {
+                let current = match mode {
+                    Mode::Query => crate::authority::authorization_holds(snapshot, grant)?,
+                    Mode::Command => {
+                        crate::authority::service::command_publication_holds(snapshot, grant)?
+                    }
+                };
+                if !current || !artifacts_visible(snapshot, ctx, artifacts)? {
+                    return Ok(false);
+                }
+                for fence in grant.fences() {
+                    if let AuthorityFence::ExternalMcp(fence) = fence
+                        && let Some(id) = &fence.artifact
+                        && !artifacts_visible(snapshot, ctx, std::slice::from_ref(id))?
+                    {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
             }),
             Ok(true)
         )
         && proof.live.0.load(Ordering::Acquire)
+}
+
+fn artifacts_visible(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    ids: &[Id],
+) -> Result<bool, StorageError> {
+    if ids.is_empty() {
+        return Ok(true);
+    }
+    let read = snapshot.artifacts();
+    let viewer = Viewer::resolve(snapshot.authority(), ctx)?;
+    for id in ids {
+        let Some(artifact) = read.artifact(id)? else {
+            return Ok(false);
+        };
+        if artifact.state != crate::ports::storage::ArtifactState::Live
+            || !visible(read, &viewer, &artifact)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(crate) fn request_live(ctx: &InvocationContext) -> bool {
@@ -177,6 +222,9 @@ pub(crate) fn request_live(ctx: &InvocationContext) -> bool {
 
 fn selected_repositories(input: &OperationInput) -> Vec<Id> {
     match input {
+        OperationInput::Repositories(repositories::Input::Get(input)) => {
+            vec![input.repository_id.clone()]
+        }
         OperationInput::Features(features::Input::List(input)) => input.repository_ids.0.clone(),
         OperationInput::Issues(issues::Input::List(input)) => input.repository_ids.0.clone(),
         OperationInput::Tasks(tasks::Input::List(input)) => input.repository_ids.0.clone(),
@@ -221,6 +269,38 @@ fn full_project_repositories(operation: &str) -> bool {
     matches!(
         operation,
         "projects.get"
+            | "projects.list"
+            | "repositories.list"
+            | "repositories.search"
+            | "indexing.discover"
+            | "history.events"
+            | "history.work_lineage"
+            | "history.git_links"
+            | "history.evidence_links"
+            | "history.tool_usage"
+            | "sessions.list"
+            | "sessions.get"
+            | "sessions.transcript"
+            | "sessions.briefing"
+            | "sessions.context_sources"
+            | "next_work.inspect_claim"
+            | "next_work.inspect_queue"
+            | "runs.inspect"
+            | "runs.eligibility"
+            | "agents.inspect"
+            | "agents.inbox"
+            | "schemas.connections"
+            | "schemas.objects"
+            | "schemas.relationships"
+            | "schemas.code_references"
+            | "conventions.list"
+            | "conventions.read"
+            | "conventions.version"
+            | "conventions.resources"
+            | "conventions.search"
+            | "documents.list"
+            | "documents.search"
+            | "artifacts.list"
             | "features.list"
             | "features.create"
             | "features.edit_plan"
@@ -257,6 +337,73 @@ fn project_target(operation: &str) -> bool {
     matches!(
         operation,
         "projects.get"
+            | "projects.list"
+            | "repositories.list"
+            | "repositories.get"
+            | "repositories.readme"
+            | "repositories.summary"
+            | "repositories.search"
+            | "repositories.nodes"
+            | "indexing.discover"
+            | "history.events"
+            | "history.work_lineage"
+            | "history.git_links"
+            | "history.evidence_links"
+            | "history.tool_usage"
+            | "sessions.list"
+            | "sessions.get"
+            | "sessions.transcript"
+            | "sessions.briefing"
+            | "sessions.context_sources"
+            | "next_work.inspect_claim"
+            | "next_work.inspect_queue"
+            | "runs.inspect"
+            | "runs.eligibility"
+            | "agents.inspect"
+            | "agents.inbox"
+            | "knowledge.diagnostics"
+            | "knowledge.subgraph"
+            | "knowledge.entity_bundle"
+            | "knowledge.entity_graph"
+            | "knowledge.claim_bundle"
+            | "knowledge.expand_frontier"
+            | "knowledge.render_summary"
+            | "knowledge.query"
+            | "knowledge.tagged_lessons"
+            | "help.search"
+            | "help.read"
+            | "help.topic_for_screen"
+            | "help.package_guides"
+            | "analysis.health"
+            | "analysis.cross_repo_links"
+            | "analysis.status"
+            | "analysis.clusters"
+            | "analysis.cluster_detail"
+            | "analysis.security"
+            | "analysis.metrics"
+            | "analysis.hotspots"
+            | "analysis.fleet_health"
+            | "analysis.archival_candidates"
+            | "analysis.file_hotspot"
+            | "schemas.connections"
+            | "schemas.objects"
+            | "schemas.relationships"
+            | "schemas.code_references"
+            | "conventions.list"
+            | "conventions.read"
+            | "conventions.version"
+            | "conventions.resources"
+            | "conventions.search"
+            | "documents.list"
+            | "documents.read"
+            | "documents.search"
+            | "knowledge.write_status"
+            | "artifacts.list"
+            | "artifacts.read"
+            | "artifacts.preview"
+            | "artifacts.export"
+            | "indexing.status"
+            | "indexing.runs"
             | "features.list"
             | "features.get"
             | "features.create"
@@ -347,6 +494,19 @@ pub(crate) fn authorize(
         return Err(DenialReason::ToolNotSelected);
     }
     let project = ctx.project_id().ok_or(DenialReason::OutOfProjectScope)?;
+    if let OperationInput::Knowledge(knowledge::Input::WriteStatus(input)) = request.input
+        && !read
+            .knowledge()
+            .knowledge_write(&input.write_id)
+            .map_err(target_error)?
+            .is_some_and(|stored| {
+                &stored.actor == ctx.principal()
+                    && stored.scope
+                        == crate::ports::storage::KnowledgeScope::Project(project.clone())
+            })
+    {
+        return Err(DenialReason::OutOfProjectScope);
+    }
     let other_scope = match request.input {
         OperationInput::Conventions(conventions::Input::Move(input)) => Some(&input.destination),
         OperationInput::Conventions(conventions::Input::Index(input)) => input.all_scope.as_ref(),
@@ -361,9 +521,11 @@ pub(crate) fn authorize(
         .input
         .body()
         .map_err(|_| DenialReason::AuthorityUnavailable)?;
-    if project_targets(&normalized)
-        .iter()
-        .any(|target| target != project)
+    if [Some(&normalized), normalized.get("query")]
+        .into_iter()
+        .flatten()
+        .flat_map(project_targets)
+        .any(|target| &target != project)
     {
         return Err(DenialReason::OutOfProjectScope);
     }
@@ -376,6 +538,13 @@ pub(crate) fn authorize(
     let mut exact = IndexTargets::resolve(read, ctx, request.input, &client.access.worktree_ids.0)
         .map_err(target_error)?;
     let mut full_project_repositories = full_project_repositories(operation);
+    full_project_repositories |= match request.input {
+        OperationInput::Indexing(indexing::Input::Status(input)) => {
+            input.repository_id.is_none() && input.overlay_id.is_none()
+        }
+        OperationInput::Indexing(indexing::Input::Runs(input)) => input.repository_id.is_none(),
+        _ => false,
+    };
     if graph_read {
         let graph: GraphReadRequest = serde_json::from_value(normalized.clone())
             .map_err(|_| DenialReason::AuthorityUnavailable)?;
@@ -383,11 +552,39 @@ pub(crate) fn authorize(
             .graph(read, ctx, &graph, &client.access.worktree_ids.0)
             .map_err(target_error)?;
     }
+    if request.binding.mode == Mode::Query && matches!(request.input, OperationInput::Analysis(_)) {
+        // Reviewed analysis reads all take this native data scope and explicit view selection.
+        // The application owner still resolves the analysis-specific filter and result.
+        exact
+            .analysis(read, ctx, &normalized, &client.access.worktree_ids.0)
+            .map_err(target_error)?;
+    }
     let mut repositories = selected_repositories(request.input);
     repositories.extend(exact.repositories);
     let mut worktrees = exact.worktrees;
     let mut documents =
         document_targets(read.artifacts(), project, request.input).map_err(target_error)?;
+    let artifact = match request.input {
+        OperationInput::Artifacts(
+            artifacts::Input::Read(input)
+            | artifacts::Input::Preview(input)
+            | artifacts::Input::Export(input),
+        ) => {
+            use crate::protocol::data::ArtifactQuery;
+            match &input.query {
+                ArtifactQuery::Read { artifact_id, .. }
+                | ArtifactQuery::Preview { artifact_id, .. }
+                | ArtifactQuery::Export { artifact_id, .. } => Some(artifact_id.clone()),
+                _ => return Err(DenialReason::OutOfProjectScope),
+            }
+        }
+        _ => None,
+    };
+    if let Some(id) = &artifact
+        && !artifacts_visible(read, ctx, std::slice::from_ref(id)).map_err(target_error)?
+    {
+        return Err(DenialReason::OutOfProjectScope);
+    }
     documents.extend(exact.document_run);
     if full_project_repositories {
         repositories.extend(
@@ -397,6 +594,13 @@ pub(crate) fn authorize(
         );
     }
     let mut work_targets = work_targets(&normalized);
+    if let Some(query) = normalized.get("query") {
+        for id in crate::admission::work_targets(query) {
+            if !work_targets.contains(&id) {
+                work_targets.push(id);
+            }
+        }
+    }
     if let OperationInput::Tasks(tasks::Input::Create(input)) = request.input
         && let Some(parent) = &input.parent_id
         && !work_targets.contains(&parent.0)
@@ -467,6 +671,7 @@ pub(crate) fn authorize(
         recovering_operation: recovering_operation.map(|(operation, _)| operation),
         worktrees,
         documents,
+        artifact,
         index_removal: exact.removal,
         work,
     };

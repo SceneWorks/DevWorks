@@ -115,6 +115,13 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
     let _case = common::native_runtime_case();
     let root = common::Root::new("incoming-mcp");
     let engine = common::start(&root);
+    let runtime = engine.host().runtime();
+    let missing: Vec<_> = devworks_core::services::mcp_inbound::published_tools()
+        .iter()
+        .filter(|tool| !runtime.has_mcp_tool(tool))
+        .map(|tool| tool.operation.name)
+        .collect();
+    eprintln!("Reviewed MCP bindings missing a native owner in this build: {missing:?}");
     let backend = engine.backend();
     let project = command(
         &*backend,

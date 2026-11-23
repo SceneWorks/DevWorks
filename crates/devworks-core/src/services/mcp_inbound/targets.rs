@@ -7,7 +7,8 @@ use crate::ports::storage::{
     StorageError, StoredIndexRun, StoredOverlay,
 };
 use crate::protocol::data::{
-    ArtifactCommand, DataScope, GraphReadRequest, IndexCommand, ViewSelection,
+    ArtifactCommand, ArtifactQuery, DataScope, DocumentVersions, GraphReadRequest, IndexCommand,
+    ViewSelection,
 };
 use crate::protocol::{Id, ProjectId};
 use serde::{Deserialize, Serialize};
@@ -132,13 +133,54 @@ impl IndexTargets {
         {
             return Err(StorageError::ScopeDenied);
         }
-        match request.view.as_ref() {
+        self.graph_views(
+            snapshot,
+            ctx,
+            &request.scope,
+            request.view.as_ref(),
+            None,
+            granted_worktrees,
+        )
+    }
+
+    pub fn analysis(
+        &mut self,
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        input: &serde_json::Value,
+        granted_worktrees: &[Id],
+    ) -> Result<(), StorageError> {
+        let scope: DataScope = serde_json::from_value(input["scope"].clone())
+            .map_err(|_| StorageError::ScopeDenied)?;
+        if !matches!(&scope, DataScope::Project { project_id } if Some(project_id) == ctx.project_id())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
+        let views: ViewSelection = serde_json::from_value(input["views"].clone())
+            .map_err(|_| StorageError::ScopeDenied)?;
+        self.graph_views(snapshot, ctx, &scope, Some(&views), None, granted_worktrees)?;
+        Ok(())
+    }
+
+    fn graph_views(
+        &mut self,
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        scope: &DataScope,
+        selection: Option<&ViewSelection>,
+        repository: Option<&Id>,
+        granted_worktrees: &[Id],
+    ) -> Result<bool, StorageError> {
+        match selection {
             Some(ViewSelection::Published { repository_ids }) => {
+                if repository.is_some_and(|id| !repository_ids.contains(id)) {
+                    return Err(StorageError::ScopeDenied);
+                }
                 self.repositories.extend(repository_ids.iter().cloned());
             }
             Some(ViewSelection::Exact { view_ids }) => {
                 for view in view_ids {
-                    self.view(snapshot.indexing(), view, None, granted_worktrees)?;
+                    self.view(snapshot.indexing(), view, repository, granted_worktrees)?;
                 }
             }
             Some(ViewSelection::Pinned { pin_id }) => {
@@ -146,13 +188,8 @@ impl IndexTargets {
                     .graph()
                     .graph_pin(pin_id)?
                     .ok_or(StorageError::ScopeDenied)?;
-                crate::services::graph::lease::check_pin(
-                    &pin,
-                    ctx,
-                    &request.scope,
-                    snapshot.stamp().now_ms,
-                )
-                .map_err(|_| StorageError::ScopeDenied)?;
+                crate::services::graph::lease::check_pin(&pin, ctx, scope, snapshot.stamp().now_ms)
+                    .map_err(|_| StorageError::ScopeDenied)?;
                 for view in pin.scope.views {
                     self.view(
                         snapshot.indexing(),
@@ -168,7 +205,10 @@ impl IndexTargets {
                 );
             }
             Some(ViewSelection::SchemaPublished { .. }) => return Err(StorageError::ScopeDenied),
-            None => return Ok(true),
+            None => match repository {
+                Some(repository) => self.repository(repository),
+                None => return Ok(true),
+            },
         }
         Ok(false)
     }
@@ -206,7 +246,75 @@ impl IndexTargets {
     ) -> Result<Self, StorageError> {
         let read = snapshot.indexing();
         let mut exact = Self::default();
+        if let OperationInput::Repositories(request) = input {
+            let target = match request {
+                repositories::Input::Nodes(input) => {
+                    Some((&input.repository_id, input.views.as_ref()))
+                }
+                repositories::Input::Readme(input) => {
+                    Some((&input.repository_id, Some(&input.views)))
+                }
+                repositories::Input::Summary(input) => {
+                    Some((&input.repository_id, Some(&input.views)))
+                }
+                _ => None,
+            };
+            if let Some((repository, views)) = target {
+                let project_id = ctx.project_id().cloned().ok_or(StorageError::ScopeDenied)?;
+                exact.graph_views(
+                    snapshot,
+                    ctx,
+                    &DataScope::Project { project_id },
+                    views,
+                    Some(repository),
+                    granted_worktrees,
+                )?;
+            }
+        }
         match input {
+            OperationInput::Indexing(indexing::Input::Status(input)) => {
+                if let Some(overlay) = &input.overlay_id {
+                    let selected = read.overlay(overlay)?.ok_or(StorageError::ScopeDenied)?;
+                    if input
+                        .repository_id
+                        .as_ref()
+                        .is_some_and(|repo| repo != &selected.repository_id)
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                    exact.overlay(read, &selected, granted_worktrees)?;
+                    exact.repository_overlays(read, &selected.repository_id, granted_worktrees)?;
+                } else {
+                    let project = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
+                    let repositories = match &input.repository_id {
+                        Some(repository) => vec![repository.clone()],
+                        None => snapshot.projects().members(project)?,
+                    };
+                    for repository in repositories {
+                        exact.repository_overlays(read, &repository, granted_worktrees)?;
+                    }
+                }
+            }
+            OperationInput::Indexing(indexing::Input::Runs(input)) => {
+                let project = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
+                let repositories = match &input.repository_id {
+                    Some(repository) => vec![repository.clone()],
+                    None => snapshot.projects().members(project)?,
+                };
+                let includes_overlays = input.kinds.as_ref().is_none_or(|kinds| {
+                    kinds
+                        .0
+                        .iter()
+                        .any(|kind| matches!(kind, crate::protocol::records::IndexRunKind::Overlay))
+                });
+                for repository in repositories {
+                    if includes_overlays {
+                        exact.repository_overlays(read, &repository, granted_worktrees)?;
+                    } else {
+                        exact.repository(&repository);
+                    }
+                }
+            }
             OperationInput::Code(code::Input::SetTrust(input)) => {
                 let IndexCommand::SetTrust {
                     repository_id,
@@ -267,6 +375,19 @@ impl IndexTargets {
             _ => {}
         }
         Ok(exact)
+    }
+
+    fn repository_overlays(
+        &mut self,
+        read: &dyn IndexRead,
+        repository: &Id,
+        granted_worktrees: &[Id],
+    ) -> Result<(), StorageError> {
+        self.repository(repository);
+        for overlay in read.overlays(repository)? {
+            self.overlay(read, &overlay, granted_worktrees)?;
+        }
+        Ok(())
     }
 }
 
@@ -410,6 +531,26 @@ pub(super) fn document_targets(
         }
         documents::Input::Index(input) => &input.document_id,
         documents::Input::Retry(input) => &input.document_id,
+        documents::Input::Read(input) => {
+            let ArtifactQuery::Read { artifact_id, .. } = &input.query else {
+                return Err(StorageError::ScopeDenied);
+            };
+            return Ok(vec![DocumentTarget::resolve(
+                read,
+                project,
+                artifact_id,
+                false,
+            )?]);
+        }
+        documents::Input::Search(input) => {
+            let DocumentVersions::Exact { versions } = &input.versions else {
+                return Ok(Vec::new());
+            };
+            return versions
+                .iter()
+                .map(|version| DocumentTarget::resolve(read, project, &version.artifact_id, false))
+                .collect();
+        }
         documents::Input::Share(_) | documents::Input::Move(_) => {
             return Err(StorageError::ScopeDenied);
         }
