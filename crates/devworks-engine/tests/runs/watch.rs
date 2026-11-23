@@ -2533,6 +2533,7 @@ fn the_shell_guard_protects_the_bound_github_default_branch_without_origin_head(
                 credential_revision: 1,
                 permission_revision: 1,
                 granted_scopes: vec!["repo".into()],
+granted_scopes_reported: true,
                 observed_at_ms: 1,
                 last_error: None,
             },

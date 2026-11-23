@@ -1856,3 +1856,6 @@ mod worktree_hooks;
 
 #[path = "git/push_transport.rs"]
 mod push_transport;
+
+#[path = "git/github_sync.rs"]
+mod github_sync;

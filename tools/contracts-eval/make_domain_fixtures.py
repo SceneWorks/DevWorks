@@ -1458,5 +1458,25 @@ mutate('reject-dream-run-resume-and-cancel','r9-input-dreaming.run-Command',['bo
 mutate('reject-dream-revert-both-targets','r9-input-dreaming.revert-Command',['body','proposalId'],'proposal-a')
 mutate('reject-dream-settings-too-many-turns','r9-input-dreaming.settings-Command',['body','config','maxTurns'],'101',schema=True)
 mutate('reject-dream-proposal-without-evidence','r9-input-dreaming.propose-Command',['body','evidence'],DELETE,schema=True)
+
+# Schema revision 3 (GitHub sync, DW-40): verified issue links, account diagnostics and resumable poll status.
+for name in ['issues.publish','issues.link']:
+ case('r3-input-'+name,'domain-request.r3',{**request(name,'Command'),'schemaRevision':3})
+ github_issue_link={**sample('GithubIssueLink'),'url':'https://github.com/Acme/kit/issues/42'}
+ case('r3-result-'+name,'operation-result.r3',{'kind':name,'value':github_issue_link})
+ case('reject-r1-result-'+name+'-issue-link','operation-result',{'kind':name,'value':github_issue_link},False,False)
+case('r3-input-github.account-query','domain-request.r3',{**request('github.account','Query'),'schemaRevision':3})
+case('r3-input-github.account-command','domain-request.r3',{**request('github.account','Command'),'schemaRevision':3})
+github_account_r3={**sample('GithubAccountState'),'apiHost':'github.com','authorizationState':'Connected','permissionRevision':'2','grantedScopes':['repo'],'failure':'Token expired'}
+case('r3-result-github.account','operation-result.r3',{'kind':'github.account','value':github_account_r3})
+case('reject-r1-result-github.account-diagnostics','operation-result',{'kind':'github.account','value':github_account_r3},False,False)
+case('r3-input-github.poll_status','domain-request.r3',{**request('github.poll_status','Query'),'schemaRevision':3})
+poll_page={**request('github.poll_status','Query'),'schemaRevision':3};poll_page['body']['page']={'limit':50,'cursor':'cursor-a'}
+case('r3-input-github.poll_status-page','domain-request.r3',poll_page)
+poll_page_r1=request('github.poll_status','Query');poll_page_r1['body']['page']={'limit':50}
+case('reject-r1-input-github.poll_status-page','domain-request',poll_page_r1,False,False)
+github_poll_view={**sample('GithubPollStatusView'),'endpoints':[sample('GithubPollEndpoint')],'intake':{'items':[{**sample('GithubIssueIntakeView'),'url':'https://github.com/Acme/kit/issues/42'}],'hasMore':False}}
+case('r3-result-github.poll_status','operation-result.r3',{'kind':'github.poll_status','value':github_poll_view})
+case('reject-r1-result-github.poll_status-view','operation-result',{'kind':'github.poll_status','value':github_poll_view},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

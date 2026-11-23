@@ -485,6 +485,10 @@ fn the_registry_lists_the_wire_revisions_the_desktop_expects() {
         ("next_work.inspect_queue", 3),
         ("next_work.inspect_claim", 3),
         ("watch.list", 8),
+        ("github.account", 3),
+        ("github.poll_status", 3),
+        ("issues.link", 3),
+        ("issues.publish", 3),
     ] {
         assert_eq!(latest_revision(operation), Some(revision), "{operation}");
     }

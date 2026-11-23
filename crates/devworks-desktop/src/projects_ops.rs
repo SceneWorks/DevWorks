@@ -35,6 +35,8 @@ pub enum ProjectsSlot {
     RepositoryDeletion(String),
     /// A repository's source control state (repository ID).
     GitInspect(String),
+    GithubStatus(String),
+    GithubSync(String),
     /// A patch between two commits of a repository, and its artifact text.
     GitDiff(String),
     GitDiffContent(String),

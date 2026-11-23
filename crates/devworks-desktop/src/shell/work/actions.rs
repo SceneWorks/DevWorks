@@ -268,6 +268,129 @@ impl WorkCtl<'_, '_> {
                 Action::OpenGitSession(session) => {
                     self.cx.effects.push(Effect::OpenGitSession(session));
                 }
+                Action::PublishGithubIssue {
+                    issue_id,
+                    expected_revision,
+                    repository_id,
+                } => {
+                    self.command(
+                        WorkSlot::GithubIssuePublish(issue_id.clone()),
+                        "Publishing issue to GitHub",
+                        "issues.publish",
+                        move |be| {
+                            let input = (|| {
+                                let rev: i64 = expected_revision.parse().ok()?;
+                                Some(In::Issues(issues::Input::Publish(issues::PublishInput {
+                                    issue_id: RootId(frame::id(&issue_id)?),
+                                    expected_revision: Revision::new(rev).ok()?,
+                                    repository_id: frame::id(&repository_id)?,
+                                    expected_remote_revision: None,
+                                })))
+                            })();
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                }
+                Action::LinkGithubIssue {
+                    issue_id,
+                    expected_revision,
+                    repository_id,
+                    remote_issue_number,
+                } => {
+                    self.command(
+                        WorkSlot::GithubIssueLink(issue_id.clone()),
+                        "Linking GitHub issue",
+                        "issues.link",
+                        move |be| {
+                            use devworks_core::protocol::support::PositiveCounter;
+                            let input = (|| {
+                                let num: i64 = remote_issue_number.trim().parse().ok()?;
+                                if num <= 0 {
+                                    return None;
+                                }
+                                let rev: i64 = expected_revision.parse().ok()?;
+                                Some(In::Issues(issues::Input::Link(issues::LinkInput {
+                                    issue_id: RootId(frame::id(&issue_id)?),
+                                    expected_revision: Revision::new(rev).ok()?,
+                                    repository_id: frame::id(&repository_id)?,
+                                    remote_issue_number: PositiveCounter(num.to_string()),
+                                })))
+                            })();
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                }
+                Action::ReadGithubPullObservations {
+                    repository_id,
+                    pull_request_url,
+                    expected_head,
+                } => {
+                    use devworks_core::operations::github;
+                    use devworks_core::protocol::{
+                        data::{GitOid, ObjectFormat},
+                        records::PageRequest,
+                        support::{Limit, PositiveCounter},
+                    };
+                    let pr_number = pull_request_url
+                        .rsplit_once("/pull/")
+                        .and_then(|(_, tail)| {
+                            let digits = tail.split(['/', '?', '#']).next()?;
+                            let n: i64 = digits.parse().ok()?;
+                            (n > 0).then(|| n.to_string())
+                        });
+                    let Some(pr_number) = pr_number else {
+                        continue;
+                    };
+                    let head_oid = |hex: String| GitOid {
+                        format: if hex.len() == 64 {
+                            ObjectFormat::Sha256
+                        } else {
+                            ObjectFormat::Sha1
+                        },
+                        hex,
+                    };
+                    let repo_checks = repository_id.clone();
+                    let pr_num_checks = pr_number.clone();
+                    let head_checks = expected_head.clone();
+                    self.query(
+                        WorkSlot::GithubPullChecks(pull_request_url.clone()),
+                        "Reading GitHub checks",
+                        "github.checks",
+                        move |be| {
+                            let input = Id::new(repo_checks).ok().map(|repository_id| {
+                                In::Github(github::Input::Checks(github::ChecksInput {
+                                    repository_id,
+                                    pull_request_number: PositiveCounter(pr_num_checks),
+                                    head: head_oid(head_checks),
+                                    page: PageRequest {
+                                        limit: Limit::new(50).expect("bounded checks limit"),
+                                        cursor: None,
+                                    },
+                                }))
+                            });
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                    self.query(
+                        WorkSlot::GithubPullReviews(pull_request_url),
+                        "Reading GitHub reviews",
+                        "github.reviews",
+                        move |be| {
+                            let input = Id::new(repository_id).ok().map(|repository_id| {
+                                In::Github(github::Input::Reviews(github::ReviewsInput {
+                                    repository_id,
+                                    pull_request_number: PositiveCounter(pr_number),
+                                    head: head_oid(expected_head),
+                                    page: PageRequest {
+                                        limit: Limit::new(50).expect("bounded reviews limit"),
+                                        cursor: None,
+                                    },
+                                }))
+                            });
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                }
                 Action::Inspect(root) => self.inspect(&root),
                 Action::Run(op, w) => {
                     let Some(snapshot) = self.work.runs.get(w.id.as_str()).cloned() else {

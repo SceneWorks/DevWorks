@@ -4606,6 +4606,203 @@ impl Check for GithubAccount {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueLink {
+    pub repository_id: Id,
+    pub work_id: RootId,
+    pub remote_repository_id: Text,
+    pub remote_issue_id: Text,
+    pub remote_issue_number: PositiveCounter,
+    pub url: Url,
+    pub source_revision: Text,
+}
+impl Check for GithubIssueLink {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.work_id.check()?;
+        self.remote_repository_id.check()?;
+        self.remote_issue_id.check()?;
+        self.remote_issue_number.check()?;
+        self.url.check()?;
+        self.source_revision.check()?;
+        super::domain_rules::record(
+            "GithubIssueLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 3}))]
+pub enum GithubIssueLinkResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(GitLink),
+    #[schemars(extend("x-since" = 3))]
+    Current(GithubIssueLink),
+}
+impl Check for GithubIssueLinkResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for GithubIssueLinkResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPollEndpoint {
+    pub endpoint: Label,
+    pub state: Label,
+    pub next_poll_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_polled_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Text>,
+}
+impl Check for GithubPollEndpoint {
+    fn check(&self) -> Result<(), String> {
+        self.endpoint.check()?;
+        self.state.check()?;
+        self.next_poll_at_ms.check()?;
+        self.last_polled_at_ms.check()?;
+        self.failure.check()?;
+        super::domain_rules::record(
+            "GithubPollEndpoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueIntakeView {
+    pub remote_issue_number: PositiveCounter,
+    pub source_revision: Text,
+    pub state: Label,
+    pub url: Url,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_state: Option<OperationState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_state: Option<OperationState>,
+}
+impl Check for GithubIssueIntakeView {
+    fn check(&self) -> Result<(), String> {
+        self.remote_issue_number.check()?;
+        self.source_revision.check()?;
+        self.state.check()?;
+        self.url.check()?;
+        self.work_id.check()?;
+        self.comment_state.check()?;
+        self.close_state.check()?;
+        super::domain_rules::record(
+            "GithubIssueIntakeView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueIntakePage {
+    pub items: Rows<GithubIssueIntakeView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for GithubIssueIntakePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "GithubIssueIntakePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPollStatusView {
+    pub repository_id: Id,
+    pub endpoints: Items<GithubPollEndpoint>,
+    pub intake: GithubIssueIntakePage,
+    pub interval_seconds: PositiveCounter,
+    pub next_admission_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_admitted_at_ms: Option<Counter>,
+}
+impl Check for GithubPollStatusView {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.endpoints.check()?;
+        self.intake.check()?;
+        self.interval_seconds.check()?;
+        self.next_admission_at_ms.check()?;
+        self.last_admitted_at_ms.check()?;
+        super::domain_rules::record(
+            "GithubPollStatusView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum GithubPollStatusResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<GithubObservation>),
+    #[schemars(extend("x-since" = 3))]
+    Current(GithubPollStatusView),
+}
+impl Check for GithubPollStatusResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for GithubPollStatusResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GithubObservation {
     pub repository_id: Id,
     pub subject_id: Id,
@@ -9406,17 +9603,77 @@ pub struct GithubAccountState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_flow_id: Option<Id>,
     pub state: ItemState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub api_host: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub authorization_state: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 3))]
+    pub permission_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub granted_scopes: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 3))]
+    pub failure: Option<Text>,
 }
 impl Check for GithubAccountState {
     fn check(&self) -> Result<(), String> {
         self.account.check()?;
         self.auth_flow_id.check()?;
         self.state.check()?;
+        self.api_host.check()?;
+        self.authorization_state.check()?;
+        self.permission_revision.check()?;
+        self.granted_scopes.check()?;
+        self.failure.check()?;
         super::domain_rules::record(
             "GithubAccountState",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for GithubAccountState {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.api_host = None;
+        }
+        if revision < 3 {
+            self.authorization_state = None;
+        }
+        if revision < 3 {
+            self.permission_revision = None;
+        }
+        if revision < 3 {
+            self.granted_scopes = None;
+        }
+        if revision < 3 {
+            self.failure = None;
+        }
     }
 }
 
@@ -20540,7 +20797,16 @@ pub enum DomainQuery {
         organization: Option<Label>,
     },
     #[serde(rename = "github.poll_status")]
-    GithubPollStatus { repository_id: Id },
+    GithubPollStatus {
+        repository_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 3))]
+        page: Option<PageRequest>,
+    },
     #[serde(rename = "github.checks")]
     GithubChecks {
         repository_id: Id,
@@ -22111,8 +22377,12 @@ impl Check for DomainQuery {
                 page.check()?;
                 organization.check()?;
             }
-            Self::GithubPollStatus { repository_id } => {
+            Self::GithubPollStatus {
+                repository_id,
+                page,
+            } => {
                 repository_id.check()?;
+                page.check()?;
             }
             Self::GithubChecks {
                 repository_id,
@@ -22864,6 +23134,11 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *completion_only = None;
+                }
+            }
+            Self::GithubPollStatus { page, .. } => {
+                if revision < 3 {
+                    *page = None;
                 }
             }
             Self::JobsInspect { history, usage, .. } => {
@@ -28067,9 +28342,9 @@ pub enum OperationResult {
     #[serde(rename = "features.request_plan_approval")]
     FeaturesRequestPlanApproval { value: ProposalRecord },
     #[serde(rename = "issues.publish")]
-    IssuesPublish { value: GitLink },
+    IssuesPublish { value: GithubIssueLinkResult },
     #[serde(rename = "issues.link")]
-    IssuesLink { value: GitLink },
+    IssuesLink { value: GithubIssueLinkResult },
     #[serde(rename = "tasks.move")]
     TasksMove { value: WorkRecord },
     #[serde(rename = "tasks.assign")]
@@ -28394,7 +28669,7 @@ pub enum OperationResult {
     #[serde(rename = "github.repositories")]
     GithubRepositories { value: Page<RepositoryRecord> },
     #[serde(rename = "github.poll_status")]
-    GithubPollStatus { value: Page<GithubObservation> },
+    GithubPollStatus { value: GithubPollStatusResult },
     #[serde(rename = "github.issue_sync")]
     GithubIssueSync { value: OperationRef },
     #[serde(rename = "github.checks")]
@@ -29634,6 +29909,8 @@ impl Revisioned for OperationResult {
             Self::TasksEdit { value } => value.retain_revision(revision),
             Self::FeaturesEditPlan { value } => value.retain_revision(revision),
             Self::FeaturesDependencies { value } => value.retain_revision(revision),
+            Self::IssuesPublish { value } => value.retain_revision(revision),
+            Self::IssuesLink { value } => value.retain_revision(revision),
             Self::TasksMove { value } => value.retain_revision(revision),
             Self::TasksAssign { value } => value.retain_revision(revision),
             Self::TasksDependencyLinks { value } => value.retain_revision(revision),
@@ -29719,6 +29996,8 @@ impl Revisioned for OperationResult {
             Self::NotificationsList { value } => value.retain_revision(revision),
             Self::NotificationsRead { value } => value.retain_revision(revision),
             Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
+            Self::GithubAccount { value } => value.retain_revision(revision),
+            Self::GithubPollStatus { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -29903,6 +30182,8 @@ impl Revisioned for OperationResult {
             Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::IssuesPublish { value } => value.check_revision(revision),
+            Self::IssuesLink { value } => value.check_revision(revision),
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
             Self::DreamingRevert { value } => value.check_revision(revision),
@@ -29922,6 +30203,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsImport { value } => value.check_revision(revision),
             Self::ConventionsMove { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::GithubPollStatus { value } => value.check_revision(revision),
             Self::JobsList { value } => value.check_revision(revision),
             Self::JobsCreate { value } => value.check_revision(revision),
             Self::JobsEdit { value } => value.check_revision(revision),
