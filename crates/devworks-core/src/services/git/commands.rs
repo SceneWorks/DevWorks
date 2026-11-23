@@ -155,6 +155,44 @@ fn oid(head: String) -> GitOid {
     }
 }
 
+fn cleanup_stage(path: &Path, operation: &OperationId) -> Option<PathBuf> {
+    let digest = crate::fingerprint::sha256_hex(operation.0.as_str().as_bytes());
+    Some(
+        path.parent()?
+            .join(format!(".devworks-cleanup-{}", &digest[..24])),
+    )
+}
+
+fn definite_git_refusal(outcome: &Result<Vec<u8>, GitFault>) -> bool {
+    matches!(
+        outcome,
+        Err(GitFault::Helper(
+            HelperFault::Refused(_) | HelperFault::Spawn(_) | HelperFault::Failed { .. }
+        ))
+    )
+}
+
+fn cleanup_identity_matches(git: &Git<'_>, expected: &StoredGitWorktree, path: &Path) -> bool {
+    expected
+        .location
+        .as_ref()
+        .zip(path.to_str())
+        .is_some_and(|(location, path)| {
+            super::location::require_worktree_location(git, path, location).is_ok()
+        })
+}
+
+fn cleanup_matches(git: &Git<'_>, expected: &StoredGitWorktree, path: &Path) -> bool {
+    cleanup_identity_matches(git, expected, path)
+        && git.revision_observation(path).is_ok_and(|observed| {
+            !observed.dirty
+                && observed.head == expected.head.hex
+                && observed.branch.as_deref() == Some(expected.branch.as_str())
+        })
+        && matches!(git.has_status_hidden_entries(path), Ok(false))
+        && matches!(git.has_ignored_files(path), Ok(false))
+}
+
 impl GitService {
     pub(super) fn root_path(&self, id: &Id) -> Result<PathBuf, Failure> {
         let root = self
@@ -964,12 +1002,7 @@ impl GitService {
         {
             return denied("cleanup target is not a registered isolated worktree");
         }
-        let clean = git.revision_observation(path).is_ok_and(|observed| {
-            !observed.dirty
-                && observed.head == job.tree.head.hex
-                && observed.branch.as_deref() == Some(job.tree.branch.as_str())
-        }) && matches!(git.has_ignored_files(path), Ok(false));
-        if !clean {
+        if !cleanup_matches(git, &job.tree, path) {
             return changed("worktree head changed or has local data that must be retained");
         }
         let default = match git.default_branch(repo) {
@@ -993,31 +1026,81 @@ impl GitService {
         {
             return denied("cleanup requires the exact worktree head to be integrated");
         }
-        let path_arg = match crate::services::git::client::path_argument(path) {
-            Ok(arg) => arg,
-            Err(_) => return denied("cleanup worktree path is unsupported"),
+        let Some(staged) = cleanup_stage(path, &operation.id) else {
+            return denied("cleanup worktree path is unsupported");
         };
-        if self
-            .verify_target(
-                git,
-                &Target {
-                    repository: repository.clone(),
-                    worktree: Some(job.tree.clone()),
-                },
-            )
-            .is_err()
-        {
-            return changed("physical Git ownership changed before cleanup");
+        let (Ok(original), Ok(staging)) = (
+            crate::services::git::client::path_argument(path),
+            crate::services::git::client::path_argument(&staged),
+        ) else {
+            return denied("cleanup worktree path is unsupported");
+        };
+        if !self.cleanup_path_missing(&staged) || !cleanup_matches(git, &job.tree, path) {
+            return changed("the cleanup staging path or original checkout changed");
         }
-        // Never force Git to remove the checkout, or remove the branch that retains its commits.
-        let _ = git.mutation(
+        let move_effect = git.mutation(
             repo,
-            &["worktree", "remove", "--", &path_arg],
+            &["worktree", "move", "--", &original, &staging],
             None,
             &operation.id,
             false,
         );
+        if move_effect.is_err() {
+            if definite_git_refusal(&move_effect)
+                && self.cleanup_path_missing(&staged)
+                && cleanup_matches(git, &job.tree, path)
+            {
+                return changed("Git refused to move the intact checkout");
+            }
+            return EffectOutcome::Unknown(
+                "the checkout could not be safely staged; no removal was attempted".into(),
+            );
+        }
+        let restore = || {
+            if !self.cleanup_path_missing(path)
+                || !cleanup_identity_matches(git, &job.tree, &staged)
+            {
+                return false;
+            }
+            let _ = git.mutation(
+                repo,
+                &["worktree", "move", "--", &staging, &original],
+                None,
+                &operation.id,
+                false,
+            );
+            self.cleanup_path_missing(&staged) && cleanup_identity_matches(git, &job.tree, path)
+        };
+        // Moving the physical checkout first fences path-based writers from the deletion target.
+        // Recheck the exact native witness, ref and all local data at the staged path.
+        if !cleanup_matches(git, &job.tree, &staged) || !self.cleanup_path_missing(path) {
+            return if restore() {
+                changed("the staged checkout had changed and was restored with its data")
+            } else {
+                EffectOutcome::Unknown("staged checkout retained for recovery".into())
+            };
+        }
+        let removal = git.mutation(
+            repo,
+            &["worktree", "remove", "--", &staging],
+            None,
+            &operation.id,
+            false,
+        );
+        if definite_git_refusal(&removal) && cleanup_matches(git, &job.tree, &staged) && restore() {
+            return changed("Git refused to remove the intact checkout");
+        }
         self.observe_cleanup(job, operation, git, repository)
+    }
+
+    fn cleanup_path_missing(&self, path: &Path) -> bool {
+        self.config.filesystem.as_ref().is_some_and(|fs| {
+            path.to_str()
+                .and_then(|path| fs.resolve(path, None).ok())
+                .is_some_and(|entry| {
+                    entry.entry_kind == EntryKind::Missing && entry.linked_ancestors.is_empty()
+                })
+        })
     }
 
     fn observe_cleanup(
@@ -1038,14 +1121,14 @@ impl GitService {
             {
                 return None;
             }
-            let entry = fs.resolve(&job.tree.path, None).ok()?;
-            if entry.entry_kind != EntryKind::Missing
-                || !entry.linked_ancestors.is_empty()
-                || git
-                    .worktrees(repo)
-                    .ok()?
-                    .iter()
-                    .any(|tree| self.same_worktree_path(Path::new(&tree.path), path))
+            let staged = cleanup_stage(path, &operation.id)?;
+            if !self.cleanup_path_missing(path)
+                || !self.cleanup_path_missing(&staged)
+                || git.worktrees(repo).ok()?.iter().any(|tree| {
+                    let registered = Path::new(&tree.path);
+                    self.same_worktree_path(registered, path)
+                        || self.same_worktree_path(registered, &staged)
+                })
                 || git
                     .resolve(repo, &job.tree.branch)
                     .ok()?

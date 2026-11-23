@@ -212,6 +212,8 @@ pub struct IndexEnv {
     /// Installed semantic language packs (items 24–27 register here).
     pub enrichers: RwLock<Vec<Arc<dyn SemanticEnricher>>>,
     pub package_semantics: std::sync::OnceLock<Arc<dyn SemanticCatalog>>,
+    /// The runtime's existing supervision wakeup after a derived index run commits.
+    pub run_queued: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>,
     pub settings: IndexSettings,
 }
 impl IndexEnv {
@@ -1275,8 +1277,21 @@ impl CommandHandler for IndexCoordinator {
                     worktree_id,
                     git_ref,
                     expected_source_revision,
-                } => {
+                } => (|| {
                     let bound_worktree = if assigned::applies(ctx) {
+                        let checkout = assigned::worktree_for_write(tx, ctx)?.ok_or_else(|| {
+                            refuse(DomainErrorCode::PermissionDenied, "worktree_custody", None)
+                        })?;
+                        if !command
+                            .prepared::<overlay::Observed>()
+                            .is_some_and(|observed| assigned::capture_matches(observed, &checkout))
+                        {
+                            return Err(refuse(
+                                DomainErrorCode::ViewUnavailable,
+                                "worktree_view",
+                                Some(&checkout.id),
+                            ));
+                        }
                         Some(
                             assigned::refresh_target(
                                 tx.git(),
@@ -1312,7 +1327,7 @@ impl CommandHandler for IndexCoordinator {
                         ),
                         None => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
                     }
-                }
+                })(),
                 _ => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
             },
             _ => Err(refuse(
@@ -1355,18 +1370,20 @@ pub(crate) fn retire_git_worktree(
     project: &ProjectId,
 ) -> Result<(), StorageError> {
     let indexed = assigned::indexed_id(tree);
-    if let Some(overlay) = tx.indexing().overlay_for(&tree.repository_id, &indexed)?
-        && overlay.state != OVERLAY_UNAVAILABLE
-    {
-        let revision = overlay::retire_overlay(tx, &overlay, "the worktree was removed")?;
-        history(
-            tx,
-            actor,
-            Some(project),
-            (OVERLAY_AGGREGATE, &overlay.id, revision),
-            "IndexOverlayRetired",
-            json!({"worktreeId": indexed, "gitWorktreeId": tree.id}),
-        )?;
+    if let Some(overlay) = tx.indexing().overlay_for(&tree.repository_id, &indexed)? {
+        if overlay.state == OVERLAY_UNAVAILABLE {
+            tx.graph().invalidate_graph_pins_for_overlay(&overlay.id)?;
+        } else {
+            let revision = overlay::retire_overlay(tx, &overlay, "the worktree was removed")?;
+            history(
+                tx,
+                actor,
+                Some(project),
+                (OVERLAY_AGGREGATE, &overlay.id, revision),
+                "IndexOverlayRetired",
+                json!({"worktreeId": indexed, "gitWorktreeId": tree.id}),
+            )?;
+        }
     }
     let mut rows = tx.indexing().worktrees(&tree.repository_id)?;
     let before = rows.len();

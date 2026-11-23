@@ -49,14 +49,79 @@ fn live(
     assignment
         .zip(session)
         .is_some_and(|(assignment, session)| {
-            assignment.state.is_live()
-                && Some(&assignment.root_id) == ctx.root_id()
-                && Some(&assignment.session_id) == ctx.session_id()
-                && !session.closed()
-                && &session.agent_id == ctx.principal()
-                && session.project_id.as_ref() == ctx.project_id()
-                && session.root_id.as_ref() == ctx.root_id()
+            crate::services::git::context::live_assignment(&assignment, &session, ctx)
         })
+}
+
+/// Check exact custody and live lineage against the snapshot that will publish a query.
+pub(crate) fn live_custody(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+) -> Result<bool, StorageError> {
+    let Some((assignment, session)) = ctx.assignment_id().zip(ctx.session_id()) else {
+        return Ok(false);
+    };
+    let Some(tree) = owned(read.git(), ctx)? else {
+        return Ok(false);
+    };
+    let work = read.work().work(&tree.work_id)?;
+    Ok(live(
+        read.runs().assignment(assignment)?,
+        read.sessions().session(session)?,
+        ctx,
+    ) && work.is_some_and(|work| Some(&work.project_id) == ctx.project_id())
+        && read
+            .work()
+            .work_repositories(&tree.work_id)?
+            .contains(&tree.repository_id)
+        && read
+            .projects()
+            .repository_projects(&tree.repository_id)?
+            .iter()
+            .any(|project| Some(project) == ctx.project_id()))
+}
+
+pub(crate) fn worktree_for_write(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+) -> Result<Option<StoredGitWorktree>, StorageError> {
+    let Some((assignment, session)) = ctx.assignment_id().zip(ctx.session_id()) else {
+        return Ok(None);
+    };
+    let Some(tree) = owned(tx.git(), ctx)? else {
+        return Ok(None);
+    };
+    if !live(
+        tx.runs().assignment(assignment)?,
+        tx.sessions().session(session)?,
+        ctx,
+    ) || tx
+        .work()
+        .work(&tree.work_id)?
+        .is_none_or(|work| Some(&work.project_id) != ctx.project_id())
+        || !tx
+            .work()
+            .work_repositories(&tree.work_id)?
+            .contains(&tree.repository_id)
+        || !tx
+            .projects()
+            .repository_projects(&tree.repository_id)?
+            .iter()
+            .any(|project| Some(project) == ctx.project_id())
+    {
+        return Ok(None);
+    }
+    Ok(Some(tree))
+}
+
+pub(crate) fn capture_matches(observed: &overlay::Observed, checkout: &StoredGitWorktree) -> bool {
+    checkout.location.is_some()
+        && observed
+            .0
+            .as_ref()
+            .ok()
+            .and_then(|capture| capture.owned_checkout.as_ref())
+            == Some(checkout)
 }
 
 pub(crate) fn refresh_target(
@@ -123,27 +188,21 @@ pub(crate) fn ensure_current(
         deadline_ms: Some(deadline),
         cancellation: cancellation.cloned(),
     };
-    let assignment = ctx
-        .assignment_id()
-        .cloned()
-        .ok_or(StorageError::ScopeDenied)?;
-    let session = ctx.session_id().cloned().ok_or(StorageError::ScopeDenied)?;
-    let current = read_snapshot(&*env.store, &options, |read| {
-        Ok(owned(read.git(), ctx)?.is_some_and(|tree| {
-            &tree.repository_id == repository && &indexed_id(&tree) == worktree
-        }) && live(
-            read.runs().assignment(&assignment)?,
-            read.sessions().session(&session)?,
-            ctx,
-        ))
-    })?;
-    if !current {
-        return Err(StorageError::ScopeDenied.into());
-    }
+    let checkout = read_snapshot(&*env.store, &options, |read| {
+        if !live_custody(read, ctx)? {
+            return Ok(None);
+        }
+        Ok(owned(read.git(), ctx)?
+            .filter(|tree| &tree.repository_id == repository && &indexed_id(tree) == worktree))
+    })?
+    .ok_or_else(|| Refusal::new(DomainErrorCode::PermissionDenied, "worktree_custody", None))?;
     loop {
         let observed = overlay::observe(env, ctx, repository, worktree, &stopped);
         if stopped() {
             return Err(StorageError::Cancelled.into());
+        }
+        if !capture_matches(&observed, &checkout) {
+            return Err(unavailable().into());
         }
         let capture = observed
             .0
@@ -156,7 +215,7 @@ pub(crate) fn ensure_current(
             ctx,
             authorization,
             (repository, worktree),
-            (&assignment, &session),
+            &checkout,
             (deadline, cancellation),
             observed,
         )?;
@@ -178,6 +237,17 @@ pub(crate) fn ensure_current(
                     if current.is_some_and(|row| {
                         row.state == OVERLAY_READY && row.capture_digest == capture
                     }) {
+                        let host = env.host_context(None);
+                        let git = super::worker::git_for(env, &host, &stopped);
+                        crate::services::git::location::require_worktree_location(
+                            &git,
+                            &checkout.path,
+                            checkout.location.as_ref().ok_or_else(&unavailable)?,
+                        )
+                        .map_err(|_| unavailable())?;
+                        if stopped() {
+                            return Err(StorageError::Cancelled.into());
+                        }
                         return Ok(());
                     }
                     // Another request had already started this run. Check the checkout again
@@ -196,31 +266,23 @@ fn queue_current(
     ctx: &InvocationContext,
     authorization: &crate::ports::Authorization,
     (repository, worktree): (&Id, &Id),
-    (assignment, session): (&crate::protocol::AssignmentId, &Id),
+    checkout: &StoredGitWorktree,
     (deadline, cancellation): (i64, Option<&Cancellation>),
     observed: overlay::Observed,
 ) -> Result<Id, Failure> {
-    let (env2, ctx2, auth, repo, tree, assignment, session) = (
+    let (env2, ctx2, auth, repo, tree, checkout) = (
         env.clone(),
         ctx.clone(),
         authorization.clone(),
         repository.clone(),
         worktree.clone(),
-        assignment.clone(),
-        session.clone(),
+        checkout.clone(),
     );
     let mut write_options = WriteOptions::host_state();
     write_options.deadline_ms = Some(deadline);
     write_options.cancellation = cancellation.cloned();
     let run = run_write(&*env.store, write_options, move |tx| {
-        let owned = owned(tx.git(), &ctx2)?
-            .is_some_and(|current| current.repository_id == repo && indexed_id(&current) == tree);
-        if !owned
-            || !live(
-                tx.runs().assignment(&assignment)?,
-                tx.sessions().session(&session)?,
-                &ctx2,
-            )
+        if worktree_for_write(tx, &ctx2)?.as_ref() != Some(&checkout)
             || !crate::authority::authorization_holds_in(tx, &ctx2, &auth)?
         {
             return Err(StorageError::ScopeDenied);
@@ -248,8 +310,13 @@ fn queue_current(
     match run {
         DomainDecision::Applied {
             result: OperationResult::IndexingRefreshOverlay { value },
+        } => {
+            if let Some(notify) = env.run_queued.get() {
+                notify();
+            }
+            Ok(value.id)
         }
-        | DomainDecision::NoChange {
+        DomainDecision::NoChange {
             result: OperationResult::IndexingRefreshOverlay { value },
         } => Ok(value.id),
         _ => Err(Refusal::new(

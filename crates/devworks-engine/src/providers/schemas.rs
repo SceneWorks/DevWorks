@@ -537,7 +537,15 @@ fn assignment_worktree(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
 ) -> Result<Option<InvocationContext>, StorageError> {
-    match devworks_core::services::git::context::assignment_worktree(read, ctx) {
+    use devworks_core::services::git::context::{AssignmentCheckout, assignment_worktree};
+    match assignment_worktree(
+        read,
+        ctx,
+        AssignmentCheckout {
+            any_for_visibility: true,
+            ..Default::default()
+        },
+    ) {
         Err(StorageError::ScopeDenied) => Ok(None),
         result => result,
     }

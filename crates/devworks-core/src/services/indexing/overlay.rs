@@ -76,6 +76,8 @@ pub struct Observed(pub Result<Snapshot, String>);
 pub struct Snapshot {
     /// The checkout the build reads: the worktree, or the repository's for a ref overlay.
     pub worktree_path: String,
+    /// The durable Git custody observed with these source bytes, when Git owns this checkout.
+    pub owned_checkout: Option<StoredGitWorktree>,
     pub base_generation: Id,
     pub base_oid: String,
     pub head_oid: Option<String>,
@@ -145,13 +147,65 @@ pub fn observe(
 ) -> Observed {
     Observed(observe_inner(env, repository, worktree, stop))
 }
+fn registered_checkout(
+    git: &dyn GitRead,
+    path: &str,
+) -> Result<Option<StoredGitWorktree>, StorageError> {
+    let exact = git.git_worktree_at(path)?;
+    if exact.is_some() || !cfg!(windows) || path.starts_with(r"\\?\") {
+        return Ok(exact);
+    }
+    let verbatim = if let Some(unc) = path.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{unc}")
+    } else {
+        format!(r"\\?\{path}")
+    };
+    git.git_worktree_at(&verbatim)
+}
+
+fn verify_owned_checkout(
+    git: &crate::services::git::client::Git<'_>,
+    checkout: &StoredGitWorktree,
+) -> Result<(), String> {
+    let changed = || "the owned worktree changed physical identity".to_owned();
+    if checkout.removed || checkout.pending_operation_id.is_some() {
+        return Err(changed());
+    }
+    match checkout.location.as_ref() {
+        Some(witness) => {
+            crate::services::git::location::require_worktree_location(git, &checkout.path, witness)
+                .map_err(|_| changed())
+        }
+        // Retain support for older unassigned registrations with no native custody witness.
+        None if checkout.owner_assignment_id.is_none() => Ok(()),
+        None => Err(changed()),
+    }
+}
+
+fn owner_is_current(
+    checkout: &StoredGitWorktree,
+    assignment: Option<StoredAssignment>,
+    session: Option<StoredSession>,
+) -> bool {
+    assignment
+        .zip(session)
+        .is_some_and(|(assignment, session)| {
+            assignment.state.is_live()
+                && checkout.owner_assignment_id.as_ref() == Some(&assignment.id)
+                && checkout.owner_root_id.as_ref() == Some(&assignment.root_id)
+                && checkout.owner_root_id.as_ref() == session.root_id.as_ref()
+                && session.agent_id == checkout.owner
+                && !session.closed()
+        })
+}
+
 fn observe_inner(
     env: &IndexEnv,
     repository: &Id,
     worktree: &Id,
     stop: &(dyn Fn() -> bool + Sync),
 ) -> Result<Snapshot, String> {
-    let (wt, base, cfg) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+    let (wt, base, cfg, checkout) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
         let wt = s
             .indexing()
             .worktrees(repository)?
@@ -165,7 +219,25 @@ fn observe_inner(
             None => None,
         };
         let cfg = effective_config(s.indexing(), s.projects(), repository)?;
-        Ok((wt, base, cfg))
+        let checkout = wt
+            .as_ref()
+            .map(|row| registered_checkout(s.git(), &row.path))
+            .transpose()?
+            .flatten();
+        if let Some(row) = &checkout
+            && let Some(owner) = &row.owner_assignment_id
+        {
+            let assignment = s.runs().assignment(owner)?;
+            let session = assignment
+                .as_ref()
+                .map(|assignment| s.sessions().session(&assignment.session_id))
+                .transpose()?
+                .flatten();
+            if !owner_is_current(row, assignment, session) {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        Ok((wt, base, cfg, checkout))
     })
     .map_err(|e| e.to_string())?;
     let wt = wt.ok_or("the worktree is not a recorded worktree of this repository")?;
@@ -186,6 +258,12 @@ fn observe_inner(
         Ok(None) => return Err("the worktree is no longer a checkout".into()),
         Err(e) => return Err(format!("the worktree cannot be read: {e}")),
     }
+    if let Some(checkout) = &checkout {
+        if &checkout.repository_id != repository {
+            return Err("the owned worktree belongs to another registration".into());
+        }
+        verify_owned_checkout(&git, checkout)?;
+    }
     let head = git.head(&root).map_err(|e| e.to_string())?;
     let head_ref = git.branch(&root).map_err(|e| e.to_string())?;
     let against = head.clone().unwrap_or_else(|| {
@@ -195,9 +273,15 @@ fn observe_inner(
             EMPTY_TREE_SHA1.into()
         }
     });
-    let (changes, refused) = git
-        .local_changes(&root, &against)
-        .map_err(|e| e.to_string())?;
+    let (changes, refused) = if checkout
+        .as_ref()
+        .is_some_and(|tree| tree.location.is_some())
+    {
+        git.reviewed_local_changes(&root, &against)
+    } else {
+        git.local_changes(&root, &against)
+    }
+    .map_err(|e| e.to_string())?;
     if changes.len() > MAX_LOCAL_CHANGES {
         return Err(format!(
             "the worktree has {} changed paths (more than {MAX_LOCAL_CHANGES}); exclude generated files or commit them",
@@ -261,8 +345,12 @@ fn observe_inner(
             l.previous.as_deref().unwrap_or("")
         ));
     }
+    if let Some(checkout) = &checkout {
+        verify_owned_checkout(&git, checkout)?;
+    }
     Ok(Snapshot {
         worktree_path: wt.path.clone(),
+        owned_checkout: checkout,
         base_generation: base.id.clone(),
         base_oid: base.source_digest.clone(),
         head_oid: head,
@@ -335,6 +423,7 @@ fn ref_snapshot(env: &IndexEnv, o: &StoredOverlay) -> Result<Snapshot, String> {
     let base = base.ok_or("the repository has no published baseline")?;
     Ok(Snapshot {
         worktree_path: location.ok_or("the repository is not registered")?,
+        owned_checkout: None,
         base_generation: base.id.clone(),
         base_oid: base.source_digest.clone(),
         head_oid: o.head_oid.clone(),
@@ -743,6 +832,7 @@ pub(crate) fn retire_overlay(
     o: &StoredOverlay,
     reason: &str,
 ) -> Result<i64, StorageError> {
+    tx.graph().invalidate_graph_pins_for_overlay(&o.id)?;
     end_overlay(tx, o, OVERLAY_UNAVAILABLE, reason)
 }
 
@@ -1280,6 +1370,13 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         super::worker::view_links(s.indexing(), &repo_id, &composed_layers)
     })
     .map_err(Stop::storage)?;
+    if let Some(checkout) = &snap.owned_checkout {
+        verify_owned_checkout(
+            &super::worker::git_for(&env, &env.host_context(None), &stop),
+            checkout,
+        )
+        .map_err(|error| Stop::det("checkout_changed", error))?;
+    }
     let view_id = env.ids.next_id(IdKind::View);
     let (o_id, base_gen, repo2) = (
         overlay_id.clone(),
@@ -1290,6 +1387,18 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     let ttl = env.settings.overlay_ttl_ms;
     let semantic_env = env.clone();
     let published = exec.fenced(WritePriority::Authoritative, move |tx, r| {
+        if let Some(checkout) = &snap2.owned_checkout {
+            if tx.git().git_worktree(&checkout.id)?.as_ref() != Some(checkout) {
+                return Ok(Err("the owned worktree custody changed during the build"));
+            }
+            if let Some(owner) = &checkout.owner_assignment_id {
+                let assignment = tx.runs().assignment(owner)?;
+                let session = assignment.as_ref().map(|assignment| tx.sessions().session(&assignment.session_id)).transpose()?.flatten();
+                if !owner_is_current(checkout, assignment, session) {
+                    return Ok(Err("the assigned checkout owner changed during the build"));
+                }
+            }
+        }
         let config = effective_config_tx(tx, &repo2)?;
         let projects = tx.projects().repository_projects(&repo2)?;
         if config.digest != cfg.digest || super::worker::semantic::registry_binding(&semantic_env, tx.packages(), &config, &projects)? != semantic_binding {

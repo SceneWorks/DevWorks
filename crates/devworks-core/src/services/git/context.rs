@@ -94,10 +94,19 @@ pub(crate) fn live_assignment(
         && session.root_id.as_ref() == ctx.root_id()
 }
 
+/// Operation targets narrow current custody. A target never grants custody by itself.
+#[derive(Default)]
+pub struct AssignmentCheckout<'a> {
+    pub repository: Option<&'a Id>,
+    pub worktree: Option<&'a Id>,
+    pub any_for_visibility: bool,
+}
+
 /// Resolve a normal launcher context from current assignment custody, without trusting tool input.
 pub fn assignment_worktree(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
+    target: AssignmentCheckout<'_>,
 ) -> Result<Option<InvocationContext>, StorageError> {
     let Some(assignment_id) = ctx
         .assignment_id()
@@ -151,6 +160,12 @@ pub fn assignment_worktree(
                 || row.owner_assignment_id.as_ref() != ctx.assignment_id()
                 || !members.contains(&row.repository_id)
                 || !repositories.contains(&row.repository_id)
+                || target
+                    .repository
+                    .is_some_and(|repository| repository != &row.repository_id)
+                || target.worktree.is_some_and(|id| {
+                    id != &row.id && id != &crate::services::indexing::assigned::indexed_id(row)
+                })
             {
                 continue;
             }
@@ -163,6 +178,9 @@ pub fn assignment_worktree(
                 row.work_id.clone(),
                 row.ownership_revision,
             ));
+            if target.any_for_visibility {
+                return Ok(unique.map(|worktree| ctx.clone().bind_worktree(worktree)));
+            }
         }
         if page.len() < 64 {
             break;

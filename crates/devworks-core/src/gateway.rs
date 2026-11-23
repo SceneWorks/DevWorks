@@ -256,6 +256,7 @@ impl Gateway<'_> {
         &self,
         ctx: &InvocationContext,
         operation: &str,
+        input: &OperationInput,
         options: &ReadOptions,
     ) -> Result<Option<InvocationContext>, StorageError> {
         if !crate::services::indexing::assigned::applies(ctx)
@@ -269,7 +270,105 @@ impl Gateway<'_> {
             return Ok(None);
         }
         read_snapshot(self.store, options, |read| {
-            crate::services::git::context::assignment_worktree(read, ctx)
+            use crate::operations::{git, indexing, repositories};
+            use crate::protocol::data::{GitCommand, IndexCommand, ViewSelection};
+            use crate::services::{git::context::AssignmentCheckout, graph};
+            let (repository, worktree) = match input {
+                OperationInput::Indexing(indexing::Input::RefreshOverlay(request)) => {
+                    let IndexCommand::RefreshOverlay {
+                        repository_id,
+                        worktree_id,
+                        ..
+                    } = &request.command
+                    else {
+                        return Ok(None);
+                    };
+                    (Some(repository_id.clone()), worktree_id.clone())
+                }
+                OperationInput::Indexing(indexing::Input::Status(request)) => {
+                    if let Some(id) = &request.overlay_id {
+                        let Some(overlay) = read.indexing().overlay(id)? else {
+                            return Ok(None);
+                        };
+                        let Some(worktree) = overlay.worktree_id else {
+                            return Ok(None);
+                        };
+                        (Some(overlay.repository_id), Some(worktree))
+                    } else {
+                        (request.repository_id.clone(), None)
+                    }
+                }
+                OperationInput::Git(git::Input::Cleanup(request)) => {
+                    let GitCommand::Cleanup { worktree_id, .. } = &request.command else {
+                        return Ok(None);
+                    };
+                    (None, Some(worktree_id.clone()))
+                }
+                operation => {
+                    let (view, repository, cursor) =
+                        if let Some(request) = graph::graph_input(operation) {
+                            (
+                                request.view.as_ref(),
+                                graph::target_repository(&request.query),
+                                request.cursor.as_deref(),
+                            )
+                        } else if let OperationInput::Repositories(repositories::Input::Nodes(
+                            request,
+                        )) = operation
+                        {
+                            (
+                                request.views.as_ref(),
+                                Some(&request.repository_id),
+                                request.page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                            )
+                        } else {
+                            return Ok(None);
+                        };
+                    let cursor_pin = cursor.and_then(graph::cursor_pin);
+                    let pin = cursor_pin.as_ref().or(match view {
+                        Some(ViewSelection::Pinned { pin_id }) => Some(pin_id),
+                        _ => None,
+                    });
+                    let views = if let Some(pin_id) = pin {
+                        read.graph()
+                            .graph_pin(pin_id)?
+                            .filter(|pin| pin.scope.views.len() == 1)
+                            .map(|pin| pin.scope.views[0].view_id.clone())
+                    } else {
+                        match view {
+                            Some(
+                                ViewSelection::Published { .. }
+                                | ViewSelection::SchemaPublished { .. },
+                            ) => return Ok(None),
+                            Some(ViewSelection::Exact { view_ids }) if view_ids.len() == 1 => {
+                                Some(view_ids[0].clone())
+                            }
+                            _ => None,
+                        }
+                    };
+                    let worktree = views
+                        .as_ref()
+                        .map(|view| read.indexing().view(view))
+                        .transpose()?
+                        .flatten()
+                        .and_then(|view| {
+                            serde_json::from_value::<Id>(view.coverage["worktreeId"].clone()).ok()
+                        });
+                    if (pin.is_some() || views.is_some()) && worktree.is_none() {
+                        return Ok(None);
+                    }
+                    (repository.cloned(), worktree)
+                }
+            };
+            crate::services::git::context::assignment_worktree(
+                read,
+                ctx,
+                AssignmentCheckout {
+                    repository: repository.as_ref(),
+                    worktree: worktree.as_ref(),
+                    any_for_visibility: false,
+                },
+            )
         })
     }
 
@@ -311,18 +410,19 @@ impl Gateway<'_> {
                 "query admitted with a command key".into(),
             ));
         };
-        let worktree_context = match self.assignment_worktree(ctx, operation, &options) {
-            Ok(context) => context,
-            Err(error) => {
-                let (code, retry) = match error {
-                    StorageError::ScopeDenied => {
-                        (DomainErrorCode::PermissionDenied, RetryAdvice::Never)
-                    }
-                    _ => storage_fault(&error),
-                };
-                return Ok(self.query_fault(query_id, code, retry));
-            }
-        };
+        let worktree_context =
+            match self.assignment_worktree(ctx, operation, &decoded.input, &options) {
+                Ok(context) => context,
+                Err(error) => {
+                    let (code, retry) = match error {
+                        StorageError::ScopeDenied => {
+                            (DomainErrorCode::PermissionDenied, RetryAdvice::Never)
+                        }
+                        _ => storage_fault(&error),
+                    };
+                    return Ok(self.query_fault(query_id, code, retry));
+                }
+            };
         let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let request = AuthorityRequest {
             descriptor: decoded.descriptor,
@@ -399,11 +499,19 @@ impl Gateway<'_> {
         });
         // Publication point: authority that was revoked or narrowed while the answer was being
         // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
+        let scoped_worktree = ctx.worktree().is_some()
+            && crate::services::indexing::assigned::applies(ctx)
+            && (crate::services::graph::OPERATIONS.contains(&operation)
+                || operation == "indexing.status");
         if matches!(answered, Ok(Some((Ok(_), _))))
-            && (!authorization.fences().is_empty() || !authorization.authority_grants().is_empty())
+            && (scoped_worktree
+                || !authorization.fences().is_empty()
+                || !authorization.authority_grants().is_empty())
         {
-            let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
-                crate::authority::authorization_holds(s, &authorization)
+            let holds = read_snapshot(self.store, &options, |s| {
+                Ok(crate::authority::authorization_holds(s, &authorization)?
+                    && (!scoped_worktree
+                        || crate::services::indexing::assigned::live_custody(s, ctx)?))
             });
             if !matches!(holds, Ok(true)) {
                 return Ok(self.query_fault(
@@ -631,6 +739,7 @@ impl Gateway<'_> {
         let worktree_context = match self.assignment_worktree(
             ctx,
             operation,
+            &decoded.input,
             &ReadOptions {
                 deadline_ms: options.deadline_ms,
                 cancellation: options.cancellation.clone(),

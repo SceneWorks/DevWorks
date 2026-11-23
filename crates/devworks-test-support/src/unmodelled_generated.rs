@@ -1099,6 +1099,9 @@ impl GitRead for Unmodelled {
     fn git_worktree(&self, _: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
         Ok(None)
     }
+    fn git_worktree_at(&self, _: &str) -> Result<Option<StoredGitWorktree>, StorageError> {
+        unmodelled()
+    }
     fn git_repository_worktrees(
         &self,
         _: &Id,
@@ -1546,6 +1549,9 @@ impl GraphRepository for Unmodelled {
         unmodelled()
     }
     fn invalidate_graph_pins_for_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn invalidate_graph_pins_for_overlay(&mut self, _: &Id) -> Result<(), StorageError> {
         unmodelled()
     }
     fn insert_graph_source_capture(

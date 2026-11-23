@@ -33,6 +33,61 @@ impl AuthorityPort for NativeAuthority {
     }
 }
 
+#[derive(Default)]
+struct CleanupHost {
+    on_staging: std::sync::Mutex<Option<StageEdit>>,
+}
+
+enum StageEdit {
+    Ignored,
+    Replacement(PathBuf),
+}
+
+impl devworks_core::ports::process::ProcessHost for CleanupHost {
+    fn platform(&self) -> &'static str {
+        NativeProcessHost.platform()
+    }
+    fn environment(&self) -> Vec<(String, String)> {
+        NativeProcessHost.environment()
+    }
+    fn current_identity(&self) -> Option<devworks_core::ports::process::NativeIdentity> {
+        NativeProcessHost.current_identity()
+    }
+    fn probe(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.probe(identity)
+    }
+    fn terminate(
+        &self,
+        identity: &devworks_core::ports::process::NativeIdentity,
+    ) -> devworks_core::ports::process::Probe {
+        NativeProcessHost.terminate(identity)
+    }
+    fn spawn(
+        &self,
+        spec: &devworks_core::ports::process::ProcessSpec,
+    ) -> Result<
+        Box<dyn devworks_core::ports::process::ProcessTree>,
+        devworks_core::ports::process::ProcessError,
+    > {
+        if let Some(path) = spec.cwd.as_ref().filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".devworks-cleanup-"))
+        }) && let Some(edit) = self.on_staging.lock().unwrap().take()
+        {
+            std::fs::write(path.join("private.tmp"), "late staged data").unwrap();
+            if let StageEdit::Replacement(original) = edit {
+                std::fs::create_dir(&original).unwrap();
+                std::fs::write(original.join("untouched.txt"), "unrelated replacement").unwrap();
+            }
+        }
+        NativeProcessHost.spawn(spec)
+    }
+}
+
 fn operation(reply: CommandReply<DomainDecision>) -> OperationId {
     match reply {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
@@ -93,6 +148,8 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "baseline"]);
     let mut composed = composition(&h, store.clone(), "git");
+    let process_host = Arc::new(CleanupHost::default());
+    composed.process_host = process_host.clone();
     composed.git = Some(GitComposition {
         config: GitConfig {
             roots: vec![RegisteredGitRoot {
@@ -385,23 +442,71 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
         matches!(&denied, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::PermissionDenied),
         "{denied:?}"
     );
-    let edit = Path::new(&tree.path).join("src/lib.rs");
-    let mut last = None;
-    for name in ["first_unsaved_symbol", "second_unsaved_symbol"] {
-        std::fs::write(&edit, format!("pub fn {name}() {{}}\n")).unwrap();
-        let f = json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":name,"scope":{"kind":"Project","projectId":"project"},"current":true,
+    let checkout = Path::new(&tree.path);
+    let edit = checkout.join("src/lib.rs");
+    let graph_search = |name: &str| {
+        json!({"protocol":"1.0-draft.1","schemaRevision":3,"queryId":name,"scope":{"kind":"Project","projectId":"project"},"current":true,
             "query":{"kind":"Search","selection":{"mode":"NodeList","text":name,"repositoryId":repository}},
-            "limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000}});
-        let (runtime, worker) = (app.clone(), worker.clone());
-        let answer = executor.block_on(async {
+            "limits":{"maxResults":100,"maxVisited":100000,"deadlineMs":30000}})
+    };
+    let run_search = |ctx: &InvocationContext, frame: Value| {
+        let (runtime, context) = (app.clone(), ctx.clone());
+        executor.block_on(async {
             tokio::task::spawn_blocking(move || {
                 runtime
-                    .query(&worker, "code.search", f.to_string().as_bytes())
+                    .query(&context, "code.search", frame.to_string().as_bytes())
                     .unwrap()
             })
             .await
             .unwrap()
-        });
+        })
+    };
+    let parked = checkout.with_extension("fixture-parked");
+    std::fs::rename(checkout, &parked).unwrap();
+    std::fs::create_dir_all(checkout.join("src")).unwrap();
+    std::fs::copy(parked.join(".git"), checkout.join(".git")).unwrap();
+    std::fs::write(&edit, "pub fn replaced_directory() {}\n").unwrap();
+    let replaced = run_search(&worker, graph_search("replaced_directory"));
+    assert!(
+        matches!(&replaced, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::ViewUnavailable),
+        "{replaced:?}"
+    );
+    let replaced = refresh(&worker, "replaced-checkout-refresh", &tree.id);
+    assert!(
+        matches!(&replaced, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::ViewUnavailable)
+        ),
+        "{replaced:?}"
+    );
+    std::fs::remove_dir_all(checkout).unwrap();
+    std::fs::rename(parked, checkout).unwrap();
+
+    git(&repo, &["config", "filter.capture-proof.clean", "exit 41"]);
+    let attributes = checkout.join(".gitattributes");
+    std::fs::write(&attributes, "src/lib.rs filter=capture-proof\n").unwrap();
+    std::fs::write(&edit, "pub fn should_not_capture() {}\n").unwrap();
+    let refused_capture = run_search(&worker, graph_search("should_not_capture"));
+    assert!(
+        matches!(&refused_capture, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::ViewUnavailable),
+        "{refused_capture:?}"
+    );
+    let mut published = graph_search("baseline");
+    published.as_object_mut().unwrap().remove("current");
+    published["view"] = json!({"kind":"Published","repositoryIds":[repository]});
+    let published = run_search(&worker, published);
+    assert!(
+        matches!(&published, DomainQueryReply::Result { .. }),
+        "{published:?}"
+    );
+    std::fs::remove_file(attributes).unwrap();
+    git(&repo, &["config", "--unset", "filter.capture-proof.clean"]);
+
+    let mut last = None;
+    let mut historical = None;
+    let mut historical_exact = None;
+    for name in ["first_unsaved_symbol", "second_unsaved_symbol"] {
+        std::fs::write(&edit, format!("pub fn {name}() {{}}\n")).unwrap();
+        let answer = run_search(&worker, graph_search(name));
         let DomainQueryReply::Result {
             result: OperationResult::CodeSearch { value },
             ..
@@ -422,10 +527,33 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
         )), "{value:?}");
         if let Some((prior, _)) = &last {
             assert_ne!(&view.views[0].view_id, prior);
+        } else {
+            let mut exact = graph_search(name);
+            exact.as_object_mut().unwrap().remove("current");
+            exact["view"] = json!({"kind":"Exact","viewIds":[view.views[0].view_id]});
+            historical_exact = Some((view.views[0].view_id.clone(), exact.clone()));
+            let answer = run_search(&human, exact);
+            let DomainQueryReply::Result {
+                result: OperationResult::CodeSearch { value },
+                ..
+            } = answer
+            else {
+                panic!("{answer:?}")
+            };
+            let mut retained = graph_search(name);
+            retained.as_object_mut().unwrap().remove("current");
+            retained["view"] = json!({"kind":"Pinned","pinId":value.view.unwrap().pin_id});
+            historical = Some(retained);
         }
         last = Some((view.views[0].view_id.clone(), view.pin_id));
     }
-    let (own_view, pin) = last.unwrap();
+    let historical = historical.unwrap();
+    let before_removal = run_search(&human, historical.clone());
+    assert!(
+        matches!(before_removal, DomainQueryReply::Result { .. }),
+        "{before_removal:?}"
+    );
+    let (own_view, _) = last.unwrap();
     let own = overlays(status(&worker, None));
     assert_eq!(own.current_view_ids.0, vec![own_view.clone()]);
     let own_overlay = own.overlays.unwrap().0.remove(0);
@@ -438,6 +566,50 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
             .len(),
         1
     );
+    let retire = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":"retire-retained",
+        "body":{"kind":"indexing.retire_view","viewId":own_overlay.overlay_id,"expectedRevision":own_overlay.revision}});
+    let retired = app
+        .command(
+            &human,
+            "indexing.retire_view",
+            retire.to_string().as_bytes(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&retired, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })),
+        "{retired:?}"
+    );
+    assert_refresh(refresh(&worker, "reactivate-retired-overlay", &tree.id));
+    let recovered = run_search(&worker, graph_search("second_unsaved_symbol"));
+    let DomainQueryReply::Result {
+        result: OperationResult::CodeSearch { value },
+        ..
+    } = recovered
+    else {
+        panic!("{recovered:?}")
+    };
+    let recovered = value.view.unwrap();
+    assert_ne!(recovered.views[0].view_id, own_view);
+    let (own_view, pin) = (recovered.views[0].view_id.clone(), recovered.pin_id);
+    let (historical_view, historical_exact) = historical_exact.unwrap();
+    read(&*store, |s| {
+        assert!(s.indexing().view(&historical_view)?.is_some());
+        Ok(())
+    });
+    let exact_after_reactivation = run_search(&worker, historical_exact);
+    assert!(
+        matches!(&exact_after_reactivation, DomainQueryReply::Rejected { fault, .. }
+        if fault.code == DomainErrorCode::ViewUnavailable),
+        "{exact_after_reactivation:?}"
+    );
+    let after_reactivation = run_search(&human, historical.clone());
+    assert!(
+        matches!(&after_reactivation, DomainQueryReply::Rejected { fault, .. }
+        if fault.code == DomainErrorCode::ViewUnavailable),
+        "{after_reactivation:?}"
+    );
+
     let stale = worker.clone().with_session(id("stale-session"));
     let stale_status = status(&stale, None);
     assert!(
@@ -524,14 +696,15 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
         );
     }
 
-    let cleanup = |target: &StoredGitWorktree, key: &str| {
+    let cleanup_from = |ctx: &InvocationContext, target: &StoredGitWorktree, key: &str| {
         let frame = json!({"protocol":"1.0-draft.1","requestKey":key,"command":{
             "kind":"Cleanup","worktreeId":target.id,
             "expectedOwnershipRevision":target.ownership_revision.to_string(),"expectedHead":target.head
         }});
-        app.command(&worker, "git.cleanup", frame.to_string().as_bytes())
+        app.command(ctx, "git.cleanup", frame.to_string().as_bytes())
             .unwrap()
     };
+    let cleanup = |target: &StoredGitWorktree, key: &str| cleanup_from(&worker, target, key);
     let sibling_removed = cleanup(&sibling_tree, "sibling-cleanup");
     assert!(
         matches!(&sibling_removed,
@@ -554,6 +727,53 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
     assert_eq!(done.state, OperationState::Failed, "{done:?}");
     assert_eq!(std::fs::read_to_string(&ignored).unwrap(), "local data");
     std::fs::remove_file(&ignored).unwrap();
+    for (set, clear, key) in [
+        (
+            "--assume-unchanged",
+            "--no-assume-unchanged",
+            "assume-unchanged",
+        ),
+        ("--skip-worktree", "--no-skip-worktree", "skip-worktree"),
+    ] {
+        let checkout = Path::new(&tree.path);
+        git(checkout, &["update-index", set, "--", "src/lib.rs"]);
+        let local = format!("pub fn hidden_{}() {{}}\n", key.replace('-', "_"));
+        std::fs::write(&edit, &local).unwrap();
+        let refused = operation(cleanup(&tree, key));
+        let done = executor.block_on(settled(&*store, &refused));
+        assert_eq!(done.state, OperationState::Failed, "{done:?}");
+        assert_eq!(std::fs::read_to_string(&edit).unwrap(), local);
+        git(checkout, &["update-index", clear, "--", "src/lib.rs"]);
+        std::fs::write(&edit, baseline).unwrap();
+    }
+    git(checkout, &["checkout", "--detach", &tree.head.hex]);
+    let detached = operation(cleanup(&tree, "detached-head"));
+    let done = executor.block_on(settled(&*store, &detached));
+    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert!(checkout.is_dir());
+    git(
+        checkout,
+        &["checkout", tree.branch.strip_prefix("refs/heads/").unwrap()],
+    );
+
+    let path = checkout.to_str().unwrap();
+    git(&repo, &["worktree", "lock", "--", path]);
+    let locked = operation(cleanup(&tree, "locked-worktree"));
+    let done = executor.block_on(settled(&*store, &locked));
+    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert!(checkout.is_dir());
+    git(&repo, &["worktree", "unlock", "--", path]);
+
+    *process_host.on_staging.lock().unwrap() = Some(StageEdit::Ignored);
+    let staged_dirty = operation(cleanup(&tree, "staged-ignored"));
+    let done = executor.block_on(settled(&*store, &staged_dirty));
+    assert_eq!(done.state, OperationState::Failed, "{done:?}");
+    assert_eq!(
+        std::fs::read_to_string(&ignored).unwrap_or_else(|error| panic!("{error}: {done:?}")),
+        "late staged data"
+    );
+    std::fs::remove_file(&ignored).unwrap();
+
     let cleaned = operation(cleanup(&tree, "cleaned"));
     let done = executor.block_on(settled(&*store, &cleaned));
     assert_eq!(done.state, OperationState::ObservedComplete, "{done:?}");
@@ -567,6 +787,20 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
     );
     assert!(!Path::new(&tree.path).exists());
     assert!(inventory.selected_builtins(&worker).unwrap().is_empty());
+    let current = run_search(&worker, graph_search("baseline"));
+    let DomainQueryReply::Result {
+        result: OperationResult::CodeSearch { value },
+        ..
+    } = current
+    else {
+        panic!("{current:?}")
+    };
+    assert!(value.view.unwrap().views[0].snapshot.worktree_id.is_none());
+    let retired = run_search(&human, historical);
+    assert!(
+        matches!(&retired, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::ViewUnavailable),
+        "{retired:?}"
+    );
     let missing = status(&worker, None);
     assert!(
         matches!(&missing, DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::PermissionDenied),
@@ -606,6 +840,33 @@ fn assigned_native_graph_refreshes_and_cleanup_retires_exact_worktree() {
         )),
         "{retired:?}"
     );
+    let sibling_checkout = PathBuf::from(&sibling_tree.path);
+    std::fs::write(sibling_checkout.join("src/lib.rs"), baseline).unwrap();
+    *process_host.on_staging.lock().unwrap() =
+        Some(StageEdit::Replacement(sibling_checkout.clone()));
+    let staged = operation(cleanup_from(
+        &sibling,
+        &sibling_tree,
+        "replacement-during-cleanup",
+    ));
+    let unknown = executor.block_on(settled(&*store, &staged));
+    assert_eq!(unknown.state, OperationState::OutcomeUnknown, "{unknown:?}");
+    let digest = devworks_core::fingerprint::sha256_hex(staged.0.as_str().as_bytes());
+    let recovery = sibling_checkout.with_file_name(format!(".devworks-cleanup-{}", &digest[..24]));
+    assert_eq!(
+        std::fs::read_to_string(recovery.join("private.tmp")).unwrap(),
+        "late staged data"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sibling_checkout.join("untouched.txt")).unwrap(),
+        "unrelated replacement"
+    );
+    read(&*store, |s| {
+        let row = s.git().git_worktree(&sibling_tree.id)?.unwrap();
+        assert!(!row.removed);
+        assert_eq!(row.pending_operation_id.as_ref(), Some(&staged));
+        Ok(())
+    });
     executor.block_on(app.shutdown());
     std::fs::remove_dir_all(src).unwrap();
 }

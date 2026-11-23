@@ -92,9 +92,9 @@ struct ReadPrepared {
     source: Option<source::Source>,
     source_budget: Option<Budget>,
 }
-fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRequest, Failure> {
+pub(crate) fn graph_input(input: &OperationInput) -> Option<&GraphReadRequest> {
     use operations::code::Input::*;
-    let request = match query.input() {
+    match input {
         OperationInput::Code(
             Search(i)
             | Architecture(i)
@@ -114,7 +114,42 @@ fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRe
             | Publishers(i)
             | Snippet(i)
             | RepositoryDependencies(i),
-        ) => i.clone(),
+        ) => Some(i),
+        _ => None,
+    }
+}
+
+pub(crate) fn target_repository(query: &GraphQuery) -> Option<&Id> {
+    match query {
+        GraphQuery::Search { selection, .. } => selection.as_ref()?.repository_id.as_ref(),
+        GraphQuery::Source {
+            selection: Some(CodeSourceSelection::File { repository_id, .. }),
+            ..
+        }
+        | GraphQuery::RepositoryDependencies { repository_id } => Some(repository_id),
+        GraphQuery::Overview { repository_id } => repository_id.as_ref(),
+        GraphQuery::FileImpact {
+            repository_id,
+            selection,
+            ..
+        }
+        | GraphQuery::NodesByFile {
+            repository_id,
+            selection,
+            ..
+        } => selection
+            .as_ref()
+            .map(|target| &target.repository_id)
+            .or(repository_id.as_ref()),
+        _ => None,
+    }
+}
+
+fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRequest, Failure> {
+    if let Some(input) = graph_input(query.input()) {
+        return Ok(input.clone());
+    }
+    let request = match query.input() {
         OperationInput::Repositories(operations::repositories::Input::Nodes(i)) => {
             let scope = i.scope.clone().unwrap_or_else(|| {
                 ctx.project_id()
@@ -230,9 +265,6 @@ impl QueryHandler for GraphService {
                 requested = Some(ViewSelection::Pinned { pin_id });
             }
             let current_worktree = if requested.is_none() {
-                if assigned::applies(ctx) && ctx.worktree().is_none() {
-                    return Err(scope::unavailable(None));
-                }
                 let resolved = self.current_worktree(ctx, deadline, env.cancellation);
                 let prepared = resolved.and_then(|worktree| {
                     if let (Some(worktree_id), Some(bound), Some(indexing)) =

@@ -134,6 +134,14 @@ pub(super) fn retained(
         .iter()
         .find(|w| w.view_id == binding.view_id)
         .ok_or_else(|| unavailable(Some(pin.id.clone())))?;
+    if let Some(id) = &proof.overlay_id
+        && read
+            .indexing()
+            .overlay(id)?
+            .is_none_or(|row| row.state == OVERLAY_UNAVAILABLE)
+    {
+        return Err(unavailable(Some(pin.id.clone())));
+    }
     if selected.view.repository_id != binding.repository_id
         || selected.view.view_digest != binding.view_digest
         || proof.expires_at_ms.is_some_and(|expiry| now >= expiry)
@@ -209,22 +217,23 @@ fn authorize_worktree_view(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     view: &StoredView,
-) -> Result<(), Failure> {
+) -> Result<Option<Id>, Failure> {
     if !assigned::applies(ctx) {
-        return Ok(());
+        return Ok(None);
     }
     let worktree = view
         .coverage
         .get("worktreeId")
         .and_then(serde_json::Value::as_str);
     if worktree.is_none() && view.worktree_id.is_none() {
-        return Ok(());
+        return Ok(None);
     }
-    if assigned::owned(read.git(), ctx)?.is_some_and(|tree| {
-        tree.repository_id == view.repository_id
-            && Some(assigned::indexed_id(&tree).as_str()) == worktree
-    }) {
-        return Ok(());
+    if let Some(id) = assigned::owned(read.git(), ctx)?
+        .filter(|tree| tree.repository_id == view.repository_id)
+        .map(|tree| assigned::indexed_id(&tree))
+        .filter(|id| Some(id.as_str()) == worktree)
+    {
+        return Ok(Some(id));
     }
     Err(Refusal::new(
         DomainErrorCode::PermissionDenied,
@@ -245,7 +254,16 @@ pub(super) fn exact(
 ) -> Result<views::ViewLayers, Failure> {
     let layers = views::layers(read.indexing(), id)?;
     authorize(read, ctx, scope, &layers.view.repository_id)?;
-    authorize_worktree_view(read, ctx, &layers.view)?;
+    if let Some(worktree) = authorize_worktree_view(read, ctx, &layers.view)?
+        && read
+            .indexing()
+            .overlay_for(&layers.view.repository_id, &worktree)?
+            .is_none_or(|current| current.view_id.as_ref() != Some(id))
+    {
+        // Prior generations can continue through their immutable ownership-bound pins.
+        // An explicit ID cannot acquire a new pin to another custody epoch's source.
+        return Err(unavailable(Some(id.clone())));
+    }
     if overlay(&layers.view) {
         if let Some(expiry) = layers
             .view
