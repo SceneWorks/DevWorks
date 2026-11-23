@@ -1,6 +1,8 @@
 //! Installed-owner boundaries and the durable native replacement journal.
 mod exchange;
 mod startup;
+#[cfg(windows)]
+mod windows_trust;
 
 pub use startup::{Candidate, enter_application, run_internal};
 
@@ -76,7 +78,7 @@ struct Installation {
 }
 
 impl Installation {
-    fn configured_root() -> Result<(InstallOwner, PathBuf), String> {
+    fn configured_owner() -> Result<InstallOwner, String> {
         if !BUILD.is_some_and(|build| is_lower_hex(build, 40))
             || !TRUST.is_some_and(|keys| {
                 !keys.is_empty() && keys.split(',').all(|key| decode_key(key).is_some())
@@ -95,7 +97,8 @@ impl Installation {
             }
             InstallOwner::MacApplication
         } else if cfg!(windows) {
-            if !option_env!("DEVWORKS_SIGNING_CERT_SHA256").is_some_and(is_sha256_hex) {
+            #[cfg(windows)]
+            if windows_trust::configured_profile().is_none() {
                 return Err("This Windows build has no qualified signing owner.".into());
             }
             InstallOwner::WindowsPerUser
@@ -107,6 +110,10 @@ impl Installation {
         if !owner.matches_target(&devworks_adapters::packages::host_target_triple()) {
             return Err("This build target has no qualified installer.".into());
         }
+        Ok(owner)
+    }
+
+    fn platform_root(owner: InstallOwner) -> Result<PathBuf, String> {
         let user = |name| {
             std::env::var_os(name)
                 .filter(|value| !value.is_empty())
@@ -116,35 +123,56 @@ impl Installation {
         };
         let path = match owner {
             InstallOwner::MacApplication => user("HOME")?.join("Applications/DevWorks.app"),
-            InstallOwner::WindowsPerUser => user("LOCALAPPDATA")?.join("Programs/DevWorks"),
+            InstallOwner::WindowsPerUser => windows_per_user_root()?,
             InstallOwner::LinuxStandalone => user("HOME")?.join(".local/opt/devworks"),
         };
-        Ok((owner, path))
+        Ok(path)
     }
 
     fn locate() -> Result<Self, String> {
-        let (owner, root) = Self::configured_root()?;
+        let owner = Self::configured_owner()?;
+        let root = Self::platform_root(owner)?;
         Self::at(owner, &root)
     }
 
     /// A provisioned binary outside the managed owner can run with updates unavailable.
     /// Errors within the installed location have to keep that location's gate closed.
     fn normal_entry() -> Result<Option<Self>, String> {
-        let Ok((owner, path)) = Self::configured_root() else {
-            return Ok(None);
+        #[cfg(windows)]
+        let path = Self::platform_root(InstallOwner::WindowsPerUser)?;
+        #[cfg(not(windows))]
+        let (owner, path) = {
+            let Ok(owner) = Self::configured_owner() else {
+                return Ok(None);
+            };
+            let Ok(path) = Self::platform_root(owner) else {
+                return Ok(None);
+            };
+            (owner, path)
         };
         let executable = std::env::current_exe().map_err(native_error)?;
-        let belongs = executable.starts_with(&path)
-            || path.canonicalize().is_ok_and(|root| {
-                executable
-                    .canonicalize()
-                    .is_ok_and(|entry| entry.starts_with(&root))
-            });
-        if belongs {
-            Self::at(owner, &path).map(Some)
-        } else {
-            Ok(None)
+        if !path_is_within(&executable, &path) {
+            return Ok(None);
         }
+        #[cfg(windows)]
+        let owner = Self::configured_owner()?;
+        Self::at(owner, &path).map(Some)
+    }
+
+    #[cfg(windows)]
+    fn is_windows_launcher() -> Result<bool, String> {
+        let executable = std::env::current_exe().map_err(native_error)?;
+        if !executable
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("DevWorks.exe"))
+        {
+            return Ok(false);
+        }
+        let expected = Self::platform_root(InstallOwner::WindowsPerUser)?.join("DevWorks.exe");
+        Ok(executable == expected
+            || expected
+                .canonicalize()
+                .is_ok_and(|expected| executable.canonicalize().is_ok_and(|path| path == expected)))
     }
 
     fn at(owner: InstallOwner, path: &Path) -> Result<Self, String> {
@@ -311,6 +339,58 @@ impl Installation {
         result.map_err(native_error)?;
         sync_directory(parent)
     }
+}
+
+#[cfg(windows)]
+fn windows_per_user_root() -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+    };
+    use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+
+    const UNAVAILABLE: &str = "Windows could not locate the current user's LocalAppData folder.";
+    // SAFETY: COM initialization and cleanup stay on this thread, and the shell-owned
+    // string is copied before it is freed. Changed mode means COM is already initialized.
+    let path = unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        if initialized.is_err() && initialized != RPC_E_CHANGED_MODE {
+            return Err(UNAVAILABLE.into());
+        }
+        let result =
+            SHGetKnownFolderPath(&FOLDERID_LocalAppData, KF_FLAG_DEFAULT, None).map(|value| {
+                let path = if value.is_null() {
+                    PathBuf::new()
+                } else {
+                    PathBuf::from(std::ffi::OsString::from_wide(value.as_wide()))
+                };
+                CoTaskMemFree(Some(value.0.cast()));
+                path
+            });
+        if initialized.is_ok() {
+            CoUninitialize();
+        }
+        result.map_err(|_| UNAVAILABLE)?
+    };
+    if !path.is_absolute() {
+        return Err(UNAVAILABLE.into());
+    }
+    Ok(path.join("Programs/DevWorks"))
+}
+
+#[cfg(not(windows))]
+fn windows_per_user_root() -> Result<PathBuf, String> {
+    Err("Windows installation is unavailable on this host.".into())
+}
+
+fn path_is_within(executable: &Path, root: &Path) -> bool {
+    executable.starts_with(root)
+        || root.canonicalize().is_ok_and(|root| {
+            executable
+                .canonicalize()
+                .is_ok_and(|entry| entry.starts_with(&root))
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -568,12 +648,14 @@ fn private_options(options: &mut OpenOptions) {
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
-    let mut build = fs::DirBuilder::new();
+    let build = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let build = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut build = build;
         build.mode(0o700);
-    }
+        build
+    };
     build.create(path)
 }
 
