@@ -7,18 +7,26 @@ on:
         description: Reviewed DW-417 qualification source
         required: true
         type: string
+      target:
+        description: Native Windows installation target
+        type: choice
+        options: [x64, arm64]
+        default: x64
 
 permissions: {}
 
 env:
   DEVWORKS_WINDOWS_SIGNING_PROFILE_OID: '1.3.6.1.4.1.311.97.840169298.24257481.644551716.202800253'
   PAYLOAD_NAMES: old-desktop.exe,old-worker.exe,new-desktop.exe,new-worker.exe
+  NATIVE_TARGET: ${{ inputs.target == 'arm64' && 'aarch64-pc-windows-msvc' || 'x86_64-pc-windows-msvc' }}
+  NATIVE_ARCH: ${{ inputs.target == 'arm64' && 'Arm64' || 'X64' }}
+  PE_MACHINE: ${{ inputs.target == 'arm64' && 'aa64' || '8664' }}
 
 jobs:
   build:
     name: Build two isolated Windows qualification releases
     if: github.repository == 'SceneWorks/DevWorks' && github.ref == 'refs/heads/main'
-    runs-on: windows-2025
+    runs-on: ${{ inputs.target == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
     timeout-minutes: 110
     permissions:
       contents: read
@@ -40,11 +48,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.source_sha }}
-          APPROVED: bfe84f3e6183074ef23df7af0fd39e31af78fd8b
+          CHOICE: ${{ inputs.target }}
         run: |
           set -euo pipefail
+          case "$CHOICE" in
+            x64)
+              APPROVED=bfe84f3e6183074ef23df7af0fd39e31af78fd8b
+              branch=codex/dw-417-signed-updater-source
+              ;;
+            arm64)
+              APPROVED=c7ead308c59aed408b2b1fe8f02c2703c0cb8c91
+              branch=codex/dw-417-arm-signed-updater-source
+              ;;
+            *) exit 1 ;;
+          esac
           test "$REQUESTED" = "$APPROVED"
-          published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/codex/dw-417-signed-updater-source" --jq .object.sha)"
+          published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq .object.sha)"
           test "$published" = "$APPROVED"
           printf 'source=%s\n' "$APPROVED" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -56,6 +75,13 @@ jobs:
           ref: ${{ steps.admit.outputs.source }}
           path: candidate
           persist-credentials: false
+      - name: Install the pinned native Windows toolchain
+        working-directory: candidate
+        shell: bash
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel-$NATIVE_TARGET" --profile minimal
+          printf 'RUSTUP_TOOLCHAIN=%s-%s\n' "$channel" "$NATIVE_TARGET" >> "$GITHUB_ENV"
       - name: Compile the signed-stage test inputs
         working-directory: candidate
         shell: pwsh
@@ -63,8 +89,13 @@ jobs:
           DEVWORKS_RELEASE_BUILD: ${{ steps.admit.outputs.source }}
         run: |
           if ((git rev-parse HEAD) -cne $env:DEVWORKS_RELEASE_BUILD) { throw 'Wrong qualification source' }
-          if ((rustc -vV) -cnotcontains 'host: x86_64-pc-windows-msvc') { throw 'Wrong native Rust toolchain' }
+          if ((rustc -vV) -cnotcontains "host: $env:NATIVE_TARGET") { throw 'Wrong native Rust toolchain' }
           . "$env:GITHUB_WORKSPACE/trusted/tools/ci/windows-test-installer.ps1"
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -cne $env:NATIVE_ARCH) {
+            throw 'Wrong native Windows build host'
+          }
+          Get-Command 7z.exe,python.exe,openssl.exe -ErrorAction Stop | Out-Null
+          Get-TestSignTool ($env:NATIVE_ARCH.ToLowerInvariant()) | Out-Null
           $work = Join-Path $env:RUNNER_TEMP 'upgrade-build'
           $fixture = New-Item -ItemType Directory -Path (Join-Path $work 'fixtures') -Force
           $payload = New-Item -ItemType Directory -Path (Join-Path $work 'payload')
@@ -112,14 +143,16 @@ jobs:
           $harness = @($compiled | ForEach-Object { ConvertFrom-Json -InputObject $_ -AsHashtable } |
             Where-Object { $_.reason -ceq 'compiler-artifact' -and $_.target.name -ceq 'devworks_desktop' -and $_.executable })
           if ($harness.Count -ne 1) { throw 'No unique native verifier harness' }
+          $machine = [Convert]::ToUInt16($env:PE_MACHINE,16)
+          Get-TestPeSubsystem $harness[0].executable $machine | Out-Null
           Copy-Item -LiteralPath $harness[0].executable (Join-Path $fixture 'native-verifier.exe')
           $hashes = [ordered]@{}
           foreach ($name in $env:PAYLOAD_NAMES.Split(',')) {
             $file = Join-Path $payload $name
-            Assert-UnsignedX64 $file
+            Assert-UnsignedTestPe $file ([Convert]::ToUInt16($env:PE_MACHINE,16))
             $hashes[$name] = Get-Sha256 $file
           }
-          @{ source = $env:DEVWORKS_RELEASE_BUILD; hashes = $hashes } | ConvertTo-Json -Depth 4 |
+          @{ source = $env:DEVWORKS_RELEASE_BUILD; target = $env:NATIVE_TARGET; hashes = $hashes } | ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath (Join-Path $payload 'unsigned.json') -Encoding utf8NoBOM
       - id: seal
         name: Encrypt the exact same-run qualification inputs
@@ -187,11 +220,13 @@ jobs:
           $path = Join-Path $payload 'unsigned.json'
           if ((Get-Item -LiteralPath $path).Length -gt 4096) { throw 'Oversized build receipt' }
           $meta = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
-          if ($meta.source -cne $env:SOURCE -or $meta.hashes.Count -ne $names.Count) { throw 'Unexpected source or file inventory' }
+          if ($meta.source -cne $env:SOURCE -or $meta.target -cne $env:NATIVE_TARGET -or $meta.hashes.Count -ne $names.Count) {
+            throw 'Unexpected source, target or file inventory'
+          }
           foreach ($name in $names) {
             $file = Join-Path $payload $name
             if ((Get-Sha256 $file) -cne $meta.hashes[$name]) { throw "Changed signing input $name" }
-            Assert-UnsignedX64 $file
+            Assert-UnsignedTestPe $file ([Convert]::ToUInt16($env:PE_MACHINE,16))
           }
           Remove-Item -LiteralPath $path
       - name: Sign in to the approved Azure environment
@@ -234,9 +269,11 @@ jobs:
           $payload = Join-Path $env:RUNNER_TEMP 'payload'
           $files = [ordered]@{}
           foreach ($name in $env:PAYLOAD_NAMES.Split(',')) {
-            $files[$name] = Get-VerifiedTestSignature (Join-Path $payload $name)
+            $file = Join-Path $payload $name
+            Get-TestPeSubsystem $file ([Convert]::ToUInt16($env:PE_MACHINE,16)) | Out-Null
+            $files[$name] = Get-VerifiedTestSignature $file
           }
-          @{ source = $env:SOURCE; files = $files } | ConvertTo-Json -Depth 5 |
+          @{ source = $env:SOURCE; target = $env:NATIVE_TARGET; files = $files } | ConvertTo-Json -Depth 5 |
             Set-Content -LiteralPath (Join-Path $payload 'signed.json') -Encoding utf8NoBOM
           $signed = Join-Path $env:RUNNER_TEMP 'upgrade-signed.7z'
           Protect-TestArtifact $payload $signed ($env:PAYLOAD_NAMES.Split(',') + 'signed.json')
@@ -253,7 +290,7 @@ jobs:
   verify:
     name: Run signed approval, startup and recovery on Windows
     needs: [build, sign]
-    runs-on: windows-2025
+    runs-on: ${{ inputs.target == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
     timeout-minutes: 25
     permissions:
       contents: read
@@ -272,7 +309,22 @@ jobs:
           artifact-ids: ${{ needs.sign.outputs.signed_id }},${{ needs.build.outputs.test_id }}
           merge-multiple: true
           path: ${{ runner.temp }}/transport
-      - name: Restore and validate the isolated run inputs
+      - name: Verify the intended native Windows host and SDK tools
+        shell: pwsh
+        run: |
+          . ./trusted/tools/ci/windows-test-installer.ps1
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -cne $env:NATIVE_ARCH) {
+            throw 'Wrong native Windows OS architecture'
+          }
+          $os = Get-CimInstance Win32_OperatingSystem
+          $os | Select-Object Caption,BuildNumber,OSArchitecture | Format-List
+          if ($env:NATIVE_ARCH -ceq 'Arm64' -and ($os.Caption -notmatch 'Windows 11' -or $os.BuildNumber -ne '26200')) {
+            throw 'ARM64 qualification requires Windows 11 client build 26200'
+          }
+          $signTool = Get-TestSignTool ($env:NATIVE_ARCH.ToLowerInvariant())
+          "DW417_SIGNTOOL=$signTool" >> $env:GITHUB_ENV
+      - id: restore
+        name: Restore and validate the isolated run inputs
         shell: pwsh
         env:
           DW421_ARCHIVE_KEY: ${{ secrets.DW417_ARCHIVE_KEY }}
@@ -287,9 +339,15 @@ jobs:
           Expand-TestArtifact (Join-Path $env:RUNNER_TEMP 'transport/upgrade-signed.7z') $env:SIGNED_HASH $signed ($names + 'signed.json')
           Expand-TestArtifact (Join-Path $env:RUNNER_TEMP 'transport/upgrade-tests.7z') $env:TEST_HASH $tests @('test-key.pem','native-verifier.exe')
           $receipt = Get-Content -LiteralPath (Join-Path $signed 'signed.json') -Raw | ConvertFrom-Json -AsHashtable
-          if ($receipt.source -cne $env:SOURCE -or $receipt.files.Count -ne $names.Count) { throw 'Wrong signed fixture' }
+          if ($receipt.source -cne $env:SOURCE -or $receipt.target -cne $env:NATIVE_TARGET -or $receipt.files.Count -ne $names.Count) {
+            throw 'Wrong signed fixture'
+          }
+          $machine = [Convert]::ToUInt16($env:PE_MACHINE,16)
+          Get-TestPeSubsystem (Join-Path $tests 'native-verifier.exe') $machine | Out-Null
           foreach ($name in $names) {
-            $signature = Get-VerifiedTestSignature (Join-Path $signed $name)
+            $file = Join-Path $signed $name
+            Get-TestPeSubsystem $file $machine | Out-Null
+            $signature = Get-VerifiedTestSignature $file $env:DW417_SIGNTOOL
             if ($signature.sha256 -cne $receipt.files[$name].sha256) { throw "Signed file changed: $name" }
           }
           $work = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'installed-upgrade')
@@ -306,13 +364,7 @@ jobs:
           $noStamp = Join-Path $fixtures 'no-timestamp.exe'
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'signed/new-desktop.exe') $genuine
           Copy-Item -LiteralPath $genuine $noStamp
-          $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
-          $signTool = Get-ChildItem -LiteralPath $sdk -Filter signtool.exe -Recurse |
-            Where-Object { $_.Directory.Name -eq 'x64' -and $_.Directory.Parent.Name -match '^\d+(\.\d+){3}$' } |
-            Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
-          if (-not $signTool) { throw 'Windows SDK SignTool is unavailable' }
-          "DW417_SIGNTOOL=$($signTool.FullName)" >> $env:GITHUB_ENV
-          & $signTool.FullName remove /u $noStamp
+          & $env:DW417_SIGNTOOL remove /u $noStamp
           if ($LASTEXITCODE -ne 0) { throw 'Cannot remove the timestamp from the native fixture' }
           $genuineSignature = Get-AuthenticodeSignature -LiteralPath $genuine
           $stripped = Get-AuthenticodeSignature -LiteralPath $noStamp
@@ -342,10 +394,16 @@ jobs:
             -TextExtension @('2.5.29.19={critical}{text}CA=1&pathlength=0')
           $leaf = $null
           try {
-            $eku = "2.5.29.37={text}1.3.6.1.5.5.7.3.3&1.3.6.1.4.1.311.97.1.0&$env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID"
+            $expectedEkus = @('1.3.6.1.5.5.7.3.3','1.3.6.1.4.1.311.97.1.0',$env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID)
+            $eku = "2.5.29.37={text}" + ($expectedEkus -join ',')
             $leaf = New-SelfSignedCertificate -Subject 'CN=DevWorks temporary qualification publisher' `
               -Signer $root -Type Custom -KeyUsage DigitalSignature -HashAlgorithm SHA256 `
-              -CertStoreLocation Cert:\CurrentUser\My -TextExtension @($eku,'2.5.29.19={text}')
+              -CertStoreLocation Cert:\CurrentUser\My -TextExtension @($eku,'2.5.29.19={text}CA=0')
+            $usage = [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($leaf.Extensions['2.5.29.37'], $false)
+            $actualEkus = @($usage.EnhancedKeyUsages | ForEach-Object Value)
+            if (Compare-Object ($expectedEkus | Sort-Object) ($actualEkus | Sort-Object)) {
+              throw 'The lookalike leaf must carry the exact signing and profile EKUs'
+            }
             $rootFile = Join-Path $env:RUNNER_TEMP 'lookalike-root.cer'
             Export-Certificate -Cert $root -FilePath $rootFile | Out-Null
             Import-Certificate -FilePath $rootFile -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
@@ -379,13 +437,15 @@ jobs:
             Remove-Item -LiteralPath $root.PSPath -DeleteKey
           }
       - name: Exercise signed installation and the normal updater entry points
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' }}
         shell: pwsh
         env:
           SOURCE: ${{ needs.build.outputs.source }}
         run: |
-          Get-CimInstance Win32_OperatingSystem | Select-Object Caption,BuildNumber,OSArchitecture | Format-List
           $local = [Environment]::GetFolderPath('LocalApplicationData')
           $work = Join-Path $env:RUNNER_TEMP 'installed-upgrade'
           $key = Join-Path $env:RUNNER_TEMP 'tests/test-key.pem'
-          python -I candidate/tools/ci/qualify-windows-update.py exercise $work $local $key $env:SOURCE
+          $qualification = @('candidate/tools/ci/qualify-windows-update.py','exercise',$work,$local,$key,$env:SOURCE)
+          if ($env:NATIVE_ARCH -ceq 'Arm64') { $qualification += @('--target',$env:NATIVE_TARGET) }
+          python -I @qualification
           if ($LASTEXITCODE -ne 0) { throw 'Signed native approval, upgrade or rollback qualification failed' }
