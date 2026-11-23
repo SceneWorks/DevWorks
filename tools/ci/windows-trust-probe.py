@@ -16,10 +16,10 @@ source = Path("crates/devworks-desktop/src/app_updates/windows_trust.rs").read_t
 source = source.replace("pub(super) fn", "pub fn")
 source = source.replace("use devworks_core::fingerprint::sha256_hex;", """
 use sha2::{Digest, Sha256};
-fn sha256_hex(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
+fn sha256_hex(bytes: &[u8]) -> String { Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect() }
 """)
 source = source.replace("fn verify_profile(path: &Path, profile: &str) -> Result<(), String> {", """
-fn verify_profile(path: &Path, profile: &str, flags: u32, initial: u32, use_ex: bool) -> Result<(), String> {
+fn verify_profile(path: &Path, profile: &str, flags: WINTRUST_SIGNATURE_SETTINGS_FLAGS, initial: u32, use_ex: bool) -> Result<(), String> {
 """)
 source = source.replace("verify_profile(path, profile)", "verify_profile(path, profile, WSS_VERIFY_SPECIFIC | WSS_GET_SECONDARY_SIG_COUNT, u32::MAX, true)")
 source = source.replace("dwFlags: WSS_VERIFY_SPECIFIC | WSS_GET_SECONDARY_SIG_COUNT,", "dwFlags: flags,")
@@ -28,7 +28,7 @@ source = source.replace("let status = WinVerifyTrustEx(HWND::default(), &mut act
 let status = if use_ex { WinVerifyTrustEx(HWND::default(), &mut action, &mut data) }
     else { WinVerifyTrust(HWND::default(), &mut action, (&mut data as *mut WINTRUST_DATA).cast()) };
 if status == 0 {
-    println!("flags={flags} initial={initial} ex={use_ex} secondary={} index={} identity={:?}", signatures.cSecondarySigs,
+    println!("flags={flags:?} initial={initial} ex={use_ex} secondary={} index={} identity={:?}", signatures.cSecondarySigs,
          signatures.dwVerifiedSigIndex, verified_identity(data.hWVTStateData, profile));
 }
 """)
@@ -55,7 +55,7 @@ fn main() {
             for flags in [WSS_VERIFY_SPECIFIC | WSS_GET_SECONDARY_SIG_COUNT, WSS_GET_SECONDARY_SIG_COUNT, WSS_VERIFY_SPECIFIC] {
                 for initial in [u32::MAX, 0] {
                     if let Err(error) = verify_profile(&path, configured_profile().unwrap(), flags, initial, use_ex) {
-                        println!("flags={flags} initial={initial} ex={use_ex}: {error}");
+                        println!("flags={flags:?} initial={initial} ex={use_ex}: {error}");
                     }
                 }
             }
