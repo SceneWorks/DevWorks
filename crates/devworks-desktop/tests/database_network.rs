@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use devworks_core::ports::secrets::Secret;
 use devworks_core::protocol::{
-    CommandReply,
+    CommandReply, DomainErrorCode,
     results::{DomainDecision, DomainQueryReply, OperationResult},
 };
 use serde_json::json;
@@ -178,6 +178,16 @@ fn native_mysql_retained_read_contract() {
             .query(operation, frame.to_string().as_bytes())
             .unwrap()
     };
+    let ordered_read = "SELECT id AS item FROM dw_public ORDER BY id";
+    if std::env::var("DW37_EXPECT_UNSUPPORTED_RELEASE").as_deref() == Ok("1") {
+        let actual = query(selected.as_str(), ordered_read, 1);
+        assert!(
+            matches!(&actual, DomainQueryReply::Rejected { fault, .. }
+                if fault.code == DomainErrorCode::UnsupportedTarget),
+            "{actual:?}"
+        );
+        return;
+    }
     for source in [
         selected.as_str(),
         "default",
@@ -185,7 +195,7 @@ fn native_mysql_retained_read_contract() {
         "dw37_fixture",
         "127.0.0.1",
     ] {
-        let actual = query(source, "SELECT id AS item FROM dw_public ORDER BY id", 1);
+        let actual = query(source, ordered_read, 1);
         let DomainQueryReply::Result {
             result: OperationResult::DatabaseMysqlReadonlyQuery { value },
             ..
@@ -227,7 +237,7 @@ fn native_mysql_retained_read_contract() {
         serde_json::to_value(value).unwrap(),
         json!({"rows":[{"payload":"AQI="}],"rowCount":1})
     );
-    let actual = query("default", "SELECT id AS item FROM dw_public ORDER BY id", 2);
+    let actual = query("default", ordered_read, 2);
     let DomainQueryReply::Result {
         result: OperationResult::DatabaseMysqlReadonlyQuery { value },
         ..
