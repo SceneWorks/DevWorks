@@ -751,6 +751,15 @@ impl SchemaDocuments for RegisteredSchemas {
                     "documents.share" | "documents.move" => Some(
                         "Change a managed document's project access. Requires workspace authority and current scope revision.",
                     ),
+                    "documents.transfer_propose" => Some(
+                        "As the current coordinator of the owning project, ask another project's coordinator if it needs the document. State whether your own project still needs it. Only include a summary you may share with the destination.",
+                    ),
+                    "documents.transfer_respond" => Some(
+                        "As the destination coordinator, decide if your project needs the proposed document. DevWorks shares if both projects need it and moves it if only yours does.",
+                    ),
+                    "documents.transfer_status" => Some(
+                        "Recover a document transfer decision for a proposal one of your coordinating sessions participated in.",
+                    ),
                     _ => None,
                 };
                 let description = document_description

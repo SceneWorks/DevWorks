@@ -1,6 +1,6 @@
 //! Agent coordination domain rules shared by the native UI and tool gateway.
 //! A message is stored with its recipient delivery and project event in one write unit.
-mod active;
+pub(super) mod active;
 pub mod retained;
 mod rows;
 use crate::context::{InvocationContext, PrincipalKind};
@@ -1812,6 +1812,48 @@ pub fn post_assignment(
         message.created_at_ms,
     )?;
     Ok(wire(&message, &delivery)?)
+}
+
+/// Notify the receiving assignment about an already authorized document proposal. Only the
+/// Documents service can select the recipient. This message deliberately carries no attachment.
+pub(super) fn notify_document_transfer(
+    tx: &mut dyn WriteTransaction,
+    proposal: &crate::ports::storage::DocumentTransferProposal,
+    transfer: &Id,
+    summary: &str,
+) -> Result<(), StorageError> {
+    let destination = &proposal.destination;
+    let body = format!(
+        "Document transfer {}: {}. Use documents.transfer_respond to say whether your project needs it.",
+        transfer.as_str(),
+        summary,
+    );
+    let message = StoredAgentMessage {
+        root_id: Some(destination.root.clone()),
+        to_assignment_id: Some(destination.assignment.clone()),
+        ..rows::message(
+            tx,
+            rows::NewMessage {
+                project: &destination.project,
+                channel: "Assignment",
+                class: "Status",
+                body: &body,
+                from_actor: &proposal.source.actor,
+            },
+        )
+    };
+    tx.runs().insert_agent_message(&message)?;
+    let target = rows::Target::Assignment(destination.assignment.clone());
+    rows::insert_delivery(tx, &destination.project, &message.id, &target, false)?;
+    rows::append_event(
+        tx,
+        &destination.project,
+        &message.id,
+        "Posted",
+        &proposal.source.actor,
+        &target,
+        message.created_at_ms,
+    )
 }
 
 /// Explicitly marks one assignment delivery read. Inbox observation is pure; only this command

@@ -1240,8 +1240,29 @@ impl ArtifactService {
         expected_scope_revision: &Revision,
     ) -> Result<MutationSummary, Failure> {
         let viewer = Viewer::resolve(tx.authority(), ctx)?;
-        let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+        let artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+        if authorized_scope(tx.authority(), ctx)? != AuthorizedScope::Workspace {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "project",
+                Some(target.0.clone()),
+            )
+            .into());
+        }
+        self.share_authorized(tx, ctx, artifact, target, expected_scope_revision)
+    }
+
+    /// Applies a share after the owning service has checked the caller's transfer authority.
+    pub(crate) fn share_authorized(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        mut artifact: StoredArtifact,
+        target: &ProjectId,
+        expected_scope_revision: &Revision,
+    ) -> Result<MutationSummary, Failure> {
         require_explicit(&artifact, &tx.store().host_actor)?;
+        let artifact_id = &artifact.id;
         if expected_scope_revision.get() != artifact.scope_revision {
             return Err(conflict(
                 RevisionDimension::Scope,
@@ -1250,15 +1271,6 @@ impl ArtifactService {
                 expected_scope_revision,
                 artifact.scope_revision,
             ));
-        }
-        let scope = authorized_scope(tx.authority(), ctx)?;
-        if scope != AuthorizedScope::Workspace {
-            return Err(Refusal::new(
-                DomainErrorCode::PermissionDenied,
-                "project",
-                Some(target.0.clone()),
-            )
-            .into());
         }
         if !tx.artifacts().project_exists(target)? {
             return Err(

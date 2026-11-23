@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-13",
-  "catalogSha256": "f83c31fa00fabf48d9c07e3131f71d4dde4dd9ccc823d8150b39623bbabddac4",
+  "catalogSha256": "807f73059ea97a55d8f41b709a4bcc33ff220f1175064271dbed3cc1ee30cc93",
   "familyCount": 50,
-  "operationCount": 381,
-  "concreteInputCandidates": 381,
+  "operationCount": 384,
+  "concreteInputCandidates": 384,
   "domainInputsPending": 0,
   "families": [
     {
@@ -9839,6 +9839,147 @@
           "authority": "Scoped",
           "effect": "ReadOnly",
           "semanticRules": "Resolve a managed citation only under current artifact authority. Require the exact retained version, source digest and length, extraction revision, block identity, locator and passage digest.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 14,
+          "operation": "documents.transfer_propose",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.transfer_propose",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.transfer_propose"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.transfer_propose"
+          },
+          "resultValueType": "DocumentTransferRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 14,
+              "inputSchema": "domain-request.r14.schema.json",
+              "resultSchema": "operation-result.r14.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r14.schema.json",
+              "completionSchema": "operation-completion.r14.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The current source coordinator records its project need. Pin current document, owner, both primary assignments and authority generations, and notify the exact current destination coordinator atomically.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 14,
+          "operation": "documents.transfer_respond",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.transfer_respond",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.transfer_respond"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.transfer_respond"
+          },
+          "resultValueType": "DocumentTransferRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 14,
+              "inputSchema": "domain-request.r14.schema.json",
+              "resultSchema": "operation-result.r14.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r14.schema.json",
+              "completionSchema": "operation-completion.r14.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Only the pinned current destination coordinator decides. Revalidate both parties and the document, then share for joint need, move for exclusive destination need, or decline. Consume the proposal and record the receipt with the document mutation.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 14,
+          "operation": "documents.transfer_status",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.transfer_status",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.transfer_status"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.transfer_status"
+          },
+          "resultValueType": "DocumentTransferRecord",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 14,
+              "inputSchema": "domain-request.r14.schema.json",
+              "resultSchema": "operation-result.r14.schema.json",
+              "queryReplySchema": "domain-query-reply.r14.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "ReadOnly",
+          "semanticRules": "Return the exact transfer outcome only to one of its authorized coordinator participants. A transfer receipt does not grant document content access.",
           "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

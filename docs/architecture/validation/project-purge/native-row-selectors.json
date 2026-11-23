@@ -72,6 +72,7 @@
     "document_index_versions": "version_id IN(SELECT id FROM relatedArtifactVersions)",
     "document_lexical_rows": "block_id IN(SELECT b.id FROM document_extracted_blocks b JOIN document_extractions e ON e.id=b.extraction_id WHERE e.version_id IN(SELECT id FROM relatedArtifactVersions))",
     "document_retrieval_preferences": "artifact_id IN(SELECT id FROM relatedArtifacts)",
+    "document_transfers": "source_project_id=?1 OR destination_project_id=?1 OR artifact_id IN(SELECT id FROM relatedArtifacts)",
     "document_vectors": "extraction_id IN(SELECT id FROM document_extractions WHERE version_id IN(SELECT id FROM relatedArtifactVersions))",
     "document_vision_units": "extraction_id IN(SELECT id FROM document_extractions WHERE version_id IN(SELECT id FROM relatedArtifactVersions))",
     "effective_configuration": "scope_key='project:'||?1 OR substr(scope_key,1,length(?1)+12)='repository:'||?1||':'",

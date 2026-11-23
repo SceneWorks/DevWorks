@@ -263,11 +263,22 @@ pub(crate) fn import_document(
 pub(crate) fn move_document(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
-    mut artifact: StoredArtifact,
+    artifact: StoredArtifact,
     target: &ProjectId,
     expected: &Revision,
 ) -> Result<(StoredArtifact, bool), Failure> {
     require_workspace_authority(tx.authority(), ctx)?;
+    move_document_authorized(tx, ctx, artifact, target, expected)
+}
+
+/// Applies a document move after the owning service has checked transfer authority.
+pub(crate) fn move_document_authorized(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    mut artifact: StoredArtifact,
+    target: &ProjectId,
+    expected: &Revision,
+) -> Result<(StoredArtifact, bool), Failure> {
     if expected.get() != artifact.scope_revision {
         return Err(conflict(
             RevisionDimension::Scope,

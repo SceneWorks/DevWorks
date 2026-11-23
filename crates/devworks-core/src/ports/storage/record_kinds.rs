@@ -84,6 +84,7 @@ record_kinds! {
     DocumentLexicalFtsIdx,
     DocumentLexicalRows,
     DocumentRetrievalPreferences,
+    DocumentTransfers,
     DocumentVectors,
     DocumentVisionUnits,
     DreamingActions,
