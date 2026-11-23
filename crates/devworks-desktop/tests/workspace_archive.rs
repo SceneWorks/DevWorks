@@ -325,7 +325,7 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
             assert!(matches!(
                 app.host().runtime().command(&context, operation, &frame),
                 Ok(CommandReply::Recorded { receipt, .. })
-                    if matches!(receipt.decision, DomainDecision::Refused { fault }
+                    if matches!(&receipt.decision, DomainDecision::Refused { fault }
                         if fault.code == devworks_core::protocol::DomainErrorCode::Conflict)
             ));
         }
