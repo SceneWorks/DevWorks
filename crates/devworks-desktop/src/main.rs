@@ -106,7 +106,9 @@ fn arg(name: &str) -> Option<String> {
 fn main() -> eframe::Result {
     #[cfg(any(unix, windows))]
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "mcp") {
-        let data_root = arg("--data-dir").map(PathBuf::from).or_else(default_data_root);
+        let data_root = arg("--data-dir")
+            .map(PathBuf::from)
+            .or_else(default_data_root);
         let result = data_root
             .as_deref()
             .ok_or_else(|| std::io::Error::other("no DevWorks data root is configured"))

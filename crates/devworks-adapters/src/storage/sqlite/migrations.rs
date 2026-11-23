@@ -839,11 +839,12 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_writer: 77,
         sql: include_str!("migrations/0077_document_transfers.sql"),
         expected_sha256: "7e4772630d9f1125814cb53ffa641fcf371afea8c7801d2c6065c590b61b95d4",
+        rebuilds_tables: false,
     },
     // Existing readers ignore this independent aggregate. Earlier writers do not update its rows.
     Migration {
         version: 78,
-        minimum_reader: 57,
+        minimum_reader: 68,
         minimum_writer: 78,
         sql: include_str!("migrations/0078_analysis.sql"),
         expected_sha256: "a604659ef41800df6389f9094fd42f27c15e4d7623d8718a9efae1c533d1ae01",

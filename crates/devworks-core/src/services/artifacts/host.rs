@@ -654,7 +654,7 @@ impl ArtifactService {
         tx.artifacts()
             .tombstone_version(&reference.version_id, now)?;
         super::release_blob(tx, reference.sha256.as_str())?;
-        self.retire(tx, &mut artifact)?;
+        Self::retire(tx, &mut artifact)?;
         artifact.revision += 1;
         tx.artifacts().update_artifact(&artifact)
     }
