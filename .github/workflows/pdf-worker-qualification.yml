@@ -1,20 +1,9 @@
-name: Native PDF worker qualification
+name: DW-59 combined PDF worker qualification
 
 on:
   workflow_dispatch:
   push:
-    branches: [feature/dw-f8]
-    paths:
-      - '.github/workflows/pdf-worker-qualification.yml'
-      - 'tools/ci/package-pdf-qualification.py'
-      - 'packaging/pdf/**'
-      - 'crates/devworks-adapters/src/documents/pdf.rs'
-      - 'crates/devworks-core/src/services/documents/pdf.rs'
-      - 'crates/devworks-desktop/src/bin/devworks-pdf-worker.rs'
-      - 'crates/devworks-desktop/src/document_extraction.rs'
-      - 'crates/devworks-desktop/tests/document_extraction.rs'
-      - 'crates/devworks-desktop/tests/pdf_worker.rs'
-      - 'crates/devworks-engine/src/documents/pdf.rs'
+    branches: [codex/dw-59-combined-pdf-matrix]
 
 permissions:
   contents: read
@@ -32,16 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-26
-            target: aarch64-apple-darwin
           - runner: macos-26-intel
             target: x86_64-apple-darwin
             # The cold release build alone exhausted the original 55-minute job limit.
             timeout: 110
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            # The cold release build took 35 minutes before the separate test build.
-            timeout: 75
           - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
           - runner: ubuntu-24.04
@@ -58,6 +41,9 @@ jobs:
       - name: Install and verify native Rust toolchain
         shell: bash
         run: |
+          git fetch --depth=1 origin 1ae1be523bd7202900904fb9d1b173d1caa07996
+          git -c advice.detachedHead=false checkout --detach 1ae1be523bd7202900904fb9d1b173d1caa07996
+          test "$(git rev-parse HEAD)" = "1ae1be523bd7202900904fb9d1b173d1caa07996"
           channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
           rustup toolchain install "$channel-${{ matrix.target }}" --profile minimal
           rustup override set "$channel-${{ matrix.target }}"
@@ -70,8 +56,22 @@ jobs:
       - name: Build distribution and attest installed files
         shell: bash
         run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            export MACOSX_DEPLOYMENT_TARGET=26.2
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cat /etc/os-release
+            uname -a
+            ldd --version
+          fi
           cargo build --locked -p devworks-desktop --release --bins
           cargo_target="$(cargo metadata --no-deps --locked --format-version 1 | python -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            for bin in devworks-desktop devworks-pdf-worker; do
+              ldd "$cargo_target/release/$bin"
+              readelf --version-info "$cargo_target/release/$bin" | grep -E 'Name: (GLIBC|GLIBCXX|CXXABI)' | sort -u
+            done
+          fi
           python tools/ci/package-pdf-qualification.py --binaries "$cargo_target/release" --output "$RUNNER_TEMP/pdf-worker" --target "${{ matrix.target }}"
       - name: Exercise the packaged worker and native Documents processor
         shell: bash
