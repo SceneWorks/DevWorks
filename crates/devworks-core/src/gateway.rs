@@ -692,16 +692,16 @@ impl Gateway<'_> {
         let preparing = if authorization.is_replay_only() {
             Ok((None, None))
         } else {
-            // Removed content is a committed terminal outcome, never a reason to recreate
-            // files or reopen source arguments before the transactional replay fence.
+            // An incoming client can replay its own committed receipt while an external
+            // source needed by initial preparation is unavailable. The writer decides whether
+            // the stored intent and current disclosure scope match before returning the receipt.
             env.read(|r| {
-                Ok(matches!(
-                    r.receipts().lookup(admitted.identity())?,
-                    Some(LedgerEntry::Purged(_))
-                ))
+                let existing = r.receipts().lookup(admitted.identity())?;
+                Ok(matches!(existing, Some(LedgerEntry::Purged(_)))
+                    || (ctx.principal_kind() == PrincipalKind::McpClient && existing.is_some()))
             })
-            .and_then(|purged| {
-                if purged {
+            .and_then(|recorded| {
+                if recorded {
                     Ok((None, None))
                 } else if waiting == Waiting::Report {
                     handler

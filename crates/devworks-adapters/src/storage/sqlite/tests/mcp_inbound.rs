@@ -367,14 +367,27 @@ fn issue_command_requires_the_explicit_repository_and_the_issues_project() {
         }
         tx.projects()
             .set_members(&project, &[id("granted"), id("withheld")])?;
-        for (issue, project_id) in [
-            ("local-issue", project),
-            ("other-issue", ProjectId(id("second"))),
+        for (issue, project_id, kind) in [
+            (
+                "local-issue",
+                project.clone(),
+                devworks_core::ports::storage::TASK,
+            ),
+            (
+                "other-issue",
+                ProjectId(id("second")),
+                devworks_core::ports::storage::TASK,
+            ),
+            (
+                "parent-feature",
+                project,
+                devworks_core::ports::storage::FEATURE,
+            ),
         ] {
             tx.work().insert_work(&StoredWork {
                 id: id(issue),
                 project_id,
-                kind: devworks_core::ports::storage::TASK.into(),
+                kind: kind.into(),
                 parent_feature_id: None,
                 status_id: None,
                 title: issue.into(),
@@ -392,6 +405,8 @@ fn issue_command_requires_the_explicit_repository_and_the_issues_project() {
                 brief: json!({}),
             })?;
         }
+        tx.work()
+            .set_work_repositories(&id("parent-feature"), &[id("withheld")])?;
         Ok(())
     })
     .unwrap();
@@ -400,7 +415,7 @@ fn issue_command_requires_the_explicit_repository_and_the_issues_project() {
         "enable",
         &fx.register(),
         &["granted"],
-        &["issues.link", "issues.publish"],
+        &["issues.link", "issues.publish", "tasks.create"],
     );
     let token = fx
         .credentials
@@ -440,6 +455,19 @@ fn issue_command_requires_the_explicit_repository_and_the_issues_project() {
             "{operation}"
         );
     }
+    let create = authorize(
+        &fx,
+        &ctx,
+        "tasks.create",
+        json!({
+            "projectId":"first","title":"Child", "description":"", "repositoryIds":[],
+            "parentId":"parent-feature","statusId":"ready","priority":0
+        }),
+    );
+    assert!(matches!(
+        create,
+        Err(AuthorityDenial::Policy(DenialReason::OutOfProjectScope))
+    ));
 }
 
 #[test]
