@@ -826,7 +826,8 @@ fn revocation_during_a_native_query_prevents_publication() {
 #[test]
 fn incoming_named_pipe_rechecks_the_kernel_peer_for_its_message() {
     use crate::mcp_inbound::windows::PrivatePipe;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use devworks_core::services::mcp_inbound::CredentialError;
+    use tokio::io::AsyncWriteExt;
     use tokio::net::windows::named_pipe::ClientOptions;
 
     let fx = Fixture::new();
@@ -845,17 +846,40 @@ fn incoming_named_pipe_rechecks_the_kernel_peer_for_its_message() {
         let mut server = PrivatePipe::bind(&fx.store.info().store_id.0).unwrap();
         let mut client = ClientOptions::new().open(server.path()).unwrap();
         server.connect().await.unwrap();
-        assert!(server.authenticate(&fx.credentials, &bearer).is_err());
-        client.write_all(b"pair").await.unwrap();
-        let mut hello = [0; 4];
-        server.stream().read_exact(&mut hello).await.unwrap();
-        assert_eq!(hello, *b"pair");
+        let decode = |bytes: &[u8]| {
+            std::str::from_utf8(bytes)
+                .map(Secret::new)
+                .map_err(|_| CredentialError::Denied)
+        };
         assert!(
             server
-                .authenticate(&fx.credentials, &Secret::new("invalid"))
+                .authenticate(&fx.credentials, &mut [], decode)
+                .await
                 .is_err()
         );
-        assert!(server.authenticate(&fx.credentials, &bearer).is_ok());
+        client.write_all(b"invalid").await.unwrap();
+        assert!(
+            server
+                .authenticate(&fx.credentials, &mut [0; 7], decode)
+                .await
+                .is_err()
+        );
+        let credential = bearer.expose().as_bytes();
+        let mut frame = vec![0; credential.len()];
+        client.write_all(credential).await.unwrap();
+        assert!(
+            server
+                .authenticate(&fx.credentials, &mut frame, decode)
+                .await
+                .is_ok()
+        );
+        drop(client);
+        assert!(
+            server
+                .authenticate(&fx.credentials, &mut frame, decode)
+                .await
+                .is_err()
+        );
     });
 }
 

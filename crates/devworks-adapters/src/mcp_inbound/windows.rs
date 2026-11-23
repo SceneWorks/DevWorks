@@ -7,6 +7,7 @@ use std::ffi::c_void;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::ptr::{NonNull, null_mut};
+use tokio::io::AsyncReadExt;
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
@@ -76,22 +77,26 @@ impl PrivatePipe {
         self.pipe.connect().await
     }
 
-    pub fn stream(&mut self) -> &mut NamedPipeServer {
-        &mut self.pipe
-    }
-
-    /// Call this after the bounded pairing frame was read. Win32 associates impersonation with
-    /// the security context of the last message read, even for the same open client connection.
-    pub fn authenticate(
-        &self,
+    /// Read a complete pairing frame before checking the peer and decoding the credential.
+    /// Win32 associates impersonation with the last message read from the pipe.
+    pub async fn authenticate(
+        &mut self,
         credentials: &Credentials,
-        credential: &Secret,
+        frame: &mut [u8],
+        decode: impl FnOnce(&[u8]) -> Result<Secret, CredentialError>,
     ) -> Result<AuthenticatedClient, CredentialError> {
+        if frame.is_empty() {
+            return Err(CredentialError::Denied);
+        }
+        self.pipe
+            .read_exact(frame)
+            .await
+            .map_err(|_| CredentialError::Denied)?;
         let peer = pipe_peer_sid(&self.pipe).map_err(|_| CredentialError::Denied)?;
         if peer != self.owner {
             return Err(CredentialError::Denied);
         }
-        credentials.authenticate(Binding::LocalIpc, credential)
+        credentials.authenticate(Binding::LocalIpc, &decode(frame)?)
     }
 }
 
