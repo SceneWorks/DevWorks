@@ -1,7 +1,7 @@
 //! A live native credential and durable scope witness back each selected gateway call.
 
 use super::targets::{
-    DocumentTarget, IndexRemoval, IndexTargets, WorktreeTarget, document_targets,
+    DocumentTarget, IndexRemoval, IndexTargets, OverlayRead, WorktreeTarget, document_targets,
 };
 use super::{AuthenticatedClient, Binding, Configuration, current, selected_operation};
 use crate::admission::{project_targets, work_targets};
@@ -90,6 +90,8 @@ pub struct AccessFence {
     artifact: Option<Id>,
     #[serde(default)]
     index_removal: Option<IndexRemoval>,
+    #[serde(default)]
+    overlay_reads: Vec<OverlayRead>,
     work: Vec<WorkScope>,
 }
 
@@ -204,13 +206,49 @@ fn artifacts_visible(
         let Some(artifact) = read.artifact(id)? else {
             return Ok(false);
         };
-        if artifact.state != crate::ports::storage::ArtifactState::Live
+        // A receipt's original scope is checked by receipt recovery and exact command replay.
+        // Repository text inherited through project membership is read through the selected
+        // repository operation, which also checks the individual repository grant.
+        if artifact.retention != crate::ports::storage::ArtifactRetention::Explicit
+            || ctx.project_id().is_none_or(|project| {
+                artifact.scope.project() != Some(project)
+                    && !read.shares(id).is_ok_and(|shares| shares.contains(project))
+            })
+            || artifact.state != crate::ports::storage::ArtifactState::Live
             || !visible(read, &viewer, &artifact)?
         {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Historical overlay runs whose original target no longer exists have no live view proof.
+pub(crate) fn allowed_index_overlays(authorization: &Authorization) -> Vec<Id> {
+    authorization
+        .fences()
+        .iter()
+        .filter_map(|fence| match fence {
+            AuthorityFence::ExternalMcp(fence) => Some(&fence.overlay_reads),
+            _ => None,
+        })
+        .flatten()
+        .flat_map(|scope| scope.ids().iter().cloned())
+        .collect()
+}
+
+pub(crate) fn overlay_is_admitted(ctx: &InvocationContext, overlay: &Id) -> bool {
+    if ctx.principal_kind() != PrincipalKind::McpClient {
+        return true;
+    }
+    ctx.mcp_client_proof()
+        .and_then(|proof| proof.publication.0.get())
+        .is_some_and(|(_, grant)| {
+            grant.fences().iter().any(|fence| {
+                matches!(fence, AuthorityFence::ExternalMcp(fence) if fence.overlay_reads.iter()
+                .any(|scope| scope.ids().contains(overlay)))
+            })
+        })
 }
 
 pub(crate) fn request_live(ctx: &InvocationContext) -> bool {
@@ -543,6 +581,9 @@ pub(crate) fn authorize(
             input.repository_id.is_none() && input.overlay_id.is_none()
         }
         OperationInput::Indexing(indexing::Input::Runs(input)) => input.repository_id.is_none(),
+        OperationInput::Repositories(repositories::Input::Nodes(input)) => {
+            input.views.is_none() && input.page.cursor.is_none()
+        }
         _ => false,
     };
     if graph_read {
@@ -673,6 +714,7 @@ pub(crate) fn authorize(
         documents,
         artifact,
         index_removal: exact.removal,
+        overlay_reads: exact.overlay_reads,
         work,
     };
     if fence
@@ -967,6 +1009,11 @@ impl AccessFence {
     ) -> Result<bool, StorageError> {
         for tree in &self.worktrees {
             if !tree.holds(indexing)? {
+                return Ok(false);
+            }
+        }
+        for selection in &self.overlay_reads {
+            if !selection.holds(indexing)? {
                 return Ok(false);
             }
         }

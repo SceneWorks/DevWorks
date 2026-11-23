@@ -207,6 +207,10 @@ pub struct StoredIndexRun {
 /// Which runs a listing covers (newest first, then by ID).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IndexRunFilter {
+    /// When required, only runs initiated from this project.
+    pub requested_project: Option<ProjectId>,
+    /// When required, allow baseline runs and only these live, authorized overlay IDs.
+    pub overlay_ids: Option<Vec<Id>>,
     /// Only runs of this repository.
     pub repository: Option<Id>,
     /// Only runs of these repositories (a project's members); `None` means every repository.

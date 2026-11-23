@@ -118,10 +118,13 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
     let runtime = engine.host().runtime();
     let missing: Vec<_> = devworks_core::services::mcp_inbound::published_tools()
         .iter()
-        .filter(|tool| !runtime.has_mcp_tool(tool))
+        .filter(|tool| !runtime.has_mcp_tool(tool) || !tool.operation.supports(tool.revision))
         .map(|tool| tool.operation.name)
         .collect();
     eprintln!("Reviewed MCP bindings missing a native owner in this build: {missing:?}");
+    if std::env::var_os("DEVWORKS_REQUIRE_ALL_MCP").is_some() {
+        assert!(missing.is_empty(), "{missing:?}");
+    }
     let backend = engine.backend();
     let project = command(
         &*backend,
@@ -166,7 +169,8 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
             "action":{
                 "kind":"Replace","clientId":registered.client_id,"expectedRevision":registered.revision,
                 "name":registered.name,"enabled":true,"projectIds":[project.id],"repositoryIds":[],
-                "worktreeIds":[],"readOperations":["projects.get"],"commandOperations":[]
+            "worktreeIds":[],"readOperations":["projects.get","history.command_receipt"],
+            "commandOperations":["knowledge.record"]
             }
         }),
     );
@@ -179,10 +183,14 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
     let until = Instant::now() + WAIT;
     loop {
         let state = status(&*backend);
-        if matches!(
-            state.state,
-            devworks_core::protocol::records::ItemState::Enabled
-        ) {
+        if state.endpoint.is_some()
+            && state.protocol_versions.0.len() == 2
+            && matches!(
+                state.state,
+                devworks_core::protocol::records::ItemState::Enabled
+                    | devworks_core::protocol::records::ItemState::Partial
+            )
+        {
             assert!(state.endpoint.is_some());
             assert_eq!(state.protocol_versions.0.len(), 2);
             break;
@@ -192,9 +200,32 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
     }
     assert_eq!(http(port, "GET", None, &[], None).0, 405);
     assert_eq!(http(port, "POST", None, &[], Some(initial())).0, 401);
+    let legacy_headers = [("Mcp-Protocol-Version", LEGACY)];
+    assert_eq!(
+        http(
+            port,
+            "POST",
+            Some(&token),
+            &legacy_headers,
+            Some(call(LEGACY, &project.id.0))
+        )
+        .0,
+        400
+    );
     let (code, reply) = http(port, "POST", Some(&token), &[], Some(initial()));
     assert_eq!(code, 200, "{reply}");
     assert_eq!(reply["result"]["protocolVersion"], LEGACY);
+    assert_eq!(
+        http(
+            port,
+            "POST",
+            Some(&token),
+            &legacy_headers,
+            Some(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+        )
+        .0,
+        202
+    );
     for version in [LEGACY, MODERN] {
         let mut headers = vec![("Mcp-Protocol-Version", version)];
         if version == MODERN {
@@ -277,6 +308,75 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
         stdio(&root.0, &token, version, &project.id.0);
     }
 
+    let command_input = json!({
+        "name": "devworks_knowledge_record",
+        "arguments": {
+            "projectId": project.id, "requestKey": "wire-knowledge",
+            "input": {
+                "scope": {"kind":"Project","projectId":project.id},
+                "batch": {
+                    "entities":[{"clientId":"subject","label":"Wire probe","entityType":"topic","aliases":[]}],
+                    "claims":[{"subjectId":"subject","kind":"Fact","predicate":"notes",
+                        "value":"A scoped native wire probe","confidence":0.9,"evidenceIds":[],"tags":[]}],
+                    "evidence":[]
+                }
+            }
+        }
+    });
+    let (_, first) = http(
+        port,
+        "POST",
+        Some(&token),
+        &legacy_headers,
+        Some(request(5, "tools/call", command_input.clone())),
+    );
+    let first = &first["result"]["structuredContent"];
+    assert_eq!(first["kind"], "Recorded", "{first}");
+    let modern = [
+        ("Mcp-Protocol-Version", MODERN),
+        ("Mcp-Method", "tools/call"),
+        ("Mcp-Name", "devworks_knowledge_record"),
+    ];
+    let (_, replay) = http(
+        port,
+        "POST",
+        Some(&token),
+        &modern,
+        Some(request(6, "tools/call", profile(command_input, MODERN))),
+    );
+    assert_eq!(
+        replay["result"]["structuredContent"]["receipt"]["commandId"],
+        first["receipt"]["commandId"],
+        "{replay}"
+    );
+    let until = Instant::now() + WAIT;
+    let lookup = loop {
+        let (_, reply) = http(
+            port,
+            "POST",
+            Some(&token),
+            &legacy_headers,
+            Some(request(
+                7,
+                "tools/call",
+                json!({
+                    "name":"devworks_history_command_receipt",
+                    "arguments":{"projectId":project.id,"input":{"query":{"requestKey":"wire-knowledge"}}}
+                }),
+            )),
+        );
+        if reply["result"]["structuredContent"]["fault"]["code"] != "ViewUnavailable" {
+            break reply;
+        }
+        assert!(Instant::now() < until, "{reply}");
+        std::thread::sleep(Duration::from_millis(30));
+    };
+    assert_eq!(
+        lookup["result"]["structuredContent"]["result"]["value"]["commandId"],
+        first["receipt"]["commandId"],
+        "{lookup}"
+    );
+
     command(
         &*backend,
         "mcp_server.set_client_access",
@@ -303,6 +403,17 @@ fn native_bindings_use_the_gateway_in_both_mcp_wire_profiles() {
 }
 
 #[cfg(unix)]
+#[test]
+fn bridge_child_uses_the_test_desktop_image() {
+    if let Some(root) = std::env::var_os("DEVWORKS_MCP_WIRE_TEST_ROOT") {
+        // Separate the Rust test harness prefix from the wire frames.
+        println!();
+        std::io::stdout().flush().unwrap();
+        devworks_desktop::run_mcp_bridge(std::path::Path::new(&root)).unwrap();
+    }
+}
+
+#[cfg(unix)]
 fn stdio(root: &std::path::Path, token: &Secret, version: &str, project: &Id) {
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
@@ -316,10 +427,13 @@ fn stdio(root: &std::path::Path, token: &Secret, version: &str, project: &Id) {
         }
     }
     let mut bridge = Bridge(
-        Command::new(env!("CARGO_BIN_EXE_devworks-desktop"))
-            .arg("mcp")
-            .arg("--data-dir")
-            .arg(root)
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "bridge_child_uses_the_test_desktop_image",
+                "--nocapture",
+            ])
+            .env("DEVWORKS_MCP_WIRE_TEST_ROOT", root)
             .env("DEVWORKS_MCP_TOKEN", token.expose())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -332,7 +446,7 @@ fn stdio(root: &std::path::Path, token: &Secret, version: &str, project: &Id) {
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            if sender.send(line).is_err() {
+            if line.starts_with('{') && sender.send(line).is_err() {
                 break;
             }
         }
@@ -358,4 +472,18 @@ fn stdio(root: &std::path::Path, token: &Secret, version: &str, project: &Id) {
         reply["result"]["structuredContent"]["result"]["value"]["name"], "MCP wire project",
         "{reply}"
     );
+    drop(send);
+    drop(stdin);
+    let until = Instant::now() + WAIT;
+    loop {
+        if let Some(exit) = bridge.0.try_wait().unwrap() {
+            assert!(exit.success(), "{exit}");
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "stdio bridge did not close after EOF"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

@@ -41,6 +41,7 @@ pub(super) struct IndexTargets {
     pub repositories: Vec<Id>,
     pub worktrees: Vec<WorktreeTarget>,
     pub removal: Option<IndexRemoval>,
+    pub overlay_reads: Vec<OverlayRead>,
     pub document_run: Option<DocumentTarget>,
 }
 
@@ -133,14 +134,35 @@ impl IndexTargets {
         {
             return Err(StorageError::ScopeDenied);
         }
-        self.graph_views(
+        let selected = crate::services::graph::cursor::requested_view(
+            request.view.clone(),
+            request.cursor.as_deref(),
+        )
+        .map_err(|_| StorageError::CursorExpired)?;
+        let full_project = self.graph_views(
             snapshot,
             ctx,
             &request.scope,
-            request.view.as_ref(),
+            selected.as_ref(),
             None,
             granted_worktrees,
-        )
+        )?;
+        if matches!(
+            request.query,
+            crate::protocol::data::GraphQuery::ScopeStatus
+        ) {
+            let repositories = if full_project {
+                snapshot
+                    .projects()
+                    .members(ctx.project_id().ok_or(StorageError::ScopeDenied)?)?
+            } else {
+                self.repositories.clone()
+            };
+            for repository in repositories {
+                self.repository_overlays(snapshot.indexing(), &repository, granted_worktrees)?;
+            }
+        }
+        Ok(full_project)
     }
 
     pub fn analysis(
@@ -249,13 +271,18 @@ impl IndexTargets {
         if let OperationInput::Repositories(request) = input {
             let target = match request {
                 repositories::Input::Nodes(input) => {
-                    Some((&input.repository_id, input.views.as_ref()))
+                    let selected = crate::services::graph::cursor::requested_view(
+                        input.views.clone(),
+                        input.page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                    )
+                    .map_err(|_| StorageError::CursorExpired)?;
+                    Some((&input.repository_id, selected))
                 }
                 repositories::Input::Readme(input) => {
-                    Some((&input.repository_id, Some(&input.views)))
+                    Some((&input.repository_id, Some(input.views.clone())))
                 }
                 repositories::Input::Summary(input) => {
-                    Some((&input.repository_id, Some(&input.views)))
+                    Some((&input.repository_id, Some(input.views.clone())))
                 }
                 _ => None,
             };
@@ -265,7 +292,7 @@ impl IndexTargets {
                     snapshot,
                     ctx,
                     &DataScope::Project { project_id },
-                    views,
+                    views.as_ref(),
                     Some(repository),
                     granted_worktrees,
                 )?;
@@ -384,10 +411,42 @@ impl IndexTargets {
         granted_worktrees: &[Id],
     ) -> Result<(), StorageError> {
         self.repository(repository);
-        for overlay in read.overlays(repository)? {
-            self.overlay(read, &overlay, granted_worktrees)?;
+        let overlays = read.overlays(repository)?;
+        let mut allowed = Vec::new();
+        for overlay in &overlays {
+            match self.overlay(read, overlay, granted_worktrees) {
+                Ok(()) => allowed.push(overlay.id.clone()),
+                Err(StorageError::ScopeDenied) => (),
+                Err(error) => return Err(error),
+            }
         }
+        self.overlay_reads.push(OverlayRead {
+            repository: repository.clone(),
+            overlays: overlays.into_iter().map(|overlay| overlay.id).collect(),
+            allowed,
+        });
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct OverlayRead {
+    repository: Id,
+    overlays: Vec<Id>,
+    allowed: Vec<Id>,
+}
+
+impl OverlayRead {
+    pub fn ids(&self) -> &[Id] {
+        &self.allowed
+    }
+
+    pub fn holds(&self, read: &dyn IndexRead) -> Result<bool, StorageError> {
+        let current = read.overlays(&self.repository)?;
+        Ok(current.len() == self.overlays.len()
+            && current
+                .iter()
+                .all(|overlay| self.overlays.contains(&overlay.id)))
     }
 }
 

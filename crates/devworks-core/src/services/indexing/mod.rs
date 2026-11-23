@@ -531,10 +531,16 @@ impl IndexCoordinator {
         read: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         i: &iops::RunsInput,
+        authorization: &crate::ports::Authorization,
     ) -> Result<(OperationResult, i64), Failure> {
         let project = request_scope(read.projects(), ctx, &i.scope, false)?;
         let scope_revision = project.as_ref().map_or(1, |p| p.scope_revision);
         let mut filter = IndexRunFilter::default();
+        if ctx.principal_kind() == crate::context::PrincipalKind::McpClient {
+            filter.requested_project = ctx.project_id().cloned();
+            filter.overlay_ids =
+                Some(crate::services::mcp_inbound::access::allowed_index_overlays(authorization));
+        }
         if let Some(r) = &i.repository_id {
             let repo = visible_repository(read.projects(), ctx, r)?;
             if let Some(p) = &project
@@ -1152,7 +1158,9 @@ impl QueryHandler for IndexCoordinator {
         let revision = query.schema_revision().0;
         let answered = match query.input() {
             OperationInput::Indexing(iops::Input::Discover(i)) => self.discover(snapshot, ctx, i),
-            OperationInput::Indexing(iops::Input::Runs(i)) => self.runs(snapshot, ctx, i),
+            OperationInput::Indexing(iops::Input::Runs(i)) => {
+                self.runs(snapshot, ctx, i, query.authorization())
+            }
             OperationInput::Indexing(iops::Input::Status(i)) => {
                 match (&i.repository_id, &i.overlay_id) {
                     (_, Some(o)) => status::overlay_status(&self.env, snapshot, ctx, o, revision),

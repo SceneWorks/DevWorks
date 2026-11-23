@@ -428,6 +428,7 @@ impl SettingsCtl<'_, '_> {
                     Ok(TaskOutput::IncomingMcp {
                         status: Box::new(status),
                         clients,
+                        stdio_paths: backend.incoming_mcp_stdio_paths(),
                     })
                 },
             )
@@ -1259,9 +1260,11 @@ impl SettingsCtl<'_, '_> {
                 let panel = &mut self.settings.incoming_mcp;
                 panel.busy = false;
                 match result {
-                    Ok(TaskOutput::IncomingMcp { status, clients }) => {
-                        panel.loaded(*status, clients)
-                    }
+                    Ok(TaskOutput::IncomingMcp {
+                        status,
+                        clients,
+                        stdio_paths,
+                    }) => panel.loaded(*status, clients, stdio_paths),
                     Err(error) => panel.message = Some(error),
                     _ => {}
                 }

@@ -7,6 +7,12 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / 'docs/architecture'
 source = BASE / 'contracts/family-coverage.json'
 coverage = json.loads(source.read_text())
+# Keep reviewed interface revisions fixed even if the native catalog adds a new revision.
+published = BASE / 'mcp-publication-candidates.json'
+schema_pins = {
+    (tool['operation'], tool['mode']): tool['schemaRevision']
+    for tool in json.loads(published.read_text())['tools']
+}
 # Reviewed operation/mode pairs. Adding an operation to the catalog does not expose it.
 # Work queue inspection and schema-to-code references extend the retained context surface.
 QUERY_OPERATIONS = set('''
@@ -236,6 +242,7 @@ for family in coverage['families']:
                 'defaultForNewRegistration': False,
                 'requiresApplicationIdempotencyKey': mode == 'Command',
                 'hostChecks': 'Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation.',
+                'schemaRevision': schema_pins[(name, mode)],
             })
 assert len({t['name'] for t in tools}) == len(tools), 'MCP tool name collision'
 assert {t['operation'] for t in tools if t['mode'] == 'Query'} == QUERY_OPERATIONS
@@ -254,5 +261,5 @@ record = {
                'commandTools': sum(t['mode'] == 'Command' for t in tools)},
     'tools': tools, 'dispositions': dispositions,
 }
-(BASE / 'mcp-publication-candidates.json').write_text(json.dumps(record, indent=2) + '\n')
+published.write_text(json.dumps(record, indent=2) + '\n')
 print(json.dumps(record['counts']))

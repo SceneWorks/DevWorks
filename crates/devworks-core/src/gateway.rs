@@ -362,6 +362,11 @@ impl Gateway<'_> {
             {
                 return Ok(None);
             }
+            if ctx.principal_kind() == PrincipalKind::McpClient
+                && !crate::authority::authorization_holds(snapshot, &authorization)?
+            {
+                return Ok(None);
+            }
             Ok(Some((handler.query(ctx, &admitted, snapshot), stamp)))
         });
         // Publication point: authority that was revoked or narrowed while the answer was being

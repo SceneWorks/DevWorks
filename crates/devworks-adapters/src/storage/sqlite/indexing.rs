@@ -548,6 +548,15 @@ macro_rules! index_reads {
                 let n = page_limit(n)?;
                 let mut sql = format!("SELECT {RUN_COLUMNS} FROM index_runs WHERE 1=1");
                 let mut values: Vec<rusqlite::types::Value> = Vec::new();
+                if let Some(project) = &filter.requested_project {
+                    sql.push_str(" AND project_id=?");
+                    values.push(project.0.as_str().to_owned().into());
+                }
+                if let Some(overlays) = &filter.overlay_ids {
+                    sql.push_str(" AND (overlay_id IS NULL OR overlay_id IN (SELECT value FROM json_each(?)))");
+                    values.push(serde_json::to_string(overlays)
+                        .expect("opaque overlay IDs encode as JSON").into());
+                }
                 if let Some(r) = &filter.repository {
                     sql.push_str(" AND repository_id=?");
                     values.push(r.as_str().to_owned().into());

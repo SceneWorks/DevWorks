@@ -372,7 +372,13 @@ pub fn status(
         .flatten();
     let source = idx.repository_source(&r.id)?;
     let effective = effective_config(idx, read.projects(), &r.id)?;
-    let last_run = idx.latest_run(&r.id, None)?;
+    let last_run = idx.latest_run(&r.id, None)?.filter(|run| {
+        ctx.principal_kind() != crate::context::PrincipalKind::McpClient
+            || (run.project_id.as_ref() == ctx.project_id()
+                && run.overlay_id.as_ref().is_none_or(|overlay| {
+                    crate::services::mcp_inbound::access::overlay_is_admitted(ctx, overlay)
+                }))
+    });
     let active = idx.active_run(&r.id, None)?;
 
     // Freshness: the indexed commit against the observed HEAD and the current configuration.
@@ -433,7 +439,10 @@ pub fn status(
         more_gaps: more,
     };
 
-    let overlays = idx.overlays(&r.id)?;
+    let mut overlays = idx.overlays(&r.id)?;
+    overlays.retain(|overlay| {
+        crate::services::mcp_inbound::access::overlay_is_admitted(ctx, &overlay.id)
+    });
     let mut current_view_ids: Vec<Id> = published.iter().map(|p| p.view_id.clone()).collect();
     let published_gen = view.as_ref().map(|v| v.baseline_id.clone());
     let current_config = super::effective_config(idx, read.projects(), &r.id)?.digest;

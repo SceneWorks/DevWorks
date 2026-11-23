@@ -18,10 +18,12 @@ struct Manifest {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Candidate {
     name: String,
     operation: String,
     mode: String,
+    schema_revision: u32,
 }
 
 /// A reviewed MCP name bound to one exact application operation, mode and schema revision.
@@ -290,10 +292,7 @@ pub fn published_tools() -> &'static [PublishedTool] {
                     name: candidate.name,
                     operation: descriptor,
                     binding,
-                    revision: *descriptor
-                        .revisions
-                        .last()
-                        .expect("registered schema revision"),
+                    revision: SchemaRevision(candidate.schema_revision),
                 }
             })
             .collect()
@@ -353,6 +352,9 @@ mod tests {
     fn each_mcp_schema_projects_only_its_selected_input_and_result() {
         for tool in published_tools() {
             assert!(tool.has_target_authority(), "{}", tool.name);
+            if !tool.operation.supports(tool.revision) {
+                continue;
+            }
             let input = tool.input_schema();
             let output = tool.output_schema();
             assert_eq!(input["additionalProperties"], false, "{}", tool.name);

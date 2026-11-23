@@ -1891,6 +1891,10 @@ impl Backend for DesktopBackend {
             .stage_api_key(self.host.ctx.principal(), key)
             .map_err(|e| e.to_string())
     }
+    fn incoming_mcp_stdio_paths(&self) -> Option<(PathBuf, PathBuf)> {
+        Some((std::env::current_exe().ok()?, self.host.data_root.clone()))
+    }
+
     fn provision_inbound_mcp_credential(
         &self,
         client: &Id,
