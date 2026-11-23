@@ -40,7 +40,6 @@ static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
 static FALSE_POSITIVE: LazyLock<Regex> = LazyLock::new(|| {
     regex(concat!(
         r#"(?i)(?:password|passwd|pwd|pass)\s*=\s*["']\s*["']"#,
-        r#"|string\s+(?:password|passwd|pass|pwd)\s*=\s*["']"#,
         r"|(?:password|passwd|pwd)\s*=\s*\w+\.\w+",
         r#"|(?:string|var|object)\s+(?:password|passwd|pass)\s*=\s*[^\s"']"#,
         r"|string\s+(?:password|passwd|pass|pwd)\s*[,)]",
@@ -345,16 +344,25 @@ mod tests {
 
     #[test]
     fn only_sanitized_rule_names_and_locations_survive_secret_detection() {
-        let placeholder = "password = \"replace-me\"";
-        let identifier = "password = \"ResetClientPassword\"";
-        let synthetic = "password = \"Ab7!mQ92JaP\"";
-        let source = format!("{placeholder}\n{identifier}\n{synthetic}\n");
-        let findings = run("src/Options.cs", &source);
-        assert_eq!(findings.len(), 2);
-        assert!(findings.iter().all(|finding| finding.line == Some(3)));
+        let source = concat!(
+            "string password = \"replace-me\";\n",
+            "string password = \"\";\n",
+            "string password = configuration.Password;\n",
+            "string password = \"ResetClientPassword\";\n",
+            "string password = \"Ab7!mQ92JaP\";\n",
+            "password = \"kL4%tQ2W8nV\";\n",
+        );
+        let findings = run("src/Options.cs", source);
+        assert_eq!(findings.len(), 4);
+        for line in [5, 6] {
+            assert!(findings.iter().any(|finding| {
+                finding.line == Some(line) && finding.title == "Hardcoded Password Assignment"
+            }));
+        }
         let json = serde_json::to_string(&findings).unwrap();
         assert!(!json.contains("Ab7"));
-        assert!(run("src/fixtures/Options.cs", &source).is_empty());
+        assert!(!json.contains("kL4"));
+        assert!(run("src/fixtures/Options.cs", source).is_empty());
         assert!(!run("appsettings.json", "password = \"short\"").is_empty());
     }
 
