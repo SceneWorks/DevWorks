@@ -260,7 +260,11 @@ fn validate_operations(access: &McpClientAccess) -> Result<(), Failure> {
             .iter()
             .map(|operation| operation.0.as_str())
             .collect();
-        if !unique(&selected) || selected.iter().any(|op| !selected_operation(op, mode)) {
+        if !unique(&selected)
+            || selected
+                .iter()
+                .any(|op| !selected_operation(op, mode) || !access::supported_target(op))
+        {
             return Err(invalid("mcp_selected_operations").into());
         }
     }

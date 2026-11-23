@@ -1140,8 +1140,26 @@ pub fn authorization_holds(
     s: &dyn ReadSnapshot,
     authorization: &Authorization,
 ) -> Result<bool, StorageError> {
+    authority_holds_on_read(s, authorization, false)
+}
+
+pub(crate) fn command_publication_holds(
+    s: &dyn ReadSnapshot,
+    authorization: &Authorization,
+) -> Result<bool, StorageError> {
+    authority_holds_on_read(s, authorization, true)
+}
+
+fn authority_holds_on_read(
+    s: &dyn ReadSnapshot,
+    authorization: &Authorization,
+    receipt_publication: bool,
+) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::ExternalMcp(fence) if receipt_publication => {
+                fence.publication_holds(s)?
+            }
             AuthorityFence::ExternalMcp(fence) => fence.holds(s)?,
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
@@ -1168,9 +1186,12 @@ pub fn authorization_holds(
     }
     for g in authorization.authority_grants() {
         let current = s.authority().authority_grant(&g.grant_id)?;
-        if !current
-            .is_some_and(|c| c.revision == g.expected_revision && c.state == GrantState::Active)
-        {
+        if !current.is_some_and(|c| {
+            (c.revision == g.expected_revision && c.state == GrantState::Active)
+                || (receipt_publication
+                    && c.state != GrantState::Revoked
+                    && g.expected_revision.checked_add(1) == Some(c.revision))
+        }) {
             return Ok(false);
         }
     }

@@ -4,7 +4,7 @@ use crate::context::InvocationContext;
 use crate::operations::{OperationInput, code, documents, indexing, repositories};
 use crate::ports::storage::{
     ArtifactRead, ArtifactRetention, ArtifactState, IndexRead, OVERLAY_UNAVAILABLE, ReadSnapshot,
-    StorageError, StoredOverlay,
+    StorageError, StoredIndexRun, StoredOverlay,
 };
 use crate::protocol::data::{ArtifactCommand, DataScope, IndexCommand};
 use crate::protocol::{Id, ProjectId};
@@ -37,6 +37,8 @@ impl WorktreeTarget {
 pub(super) struct IndexTargets {
     pub repositories: Vec<Id>,
     pub worktrees: Vec<WorktreeTarget>,
+    pub removal: Option<IndexRemoval>,
+    pub document_run: Option<DocumentTarget>,
 }
 
 impl IndexTargets {
@@ -120,10 +122,9 @@ impl IndexTargets {
         &mut self,
         read: &dyn IndexRead,
         ctx: &InvocationContext,
-        id: &Id,
+        named: StoredIndexRun,
         granted_worktrees: &[Id],
     ) -> Result<(), StorageError> {
-        let named = read.run(id)?.ok_or(StorageError::ScopeDenied)?;
         let runs = if named.id == named.batch_id {
             read.batch_runs(&named.id)?
         } else {
@@ -187,19 +188,56 @@ impl IndexTargets {
                 let IndexCommand::Cancel { operation_id } = &input.command else {
                     return Err(StorageError::ScopeDenied);
                 };
-                exact.cancel(read, ctx, &operation_id.0, granted_worktrees)?;
+                if let Some(run) = read.run(&operation_id.0)? {
+                    exact.cancel(read, ctx, run, granted_worktrees)?;
+                } else {
+                    exact.document_run = Some(DocumentTarget::document_run(
+                        snapshot,
+                        ctx,
+                        &operation_id.0,
+                    )?);
+                }
             }
             OperationInput::Repositories(repositories::Input::RemoveIndex(input)) => {
                 exact.repository(&input.repository_id);
-                for overlay in read.overlays(&input.repository_id)? {
-                    if overlay.state != OVERLAY_UNAVAILABLE {
-                        exact.overlay(read, &overlay, granted_worktrees)?;
-                    }
+                let overlays = active_overlays(read, &input.repository_id)?;
+                for overlay in &overlays {
+                    exact.overlay(read, overlay, granted_worktrees)?;
                 }
+                exact.removal = Some(IndexRemoval {
+                    repository: input.repository_id.clone(),
+                    overlays: overlays.into_iter().map(|overlay| overlay.id).collect(),
+                });
             }
             _ => {}
         }
         Ok(exact)
+    }
+}
+
+fn active_overlays(
+    read: &dyn IndexRead,
+    repository: &Id,
+) -> Result<Vec<StoredOverlay>, StorageError> {
+    Ok(read
+        .overlays(repository)?
+        .into_iter()
+        .filter(|overlay| overlay.state != OVERLAY_UNAVAILABLE)
+        .collect())
+}
+
+/// Repository index removal also affects all existing overlays. Verify the same bound before
+/// the writer enumerates those overlays and publishes any change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct IndexRemoval {
+    repository: Id,
+    overlays: Vec<Id>,
+}
+impl IndexRemoval {
+    pub fn holds(&self, read: &dyn IndexRead) -> Result<bool, StorageError> {
+        Ok(active_overlays(read, &self.repository)?
+            .iter()
+            .all(|overlay| self.overlays.contains(&overlay.id)))
     }
 }
 
@@ -233,6 +271,37 @@ impl DocumentTarget {
             scope_revision: artifact.scope_revision,
             owner_required,
         })
+    }
+
+    /// The native document worker owns its IDs in the queue, not the repository index.
+    /// Its original queued event independently attributes the exact document and project.
+    fn document_run(
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        run: &Id,
+    ) -> Result<Self, StorageError> {
+        let entry = snapshot
+            .queue()
+            .entry(run)?
+            .filter(|entry| entry.consumer == "document_index")
+            .ok_or(StorageError::ScopeDenied)?;
+        let project = ctx.project_id().ok_or(StorageError::ScopeDenied)?;
+        let queued = snapshot
+            .history()
+            .event(&entry.event_id)?
+            .filter(|event| {
+                event.kind == "DocumentIndexQueued"
+                    && event.aggregate_kind == "document_index_run"
+                    && event.aggregate_id == run.as_str()
+                    && event.project_id.as_ref() == Some(project)
+                    && &event.actor == ctx.principal()
+            })
+            .ok_or(StorageError::ScopeDenied)?;
+        let id = queued.payload["documentId"]
+            .as_str()
+            .and_then(|id| Id::new(id).ok())
+            .ok_or(StorageError::ScopeDenied)?;
+        Self::resolve(snapshot.artifacts(), project, &id, true)
     }
 
     pub fn current(
