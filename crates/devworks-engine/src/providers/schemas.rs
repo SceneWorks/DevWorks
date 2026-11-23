@@ -125,50 +125,7 @@ impl RegisteredSchemas {
         &self,
         ctx: &InvocationContext,
     ) -> Result<Vec<ToolSchema>, StorageError> {
-        if ctx.principal_kind() != devworks_core::context::PrincipalKind::Agent {
-            return Err(StorageError::ScopeDenied);
-        }
-        let selected = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
-            current_context(snapshot, ctx)?;
-            let worktree = assignment_worktree(snapshot, ctx)?;
-            let ctx = worktree.as_ref().unwrap_or(ctx);
-            let principal = snapshot.authority().principal(ctx.principal())?;
-            let plan_reviewer = principal.as_ref().and_then(|p| p.role)
-                == Some(devworks_core::settings::catalog::AgentRole::PlanReviewer);
-            let source_enabled = if plan_reviewer {
-                crate::plan_review::source_enabled(snapshot.work(), ctx)?
-            } else {
-                false
-            };
-            let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
-            let mut selected = Vec::new();
-            for descriptor in registry::all() {
-                if plan_reviewer && !(source_enabled && descriptor.name == "code.source") {
-                    continue;
-                }
-                for binding in descriptor.modes {
-                    if self.registered(descriptor.name, binding.mode)
-                        && matches!(
-                            policy::registered_tool_visibility(
-                                ctx,
-                                principal.as_ref(),
-                                &effective,
-                                descriptor,
-                                binding,
-                                binding.effect,
-                            ),
-                            Verdict::Allow
-                        )
-                    {
-                        let revision = *descriptor.revisions.last().ok_or_else(|| {
-                            StorageError::InvalidRecord("operation has no schema revision".into())
-                        })?;
-                        selected.push((descriptor.name, binding.mode, revision));
-                    }
-                }
-            }
-            Ok(selected)
-        })?;
+        let selected = self.selected_builtin_bindings(ctx, registry::all().iter(), None)?;
         let mut tools = selected
             .into_iter()
             .map(|(name, mode, revision)| {
@@ -223,6 +180,59 @@ impl RegisteredSchemas {
             ));
         }
         Ok(tools)
+    }
+
+    fn selected_builtin_bindings(
+        &self,
+        ctx: &InvocationContext,
+        descriptors: impl Iterator<Item = &'static registry::OperationDescriptor>,
+        required_mode: Option<Mode>,
+    ) -> Result<Vec<(&'static str, Mode, SchemaRevision)>, StorageError> {
+        if ctx.principal_kind() != devworks_core::context::PrincipalKind::Agent {
+            return Err(StorageError::ScopeDenied);
+        }
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            current_context(snapshot, ctx)?;
+            let worktree = assignment_worktree(snapshot, ctx)?;
+            let ctx = worktree.as_ref().unwrap_or(ctx);
+            let principal = snapshot.authority().principal(ctx.principal())?;
+            let plan_reviewer = principal.as_ref().and_then(|p| p.role)
+                == Some(devworks_core::settings::catalog::AgentRole::PlanReviewer);
+            let source_enabled = if plan_reviewer {
+                crate::plan_review::source_enabled(snapshot.work(), ctx)?
+            } else {
+                false
+            };
+            let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
+            let mut selected = Vec::new();
+            for descriptor in descriptors {
+                if plan_reviewer && !(source_enabled && descriptor.name == "code.source") {
+                    continue;
+                }
+                for binding in descriptor.modes {
+                    if required_mode.is_none_or(|mode| mode == binding.mode)
+                        && self.registered(descriptor.name, binding.mode)
+                        && matches!(
+                            policy::registered_tool_visibility(
+                                ctx,
+                                principal.as_ref(),
+                                &effective,
+                                descriptor,
+                                binding,
+                                binding.effect,
+                            ),
+                            Verdict::Allow
+                        )
+                    {
+                        let revision = *descriptor.revisions.last().ok_or_else(|| {
+                            StorageError::InvalidRecord("operation has no schema revision".into())
+                        })?;
+                        selected.push((descriptor.name, binding.mode, revision));
+                    }
+                }
+            }
+            Ok(selected)
+        })
     }
 
     pub fn selected_mcp_tools(
@@ -406,13 +416,20 @@ impl RegisteredSchemas {
         if !equal(&expected.input_schema, reference) {
             return Err(ProviderError::MaterialUnavailable);
         }
-        self.selected_builtins(ctx)
-            .map_err(|_| ProviderError::MaterialUnavailable)?
-            .into_iter()
-            .find(|tool| {
-                tool.capability_id == expected.capability_id && equal(&tool.input_schema, reference)
-            })
-            .ok_or(ProviderError::MaterialUnavailable)
+        // Use the same selection policy as the inventory, checking only this alias's query
+        // dependencies. Resolving or rechecking one alias must not rebuild unrelated schemas.
+        let operations = alias.operations();
+        let selected = self
+            .selected_builtin_bindings(
+                ctx,
+                operations.iter().filter_map(|name| registry::find(name)),
+                Some(Mode::Query),
+            )
+            .map_err(|_| ProviderError::MaterialUnavailable)?;
+        if selected.len() != operations.len() {
+            return Err(ProviderError::MaterialUnavailable);
+        }
+        Ok(expected)
     }
     fn registered(&self, op: &str, mode: Mode) -> bool {
         match mode {

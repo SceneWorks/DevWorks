@@ -117,7 +117,7 @@ const ALIASES: &[Alias] = &[
 
 pub(crate) fn selected(builtins: &[ToolSchema]) -> impl Iterator<Item = Alias> + '_ {
     ALIASES.iter().copied().filter(|alias| {
-        alias.operations.iter().all(|op| {
+        alias.operations().iter().all(|op| {
             builtins.iter().any(|tool| {
                 crate::providers::schemas::builtin_operation(tool.capability_id.as_str())
                     .is_some_and(|(name, mode)| name == *op && mode == Some(Mode::Query))
@@ -127,6 +127,10 @@ pub(crate) fn selected(builtins: &[ToolSchema]) -> impl Iterator<Item = Alias> +
 }
 
 impl Alias {
+    pub(crate) fn operations(self) -> &'static [&'static str] {
+        self.operations
+    }
+
     pub(crate) fn document(self) -> Value {
         let mut properties = serde_json::Map::new();
         for &field in self.fields {
