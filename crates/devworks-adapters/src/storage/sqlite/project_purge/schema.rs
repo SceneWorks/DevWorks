@@ -79,8 +79,10 @@ use rusqlite::Connection;
 /// action records, plus scoped source observations. A project's settings and runs belong to
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
+/// Migration 77 adds coordinator document transfer proposals. Guarded purge owns each deletion,
+/// with custody tied to either participating project and to the retained artifact.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "da24b249a8b836f3123705560cf3ab04b9b255e6203bc39a14b913aba59809a0";
+    "1c0702568a9c7ed9effc00ddaee6fb7e2bf32d672c6fae8562703d8332fc900b";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

@@ -8,9 +8,9 @@ use devworks_core::{
     ports::storage::{
         ArtifactScope, DocumentCandidate, DocumentCheckpoint, DocumentEmbeddingRun,
         DocumentIndexVersion, DocumentRankingBatch, DocumentRankingQuery, DocumentRead,
-        DocumentRepository, StorageError,
+        DocumentRepository, DocumentTransferProposal, StorageError, StoredDocumentTransfer,
     },
-    protocol::{ActorId, Id, ProjectId, Revision},
+    protocol::{ActorId, Id, ProjectId, Revision, records::DocumentTransferState},
     services::documents::{
         extraction::ExtractedBlock,
         vision::{VisionTarget, VisionUnit},
@@ -28,6 +28,33 @@ fn encode(value: &impl Serialize) -> Result<String, StorageError> {
 
 fn decode<T: DeserializeOwned>(value: &str) -> Result<T, StorageError> {
     serde_json::from_str(value).map_err(|error| corrupt(error.to_string()))
+}
+
+fn transfer(conn: &Connection, id: &Id) -> Result<Option<StoredDocumentTransfer>, StorageError> {
+    let row = db(conn
+        .query_row(
+            "SELECT proposal_json,revision,state FROM document_transfers WHERE id=?1",
+            [id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional())?;
+    row.map(|(proposal, revision, state)| {
+        let state = serde_json::from_value(Value::String(state))
+            .map_err(|error| corrupt(error.to_string()))?;
+        Ok(StoredDocumentTransfer {
+            id: id.clone(),
+            proposal: decode(&proposal)?,
+            revision: Revision::new(revision).map_err(corrupt)?,
+            state,
+        })
+    })
+    .transpose()
 }
 
 fn retrieval(conn: &Connection, id: &Id) -> Result<bool, StorageError> {
@@ -401,6 +428,10 @@ fn pending_space<'a>(
 macro_rules! document_reads {
     ($store:ty) => {
         impl DocumentRead for $store {
+            fn document_transfer(&self, id: &Id) -> Result<Option<StoredDocumentTransfer>, StorageError> {
+                transfer(self.conn, id)
+            }
+
             fn document_corpus_digest(
                 &self, scope: &ArtifactScope, owner: Option<&ActorId>, exact_versions: Option<&[Id]>,
             ) -> Result<String, StorageError> {
@@ -536,6 +567,49 @@ document_reads!(Snapshot<'_>);
 document_reads!(Unit<'_>);
 
 impl DocumentRepository for Unit<'_> {
+    fn insert_document_transfer(
+        &mut self,
+        id: &Id,
+        proposal: &DocumentTransferProposal,
+    ) -> Result<(), StorageError> {
+        db(self.conn.execute(
+            "INSERT INTO document_transfers
+             (id,artifact_id,source_project_id,destination_project_id,proposal_json,revision,state)
+             VALUES(?1,?2,?3,?4,?5,1,'Pending')",
+            params![
+                id.as_str(),
+                proposal.document.as_str(),
+                proposal.source.project.0.as_str(),
+                proposal.destination.project.0.as_str(),
+                encode(proposal)?,
+            ],
+        ))?;
+        Ok(())
+    }
+
+    fn resolve_document_transfer(
+        &mut self,
+        id: &Id,
+        expected: &Revision,
+        outcome: &DocumentTransferState,
+    ) -> Result<(), StorageError> {
+        let state = match outcome {
+            DocumentTransferState::Shared => "Shared",
+            DocumentTransferState::Moved => "Moved",
+            DocumentTransferState::Declined => "Declined",
+            DocumentTransferState::Pending => return Err(invalid("transfer outcome is pending")),
+        };
+        let changed = db(self.conn.execute(
+            "UPDATE document_transfers SET revision=revision+1,state=?3
+             WHERE id=?1 AND revision=?2 AND state='Pending'",
+            params![id.as_str(), expected.get(), state],
+        ))?;
+        if changed != 1 {
+            return Err(invalid("document transfer is no longer pending"));
+        }
+        Ok(())
+    }
+
     fn document_extraction_by_key(
         &self,
         version: &Id,

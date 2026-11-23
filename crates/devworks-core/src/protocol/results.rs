@@ -397,6 +397,15 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 11))]
     #[serde(rename = "documents.resolve_citation")]
     DocumentsResolveCitation { value: ResolvedDocumentCitation },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_propose")]
+    DocumentsTransferPropose { value: DocumentTransferRecord },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_respond")]
+    DocumentsTransferRespond { value: DocumentTransferRecord },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_status")]
+    DocumentsTransferStatus { value: DocumentTransferRecord },
     #[serde(rename = "artifacts.save")]
     ArtifactsSave { value: ArtifactRecord },
     #[serde(rename = "artifacts.list")]
@@ -1016,6 +1025,9 @@ impl OperationResult {
             Self::DocumentsDisableRetrieval { .. } => "documents.disable_retrieval",
             Self::DocumentsRemoveIndex { .. } => "documents.remove_index",
             Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
+            Self::DocumentsTransferPropose { .. } => "documents.transfer_propose",
+            Self::DocumentsTransferRespond { .. } => "documents.transfer_respond",
+            Self::DocumentsTransferStatus { .. } => "documents.transfer_status",
             Self::ArtifactsSave { .. } => "artifacts.save",
             Self::ArtifactsList { .. } => "artifacts.list",
             Self::ArtifactsRead { .. } => "artifacts.read",
@@ -1414,6 +1426,9 @@ impl Check for OperationResult {
             Self::DocumentsDisableRetrieval { value } => value.check()?,
             Self::DocumentsRemoveIndex { value } => value.check()?,
             Self::DocumentsResolveCitation { value } => value.check()?,
+            Self::DocumentsTransferPropose { value } => value.check()?,
+            Self::DocumentsTransferRespond { value } => value.check()?,
+            Self::DocumentsTransferStatus { value } => value.check()?,
             Self::ArtifactsSave { value } => value.check()?,
             Self::ArtifactsList { value } => value.check()?,
             Self::ArtifactsRead { value } => value.check()?,
@@ -1879,6 +1894,15 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::DocumentsResolveCitation { .. } if revision < 11 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferPropose { .. } if revision < 14 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferRespond { .. } if revision < 14 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferStatus { .. } if revision < 14 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SkillsSetEnabled { .. } if revision < 8 => {

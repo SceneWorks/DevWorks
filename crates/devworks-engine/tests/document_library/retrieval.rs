@@ -4,6 +4,7 @@ use super::{
 };
 use devworks_core::{
     protocol::{
+        Id,
         data::{Citation, QueryCompletion, RetrievalMode, RetrievalPage},
         records::ResolvedDocumentCitation,
     },
@@ -104,6 +105,458 @@ fn assert_unavailable(reply: DomainQueryReply) {
         matches!(&reply, DomainQueryReply::Rejected { fault, .. }
         if fault.code == DomainErrorCode::ViewUnavailable),
         "{reply:?}"
+    );
+}
+
+fn coordinator(
+    f: &Fixture<'_>,
+    control: &Arc<devworks_core::services::runs::ControlService>,
+    root: &str,
+) -> InvocationContext {
+    use devworks_core::{
+        context::HostIngress,
+        protocol::{Counter, Revision},
+        services::agents::AgentService,
+    };
+    let started = f.command(
+        &f.human,
+        "runs.start",
+        json!({"protocol":"1.0-draft.1","requestKey":format!("start-{root}"),
+            "command":{"kind":"runs.start","rootId":root,
+                "expectedWorkRevision":"1","expectedControlRevision":"1"}}),
+    );
+    assert!(
+        matches!(&started, CommandReply::Recorded { receipt, .. }
+            if !matches!(receipt.decision, DomainDecision::Refused { .. })),
+        "{started:?}"
+    );
+    let control = control.clone();
+    let ids = f.h.ids.clone();
+    let host = principal(f.store.as_ref(), "transfer-host", PrincipalKind::Host);
+    let (assignment, session, activation) = write(f.store.as_ref(), move |tx| {
+        let lease = control
+            .claim_activation(tx, &id("transfer-owner"))?
+            .unwrap();
+        let activation = control
+            .start_activation(tx, &lease.id, lease.owner_epoch)?
+            .unwrap();
+        let service = AgentService::new(ids, control);
+        let primary = service
+            .materialize_primary(tx, &host, &activation.id, activation.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+        let assignment = tx.runs().assignment(&primary.assignment_id)?.unwrap();
+        let session = tx.sessions().session(&assignment.session_id)?.unwrap();
+        Ok((assignment, session, activation))
+    })
+    .unwrap();
+    HostIngress::new(f.store.as_ref())
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id(&format!("{root}-invocation")),
+            id(&format!("{root}-ingress")),
+            Counter::new(f.store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(session.project_id, session.root_id, Some(assignment.id))
+        .with_activation(activation.id, activation.owner_epoch)
+}
+
+fn transfer_proposal(
+    f: &Fixture<'_>,
+    document: &ArtifactRef,
+    destination: &str,
+    source_needs: bool,
+    key: &str,
+) -> Value {
+    let current = read(f.store.as_ref(), |r| {
+        r.artifacts().artifact(&document.artifact_id)
+    })
+    .unwrap();
+    json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":14,"requestKey":key,
+        "body":{"kind":"documents.transfer_propose","documentId":document.artifact_id,
+            "expectedDocumentRevision":current.revision.to_string(),
+            "expectedScopeRevision":current.scope_revision.to_string(),"destinationRootId":destination,
+            "sourceNeedsDocument":source_needs,"summary":"Relevant coordinator notes"}})
+}
+
+fn transfer_response(transfer: &Id, need: bool, key: &str) -> Value {
+    json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":14,"requestKey":key,
+        "body":{"kind":"documents.transfer_respond","transferId":transfer,
+            "expectedRevision":"1","destinationNeedsDocument":need}})
+}
+
+fn transfer_status(f: &Fixture<'_>, ctx: &InvocationContext, transfer: &Id) -> DomainQueryReply {
+    f.query(
+        ctx,
+        "documents.transfer_status",
+        json!({
+            "protocol":"1.0-draft.1","mode":"Query","schemaRevision":14,"queryId":"transfer-status",
+            "body":{"kind":"documents.transfer_status","transferId":transfer}
+        }),
+    )
+}
+
+fn proposal_id(reply: CommandReply<DomainDecision>) -> Id {
+    let OperationResult::DocumentsTransferPropose { value } = applied(reply) else {
+        panic!("expected document proposal");
+    };
+    value.id
+}
+
+fn confirm_decision(reply: CommandReply<DomainDecision>, state: &str) {
+    let OperationResult::DocumentsTransferRespond { value } = applied(reply) else {
+        panic!("expected document transfer decision");
+    };
+    assert_eq!(serde_json::to_value(value.state).unwrap(), state);
+}
+
+#[test]
+fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evidence() {
+    use devworks_core::{
+        authority::service::revoke_principal,
+        services::{agents::AgentService, runs::ControlService},
+    };
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let (completed, receiving_assignment) = {
+        let (mut f, indexer) = compose(&h);
+        seed::rows(
+            f.store.as_ref(),
+            &[seed::ProjectSeed::new("document-c")],
+            &[
+                seed::WorkSeed::issue("document-source-root", "document-a"),
+                seed::WorkSeed::issue("document-destination-root", "document-b"),
+            ],
+        )
+        .unwrap();
+        let control = Arc::new(ControlService::new(h.ids.clone()));
+        f.cases = f
+            .cases
+            .with_runs(control.clone())
+            .with_agents(Arc::new(AgentService::new(h.ids.clone(), control.clone())));
+        let a = coordinator(&f, &control, "document-source-root");
+        let b = coordinator(&f, &control, "document-destination-root");
+        let c = f.scoped("document-c");
+        let a_view = f.scoped("document-a");
+        let b_view = f.scoped("document-b");
+        let doc = put(
+            &f,
+            &indexer,
+            &a_view,
+            "transfer-doc",
+            b"Greenhouse evidence.",
+            None,
+        );
+        let reference = doc.current_version.as_ref().unwrap();
+        let citation = search(&f, &a_view, "greenhouse", &[]).passages[0]
+            .citation
+            .clone();
+        let scope = &doc.scope_revision;
+        applied(f.command(
+            &f.human,
+            "documents.share",
+            json!({"protocol":"1.0-draft.1","schemaRevision":10,
+            "requestKey":"initial-share-to-c","command":{"kind":"Share","artifactId":doc.id,
+                "targetProjectId":"document-c","expectedScopeRevision":scope}}),
+        ));
+        let proposed = transfer_proposal(&f, reference, "document-destination-root", true, "share");
+        let share = proposal_id(f.command(&a, "documents.transfer_propose", proposed.clone()));
+        let replay = f.command(&a, "documents.transfer_propose", proposed.clone());
+        assert!(matches!(
+            replay,
+            CommandReply::Recorded { replayed: true, .. }
+        ));
+        assert_eq!(proposal_id(replay), share);
+        let mut changed = proposed.clone();
+        changed["body"]["sourceNeedsDocument"] = json!(false);
+        assert!(matches!(
+            f.command(&a, "documents.transfer_propose", changed),
+            CommandReply::Rejected { .. }
+        ));
+        let project = b.project_id().unwrap().clone();
+        let assignment = b.assignment_id().unwrap().clone();
+        let notifications = read(f.store.as_ref(), move |r| {
+            r.runs()
+                .agent_assignment_thread(&project, &assignment, "Inbound", true, None, 20)
+        });
+        assert_eq!(notifications.len(), 1);
+        assert!(notifications[0].0.body.contains(share.as_str()));
+        assert_eq!(notifications[0].0.attachments, json!([]));
+        assert!(search(&f, &b_view, "greenhouse", &[]).passages.is_empty());
+        let forged = f.command(
+            &a,
+            "documents.transfer_respond",
+            transfer_response(&share, true, "own-answer"),
+        );
+        assert!(matches!(
+            forged, CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        let response = transfer_response(&share, true, "share-answer");
+        confirm_decision(
+            f.command(&b, "documents.transfer_respond", response.clone()),
+            "Shared",
+        );
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond", response),
+            CommandReply::Recorded { replayed: true, .. }
+        ));
+        assert_eq!(open(&f, &a_view, &citation).text.0, "Greenhouse evidence.");
+        assert_eq!(open(&f, &b_view, &citation).text.0, "Greenhouse evidence.");
+
+        let declined = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(&f, reference, "document-destination-root", false, "decline"),
+        ));
+        confirm_decision(
+            f.command(
+                &b,
+                "documents.transfer_respond",
+                transfer_response(&declined, false, "decline-answer"),
+            ),
+            "Declined",
+        );
+        let stale = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(&f, reference, "document-destination-root", false, "stale"),
+        ));
+        let actor = a.principal().clone();
+        let human = f.human.clone();
+        write(f.store.as_ref(), move |tx| {
+            let existing = tx.authority().principal(&actor)?.unwrap();
+            let revoked = revoke_principal(tx, &human, &actor, existing.revision)
+                .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+            bind_principal(
+                tx,
+                &human,
+                NewPrincipalBinding {
+                    actor,
+                    kind: existing.kind,
+                    role: existing.role,
+                    project_id: existing.project_id,
+                    tool_families: existing.tool_families,
+                    bound_by: human.principal().clone(),
+                },
+                Some(revoked.revision),
+            )
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+            Ok(())
+        })
+        .unwrap();
+        let revoked_status = transfer_status(&f, &a, &stale);
+        assert!(matches!(
+            revoked_status, DomainQueryReply::Rejected { fault, .. }
+                if fault.code == DomainErrorCode::PermissionDenied
+        ));
+        let old = f.command(
+            &b,
+            "documents.transfer_respond",
+            transfer_response(&stale, true, "stale-answer"),
+        );
+        assert!(matches!(
+            old, CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        let before_setting = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "before-setting",
+            ),
+        ));
+        let setting = devworks_core::settings::catalog::descriptor("tools.overrides")
+            .unwrap()
+            .schema_ref();
+        let select_proposal = |previous, selected| {
+            let scope = devworks_core::ports::storage::ConfigScope::Workspace;
+            let setting = setting.clone();
+            write(f.store.as_ref(), move |tx| {
+                tx.configuration().append_revision(
+                    &scope,
+                    "settings",
+                    previous,
+                    1,
+                    json!({"values":{"tools.overrides":{"schema":setting,
+                      "value":{"devworks/documents.transfer_propose":selected}}}}),
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        };
+        select_proposal(1, false);
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond",
+                transfer_response(&before_setting, true, "disabled-source")),
+            CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        select_proposal(2, true);
+        let before_archive = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "before-archive",
+            ),
+        ));
+        let project = a.project_id().unwrap().clone();
+        write(f.store.as_ref(), move |tx| {
+            // The lifecycle service advances this epoch on archive, then restores Active.
+            let mut stored = tx.projects().project(&project)?.unwrap();
+            let prior = stored.revision;
+            stored.revision += 1;
+            stored.archive_epoch += 1;
+            tx.projects().update_project(&stored, prior)
+        })
+        .unwrap();
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond",
+                transfer_response(&before_archive, true, "after-reopen")),
+            CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        let contrary = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "contrary",
+            ),
+        ));
+        let retain = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(&f, reference, "document-destination-root", true, "retain"),
+        ));
+        confirm_decision(
+            f.command(
+                &b,
+                "documents.transfer_respond",
+                transfer_response(&retain, true, "retain-answer"),
+            ),
+            "Shared",
+        );
+        assert!(matches!(
+            f.command(&b, "documents.transfer_respond",
+                transfer_response(&contrary, true, "contrary-answer")),
+            CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        let competing = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(
+                &f,
+                reference,
+                "document-destination-root",
+                false,
+                "competing",
+            ),
+        ));
+        let moved = proposal_id(f.command(
+            &a,
+            "documents.transfer_propose",
+            transfer_proposal(&f, reference, "document-destination-root", false, "move"),
+        ));
+        confirm_decision(
+            f.command(
+                &b,
+                "documents.transfer_respond",
+                transfer_response(&moved, true, "move-answer"),
+            ),
+            "Moved",
+        );
+        let stale = f.command(
+            &b,
+            "documents.transfer_respond",
+            transfer_response(&competing, true, "competing-answer"),
+        );
+        assert!(matches!(
+            stale, CommandReply::Recorded { receipt, .. }
+                if matches!(receipt.decision, DomainDecision::Refused { .. })
+        ));
+        assert_unavailable(f.query(
+            &a_view,
+            "documents.resolve_citation",
+            cite_envelope(&citation, 11),
+        ));
+        assert!(search(&f, &a_view, "greenhouse", &[]).passages.is_empty());
+        assert_eq!(open(&f, &b_view, &citation).text.0, "Greenhouse evidence.");
+        assert_eq!(open(&f, &c, &citation).text.0, "Greenhouse evidence.");
+        let retained_assignment = a.assignment_id().unwrap().clone();
+        write(f.store.as_ref(), move |tx| {
+            let mut newer = tx.runs().assignment(&retained_assignment)?.unwrap();
+            let prior = newer.revision;
+            newer.revision += 1;
+            newer.generation += 1;
+            tx.runs().update_assignment(&newer, prior)
+        })
+        .unwrap();
+        let status = result(transfer_status(&f, &a, &moved));
+        assert!(matches!(
+            status,
+            OperationResult::DocumentsTransferStatus { .. }
+        ));
+        let sharing_back = proposal_id(f.command(
+            &b,
+            "documents.transfer_propose",
+            transfer_proposal(&f, reference, "document-source-root", true, "share-back"),
+        ));
+        confirm_decision(
+            f.command(
+                &a,
+                "documents.transfer_respond",
+                transfer_response(&sharing_back, true, "share-back-answer"),
+            ),
+            "Shared",
+        );
+        assert_eq!(open(&f, &a_view, &citation).text.0, "Greenhouse evidence.");
+        let source_project = ProjectId(id("document-a"));
+        let plan = read(f.store.as_ref(), |r| {
+            r.projects().purge_planning(&source_project)
+        })
+        .unwrap();
+        assert!(plan.rows.iter().any(|row| {
+            row.table == "document_transfers"
+                && row.action == devworks_core::ports::storage::ProjectPurgeRowAction::Delete
+        }));
+        (moved, b.assignment_id().unwrap().clone())
+    };
+    let f = Fixture::open(&h);
+    let recovered = read(f.store.as_ref(), |r| {
+        r.documents().document_transfer(&completed)
+    })
+    .unwrap();
+    assert_eq!(serde_json::to_value(&recovered.state).unwrap(), "Moved");
+    assert_eq!(recovered.revision.get(), 2);
+    let deliveries = read(f.store.as_ref(), |r| {
+        r.runs().agent_assignment_thread(
+            &ProjectId(id("document-b")),
+            &receiving_assignment,
+            "Inbound",
+            true,
+            None,
+            20,
+        )
+    });
+    assert!(
+        deliveries
+            .iter()
+            .any(|(message, _)| message.body.contains(completed.as_str()))
     );
 }
 

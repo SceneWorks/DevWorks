@@ -3731,6 +3731,39 @@ impl Revisioned for DreamRevertResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DocumentTransferState {
+    Pending,
+    Shared,
+    Moved,
+    Declined,
+}
+impl Check for DocumentTransferState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentTransferRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub state: DocumentTransferState,
+}
+impl Check for DocumentTransferRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.state.check()?;
+        crate::protocol::rules::record(
+            "DocumentTransferRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentRecord {
     pub id: Id,

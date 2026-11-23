@@ -6863,6 +6863,70 @@
         {
           "additionalProperties": false,
           "properties": {
+            "contributionId": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "addons.read_content",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "contributionId",
+            "manifestDigest"
+          ],
+          "type": "object",
+          "x-since": 9
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contributionId": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "input": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "addons.run_workflow",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "requiredGates": {
+              "$ref": "#/$defs/List_PackageWorkflowGate_0_128"
+            },
+            "workflowId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "workflowId",
+            "packageId",
+            "contributionId",
+            "manifestDigest",
+            "input",
+            "requiredGates"
+          ],
+          "type": "object",
+          "x-since": 9
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "expectedHelpRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -10410,6 +10474,10 @@
             "kind": {
               "const": "github.poll_status",
               "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 3
             },
             "repositoryId": {
               "$ref": "#/$defs/Id"
@@ -14005,6 +14073,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PackageWorkflowGate_0_128": {
+      "items": {
+        "$ref": "#/$defs/PackageWorkflowGate"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_PortMapping_0_128": {
       "items": {
         "$ref": "#/$defs/PortMapping"
@@ -14794,6 +14870,30 @@
         "latency"
       ],
       "type": "string"
+    },
+    "PackageWorkflowGate": {
+      "additionalProperties": false,
+      "properties": {
+        "contributionId": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "manifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "packageId": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "packageId",
+        "contributionId",
+        "manifestDigest",
+        "reason"
+      ],
+      "type": "object"
     },
     "PageRequest": {
       "additionalProperties": false,

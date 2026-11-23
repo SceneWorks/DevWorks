@@ -3729,6 +3729,39 @@ impl Revisioned for DreamRevertResult {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum DocumentTransferState {
+    Pending,
+    Shared,
+    Moved,
+    Declined,
+}
+impl Check for DocumentTransferState {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentTransferRecord {
+    pub id: Id,
+    pub revision: Revision,
+    pub state: DocumentTransferState,
+}
+impl Check for DocumentTransferRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.revision.check()?;
+        self.state.check()?;
+        super::domain_rules::record(
+            "DocumentTransferRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentRecord {
     pub id: Id,
@@ -20572,6 +20605,9 @@ pub enum DomainQuery {
         #[schemars(with = "PageRequest", extend("x-since" = 9))]
         page: Option<PageRequest>,
     },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_status")]
+    DocumentsTransferStatus { transfer_id: Id },
     #[serde(rename = "documents.list")]
     DocumentsList {
         scope: DataScope,
@@ -21600,6 +21636,7 @@ impl DomainQuery {
             Self::DreamingReport { .. } => "dreaming.report",
             Self::DreamingSettings { .. } => "dreaming.settings",
             Self::DreamingInstructions { .. } => "dreaming.instructions",
+            Self::DocumentsTransferStatus { .. } => "documents.transfer_status",
             Self::DocumentsList { .. } => "documents.list",
             Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
             Self::ConventionsList { .. } => "conventions.list",
@@ -22204,6 +22241,9 @@ impl Check for DomainQuery {
             Self::DreamingInstructions { scope, page } => {
                 scope.check()?;
                 page.check()?;
+            }
+            Self::DocumentsTransferStatus { transfer_id } => {
+                transfer_id.check()?;
             }
             Self::DocumentsList {
                 scope,
@@ -23422,6 +23462,9 @@ impl Revisioned for DomainQuery {
             Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::DocumentsTransferStatus { .. } if revision < 14 => {
+                Err("operation predates its introduction".into())
+            }
             Self::DocumentsResolveCitation { .. } if revision < 11 => {
                 Err("operation predates its introduction".into())
             }
@@ -24337,6 +24380,23 @@ pub enum DomainCommand {
         expected_revision: Revision,
         decision: ProposalDecision,
         rationale: Content,
+    },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_propose")]
+    DocumentsTransferPropose {
+        document_id: Id,
+        expected_document_revision: Revision,
+        expected_scope_revision: Revision,
+        destination_root_id: RootId,
+        source_needs_document: bool,
+        summary: Label,
+    },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_respond")]
+    DocumentsTransferRespond {
+        transfer_id: Id,
+        expected_revision: Revision,
+        destination_needs_document: bool,
     },
     #[serde(rename = "documents.import")]
     DocumentsImport {
@@ -25568,6 +25628,8 @@ impl DomainCommand {
             Self::DreamingPropose { .. } => "dreaming.propose",
             Self::DreamingRevert { .. } => "dreaming.revert",
             Self::DreamingReview { .. } => "dreaming.review",
+            Self::DocumentsTransferPropose { .. } => "documents.transfer_propose",
+            Self::DocumentsTransferRespond { .. } => "documents.transfer_respond",
             Self::DocumentsImport { .. } => "documents.import",
             Self::DocumentsIndex { .. } => "documents.index",
             Self::DocumentsRetry { .. } => "documents.retry",
@@ -26595,6 +26657,30 @@ impl Check for DomainCommand {
                 expected_revision.check()?;
                 decision.check()?;
                 rationale.check()?;
+            }
+            Self::DocumentsTransferPropose {
+                document_id,
+                expected_document_revision,
+                expected_scope_revision,
+                destination_root_id,
+                source_needs_document,
+                summary,
+            } => {
+                document_id.check()?;
+                expected_document_revision.check()?;
+                expected_scope_revision.check()?;
+                destination_root_id.check()?;
+                source_needs_document.check()?;
+                summary.check()?;
+            }
+            Self::DocumentsTransferRespond {
+                transfer_id,
+                expected_revision,
+                destination_needs_document,
+            } => {
+                transfer_id.check()?;
+                expected_revision.check()?;
+                destination_needs_document.check()?;
             }
             Self::DocumentsImport {
                 scope,
@@ -28275,6 +28361,12 @@ impl Revisioned for DomainCommand {
             Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::DocumentsTransferPropose { .. } if revision < 14 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::DocumentsTransferRespond { .. } if revision < 14 => {
+                Err("operation predates its introduction".into())
+            }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
@@ -28657,6 +28749,15 @@ pub enum OperationResult {
     DreamingRevert { value: DreamRevertResult },
     #[serde(rename = "dreaming.review")]
     DreamingReview { value: ProposalRecord },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_propose")]
+    DocumentsTransferPropose { value: DocumentTransferRecord },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_respond")]
+    DocumentsTransferRespond { value: DocumentTransferRecord },
+    #[schemars(extend("x-since" = 14))]
+    #[serde(rename = "documents.transfer_status")]
+    DocumentsTransferStatus { value: DocumentTransferRecord },
     #[serde(rename = "documents.import")]
     DocumentsImport { value: DocumentResult },
     #[serde(rename = "documents.list")]
@@ -29333,6 +29434,9 @@ impl OperationResult {
             Self::DreamingPropose { .. } => "dreaming.propose",
             Self::DreamingRevert { .. } => "dreaming.revert",
             Self::DreamingReview { .. } => "dreaming.review",
+            Self::DocumentsTransferPropose { .. } => "documents.transfer_propose",
+            Self::DocumentsTransferRespond { .. } => "documents.transfer_respond",
+            Self::DocumentsTransferStatus { .. } => "documents.transfer_status",
             Self::DocumentsImport { .. } => "documents.import",
             Self::DocumentsList { .. } => "documents.list",
             Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
@@ -29731,6 +29835,9 @@ impl Check for OperationResult {
             Self::DreamingPropose { value } => value.check()?,
             Self::DreamingRevert { value } => value.check()?,
             Self::DreamingReview { value } => value.check()?,
+            Self::DocumentsTransferPropose { value } => value.check()?,
+            Self::DocumentsTransferRespond { value } => value.check()?,
+            Self::DocumentsTransferStatus { value } => value.check()?,
             Self::DocumentsImport { value } => value.check()?,
             Self::DocumentsList { value } => value.check()?,
             Self::DocumentsResolveCitation { value } => value.check()?,
@@ -30225,6 +30332,15 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferPropose { .. } if revision < 14 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferRespond { .. } if revision < 14 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferStatus { .. } if revision < 14 => {
                 Err("operation result predates its introduction".into())
             }
             Self::DocumentsResolveCitation { .. } if revision < 11 => {

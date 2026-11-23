@@ -3,14 +3,14 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "7c5e4ec462d20933584ec1789add0ec7893651aadc6ae6987a80e908f0e0a579",
+  "sourceSha256": "add31ff7b6e2565f4a9b0ed4a48ee9c23b3be263d6c1b4a48460b27a59800192",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
   "resourcePolicy": "Static safe devworks:// templates; object enumeration/read is an authenticated scoped tool/resource projection of these exact queries, preserving the query stamp and citations.",
   "counts": {
-    "catalogOperations": 390,
-    "modeDispositions": 395,
+    "catalogOperations": 393,
+    "modeDispositions": 398,
     "tools": 153,
     "readTools": 97,
     "commandTools": 56
@@ -4328,6 +4328,24 @@
       "mode": "Query",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "documents.transfer_propose",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Only the native source project coordinator can propose a transfer."
+    },
+    {
+      "operation": "documents.transfer_respond",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Only the native destination project coordinator can decide its need."
+    },
+    {
+      "operation": "documents.transfer_status",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private to the authorized native coordinators."
     },
     {
       "operation": "artifacts.save",
