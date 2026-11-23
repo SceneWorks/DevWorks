@@ -391,8 +391,8 @@ impl GitHubService {
             .map_err(|_| Fault::InvalidResponse)?;
         let repo = &target.repository;
         let mut uri = url::Url::parse(&format!(
-            "https://api.github.com/repos/{}/{}/issues",
-            repo.owner, repo.name
+            "https://api.github.com/repositories/{}/issues",
+            target.numeric_id
         ))
         .map_err(|_| Fault::InvalidResponse)?;
         uri.query_pairs_mut()
@@ -401,10 +401,7 @@ impl GitHubService {
             .append_pair("direction", "desc")
             .append_pair("per_page", "100")
             .append_pair("since", &since.to_string());
-        let endpoint = Endpoint::new(
-            uri.as_str(),
-            Some(&format!("/repositories/{}/issues", target.numeric_id)),
-        )?;
+        let endpoint = Endpoint::new(uri.as_str(), None)?;
         let now = self.clock.now_ms().get();
         let mut next = None;
         for _ in 0..20 {
@@ -474,9 +471,7 @@ fn dispatch_preflight(
     job: &Publication,
     reconcile: bool,
 ) -> Result<bool, StorageError> {
-    let authorization = Authorization::direct().fenced_by(job.authority_fences.clone());
     if snapshot.stamp().restore_epoch != job.restore_epoch
-        || !authorization_holds(snapshot, &authorization)?
         || !snapshot.projects().project(&job.project)?.is_some_and(|p| {
             p.lifecycle == "Active" && p.scope_revision == job.project_scope_revision
         })
@@ -491,7 +486,14 @@ fn dispatch_preflight(
         return Ok(false);
     }
     if reconcile {
+        // The native owner is observing an already dispatched mutation, using the exact
+        // original remote account, repository and effect marker. Settling that fact cannot
+        // grant the initiating actor new dispatch or result access.
         return Ok(true);
+    }
+    let authorization = Authorization::direct().fenced_by(job.authority_fences.clone());
+    if !authorization_holds(snapshot, &authorization)? {
+        return Ok(false);
     }
     if let Some((id, generation)) = &job.assignment
         && !snapshot

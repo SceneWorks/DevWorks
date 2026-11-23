@@ -641,6 +641,12 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
         CommandReply::Recorded { receipt, .. } if matches!(receipt.decision, DomainDecision::Refused { .. })
     ));
 
+    let publishing_actor = scoped_agent(
+        store.as_ref(),
+        "github-publication-actor",
+        "github-project",
+        "github-publication",
+    );
     let publish = |request_key: &str| {
         let frame = serde_json::to_vec(&json!({
             "mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":request_key,
@@ -651,7 +657,7 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
         }))
         .unwrap();
         match gateway
-            .command(&actor, "issues.publish", &frame, github.clone())
+            .command(&publishing_actor, "issues.publish", &frame, github.clone())
             .unwrap()
         {
             CommandReply::Recorded { receipt, .. } => match receipt.decision {
@@ -681,7 +687,7 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
             result: exchange(502, Value::Null, &[]),
         },
         Request {
-            path: "/repos/Acme/kit/issues",
+            path: "/repositories/12/issues",
             query: "state=all",
             result: exchange(200, json!([matching]), &[]),
         },
@@ -697,6 +703,14 @@ fn github_issue_link_requires_revision_three_and_recovers_publication_and_multi_
     })
     .unwrap();
     assert_eq!(after.state, OperationState::OutcomeUnknown);
+    let owner = actor.clone();
+    let revoked = publishing_actor.principal().clone();
+    write(store.as_ref(), move |tx| {
+        devworks_core::authority::service::revoke_principal(tx, &owner, &revoked, 1)
+            .map(|_| ())
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))
+    })
+    .unwrap();
     runtime().block_on(outbox.observe_unknown()).unwrap();
     runtime().block_on(outbox.run_until_idle()).unwrap();
     let confirmed = read(store.as_ref(), |snapshot| {
@@ -2130,7 +2144,8 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
     let mut conflicting_60 = reopened_60.clone();
     conflicting_60["updated_at"] = json!("2023-11-14T22:25:00Z");
     conflicting_60["title"] = json!("Rewrite entire subsystem as new feature");
-    conflicting_60["body"] = json!("Completely replaced scope and requirements.");
+    let reviewed_description = "Completely replaced scope and requirements.";
+    conflicting_60["body"] = json!(reviewed_description);
     conflicting_60["labels"] = json!([{"name": "enhancement"}]);
 
     let script = Arc::new(Script(Mutex::new(VecDeque::from([
@@ -2504,7 +2519,7 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
         "Rewrite entire subsystem as new feature"
     );
     let adopted_brief = devworks_core::kernel::work_brief::WorkBrief::of(&started_adopted).unwrap();
-    assert!(adopted_brief.description.contains("Completely replacing"));
+    assert_eq!(adopted_brief.description, reviewed_description);
     assert!(
         adopted_brief
             .comments
