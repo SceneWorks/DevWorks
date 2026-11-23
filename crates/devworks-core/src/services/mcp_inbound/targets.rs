@@ -355,24 +355,16 @@ pub(super) fn document_targets(
         }
         documents::Input::Index(input) => &input.document_id,
         documents::Input::Retry(input) => &input.document_id,
-        documents::Input::Share(request)
-        | documents::Input::Move(request)
-        | documents::Input::DisableRetrieval(request)
-        | documents::Input::RemoveIndex(request) => match &request.command {
-            ArtifactCommand::Share {
-                artifact_id,
-                target_project_id,
-                ..
+        documents::Input::Share(_) | documents::Input::Move(_) => {
+            return Err(StorageError::ScopeDenied);
+        }
+        documents::Input::DisableRetrieval(request) | documents::Input::RemoveIndex(request) => {
+            match &request.command {
+                ArtifactCommand::DisableRetrieval { artifact_id, .. }
+                | ArtifactCommand::RemoveIndex { artifact_id, .. } => artifact_id,
+                _ => return Err(StorageError::ScopeDenied),
             }
-            | ArtifactCommand::Move {
-                artifact_id,
-                target_project_id,
-                ..
-            } if target_project_id == project => artifact_id,
-            ArtifactCommand::DisableRetrieval { artifact_id, .. }
-            | ArtifactCommand::RemoveIndex { artifact_id, .. } => artifact_id,
-            _ => return Err(StorageError::ScopeDenied),
-        },
+        }
         _ => return Ok(Vec::new()),
     };
     Ok(vec![DocumentTarget::resolve(read, project, id, true)?])

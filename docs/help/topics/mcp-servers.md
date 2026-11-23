@@ -36,6 +36,8 @@ A workspace server is available to every project. A project server is available 
 
 Register each client separately. A new registration is disabled and has no grants. Edit its access to choose the exact projects, repositories and worktrees it may use. Select read operations and command operations separately. Choose only the commands you intend the client to run. DevWorks still applies the operation's revisions, approvals and other access checks.
 
+Document sharing and moving use the decisions of the two project coordinators. Incoming MCP grants do not authorize a client to make those decisions.
+
 Use **Copy pairing credential** to place the enabled client's credential on the clipboard. Store it in your MCP client's protected credential configuration. A pairing credential expires 90 days after provisioning. Use **Rotate credential** to replace it, or **Revoke client** to close its access. Rotation invalidates the previous credential as soon as the change commits.
 
 **Copy setup** includes placeholders for credentials. Use the protocol versions and endpoint reported by Settings to determine what the current build supports. The HTTP profile uses manual local pairing and listens only on a loopback address when available. An OAuth-only client needs the local stdio bridge. If Settings reports that a binding is unavailable, it cannot accept connections. After a workspace restore, enable incoming MCP again and approve and pair each client in the restored workspace.
