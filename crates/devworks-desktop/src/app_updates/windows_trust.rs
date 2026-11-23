@@ -282,6 +282,41 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the private, same-run signed updater fixtures"]
+    fn current_leaf_requires_a_verified_timestamp() {
+        let fixtures = std::env::var_os("DEVWORKS_WINDOWS_TRUST_FIXTURES")
+            .map(std::path::PathBuf::from)
+            .expect("Native test requires exact same-run signed fixtures");
+        verify(&fixtures.join("genuine.exe")).unwrap();
+        let error = verify(&fixtures.join("no-timestamp.exe")).unwrap_err();
+        // The unexpired signer and executable must pass WinTrust. The product
+        // check still refuses the absent timestamp on the verified signer.
+        assert!(error.contains("no verified RFC 3161 timestamp"), "{error}");
+        let error = verify(&fixtures.join("bad-timestamp.exe")).unwrap_err();
+        assert!(
+            error.contains("no verified RFC 3161 timestamp")
+                || error.contains("could not verify the embedded Authenticode signature"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the disposable Windows runner's lookalike publisher fixture"]
+    fn the_profile_requires_the_microsoft_root_even_when_windows_trusts_the_publisher() {
+        let path = std::env::var_os("DEVWORKS_WINDOWS_LOOKALIKE")
+            .map(std::path::PathBuf::from)
+            .expect("Native test requires a locally signed lookalike fixture");
+        let trust_removed = std::env::var_os("DEVWORKS_WINDOWS_LOOKALIKE_UNTRUSTED").is_some();
+        let error = verify(&path).unwrap_err();
+        let expected = if trust_removed {
+            "could not verify the embedded Authenticode signature"
+        } else {
+            "does not match the DevWorks platform signing identity"
+        };
+        assert!(error.contains(expected), "{error}");
+    }
+
+    #[test]
     #[ignore = "only for the fresh native Windows qualification job"]
     fn managed_entry_does_not_fall_through_with_invalid_configuration() {
         const PROBE: &str = "DEVWORKS_TEST_WINDOWS_ENTRY_PROBE";
