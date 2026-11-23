@@ -857,7 +857,7 @@ fn publish_traversal_fixture(
 
 #[test]
 fn native_traversal_reaches_one_thousand_nodes_in_a_hundred_thousand_edge_graph() {
-    let _case = native_runtime_case();
+    let _case = exclusive_native_runtime_case();
     let h = Harness::new();
     let executor = runtime();
     let store = h.open();
@@ -899,12 +899,12 @@ fn native_traversal_reaches_one_thousand_nodes_in_a_hundred_thousand_edge_graph(
         let mut reached = std::collections::BTreeSet::new();
         let mut followed = std::collections::BTreeSet::new();
         let mut complete = false;
-        for _ in 0..8 {
+        for page_index in 0..8 {
             let reply = app
                 .query(&ctx, operation, frame.to_string().as_bytes())
                 .unwrap();
             let DomainQueryReply::Result { result, .. } = reply else {
-                panic!("{operation}: {reply:?}");
+                panic!("{operation}, page {}: {reply:?}", page_index + 1);
             };
             let page: GraphPage =
                 serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
