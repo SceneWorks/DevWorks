@@ -11,9 +11,9 @@
   "counts": {
     "catalogOperations": 390,
     "modeDispositions": 395,
-    "tools": 156,
+    "tools": 155,
     "readTools": 97,
-    "commandTools": 59
+    "commandTools": 58
   },
   "tools": [
     {
@@ -2408,27 +2408,6 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
-      "name": "devworks_knowledge_import_user_data",
-      "operation": "knowledge.import_user_data",
-      "mode": "Command",
-      "inputSchema": "contracts/domain-request.schema.json",
-      "inputSelection": {
-        "pointer": "/body/kind",
-        "equals": "knowledge.import_user_data"
-      },
-      "resultSchema": "contracts/operation-result.schema.json",
-      "resultSelection": {
-        "pointer": "/kind",
-        "equals": "knowledge.import_user_data"
-      },
-      "authority": "Scoped",
-      "effect": "Journaled",
-      "clientGrant": "ExplicitCommand",
-      "defaultForNewRegistration": false,
-      "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
-    },
-    {
       "name": "devworks_knowledge_promote",
       "operation": "knowledge.promote",
       "mode": "Command",
@@ -4245,8 +4224,8 @@
     {
       "operation": "knowledge.import_user_data",
       "mode": "Command",
-      "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus existing domain authority and recovery."
+      "disposition": "InternalOnly",
+      "reason": "Native import requires the human actor that supplied the retained user data."
     },
     {
       "operation": "knowledge.promote",

@@ -145,7 +145,6 @@ COMMAND_OPERATIONS = set('''
     knowledge.challenge
     knowledge.delete_by_source
     knowledge.delete_selected
-    knowledge.import_user_data
     knowledge.promote
     knowledge.record
     knowledge.relate
@@ -180,6 +179,7 @@ PRIVATE_MODE_REASONS = {
     'agents.history': 'Private agent-to-agent messages and delivery state.',
     'agents.events': 'Private agent-to-agent events and delivery state.',
     'artifacts.tag': 'Artifact organization is outside the selected command set.',
+    'knowledge.import_user_data': 'Native import requires the human actor that supplied the retained user data.',
     'skills.set_enabled': 'Native skills configuration.',
     'approvals.review_queue': 'Private human approval queue.',
     'notifications.mark_read': 'Native notification state.',
