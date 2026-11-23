@@ -122,6 +122,20 @@ impl PublishedTool {
         let selected = select_variant(result, "kind", self.operation.name).clone();
         *result = selected;
         schema["type"] = json!("object");
+        match self.operation.name {
+            "artifacts.read" => {
+                let content = &mut schema["$defs"]["ArtifactReadContent"];
+                let variant = content["oneOf"]
+                    .as_array_mut()
+                    .expect("native artifact content")
+                    .iter_mut()
+                    .find(|variant| variant["properties"]["kind"]["const"] == "Binary")
+                    .expect("native binary content");
+                artifact_range(variant);
+            }
+            "artifacts.export" => artifact_range(&mut schema["$defs"]["ArtifactExport"]),
+            _ => {}
+        }
         registry::prune_definitions(schema)
     }
 
@@ -178,6 +192,27 @@ impl PublishedTool {
             frame,
         })
     }
+}
+
+fn artifact_range(schema: &mut Value) {
+    for member in ["streamId", "expiresAtMs"] {
+        remove_member(schema, member);
+    }
+    let position = json!({"type":"string","pattern":"^(0|[1-9][0-9]{0,18})$"});
+    schema["properties"]["bytePage"] = json!({
+        "type":"object",
+        "additionalProperties":false,
+        "required":["firstByte","nextByte","base64"],
+        "properties":{
+            "firstByte":position,
+            "nextByte":position,
+            "base64":{"type":"string","contentEncoding":"base64","maxLength":87384}
+        }
+    });
+    schema["required"]
+        .as_array_mut()
+        .expect("native range fields")
+        .push(json!("bytePage"));
 }
 
 fn remove_member(schema: &mut Value, field: &str) {
@@ -317,6 +352,7 @@ mod tests {
     #[test]
     fn each_mcp_schema_projects_only_its_selected_input_and_result() {
         for tool in published_tools() {
+            assert!(tool.has_target_authority(), "{}", tool.name);
             let input = tool.input_schema();
             let output = tool.output_schema();
             assert_eq!(input["additionalProperties"], false, "{}", tool.name);

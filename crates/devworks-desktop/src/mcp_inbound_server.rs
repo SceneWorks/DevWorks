@@ -6,7 +6,8 @@ mod http;
 #[cfg(any(unix, windows))]
 pub(crate) mod ipc;
 
-use crate::platform::{HostIds, SystemClock};
+use crate::platform::{HostIds, StoreAuthority, SystemClock};
+use base64::Engine as _;
 use devworks_core::context::InvocationContext;
 use devworks_core::ports::Clock;
 use devworks_core::ports::storage::{Cancellation, ReadOptions, WriteOptions};
@@ -44,6 +45,7 @@ const VERSIONS: [ProtocolVersion; 2] =
 #[derive(Clone)]
 pub(crate) struct IncomingMcp {
     runtime: Arc<Runtime>,
+    authority: Arc<StoreAuthority>,
     pub(crate) credentials: Arc<Credentials>,
     ids: Arc<HostIds>,
     requests: Arc<Semaphore>,
@@ -61,12 +63,14 @@ struct NativeBindings {
 impl IncomingMcp {
     pub(crate) fn start(
         runtime: Arc<Runtime>,
+        authority: Arc<StoreAuthority>,
         credentials: Arc<Credentials>,
         ids: Arc<HostIds>,
         data_root: &std::path::Path,
     ) -> Self {
         let this = Self {
             runtime,
+            authority,
             credentials,
             ids,
             requests: Arc::new(Semaphore::new(16)),
@@ -164,6 +168,10 @@ impl IncomingMcp {
             .find(|tool| tool.name == name)
             .ok_or_else(|| ErrorData::invalid_params("Unknown tool", None))?;
         let id = Id::new(self.ids.token("mcp")).expect("host invocation identifier");
+        let cursor = input
+            .pointer("/input/cursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let selected = tool
             .request(&id, input)
             .map_err(|_| ErrorData::invalid_params("Invalid DevWorks tool arguments", None))?;
@@ -205,7 +213,10 @@ impl IncomingMcp {
                 (serde_json::to_value(reply), !success, protected)
             }
         };
-        let value = value.map_err(|_| unavailable())?;
+        let mut value = value.map_err(|_| unavailable())?;
+        if !error && matches!(operation, "artifacts.read" | "artifacts.export") {
+            self.project_artifact(&ctx, &mut value, cursor.as_deref(), options)?;
+        }
         if value.to_string().len() > MAX_RESULT_BYTES {
             return Err(ErrorData::new(
                 ErrorCode(-32010),
@@ -214,9 +225,65 @@ impl IncomingMcp {
             ));
         }
         if protected {
-            let _ = proof.delivery.set(Delivery::Operation(ctx));
+            let artifacts = published_artifacts(operation, &value)?;
+            let _ = proof.delivery.set(Delivery::Operation { ctx, artifacts });
         }
         Ok((value, error))
+    }
+
+    fn project_artifact(
+        &self,
+        ctx: &InvocationContext,
+        response: &mut Value,
+        cursor: Option<&str>,
+        options: &ReadOptions,
+    ) -> Result<(), ErrorData> {
+        let detail = response
+            .pointer_mut("/result/value")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(unavailable)?;
+        let Some(stream) = detail.remove("streamId") else {
+            return Ok(());
+        };
+        detail.remove("expiresAtMs");
+        let stream = stream
+            .as_str()
+            .and_then(|id| Id::new(id).ok())
+            .ok_or_else(unavailable)?;
+        let first = cursor
+            .map_or(Some(0), |offset| offset.parse::<u64>().ok())
+            .ok_or_else(|| ErrorData::invalid_params("Invalid artifact byte cursor", None))?;
+        let bytes = self
+            .runtime
+            .artifacts()
+            .read_stream_range(
+                &*self.authority,
+                &**self.runtime.store(),
+                ctx,
+                &stream,
+                first,
+                64 * 1024,
+                &mut || {
+                    options
+                        .cancellation
+                        .as_ref()
+                        .is_some_and(Cancellation::is_cancelled)
+                        || options
+                            .deadline_ms
+                            .is_some_and(|deadline| SystemClock.now_ms().get() >= deadline)
+                },
+            )
+            .map_err(|_| denied())?;
+        let next = first + bytes.len() as u64;
+        detail.insert(
+            "bytePage".into(),
+            serde_json::json!({
+                "firstByte": first.to_string(),
+                "nextByte": next.to_string(),
+                "base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }),
+        );
+        Ok(())
     }
 
     fn available(&self, tool: &PublishedTool) -> bool {
@@ -287,7 +354,10 @@ struct RequestProof {
 
 enum Delivery {
     Discovery,
-    Operation(InvocationContext),
+    Operation {
+        ctx: InvocationContext,
+        artifacts: Vec<Id>,
+    },
 }
 
 impl RequestProof {
@@ -305,12 +375,52 @@ impl RequestProof {
         };
         match self.delivery.get() {
             Some(Delivery::Discovery) => native.tools(&self.client, &options).is_ok(),
-            Some(Delivery::Operation(ctx)) => {
-                publication_allowed(ctx, &**native.runtime.store(), &options)
+            Some(Delivery::Operation { ctx, artifacts }) => {
+                publication_allowed(ctx, &**native.runtime.store(), &options, artifacts)
             }
             None => true,
         }
     }
+}
+
+fn published_artifacts(operation: &str, reply: &Value) -> Result<Vec<Id>, ErrorData> {
+    if reply["kind"] != "Result" {
+        return Ok(Vec::new());
+    }
+    let result = &reply["result"]["value"];
+    let fields: Vec<&Value> = match operation {
+        "artifacts.list" => result["items"]
+            .as_array()
+            .ok_or_else(unavailable)?
+            .iter()
+            .map(|item| &item["artifact"]["artifactId"])
+            .collect(),
+        "documents.list" => result["items"]
+            .as_array()
+            .ok_or_else(unavailable)?
+            .iter()
+            .map(|item| &item["id"])
+            .collect(),
+        "documents.search" => result["passages"]
+            .as_array()
+            .ok_or_else(unavailable)?
+            .iter()
+            .filter_map(|passage| {
+                let source = &passage["citation"]["source"];
+                (source["kind"] == "Managed").then(|| &source["version"]["artifactId"])
+            })
+            .collect(),
+        _ => return Ok(Vec::new()),
+    };
+    fields
+        .into_iter()
+        .map(|field| {
+            field
+                .as_str()
+                .and_then(|id| Id::new(id).ok())
+                .ok_or_else(unavailable)
+        })
+        .collect()
 }
 
 struct Server(IncomingMcp);

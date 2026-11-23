@@ -548,6 +548,55 @@ impl ArtifactService {
         ctx: &InvocationContext,
         stream_id: &Id,
     ) -> Result<ArtifactStream, StreamRefusal> {
+        let (grant, generation, hold) = self.authorized_stream(authority, store, ctx, stream_id)?;
+        let reader = self
+            .files
+            .open(&grant.digest, &generation, grant.byte_count as u64)
+            .map_err(|_| StreamRefusal::NotFound)?;
+        Ok(ArtifactStream {
+            grant,
+            generation,
+            reader,
+            _hold: hold,
+        })
+    }
+
+    /// Read a bounded range without publishing a native stream handle outside the desktop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_stream_range(
+        &self,
+        authority: &dyn AuthorityPort,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        stream_id: &Id,
+        first: u64,
+        max: usize,
+        stopped: &mut dyn FnMut() -> bool,
+    ) -> Result<Vec<u8>, StreamRefusal> {
+        let (grant, generation, _hold) =
+            self.authorized_stream(authority, store, ctx, stream_id)?;
+        if first > grant.byte_count as u64 {
+            return Err(StreamRefusal::NotFound);
+        }
+        self.files
+            .read_range_controlled(
+                &grant.digest,
+                &generation,
+                grant.byte_count as u64,
+                first,
+                max,
+                stopped,
+            )
+            .map_err(|_| StreamRefusal::NotFound)
+    }
+
+    fn authorized_stream(
+        &self,
+        authority: &dyn AuthorityPort,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        stream_id: &Id,
+    ) -> Result<(StreamGrant, String, ReaderGuard), StreamRefusal> {
         let grant = self.streams.get(stream_id).ok_or(StreamRefusal::NotFound)?;
         if &grant.principal != ctx.principal() {
             return Err(StreamRefusal::NotFound);
@@ -589,16 +638,7 @@ impl ArtifactService {
         let Some(generation) = live else {
             return Err(StreamRefusal::NotFound);
         };
-        let reader = self
-            .files
-            .open(&grant.digest, &generation, grant.byte_count as u64)
-            .map_err(|_| StreamRefusal::NotFound)?;
-        Ok(ArtifactStream {
-            grant,
-            generation,
-            reader,
-            _hold: hold,
-        })
+        Ok((grant, generation, hold))
     }
 
     /// Writes an export stream to a filesystem destination the user chose. Separately authorized
