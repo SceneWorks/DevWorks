@@ -1497,7 +1497,31 @@ async fn compact(
     })
     .await
     .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
-    publish_compaction_result(engine, ctx, binding, source, produced.result, retry_at_ms)
+    let (worker, principal, binding, stopped) = (
+        engine.clone(),
+        ctx.clone(),
+        binding.clone(),
+        cancellation.clone(),
+    );
+    let (result, retry) = tokio::task::spawn_blocking(move || {
+        let mut retry = None;
+        let result = publish_compaction_result(
+            &worker,
+            &principal,
+            &binding,
+            source,
+            produced.result,
+            &mut retry,
+            &stopped,
+        );
+        (result, retry)
+    })
+    .await
+    .map_err(|error| TurnError::Worker(format!("compaction publication worker: {error}")))?;
+    if retry.is_some() {
+        *retry_at_ms = retry;
+    }
+    result
 }
 
 pub(crate) fn prepare_compaction(
@@ -1537,6 +1561,7 @@ pub(crate) fn publish_compaction_result(
     source: crate::context_epoch::EpochSource,
     result: crate::providers::sink::ProviderResult,
     retry_at_ms: &mut Option<i64>,
+    cancellation: &Cancellation,
 ) -> Result<ArtifactRef, TurnError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let store = engine.store().as_ref();
@@ -1558,20 +1583,13 @@ pub(crate) fn publish_compaction_result(
         .0;
     let mut summary = String::from_utf8(bytes)
         .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
-    if let Some(packages) = engine.packages().cloned() {
-        let context = source.context.clone();
-        let principal = ctx.clone();
-        let stopped = cancellation.clone();
-        let suggestions = tokio::task::spawn_blocking(move || {
-            packages.context_suggestions_until(
-                &principal,
-                devworks_extension_protocol::package::HookPhase::Compact,
-                &context,
-                &|| stopped.is_cancelled(),
-            )
-        })
-        .await
-        .map_err(|error| TurnError::Worker(format!("compaction context hook: {error}")))?;
+    if let Some(packages) = engine.packages() {
+        let suggestions = packages.context_suggestions_until(
+            ctx,
+            devworks_extension_protocol::package::HookPhase::Compact,
+            &source.context,
+            &|| cancellation.is_cancelled(),
+        );
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }

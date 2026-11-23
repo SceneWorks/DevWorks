@@ -819,11 +819,18 @@ async fn compact_workspace(
     ) {
         return Ok(CompactionStep::Unavailable(provider_fault(&result).into()));
     }
-    let (worker, context, source) = (engine.clone(), ctx.clone(), source.artifact);
-    tokio::task::spawn_blocking(move || finish_compaction(&worker, &context, &source, result))
-        .await
-        .map_err(invalid)?
-        .map_err(|error| invalid(format!("{error:?}")))?;
+    let (worker, context, source, stopped) = (
+        engine.clone(),
+        ctx.clone(),
+        source.artifact,
+        cancellation.clone(),
+    );
+    tokio::task::spawn_blocking(move || {
+        finish_compaction(&worker, &context, &source, result, &stopped)
+    })
+    .await
+    .map_err(invalid)?
+    .map_err(|error| invalid(format!("{error:?}")))?;
     Ok(CompactionStep::Published)
 }
 
@@ -832,6 +839,7 @@ fn finish_compaction(
     ctx: &InvocationContext,
     source: &ArtifactRef,
     result: ProviderResult,
+    cancellation: &Cancellation,
 ) -> Result<ArtifactRef, crate::turn_error::TurnError> {
     let binding = result.binding.clone().ok_or(StorageError::ScopeDenied)?;
     let (bytes, provenance) = engine
@@ -859,6 +867,7 @@ fn finish_compaction(
         },
         result,
         &mut None,
+        cancellation,
     )
 }
 
