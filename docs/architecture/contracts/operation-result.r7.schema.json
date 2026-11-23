@@ -505,6 +505,12 @@
         "externalEdges": {
           "$ref": "#/$defs/Counter"
         },
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "internalEdges": {
           "$ref": "#/$defs/Counter"
         },
@@ -513,6 +519,16 @@
         },
         "members": {
           "$ref": "#/$defs/List_AnalysisClusterMember_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -523,6 +539,42 @@
         "members",
         "bridges",
         "connections"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterGraphEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "crossCluster": {
+          "type": "boolean"
+        },
+        "edgeCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "relationshipCounts": {
+          "$ref": "#/$defs/List_AnalysisClusterRelationshipCount_0_128"
+        },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceViewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetViewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sourceRepositoryId",
+        "sourceViewId",
+        "targetRepositoryId",
+        "targetViewId",
+        "edgeCount",
+        "relationshipCounts",
+        "crossCluster"
       ],
       "type": "object"
     },
@@ -543,6 +595,16 @@
       "properties": {
         "centrality": {
           "$ref": "#/$defs/Finite"
+        },
+        "clusterId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "externalEdges": {
           "$ref": "#/$defs/Counter"
@@ -613,6 +675,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "graphEdges": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisClusterGraphEdge_0_500"
             },
             {
               "type": "null"
@@ -690,6 +762,158 @@
       "$ref": "#/$defs/AnalysisClusterPage",
       "x-since": 3
     },
+    "AnalysisClusterRelationshipCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/Counter"
+        },
+        "relationship": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "relationship",
+        "count"
+      ],
+      "type": "object"
+    },
+    "AnalysisFileMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "$ref": "#/$defs/Counter"
+        },
+        "bugFixRatio": {
+          "$ref": "#/$defs/Finite"
+        },
+        "changes90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "churn30d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "churn365d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "churn90d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "complexity": {
+          "$ref": "#/$defs/Counter"
+        },
+        "concern": {
+          "$ref": "#/$defs/Finite"
+        },
+        "couplingPartners": {
+          "$ref": "#/$defs/Counter"
+        },
+        "couplingStrength": {
+          "$ref": "#/$defs/Finite"
+        },
+        "deepLines": {
+          "$ref": "#/$defs/Counter"
+        },
+        "dotnetProject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "functionCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "health": {
+          "$ref": "#/$defs/Finite"
+        },
+        "lastChangeAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "linesAdded90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "linesRemoved90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "lintErrors": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lintWarnings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longestFunction": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maxNesting": {
+          "$ref": "#/$defs/Counter"
+        },
+        "recurringChurn": {
+          "$ref": "#/$defs/Finite"
+        },
+        "risk": {
+          "$ref": "#/$defs/Finite"
+        },
+        "role": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "truckFactor": {
+          "$ref": "#/$defs/Counter"
+        },
+        "trust": {
+          "$ref": "#/$defs/Finite"
+        }
+      },
+      "required": [
+        "health",
+        "risk",
+        "concern",
+        "trust",
+        "complexity",
+        "maxNesting",
+        "deepLines",
+        "functionCount",
+        "longestFunction",
+        "branches",
+        "linesAdded90d",
+        "linesRemoved90d",
+        "changes90d",
+        "churn30d",
+        "churn90d",
+        "churn365d",
+        "bugFixRatio",
+        "recurringChurn",
+        "couplingStrength",
+        "couplingPartners",
+        "truckFactor",
+        "role"
+      ],
+      "type": "object"
+    },
     "AnalysisFleetTotals": {
       "additionalProperties": false,
       "properties": {
@@ -725,6 +949,58 @@
         "alertCount",
         "belowHotspot",
         "belowAlert"
+      ],
+      "type": "object"
+    },
+    "AnalysisHealthSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alerts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "baseScore": {
+          "$ref": "#/$defs/Finite"
+        },
+        "dotnetProject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hotspots": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "baseScore",
+        "files",
+        "hotspots",
+        "alerts"
       ],
       "type": "object"
     },
@@ -803,6 +1079,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileMetrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisFileMetrics"
             },
             {
               "type": "null"
@@ -907,6 +1193,22 @@
         "items": {
           "$ref": "#/$defs/List_AnalysisMetricItem_0_500"
         },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageIndexed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "nextCursor": {
           "anyOf": [
             {
@@ -931,6 +1233,52 @@
     "AnalysisMetricPageResult": {
       "$ref": "#/$defs/AnalysisMetricPage",
       "x-since": 3
+    },
+    "AnalysisNarrative": {
+      "additionalProperties": false,
+      "properties": {
+        "computedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "evidence": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "model": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "summary",
+        "confidence",
+        "model",
+        "computedAtMs",
+        "evidence"
+      ],
+      "type": "object"
     },
     "AnalysisObservation": {
       "additionalProperties": false,
@@ -959,7 +1307,7 @@
           ]
         },
         "bindings": {
-          "$ref": "#/$defs/List_AnalysisViewBinding_0_128"
+          "$ref": "#/$defs/List_AnalysisViewBinding_0_500"
         },
         "computedAtMs": {
           "anyOf": [
@@ -977,6 +1325,62 @@
         "diagnostics": {
           "$ref": "#/$defs/List_Text1To256_0_128"
         },
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisHealthSummary_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedBindings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisViewBinding_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missingRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Id_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "narratives": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisNarrative_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "phases": {
           "anyOf": [
             {
@@ -991,6 +1395,26 @@
           "anyOf": [
             {
               "$ref": "#/$defs/List_Id_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "security": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisSecuritySummary_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "topHotspots": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisMetricItem_0_500"
             },
             {
               "type": "null"
@@ -1095,6 +1519,50 @@
         "kind",
         "state",
         "coverage"
+      ],
+      "type": "object"
+    },
+    "AnalysisSecuritySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "critical": {
+          "$ref": "#/$defs/Counter"
+        },
+        "high": {
+          "$ref": "#/$defs/Counter"
+        },
+        "low": {
+          "$ref": "#/$defs/Counter"
+        },
+        "medium": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "scannedFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "score": {
+          "$ref": "#/$defs/Finite"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "score",
+        "complete",
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "scannedFiles"
       ],
       "type": "object"
     },
@@ -10815,6 +11283,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_AnalysisClusterGraphEdge_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterGraphEdge"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_AnalysisClusterItem_0_500": {
       "items": {
         "$ref": "#/$defs/AnalysisClusterItem"
@@ -10826,6 +11302,22 @@
     "List_AnalysisClusterMember_0_500": {
       "items": {
         "$ref": "#/$defs/AnalysisClusterMember"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterRelationshipCount_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterRelationshipCount"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisHealthSummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisHealthSummary"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -10847,11 +11339,27 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_AnalysisNarrative_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisNarrative"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_AnalysisPhaseStatus_0_128": {
       "items": {
         "$ref": "#/$defs/AnalysisPhaseStatus"
       },
       "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisSecuritySummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisSecuritySummary"
+      },
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -10863,11 +11371,11 @@
       "minItems": 0,
       "type": "array"
     },
-    "List_AnalysisViewBinding_0_128": {
+    "List_AnalysisViewBinding_0_500": {
       "items": {
         "$ref": "#/$defs/AnalysisViewBinding"
       },
-      "maxItems": 128,
+      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
