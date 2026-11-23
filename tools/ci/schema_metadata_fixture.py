@@ -156,6 +156,17 @@ def fixtures():
         source('mysql-functional-index-fixture.sql', 'metadata_fixture')
         # MySQL captures are Complete: the reader may read routine definitions.
         sql("GRANT SHOW_ROUTINE ON *.* TO 'metadata_reader'@'%';")
+        # The desktop suite includes the retained read endpoint alongside metadata.
+        sql("""
+            CREATE DATABASE dw37_fixture;
+            GRANT SELECT, SHOW VIEW ON dw37_fixture.* TO 'metadata_reader'@'%';
+            USE dw37_fixture;
+            CREATE TABLE dw_public(id INT NOT NULL PRIMARY KEY, secret VARCHAR(40) NOT NULL);
+            INSERT INTO dw_public VALUES (1,'public'), (2,'next');
+            CREATE TABLE dw_private(id INT NOT NULL PRIMARY KEY, secret VARCHAR(40) NOT NULL);
+            INSERT INTO dw_private VALUES (1,'private');
+            CREATE VIEW dw_view AS SELECT secret FROM dw_private;
+        """)
     else:
         source('mariadb-check-name-fixture.sql', 'metadata_fixture')
 
@@ -179,6 +190,9 @@ with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folde
         env['DEVWORKS_METADATA_UNUSED_CA'] = str(tls/'unused-ca.pem')
         if a.engine == 'postgres':
             env['DEVWORKS_METADATA_POSTGRES_LIMITS'] = f'postgres://{endpoint}/metadata_limits'
+        if a.engine == 'mysql':
+            env.update(DW37_TARGET=f'mysql://{endpoint}/dw37_fixture',
+                       DW37_USER='metadata_reader', DW37_PASSWORD='devworks_metadata_reader')
         # Ordinary tests ignore network fixture cases; this explicit job runs every case for
         # this engine (extraction, bounds, TLS/CA/hostname refusal) without inference.
         subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
