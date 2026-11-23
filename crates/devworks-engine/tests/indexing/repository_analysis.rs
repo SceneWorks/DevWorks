@@ -329,8 +329,19 @@ fn native_repository_analysis_survives_restart_and_keeps_provenance() {
     )
     .unwrap();
     git(&repo, &["init", "-q"]);
+    git(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "--date=2023-01-01T00:00:00Z",
+            "-m",
+            "old repository root",
+        ],
+    );
     git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "first"]);
+    git(&repo, &["commit", "-q", "-m", "recent source"]);
     let mut configured = composition(&h, store.clone(), "git");
     configured.use_cases = configured.use_cases.with_queue();
     let app = executor.block_on(boot(configured)).unwrap();
@@ -365,6 +376,25 @@ fn native_repository_analysis_survives_restart_and_keeps_provenance() {
         phases
             .iter()
             .all(|phase| phase.state == OperationState::ObservedComplete)
+    );
+    let run = read(&*store, |snapshot| {
+        snapshot.analysis().analysis_run(&observed.id)
+    })
+    .unwrap();
+    let vitals_report = run
+        .phases
+        .iter()
+        .find(|phase| phase.phase.key() == "vitals")
+        .and_then(|phase| phase.report.as_ref())
+        .unwrap();
+    let (bytes, _) = app
+        .artifacts()
+        .read_exact(&*store, &user, vitals_report, 1024 * 1024)
+        .unwrap();
+    let vitals: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        vitals["repositories"][0]["vitality"]["firstCommitAtMs"],
+        json!(1_672_531_200_000_i64)
     );
 
     let mut file = read_body.clone();

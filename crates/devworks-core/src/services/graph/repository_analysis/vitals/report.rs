@@ -481,14 +481,14 @@ fn files(
                 (HistoryCoverage::Unavailable, None)
             } else if worktree_change {
                 if views::resolve_unit(read.indexing(), &committed_layers, original)?.is_some() {
-                    (HistoryCoverage::BaseOnly, Some(original.to_lowercase()))
+                    (HistoryCoverage::BaseOnly, Some(original))
                 } else {
                     (HistoryCoverage::NoHistory, None)
                 }
             } else {
-                (HistoryCoverage::Exact, Some(path.to_lowercase()))
+                (HistoryCoverage::Exact, Some(path.as_str()))
             };
-            let key = key.as_deref().unwrap_or("");
+            let key = key.unwrap_or("");
             let churn = history.churn.get(key).cloned().unwrap_or_default();
             let coupling = history.coupling.get(key).cloned().unwrap_or_default();
             let knowledge = history.knowledge.get(key).cloned().unwrap_or_default();

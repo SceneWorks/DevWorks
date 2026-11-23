@@ -1399,25 +1399,27 @@ impl Git<'_> {
         .and_then(|text| text.trim().parse().ok())
         .filter(|count| *count <= max_commits + 1)
         .ok_or_else(|| GitFault::Malformed("history commit count".into()))?;
-        let first = run(
-            &[
-                "log",
-                "--reverse",
-                "--format=%aI",
-                "--no-merges",
-                "--max-count=1",
-                head,
-                "--",
-            ],
-            256,
-        )?;
-        let first = std::str::from_utf8(&first)
-            .map_err(|_| GitFault::Malformed("commit date".into()))?
-            .trim();
-        let first_commit_time = (!first.is_empty())
-            .then(|| first.parse::<jiff::Timestamp>())
-            .transpose()
-            .map_err(|_| GitFault::Malformed("commit date".into()))?;
+        // A bounded complete history can identify its roots. Shallow boundaries and
+        // clipped samples cannot establish when the repository began.
+        let first_commit_time = if shallow || count > max_commits {
+            None
+        } else {
+            let roots = run(
+                &["log", "--max-parents=0", "--format=%aI", &limit, head, "--"],
+                (count + 1) * 64,
+            )?;
+            let roots = std::str::from_utf8(&roots)
+                .map_err(|_| GitFault::Malformed("commit date".into()))?;
+            let mut first = None;
+            for date in roots.lines() {
+                let date = date
+                    .trim()
+                    .parse::<jiff::Timestamp>()
+                    .map_err(|_| GitFault::Malformed("commit date".into()))?;
+                first = Some(first.map_or(date, |current: jiff::Timestamp| current.min(date)));
+            }
+            first
+        };
         let raw = run(
             &[
                 "log",

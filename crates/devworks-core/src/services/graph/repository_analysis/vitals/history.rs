@@ -125,7 +125,7 @@ impl HistoryMetrics {
                 if !budget.visit() {
                     break 'commits;
                 }
-                let key = touch.path.to_lowercase();
+                let key = touch.path.clone();
                 if !budget.retain(key.len() + author.len() + 96) {
                     break 'commits;
                 }
@@ -334,7 +334,8 @@ impl VitalityInput {
                 "Mature"
             }
         });
-        let sufficient_trends = maturity != Some("Young") && !history.shallow && !history.clipped;
+        let sufficient_trends =
+            matches!(maturity, Some("Growing" | "Mature")) && !history.shallow && !history.clipped;
         let dormant = monthly.iter().filter(|point| point.commits == 0).count();
         let activity = sufficient_trends.then(|| activity(&monthly, recent, prior, dormant).into());
         let (mut current, mut streak) = (0, 0);
@@ -468,16 +469,62 @@ mod tests {
                 deadline_ms: 30_000,
             }),
         );
-        assert_eq!(metrics.churn["src/a.rs"].changes, 2);
-        assert_eq!(metrics.churn["src/a.rs"].weighted_365, 1.9);
-        assert_eq!(metrics.churn["src/a.rs"].bug_fixes_365, 0.9);
-        assert_eq!(metrics.coupling["src/a.rs"].strength, 0.5);
-        assert_eq!(metrics.coupling["src/b.rs"].strength, 1.0);
-        assert_eq!(metrics.knowledge["src/a.rs"].truck_factor, 2);
-        assert_eq!(metrics.knowledge["src/b.rs"].truck_factor, 2);
+        assert_eq!(metrics.churn["src/A.rs"].changes, 2);
+        assert_eq!(metrics.churn["src/A.rs"].weighted_365, 1.9);
+        assert_eq!(metrics.churn["src/A.rs"].bug_fixes_365, 0.9);
+        assert_eq!(metrics.coupling["src/A.rs"].strength, 0.5);
+        assert_eq!(metrics.coupling["src/B.rs"].strength, 1.0);
+        assert_eq!(metrics.knowledge["src/A.rs"].truck_factor, 2);
+        assert_eq!(metrics.knowledge["src/B.rs"].truck_factor, 2);
         let vitality = metrics.vitality.unwrap();
         assert_eq!(vitality.firefighting_rate_90, 0.333);
         assert_eq!(vitality.maturity.as_deref(), Some("Young"));
         assert!(vitality.activity.is_none());
+    }
+
+    #[test]
+    fn case_distinct_paths_keep_separate_history_in_the_same_commit() {
+        let commits = vec![
+            sample(
+                "2026-11-01T17:00:00Z",
+                "Change both files",
+                "Ada",
+                &[("src/Foo.rs", 2), ("src/foo.rs", 8)],
+            ),
+            sample(
+                "2026-10-31T12:00:00Z",
+                "Change the capitalized file",
+                "Bob",
+                &[("src/Foo.rs", 3)],
+            ),
+        ];
+        let history = GitHistory {
+            first_commit_time: Some("2023-01-01T00:00:00Z".parse().unwrap()),
+            commits,
+            commit_count: 350,
+            shallow: false,
+            clipped: false,
+            refused_paths: 0,
+        };
+        let metrics = HistoryMetrics::build(
+            &history,
+            "2026-11-19T00:00:00Z".parse().unwrap(),
+            &mut Budget::new(&QueryLimits {
+                max_results: 10,
+                max_visited: 100,
+                deadline_ms: 30_000,
+            }),
+        );
+        assert_eq!(metrics.churn["src/Foo.rs"].lines_added, 5);
+        assert_eq!(metrics.churn["src/foo.rs"].lines_added, 8);
+        assert_eq!(metrics.churn["src/Foo.rs"].weighted_365, 1.2);
+        assert_eq!(metrics.churn["src/foo.rs"].weighted_365, 0.8);
+        assert_eq!(metrics.knowledge["src/Foo.rs"].truck_factor, 2);
+        assert_eq!(metrics.knowledge["src/foo.rs"].truck_factor, 1);
+        assert_eq!(metrics.coupling["src/Foo.rs"].strength, 0.5);
+        assert_eq!(metrics.coupling["src/foo.rs"].strength, 1.0);
+        let vitality = metrics.vitality.unwrap();
+        assert_eq!(vitality.maturity.as_deref(), Some("Mature"));
+        assert!(vitality.activity.is_some());
     }
 }
