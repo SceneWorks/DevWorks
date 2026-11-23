@@ -279,8 +279,10 @@ fn walk(reader: &mut Reader<'_>, config: Walk<'_>) -> Result<(Vec<Step>, dataset
         return Ok((steps, edges));
     }
     let edges = reader.filtered_edges(config.kinds)?;
-    let adjacency = Adjacency::new(&edges.linked, &mut reader.budget);
-    let mut walk = BreadthFirst::new(config.starts.iter().map(dataset::identity));
+    let starts = super::unmapped::identities(config.starts);
+    let (adjacency, partial) = Adjacency::new(&edges.linked, &starts, &mut reader.budget);
+    reader.note_index_limits(false, partial);
+    let mut walk = BreadthFirst::new(starts);
     while let Some((current, depth)) = walk.next(config.depth, &mut reader.budget) {
         walk.expand(
             &mut reader.budget,
@@ -300,23 +302,23 @@ fn indexed_walk(reader: &mut Reader<'_>, config: &Walk<'_>) -> Result<Option<Vec
     let mut walk = BreadthFirst::new(config.starts.iter().map(dataset::identity));
     while let Some((current, depth)) = walk.next(config.depth, &mut reader.budget) {
         // As in the scan's materialization, preserve visits for following the edges already read.
-        let (edges, partial) = reader.budget.reserve_visits(|budget| {
-            super::incident::around(
-                read,
-                &selected.pin.scope,
-                &selected.layers,
-                &current,
-                &config.direction,
-                config.kinds,
-                budget,
-            )
+        let ((edges, visit_partial), memory_partial) = reader.budget.reserve_retention(|budget| {
+            budget.reserve_visits(|budget| {
+                super::incident::around(
+                    read,
+                    &selected.pin.scope,
+                    &selected.layers,
+                    &current,
+                    &config.direction,
+                    config.kinds,
+                    budget,
+                )
+            })
         });
         let Some(edges) = edges? else {
             return Ok(None);
         };
-        if partial && !reader.gaps.contains(&"graph_visited_limit") {
-            reader.gaps.push("graph_visited_limit");
-        }
+        reader.note_index_limits(visit_partial, memory_partial);
         walk.expand(&mut reader.budget, config, &current, depth, &edges);
     }
     Ok(Some(walk.steps))
@@ -963,7 +965,8 @@ mod tests {
             depth: 10,
             complete: true,
         };
-        let adjacency = Adjacency::new(&edges, &mut budget);
+        let (adjacency, partial) = Adjacency::new(&edges, &[identity("a")], &mut budget);
+        assert!(!partial);
         assert_eq!(budget.visited, 0);
         let mut walk = BreadthFirst::new([identity("a"), identity("a")]);
         let mut expanded = Vec::new();
@@ -994,11 +997,69 @@ mod tests {
                     &Direction::Both,
                     &mut budget
                 )
+                .0
                 .iter()
                 .map(|edge| edge.raw.edge.edge_id.as_str())
                 .collect::<Vec<_>>(),
             ["ab", "bc", "ca", "self", "other-kind"]
         );
         assert_eq!(budget.visited, 4);
+    }
+
+    #[test]
+    fn fallback_keeps_a_seed_edge_when_the_auxiliary_index_is_cut_short() {
+        // Simulate the remaining retention after an admitted scan with a large payload per edge.
+        // The single useful edge is intentionally last, after thousands of unrelated endpoints.
+        let mut budget = Budget::new(&crate::protocol::data::QueryLimits {
+            max_results: 50,
+            max_visited: 20_000,
+            deadline_ms: 10_000,
+        });
+        assert!(budget.retain(super::super::budget::MAX_RETAINED_BYTES - 200 * 1024));
+        let mut edges: Vec<_> = (0..2_000)
+            .map(|i| {
+                edge(
+                    &format!("edge-{i}"),
+                    &format!("left-{i}"),
+                    &format!("right-{i}"),
+                    "CALLS",
+                )
+            })
+            .collect();
+        edges.push(edge("short-path", "start", "target", "CALLS"));
+        let starts = [identity("start")];
+        let (adjacency, partial) = Adjacency::new(&edges, &starts, &mut budget);
+        assert!(
+            partial,
+            "the other endpoints exceed the auxiliary index's memory share"
+        );
+        assert_eq!(
+            budget.exhausted, None,
+            "the retained prefix is still usable"
+        );
+        let config = Walk {
+            starts: &[],
+            kinds: &[],
+            direction: Direction::Forward,
+            depth: 3,
+            complete: true,
+        };
+        let mut walk = BreadthFirst::new(starts.clone());
+        while let Some((node, depth)) = walk.next(config.depth, &mut budget) {
+            walk.expand(
+                &mut budget,
+                &config,
+                &node,
+                depth,
+                adjacency.around(&node, &config.direction),
+            );
+        }
+        assert_eq!(walk.steps.len(), 1);
+        assert_eq!(walk.steps[0].identity, identity("target"));
+        let (incident, partial) = adjacency.around_all(&starts, &Direction::Both, &mut budget);
+        assert!(!partial);
+        assert_eq!(incident[0].raw.edge.edge_id, "short-path");
+        assert_eq!(budget.visited, 1);
+        assert_eq!(budget.exhausted, None);
     }
 }

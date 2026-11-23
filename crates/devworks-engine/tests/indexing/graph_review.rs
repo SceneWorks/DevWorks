@@ -720,9 +720,17 @@ fn native_revision_one_traversal_and_dependency_project_representable_graphs() {
     });
 }
 
-/// Publish a native indexed relationship graph without making parser throughput part of the
-/// traversal test. All rows and endpoint indexes are written through the actual storage owner.
-fn publish_large_traversal_fixture(store: &dyn ApplicationStore, location: &Path) {
+enum TraversalFixture {
+    Large,
+    MemoryPressure,
+}
+
+/// Publish a native indexed relationship graph without making parser throughput part of the tests.
+fn publish_traversal_fixture(
+    store: &dyn ApplicationStore,
+    location: &Path,
+    fixture: TraversalFixture,
+) {
     let location = location.to_string_lossy().into_owned();
     write(store, move |tx| {
         let repository = id("traversal-repository");
@@ -749,14 +757,19 @@ fn publish_large_traversal_fixture(store: &dyn ApplicationStore, location: &Path
             manifest: json!({"coverage":{"state":"Complete","gaps":[]}}),
         };
         tx.indexing().insert_generation(&captured)?;
-        let mut put = |key: &str, nodes: usize, edges: usize, ends: fn(usize) -> (usize, usize)| {
+        let mut put = |key: &str,
+                       nodes: usize,
+                       edges: usize,
+                       ends: fn(usize) -> (usize, usize),
+                       root_kind: &str,
+                       padding: &str| {
             let nodes = (0..nodes)
                 .map(|i| {
                     let name = format!("{key}-{i}");
                     StoredNode {
                         unit_key: key.into(),
                         node_id: name.replace('.', "-"),
-                        kind: "Function".into(),
+                        kind: if i == 0 { root_kind } else { "Function" }.into(),
                         name: name.clone(),
                         payload: json!({"qualifiedName":name}),
                     }
@@ -771,7 +784,7 @@ fn publish_large_traversal_fixture(store: &dyn ApplicationStore, location: &Path
                         source_node_id: nodes[source].node_id.clone(),
                         target_node_id: nodes[target].node_id.clone(),
                         kind: "HTTP_CALLS".into(),
-                        payload: json!({"sourceUnit":key,"targetUnit":key,"resolution":"Resolved"}),
+                        payload: json!({"sourceUnit":key,"targetUnit":key,"resolution":"Resolved","detail":padding}),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -787,18 +800,38 @@ fn publish_large_traversal_fixture(store: &dyn ApplicationStore, location: &Path
                 &edges,
             )
         };
-        // A reachable 1,000-node tree and one back-edge into the root. The root and the
-        // disconnected edges have no repeated identities across units.
-        put("tree.rs", 1001, 1001, |i| {
-            if i == 1000 { (1, 0) } else { (i / 10, i + 1) }
-        })?;
-        for (unit, count) in [25_000, 25_000, 25_000, 23_999].into_iter().enumerate() {
-            put(&format!("unrelated-{unit}.rs"), 160, count, |i| {
-                (i / 160, i % 160)
-            })?;
-        }
         captured.state = GEN_SEALED.into();
-        captured.watermark = 5;
+        captured.watermark = match fixture {
+            TraversalFixture::Large => {
+                // A reachable 1,000-node tree and one back-edge into the root.
+                put(
+                    "tree.rs",
+                    1_001,
+                    1_001,
+                    |i| if i == 1_000 { (1, 0) } else { (i / 10, i + 1) },
+                    "Function",
+                    "",
+                )?;
+                for (unit, count) in [25_000, 25_000, 25_000, 23_999].into_iter().enumerate() {
+                    put(
+                        &format!("unrelated-{unit}.rs"),
+                        160,
+                        count,
+                        |i| (i / 160, i % 160),
+                        "Function",
+                        "",
+                    )?;
+                }
+                5
+            }
+            TraversalFixture::MemoryPressure => {
+                // Unrelated edges use almost all the scan retention. The package root forces the
+                // composed fallback, and its two short edges appear last in scan order.
+                put("bulk.rs", 4_000, 2_000, |i| (i * 2, i * 2 + 1), "Function", &"x".repeat(7_760))?;
+                put("seed.rs", 3, 2, |i| if i == 0 { (0, 1) } else { (2, 0) }, "Package", "")?;
+                2
+            }
+        };
         tx.indexing().update_generation(&captured)?;
         tx.indexing().insert_view(&StoredView {
             view_id: view.clone(),
@@ -830,7 +863,7 @@ fn native_traversal_reaches_one_thousand_nodes_in_a_hundred_thousand_edge_graph(
     let store = h.open();
     let location = sources();
     let _source = devworks_test_support::TempRoot::adopt(location.clone());
-    publish_large_traversal_fixture(&*store, &location);
+    publish_traversal_fixture(&*store, &location, TraversalFixture::Large);
     let selected = scope(&*store, "traversal-repository");
     assert_eq!(
         read(&*store, |r| r.graph().graph_counts(&selected)).edges,
@@ -932,5 +965,53 @@ fn native_traversal_reaches_one_thousand_nodes_in_a_hundred_thousand_edge_graph(
         assert_eq!(reached.len(), 1_000, "{operation}");
         assert_eq!(followed.len(), 1_001, "{operation}");
     }
+    executor.block_on(app.shutdown()).into_result().unwrap();
+}
+
+#[test]
+fn native_memory_limited_fallback_keeps_materialized_seed_relationships() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let location = sources();
+    let _source = devworks_test_support::TempRoot::adopt(location.clone());
+    publish_traversal_fixture(&*store, &location, TraversalFixture::MemoryPressure);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    let view = json!({"kind":"Published","repositoryIds":["traversal-repository"]});
+    let traversal = graph(
+        &app,
+        &ctx,
+        "code.traverse",
+        json!({"kind":"Traverse","startIds":["seed-rs-0"],"direction":"Forward","edgeKinds":[],"maxDepth":1}),
+        None,
+        Some(view.clone()),
+    );
+    assert!(gaps(&traversal).to_string().contains("graph_memory_limit"));
+    let GraphResult::CodeGraph { value } = traversal.result else {
+        panic!("expected a one-edge traversal");
+    };
+    assert_eq!(value.edges.0.len(), 1);
+    assert_eq!(value.edges.0[0].target_id.as_str(), "seed-rs-1");
+
+    let impact = graph(
+        &app,
+        &ctx,
+        "code.impact",
+        json!({"kind":"NodeImpact","selection":{"target":{"kind":"Node","nodeId":"seed-rs-0"},"depth":1}}),
+        None,
+        Some(view),
+    );
+    let impact_gaps = gaps(&impact).to_string();
+    assert!(impact_gaps.contains("graph_memory_limit"));
+    assert!(impact_gaps.contains("impact_counts_incomplete"));
+    let GraphResult::Impact { value } = impact.result else {
+        panic!("expected package impact");
+    };
+    assert_eq!(value.affected.0.len(), 1);
+    assert_eq!(value.affected.0[0].node.node_id.as_str(), "seed-rs-2");
     executor.block_on(app.shutdown()).into_result().unwrap();
 }

@@ -273,22 +273,35 @@ fn indexed(
     nodes: &[GraphNodeIdentity],
 ) -> Result<Option<Vec<scan::Edge>>, Failure> {
     let (read, selected) = (reader.read, reader.selected);
-    let (edges, partial) = reader.budget.reserve_visits(|budget| {
-        super::incident::around_all(
-            read,
-            &selected.pin.scope,
-            &selected.layers,
-            nodes,
-            &Direction::Both,
-            &[],
-            budget,
-        )
+    let ((edges, visit_partial), memory_partial) = reader.budget.reserve_retention(|budget| {
+        budget.reserve_visits(|budget| {
+            super::incident::around_all(
+                read,
+                &selected.pin.scope,
+                &selected.layers,
+                nodes,
+                &Direction::Both,
+                &[],
+                budget,
+            )
+        })
     });
     let edges = edges?;
-    if edges.is_some() && partial && !reader.gaps.contains(&"graph_visited_limit") {
-        reader.gaps.push("graph_visited_limit");
+    if edges.is_some() {
+        reader.note_index_limits(visit_partial, memory_partial);
     }
     Ok(edges)
+}
+
+fn scanned_incident<'s>(
+    reader: &mut Reader<'_>,
+    adjacency: &'s Adjacency<'_>,
+    nodes: &[GraphNodeIdentity],
+    direction: &Direction,
+) -> Vec<&'s scan::Edge> {
+    let (edges, partial) = adjacency.around_all(nodes, direction, &mut reader.budget);
+    reader.note_index_limits(false, partial);
+    edges
 }
 
 /// The impact of `starts` over the scan's edges (`scanned`) or, without them, over each reached
@@ -320,7 +333,12 @@ fn assess(
     if unresolved {
         reader.gaps.push("unresolved_impact_edges");
     }
-    let adjacency = scanned.map(|edges| Adjacency::new(&edges.linked, &mut reader.budget));
+    let adjacency = scanned.map(|edges| {
+        let seeds = super::unmapped::identities(&starts);
+        let (index, partial) = Adjacency::new(&edges.linked, &seeds, &mut reader.budget);
+        reader.note_index_limits(false, partial);
+        index
+    });
     let found = !starts.is_empty();
     let mut start_keys = BTreeSet::new();
     let mut start_repositories = BTreeSet::new();
@@ -360,9 +378,7 @@ fn assess(
             .collect();
         let indexed_wave;
         let wave_edges = match &adjacency {
-            Some(adjacency) => {
-                adjacency.around_all(&frontier, &Direction::Both, &mut reader.budget)
-            }
+            Some(adjacency) => scanned_incident(reader, adjacency, &frontier, &Direction::Both),
             None => {
                 let Some(edges) = indexed(reader, &frontier)? else {
                     return Ok(None);
@@ -443,7 +459,7 @@ fn assess(
     }
     let mut links = Links::new();
     let mut direct = BTreeSet::<String>::new();
-    let mut direct_complete = !reader.gaps.contains(&"graph_visited_limit");
+    let mut direct_complete = !reader.index_limited();
     // A direct cross-repository link has a start at one end.
     let starts: Vec<_> = reached
         .values()
@@ -452,7 +468,7 @@ fn assess(
         .collect();
     let indexed_starts;
     let start_edges = match &adjacency {
-        Some(adjacency) => adjacency.around_all(&starts, &Direction::Both, &mut reader.budget),
+        Some(adjacency) => scanned_incident(reader, adjacency, &starts, &Direction::Both),
         None => {
             let Some(edges) = indexed(reader, &starts)? else {
                 return Ok(None);
@@ -462,8 +478,7 @@ fn assess(
         }
     };
     // The edge read above may itself have been cut short.
-    direct_complete &=
-        reader.budget.exhausted.is_none() && !reader.gaps.contains(&"graph_visited_limit");
+    direct_complete &= reader.budget.exhausted.is_none() && !reader.index_limited();
     for edge in start_edges {
         if edge.source.repository_id == edge.target.repository_id {
             continue;
@@ -630,7 +645,7 @@ fn assess(
         return Err(StorageError::CursorExpired.into());
     }
     if reader.budget.exhausted.is_some()
-        || reader.gaps.contains(&"graph_visited_limit")
+        || reader.index_limited()
         || unresolved
         || !reader.selected.pin.unavailable_repositories.is_empty()
     {
@@ -750,7 +765,7 @@ fn crate_dependents(
     let mut dependents = BTreeSet::new();
     for _ in 0..depth {
         let mut next = Vec::new();
-        let edges = adjacency.around_all(&frontier, &Direction::Reverse, &mut reader.budget);
+        let edges = scanned_incident(reader, adjacency, &frontier, &Direction::Reverse);
         for edge in edges {
             if edge.raw.edge.kind != "REFERENCES_PACKAGE" {
                 continue;

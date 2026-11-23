@@ -122,34 +122,54 @@ pub(super) struct Adjacency<'a> {
 }
 
 impl<'a> Adjacency<'a> {
-    pub fn new(edges: &'a [scan::Edge], budget: &mut Budget) -> Self {
-        let mut incident = BTreeMap::<_, Incident>::new();
-        'edges: for (index, edge) in edges.iter().enumerate() {
-            if !budget.check() {
-                break;
-            }
-            for (identity, outgoing) in [(&edge.source, true), (&edge.target, false)] {
-                let key = endpoint(identity);
-                if !budget.retain(2 * std::mem::size_of::<usize>()) {
-                    break 'edges;
+    pub fn new(
+        edges: &'a [scan::Edge],
+        starts: &[GraphNodeIdentity],
+        budget: &mut Budget,
+    ) -> (Self, bool) {
+        let (incident, partial) = budget.reserve_retention(|budget| {
+            let mut incident = BTreeMap::<_, Incident>::new();
+            let starts: BTreeSet<_> = starts.iter().map(endpoint).collect();
+            // Reserve space for useful seed edges first, even when they appear late in the scan.
+            // Each endpoint is filled in scan order in just one of the two linear passes.
+            'passes: for first in [true, false] {
+                if first && starts.is_empty() {
+                    continue;
                 }
-                let entry = match incident.entry(key) {
-                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => {
-                        if !budget.retain(std::mem::size_of::<(Endpoint<'_>, Incident)>() + 32) {
-                            break 'edges;
-                        }
-                        entry.insert(Incident::default())
+                for (index, edge) in edges.iter().enumerate() {
+                    if !budget.check() {
+                        break 'passes;
                     }
-                };
-                if outgoing {
-                    entry.outgoing.push(index);
-                } else {
-                    entry.incoming.push(index);
+                    for (identity, outgoing) in [(&edge.source, true), (&edge.target, false)] {
+                        let key = endpoint(identity);
+                        if starts.contains(&key) != first {
+                            continue;
+                        }
+                        if !budget.retain(2 * std::mem::size_of::<usize>()) {
+                            break 'passes;
+                        }
+                        let entry = match incident.entry(key) {
+                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                if !budget
+                                    .retain(std::mem::size_of::<(Endpoint<'_>, Incident)>() + 32)
+                                {
+                                    break 'passes;
+                                }
+                                entry.insert(Incident::default())
+                            }
+                        };
+                        if outgoing {
+                            entry.outgoing.push(index);
+                        } else {
+                            entry.incoming.push(index);
+                        }
+                    }
                 }
             }
-        }
-        Self { edges, incident }
+            incident
+        });
+        (Self { edges, incident }, partial)
     }
 
     fn offsets<'s>(
@@ -195,27 +215,29 @@ impl<'a> Adjacency<'a> {
         nodes: impl IntoIterator<Item = &'n GraphNodeIdentity>,
         direction: &Direction,
         budget: &mut Budget,
-    ) -> Vec<&scan::Edge> {
-        let mut offsets = BTreeSet::new();
-        'nodes: for node in nodes {
-            for index in self.offsets(node, direction) {
-                if !budget.check() {
-                    break 'nodes;
+    ) -> (Vec<&scan::Edge>, bool) {
+        budget.reserve_retention(|budget| {
+            let mut offsets = BTreeSet::new();
+            'nodes: for node in nodes {
+                for index in self.offsets(node, direction) {
+                    if !budget.check() {
+                        break 'nodes;
+                    }
+                    if offsets.contains(&index) {
+                        continue;
+                    }
+                    // Account for the ordered set and the returned slice of references.
+                    if !budget.retain(4 * std::mem::size_of::<usize>()) {
+                        break 'nodes;
+                    }
+                    offsets.insert(index);
                 }
-                if offsets.contains(&index) {
-                    continue;
-                }
-                // Account for the ordered set and the returned slice of references.
-                if !budget.retain(4 * std::mem::size_of::<usize>()) {
-                    break 'nodes;
-                }
-                offsets.insert(index);
             }
-        }
-        offsets
-            .into_iter()
-            .map(move |index| &self.edges[index])
-            .collect()
+            offsets
+                .into_iter()
+                .map(move |index| &self.edges[index])
+                .collect()
+        })
     }
 }
 
