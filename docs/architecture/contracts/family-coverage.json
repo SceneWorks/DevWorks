@@ -19699,7 +19699,7 @@
           "modePolicies": [
             {
               "mode": "Query",
-              "authority": "ScopedRead",
+              "authority": "HumanConfiguration",
               "effect": "ReadOnly or declared external read"
             }
           ],
@@ -19791,7 +19791,7 @@
           "modePolicies": [
             {
               "mode": "Query",
-              "authority": "ScopedRead",
+              "authority": "HumanConfiguration",
               "effect": "ReadOnly or declared external read"
             }
           ],

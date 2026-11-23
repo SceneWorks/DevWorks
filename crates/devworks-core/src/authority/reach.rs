@@ -24,6 +24,16 @@ pub fn reach(
         return Ok(Some(Reach::Workspace));
     }
     Ok(match authority.principal(ctx.principal())? {
+        Some(binding) if ctx.principal_kind() == PrincipalKind::McpClient => {
+            // A multi-project client acts in one granted project per request. Gateway admission
+            // requires its live proof; explicit deferred owners recheck the serialized fence
+            // before using a restored context.
+            if binding.active && binding.kind == PrincipalKind::McpClient {
+                ctx.project_id().cloned().map(Reach::Project)
+            } else {
+                None
+            }
+        }
         Some(b) if b.active => Some(b.project_id.map_or(Reach::Workspace, Reach::Project)),
         _ => None,
     })

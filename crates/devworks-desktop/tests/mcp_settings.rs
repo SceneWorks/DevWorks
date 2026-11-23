@@ -769,3 +769,40 @@ fn settings_names_a_stdio_servers_missing_runtime_before_connecting() {
         "Settings names the missing runtime before connecting"
     );
 }
+
+#[test]
+fn settings_registers_an_incoming_client_with_no_grants() {
+    let _case = native_runtime_case();
+    let root = Root::new("incoming-mcp-settings");
+    let engine = Engine::start(config(&root.0)).expect("desktop runtime boots");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1800.0);
+    settle(&mut h);
+    click_nav(&mut h, "Settings");
+    click(&mut h, Role::Button, Category::Tools.label());
+    settle(&mut h);
+
+    type_into(&mut h, "New client name", "Read-only external client");
+    click(&mut h, Role::Button, "Register");
+    settle(&mut h);
+    assert!(has_text(&h, "Incoming MCP settings saved."));
+    assert!(has_text(&h, "Read-only external client"));
+    click(&mut h, Role::Button, "Edit access");
+    settle(&mut h);
+
+    let result = devworks_desktop::ops::query_result(engine.backend().query(
+        "mcp_server.clients",
+        br#"{"protocol":"1.0-draft.1","mode":"Query","queryId":"pairing-ui","body":{"kind":"mcp_server.clients","page":{"limit":30}}}"#,
+    )).expect("native client administration");
+    let devworks_core::protocol::results::OperationResult::McpServerClients { value } = result.0
+    else {
+        panic!("client list result");
+    };
+    let [client] = value.items.0.as_slice() else {
+        panic!("expected one registered client");
+    };
+    assert_eq!(client.name.0, "Read-only external client");
+    assert!(!client.enabled);
+    assert!(client.project_ids.0.is_empty());
+    assert!(client.read_operations.0.is_empty());
+    assert!(client.command_operations.0.is_empty());
+}

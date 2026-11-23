@@ -60,6 +60,7 @@ use crate::protocol::{
 use crate::registry::{EffectClass, Mode, ModeBinding, OperationDescriptor, SchemaRevision};
 use serde_json::json;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
@@ -370,7 +371,9 @@ impl Gateway<'_> {
             let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
                 crate::authority::authorization_holds(s, &authorization)
             });
-            if !matches!(holds, Ok(true)) {
+            if !matches!(holds, Ok(true))
+                || !crate::services::mcp_inbound::access::request_live(ctx)
+            {
                 return Ok(self.query_fault(
                     admitted.query_id,
                     DomainErrorCode::PermissionDenied,
@@ -645,16 +648,16 @@ impl Gateway<'_> {
         let preparing = if authorization.is_replay_only() {
             Ok((None, None))
         } else {
-            // Removed content is a committed terminal outcome, never a reason to recreate
-            // files or reopen source arguments before the transactional replay fence.
+            // An incoming client can replay its own committed receipt while an external
+            // source needed by initial preparation is unavailable. The writer decides whether
+            // the stored intent and current disclosure scope match before returning the receipt.
             env.read(|r| {
-                Ok(matches!(
-                    r.receipts().lookup(admitted.identity())?,
-                    Some(LedgerEntry::Purged(_))
-                ))
+                let existing = r.receipts().lookup(admitted.identity())?;
+                Ok(matches!(existing, Some(LedgerEntry::Purged(_)))
+                    || (ctx.principal_kind() == PrincipalKind::McpClient && existing.is_some()))
             })
-            .and_then(|purged| {
-                if purged {
+            .and_then(|recorded| {
+                if recorded {
                     Ok((None, None))
                 } else if waiting == Waiting::Report {
                     handler
@@ -705,6 +708,8 @@ impl Gateway<'_> {
             options,
             request_key,
         } = prepared_command;
+        let publication = (ctx.principal_kind() == PrincipalKind::McpClient)
+            .then(|| (request_key.clone(), authorization.clone()));
         let cancellation = options.cancellation.clone();
         let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
         // The use case settles what it prepared once the outcome is known (for example a staged
@@ -780,6 +785,25 @@ impl Gateway<'_> {
             ),
         };
         settle.settle(ctx, prepared.as_ref(), Some(&reply), &env);
+        if let Some((request_key, authorization)) = publication
+            && matches!(
+                reply,
+                CommandReply::Recorded { .. } | CommandReply::ReceiptPurged { .. }
+            )
+            && (!read_snapshot(self.store, &ReadOptions::default(), |snapshot| {
+                crate::authority::service::command_publication_holds(snapshot, &authorization)
+            })
+            .unwrap_or(false)
+                || !crate::services::mcp_inbound::access::request_live(ctx))
+        {
+            // The decision may already be durable. Report the existing recovery outcome and
+            // keep its receipt and operation data behind current client authority.
+            return Ok(CommandReply::CommandStatusUnknown {
+                protocol: Protocol::Draft1,
+                request_key,
+                correlation_id: self.correlation(),
+            });
+        }
         validate_command_reply(&reply).map_err(GatewayFailure::HandlerContract)?;
         Ok(reply)
     }
@@ -955,7 +979,9 @@ fn unit_of_work(
         // authority, and an old-epoch receipt is never replayed as fresh authority.
         return Ok(Unit::Denied);
     }
-    if tx.actors().actor_kind(ctx.principal())?.is_none() {
+    if !crate::services::mcp_inbound::access::request_live(ctx)
+        || tx.actors().actor_kind(ctx.principal())?.is_none()
+    {
         // Receipts and history are attributed to a host-registered principal.
         return Ok(Unit::Denied);
     }
@@ -972,8 +998,20 @@ fn unit_of_work(
     // revision the operation no longer registers would otherwise be misreported as a changed
     // intent instead of an incompatible record. A receipt under another *registered* revision is
     // a different intent of the same key (its fingerprint differs), never a replay.
+    let access = crate::services::mcp_inbound::access::command_fence(authorization);
     match tx.receipts().lookup(&command.identity)? {
         Some(LedgerEntry::Purged(stored)) => {
+            if let Some(current) = access {
+                let prior = crate::services::mcp_inbound::access::receipt_fence(
+                    tx.history(),
+                    &stored.outcome.command_id,
+                    &stored.outcome.committed_sequence,
+                )?;
+                match prior {
+                    Some(prior) if prior.receipt_can_replay(current, tx.work())? => {}
+                    _ => return Ok(Unit::Denied),
+                }
+            }
             if stored.operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
@@ -993,6 +1031,17 @@ fn unit_of_work(
             });
         }
         Some(LedgerEntry::Current(stored)) => {
+            if let Some(current) = access {
+                let prior = crate::services::mcp_inbound::access::receipt_fence(
+                    tx.history(),
+                    &stored.receipt.command_id,
+                    &stored.receipt.committed_sequence,
+                )?;
+                match prior {
+                    Some(prior) if prior.receipt_can_replay(current, tx.work())? => {}
+                    _ => return Ok(Unit::Denied),
+                }
+            }
             if stored.operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
@@ -1019,6 +1068,9 @@ fn unit_of_work(
             schema_revision,
             ..
         }) => {
+            if access.is_some() {
+                return Ok(Unit::Denied);
+            }
             if operation != command.descriptor.name {
                 return Ok(Unit::IdempotencyConflict);
             }
@@ -1034,7 +1086,11 @@ fn unit_of_work(
     // view of the transaction that cannot record receipts or command history (ARCH-02). Any
     // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
-    let outcome = handler.decide(ctx, command, &mut HandlerTx::new(tx, ingress));
+    let (outcome, created_operations) = {
+        let mut handler_tx = HandlerTx::new(tx, ingress);
+        let outcome = handler.decide(ctx, command, &mut handler_tx);
+        (outcome, handler_tx.created_operations)
+    };
     let decided = match outcome {
         Ok(mut decided) => {
             if let Err(e) = check_decision(command, &decided) {
@@ -1055,6 +1111,21 @@ fn unit_of_work(
             if let Err(error) = project_decision(&mut decided.decision, command.revision) {
                 tx.rollback_to(savepoint)?;
                 return Ok(Unit::Contract(error));
+            }
+            if let (Some(access), DomainDecision::Accepted { operation_id }) =
+                (access, &decided.decision)
+                && !created_operations.contains(operation_id)
+            {
+                let existing = crate::services::mcp_inbound::access::operation_fence(
+                    tx.history(),
+                    ctx,
+                    operation_id,
+                )?;
+                if !matches!(existing, Some(fence) if fence.receipt_can_replay(access, tx.work())?)
+                {
+                    tx.rollback_to(savepoint)?;
+                    return Ok(Unit::Denied);
+                }
             }
             if matches!(decided.decision, DomainDecision::Refused { .. }) {
                 // Receipt-only decisions do not mutate work (step 5): every write the use case
@@ -1124,6 +1195,18 @@ fn unit_of_work(
         &command.project_targets,
         decided.operation_id.as_ref(),
     )?;
+    let mut payload = json!({
+        "operation": command.descriptor.name,
+        "contract": CONTRACT,
+        "schemaRevision": command.revision.0,
+        "requestDigest": command.fingerprint.as_str(),
+        "decision": decision_kind(&decided.decision),
+        "subject": scope.subject,
+    });
+    if let Some(access) = access {
+        payload["incomingMcpAccess"] = serde_json::to_value(access)
+            .map_err(|_| StorageError::InvalidRecord("incoming MCP receipt access".into()))?;
+    }
     let sequence = tx.history().append(NewEvent {
         id: event_id.clone(),
         actor: ctx.principal().clone(),
@@ -1134,14 +1217,7 @@ fn unit_of_work(
         aggregate_id: command_id.0.as_str().to_owned(),
         aggregate_revision: 1,
         kind: "CommandDecided".into(),
-        payload: json!({
-            "operation": command.descriptor.name,
-            "contract": CONTRACT,
-            "schemaRevision": command.revision.0,
-            "requestDigest": command.fingerprint.as_str(),
-            "decision": decision_kind(&decided.decision),
-            "subject": scope.subject,
-        }),
+        payload,
     })?;
     let committed_sequence = Revision::new(sequence)
         .map_err(|_| StorageError::InvalidRecord("non-positive committed sequence".into()))?;
@@ -1154,6 +1230,26 @@ fn unit_of_work(
         operation_id: decided.operation_id,
         decision,
     };
+    if let (Some(access), Some(operation)) = (access, &receipt.operation_id)
+        && matches!(receipt.decision, DomainDecision::Accepted { .. })
+        && created_operations.contains(operation)
+        && tx.operations().operation(operation)?.is_some()
+    {
+        use crate::services::mcp_inbound::access::{OPERATION_ADMITTED, OPERATION_AGGREGATE};
+        let id = EventId(tx.new_id(IdKind::Event));
+        tx.history().append(NewEvent {
+            id,
+            actor: ctx.principal().clone(),
+            project_id: ctx.project_id().cloned(),
+            root_id: ctx.root_id().cloned(),
+            operation_id: Some(operation.clone()),
+            aggregate_kind: OPERATION_AGGREGATE.into(),
+            aggregate_id: operation.0.as_str().into(),
+            aggregate_revision: 1,
+            kind: OPERATION_ADMITTED.into(),
+            payload: json!({"incomingMcpAccess": access}),
+        })?;
+    }
     tx.receipts().record(
         &command.identity,
         &StoredReceipt {
@@ -1265,14 +1361,23 @@ fn decision_scope(
 fn gateway_owned(event: &NewEvent) -> bool {
     use crate::authority::service::DENIAL_AGGREGATE;
     use crate::kernel::reply_intent::REPLY_AGGREGATE;
+    use crate::services::mcp_inbound::access::{OPERATION_ADMITTED, OPERATION_AGGREGATE};
     crate::authority::is_authority_history(event)
         || matches!(
             event.aggregate_kind.as_str(),
-            "command" | "command_receipt" | DENIAL_AGGREGATE | REPLY_AGGREGATE
+            "command"
+                | "command_receipt"
+                | DENIAL_AGGREGATE
+                | REPLY_AGGREGATE
+                | OPERATION_AGGREGATE
         )
         || matches!(
             event.kind.as_str(),
-            "CommandDecided" | "ReceiptIncompatible" | "AuthorityDenied" | "ReceiptReplyPublished"
+            "CommandDecided"
+                | "ReceiptIncompatible"
+                | "AuthorityDenied"
+                | "ReceiptReplyPublished"
+                | OPERATION_ADMITTED
         )
 }
 
@@ -1281,6 +1386,7 @@ fn gateway_owned(event: &NewEvent) -> bool {
 struct HandlerTx<'a> {
     inner: RefCell<&'a mut dyn WriteTransaction>,
     info: StoreInfo,
+    created_operations: HashSet<OperationId>,
     /// The principal of a user- or host-ingress command; authority writes are allowed only for
     /// it, and never for a command an agent, package, MCP client or schedule submitted.
     ingress: Option<ActorId>,
@@ -1292,6 +1398,7 @@ impl<'a> HandlerTx<'a> {
             ingress,
             inner: RefCell::new(inner),
             info,
+            created_operations: HashSet::new(),
         }
     }
 }
@@ -1772,6 +1879,83 @@ impl DurableQueue for HandlerTx<'_> {
     }
 }
 
+use crate::ports::storage::{
+    AttemptBinding, AttemptFence, AttemptRecord, NewOperation, OperationRead, OperationRecord,
+};
+use crate::protocol::OperationState;
+
+impl OperationRead for HandlerTx<'_> {
+    fn operation(&self, id: &OperationId) -> Result<Option<OperationRecord>, StorageError> {
+        self.inner.borrow_mut().operations().operation(id)
+    }
+    fn unresolved(&self, limit: u16) -> Result<Vec<OperationRecord>, StorageError> {
+        self.inner.borrow_mut().operations().unresolved(limit)
+    }
+    fn operations_for_capability(
+        &self,
+        capability: &str,
+        states: &[OperationState],
+        after: Option<&OperationId>,
+        limit: u16,
+    ) -> Result<Vec<OperationRecord>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .operations()
+            .operations_for_capability(capability, states, after, limit)
+    }
+}
+impl OperationJournal for HandlerTx<'_> {
+    fn record_intent(&mut self, operation: NewOperation) -> Result<OperationRecord, StorageError> {
+        let recorded = self.inner.get_mut().operations().record_intent(operation)?;
+        self.created_operations.insert(recorded.id.clone());
+        Ok(recorded)
+    }
+    fn begin_attempt(
+        &mut self,
+        id: &OperationId,
+        expected: i64,
+        binding: AttemptBinding,
+    ) -> Result<AttemptRecord, StorageError> {
+        self.inner
+            .get_mut()
+            .operations()
+            .begin_attempt(id, expected, binding)
+    }
+    fn transition(
+        &mut self,
+        id: &OperationId,
+        expected: i64,
+        fence: Option<&AttemptFence>,
+        to: OperationState,
+        observation: Option<serde_json::Value>,
+    ) -> Result<OperationRecord, StorageError> {
+        self.inner
+            .get_mut()
+            .operations()
+            .transition(id, expected, fence, to, observation)
+    }
+    fn observe(
+        &mut self,
+        id: &OperationId,
+        attempt_no: i64,
+        observation: serde_json::Value,
+    ) -> Result<(), StorageError> {
+        self.inner
+            .get_mut()
+            .operations()
+            .observe(id, attempt_no, observation)
+    }
+    fn classify_interrupted(
+        &mut self,
+        limit: u16,
+    ) -> Result<Vec<(OperationId, OperationState)>, StorageError> {
+        self.inner
+            .get_mut()
+            .operations()
+            .classify_interrupted(limit)
+    }
+}
+
 impl WriteTransaction for HandlerTx<'_> {
     fn now_ms(&self) -> i64 {
         self.inner.borrow().now_ms()
@@ -1804,7 +1988,7 @@ impl WriteTransaction for HandlerTx<'_> {
         self
     }
     fn operations(&mut self) -> &mut dyn OperationJournal {
-        self.inner.get_mut().operations()
+        self
     }
     fn queue(&mut self) -> &mut dyn DurableQueue {
         self

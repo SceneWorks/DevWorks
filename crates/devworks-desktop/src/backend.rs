@@ -258,6 +258,14 @@ pub trait Backend: Send + Sync {
     fn stage_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("credential entry is not available".into())
     }
+    /// Only the human Settings action can request protected manual client pairing.
+    fn provision_inbound_mcp_credential(
+        &self,
+        _client: &Id,
+        _revision: &devworks_core::protocol::Revision,
+    ) -> Result<Secret, String> {
+        Err("Incoming MCP pairing is unavailable".into())
+    }
     fn stage_mcp_api_key(&self, _key: Secret) -> Result<Id, String> {
         Err("MCP credential entry is not available".into())
     }
@@ -434,6 +442,10 @@ pub enum TaskOutput {
     PackageViewData(devworks_engine::package_host::native_ui::ViewData),
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
+    IncomingMcp {
+        status: Box<devworks_core::protocol::records::McpInboundStatus>,
+        clients: Vec<devworks_core::protocol::records::McpClientAccess>,
+    },
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.

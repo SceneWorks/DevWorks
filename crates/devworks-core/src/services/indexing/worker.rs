@@ -186,6 +186,7 @@ impl IndexWorker {
                         .is_none_or(|p| crate::services::runs::closed_to_work(&p.lifecycle)),
                     None => false,
                 };
+                let authority_lost = !index_run_authorized(tx, &r)?;
                 let terminal = |r: &mut StoredIndexRun, state: &str, stage: &str| {
                     r.state = state.into();
                     r.stage = stage.into();
@@ -193,8 +194,11 @@ impl IndexWorker {
                     r.lease_until_ms = None;
                     r.finished_at_ms = Some(now);
                 };
-                if r.cancel_requested_at_ms.is_some() || closed {
-                    if closed {
+                if r.cancel_requested_at_ms.is_some() || closed || authority_lost {
+                    if authority_lost {
+                        r.error_code = Some("external_access_changed".into());
+                        r.error_message = Some("the external client's access changed".into());
+                    } else if closed {
                         r.error_code = Some("project_archived".into());
                         r.error_message = Some("the project was archived or deleted".into());
                     }
@@ -451,6 +455,44 @@ impl IndexWorker {
         }
         Ok(report)
     }
+}
+
+// A dedicated MCP identity never becomes the host at dispatch. Native index calls still use
+// the worker's trusted host context, after rechecking the external client's persisted admission
+// on every claim and before every checkpoint, including final publication.
+fn index_run_authorized(
+    tx: &mut dyn WriteTransaction,
+    run: &StoredIndexRun,
+) -> Result<bool, StorageError> {
+    use crate::context::PrincipalKind;
+    use crate::ports::AuthorityFence;
+    if tx.actors().actor_kind(&run.requested_by)? != Some(PrincipalKind::McpClient) {
+        return Ok(true);
+    }
+    let page = tx.history().page(
+        &EventFilter::Aggregate {
+            kind: RUN_AGGREGATE.into(),
+            id: run.id.as_str().into(),
+        },
+        0,
+        1,
+    )?;
+    let Some(event) = page.events.first().filter(|event| {
+        event.kind == "IndexRunQueued"
+            && event.actor == run.requested_by
+            && event.project_id == run.project_id
+    }) else {
+        return Ok(false);
+    };
+    let Some(stored) = event.payload.get("externalAuthority") else {
+        return Ok(false);
+    };
+    let fences: Vec<AuthorityFence> = serde_json::from_value(stored.clone())
+        .map_err(|_| StorageError::InvalidRecord("index run authority".into()))?;
+    Ok(fences
+        .iter()
+        .any(|fence| matches!(fence, AuthorityFence::ExternalMcp(_)))
+        && crate::authority::fences_hold(tx, &fences)?)
 }
 
 /// Coverage of a staged generation (languages, modes, gaps) and its unit count.

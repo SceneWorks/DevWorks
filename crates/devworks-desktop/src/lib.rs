@@ -63,6 +63,7 @@ pub mod jobs_ops;
 pub mod jobs_screen;
 pub mod knowledge_ops;
 pub mod knowledge_screen;
+mod mcp_inbound_panel;
 pub mod mcp_panel;
 pub mod memory;
 pub mod native_notifications;

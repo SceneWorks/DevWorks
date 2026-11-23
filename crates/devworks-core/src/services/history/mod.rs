@@ -830,16 +830,24 @@ impl HistoryService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         operation_id: &OperationId,
+        authorization: &crate::ports::Authorization,
     ) -> Result<OperationResult, Failure> {
         let Some(op) = snapshot.operations().operation(operation_id)? else {
             return Err(not_found("operation", &operation_id.0).into());
         };
-        let visible = match &op.root_id {
-            Some(root) => snapshot
-                .sessions()
-                .work_root(root)?
-                .is_some_and(|w| project_visible(ctx, Some(&w.project_id))),
-            None => ctx.project_id().is_none(),
+        let visible = if ctx.principal_kind() == crate::context::PrincipalKind::McpClient {
+            crate::services::mcp_inbound::access::operation_recovery_matches(
+                authorization,
+                operation_id,
+            )
+        } else {
+            match &op.root_id {
+                Some(root) => snapshot
+                    .sessions()
+                    .work_root(root)?
+                    .is_some_and(|w| project_visible(ctx, Some(&w.project_id))),
+                None => ctx.project_id().is_none(),
+            }
         };
         if !visible {
             return Err(not_found("operation", &operation_id.0).into());
@@ -860,9 +868,26 @@ impl HistoryService {
         ctx: &InvocationContext,
         request_key: &RequestKey,
         revision: SchemaRevision,
+        authorization: &crate::ports::Authorization,
     ) -> Result<OperationResult, Failure> {
         let identity = ReceiptIdentity::bind(ctx, request_key.clone());
-        match snapshot.receipts().lookup(&identity)? {
+        let ledger = snapshot.receipts().lookup(&identity)?;
+        let ledger = if ctx.principal_kind() == crate::context::PrincipalKind::McpClient {
+            ledger.filter(|entry| {
+                let command = match entry {
+                    LedgerEntry::Current(stored) => &stored.receipt.command_id,
+                    LedgerEntry::Purged(stored) => &stored.outcome.command_id,
+                    LedgerEntry::Incompatible { .. } => return false,
+                };
+                crate::services::mcp_inbound::access::receipt_recovery_matches(
+                    authorization,
+                    command,
+                )
+            })
+        } else {
+            ledger
+        };
+        match ledger {
             None => Ok(OperationResult::HistoryCommandReceipt {
                 value: ReceiptObservation {
                     request_key: request_key.clone(),
@@ -1132,13 +1157,13 @@ impl QueryHandler for HistoryService {
             },
             ops::Input::OperationStatus(q) => match &q.query {
                 Query::Operation { operation_id } => self
-                    .operation_status(snapshot, ctx, operation_id)
+                    .operation_status(snapshot, ctx, operation_id, query.authorization())
                     .map(|r| (r, 1)),
                 _ => Err(unsupported()),
             },
             ops::Input::CommandReceipt(q) => match &q.query {
                 Query::Receipt { request_key } => self
-                    .command_receipt(snapshot, ctx, request_key, revision)
+                    .command_receipt(snapshot, ctx, request_key, revision, query.authorization())
                     .map(|r| (r, 1)),
                 _ => Err(unsupported()),
             },

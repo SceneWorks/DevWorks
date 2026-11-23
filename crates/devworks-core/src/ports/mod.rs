@@ -161,6 +161,8 @@ pub struct GrantUse {
 /// or re-bound principal, a narrowed access policy) fences the request.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorityFence {
+    /// Current incoming MCP registration, credential, and exact target scope.
+    ExternalMcp(Box<crate::services::mcp_inbound::AccessFence>),
     /// Current durable task-branch ownership and repository membership.
     GitWorktree { id: Id, digest: String },
     /// The principal binding revision authority resolved.

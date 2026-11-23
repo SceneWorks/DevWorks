@@ -3,17 +3,17 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "53a16993118c2cbec211a8c73017a208f6cadd34c6549621866034786e2231cc",
+  "sourceSha256": "be6bdf6633b87ab460cbdabacb9256d0fc0786293482cba10a6582e1bc5610dc",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
   "resourcePolicy": "Static safe devworks:// templates; object enumeration/read is an authenticated scoped tool/resource projection of these exact queries, preserving the query stamp and citations.",
   "counts": {
-    "catalogOperations": 353,
-    "modeDispositions": 358,
-    "tools": 154,
-    "readTools": 95,
-    "commandTools": 59
+    "catalogOperations": 382,
+    "modeDispositions": 387,
+    "tools": 153,
+    "readTools": 97,
+    "commandTools": 56
   },
   "tools": [
     {
@@ -722,6 +722,27 @@
       "resultSelection": {
         "pointer": "/kind",
         "equals": "next_work.inspect_claim"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_next_work_inspect_queue",
+      "operation": "next_work.inspect_queue",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "next_work.inspect_queue"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "next_work.inspect_queue"
       },
       "authority": "Scoped",
       "effect": "Local",
@@ -1946,6 +1967,27 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
+      "name": "devworks_schemas_code_references",
+      "operation": "schemas.code_references",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "schemas.code_references"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "schemas.code_references"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
       "name": "devworks_knowledge_search",
       "operation": "knowledge.search",
       "mode": "Query",
@@ -2366,27 +2408,6 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
-      "name": "devworks_knowledge_import_user_data",
-      "operation": "knowledge.import_user_data",
-      "mode": "Command",
-      "inputSchema": "contracts/domain-request.schema.json",
-      "inputSelection": {
-        "pointer": "/body/kind",
-        "equals": "knowledge.import_user_data"
-      },
-      "resultSchema": "contracts/operation-result.schema.json",
-      "resultSelection": {
-        "pointer": "/kind",
-        "equals": "knowledge.import_user_data"
-      },
-      "authority": "Scoped",
-      "effect": "Journaled",
-      "clientGrant": "ExplicitCommand",
-      "defaultForNewRegistration": false,
-      "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
-    },
-    {
       "name": "devworks_knowledge_promote",
       "operation": "knowledge.promote",
       "mode": "Command",
@@ -2528,48 +2549,6 @@
       "clientGrant": "SelectedRead",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": false,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
-    },
-    {
-      "name": "devworks_documents_share",
-      "operation": "documents.share",
-      "mode": "Command",
-      "inputSchema": "contracts/artifact-command-request.schema.json",
-      "inputSelection": {
-        "pointer": "/command/kind",
-        "equals": "Share"
-      },
-      "resultSchema": "contracts/operation-result.schema.json",
-      "resultSelection": {
-        "pointer": "/kind",
-        "equals": "documents.share"
-      },
-      "authority": "Existing host authority contract",
-      "effect": "Existing journaled command contract",
-      "clientGrant": "ExplicitCommand",
-      "defaultForNewRegistration": false,
-      "requiresApplicationIdempotencyKey": true,
-      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
-    },
-    {
-      "name": "devworks_documents_move",
-      "operation": "documents.move",
-      "mode": "Command",
-      "inputSchema": "contracts/artifact-command-request.schema.json",
-      "inputSelection": {
-        "pointer": "/command/kind",
-        "equals": "Move"
-      },
-      "resultSchema": "contracts/operation-result.schema.json",
-      "resultSelection": {
-        "pointer": "/kind",
-        "equals": "documents.move"
-      },
-      "authority": "Existing host authority contract",
-      "effect": "Existing journaled command contract",
-      "clientGrant": "ExplicitCommand",
-      "defaultForNewRegistration": false,
-      "requiresApplicationIdempotencyKey": true,
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
@@ -2902,7 +2881,7 @@
         "equals": "conventions.import"
       },
       "authority": "Scoped",
-      "effect": "Local",
+      "effect": "Journaled",
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
@@ -3295,6 +3274,30 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "projects.prepare_purge",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Native project maintenance requires the human confirmation flow."
+    },
+    {
+      "operation": "projects.purge_manifest",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private native project purge review and file locations."
+    },
+    {
+      "operation": "projects.purge",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Native human-only project purge confirmation."
+    },
+    {
+      "operation": "projects.purge_status",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private native project purge progress."
+    },
+    {
       "operation": "features.list",
       "mode": "Query",
       "disposition": "PublishCandidate",
@@ -3310,37 +3313,37 @@
       "operation": "features.create",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "features.edit_plan",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "features.prioritize",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "features.dependencies",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "features.request_plan_approval",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "features.edit",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "issues.list",
@@ -3358,31 +3361,31 @@
       "operation": "issues.create",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "issues.edit",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "issues.prioritize",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "issues.publish",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "issues.link",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.list",
@@ -3400,55 +3403,55 @@
       "operation": "tasks.create",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.edit",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.prioritize",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.move",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.assign",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.dependency_links",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.acceptance_evidence",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.sync_plan",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "tasks.set_feature",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "workflows.list",
@@ -3460,25 +3463,25 @@
       "operation": "workflows.create_status",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "workflows.rename_status",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "workflows.order",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "workflows.reassign_and_remove",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "next_work.claim_project_queue",
@@ -3503,6 +3506,12 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "next_work.inspect_queue",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
     },
     {
       "operation": "runs.start",
@@ -3563,6 +3572,36 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "agents.post",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Internal agent coordination can dispatch messages or change work."
+    },
+    {
+      "operation": "agents.receive",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Internal retained inbox coordination."
+    },
+    {
+      "operation": "agents.ack",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Internal retained inbox coordination."
+    },
+    {
+      "operation": "agents.history",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private agent-to-agent messages and delivery state."
+    },
+    {
+      "operation": "agents.events",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private agent-to-agent events and delivery state."
     },
     {
       "operation": "agents.inbox",
@@ -3742,7 +3781,7 @@
       "operation": "code.set_trust",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "code.file_impact",
@@ -3802,31 +3841,31 @@
       "operation": "indexing.index",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "indexing.reindex",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "indexing.refresh_overlay",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "indexing.retire_view",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "indexing.cancel",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "indexing.status",
@@ -3844,7 +3883,7 @@
       "operation": "indexing.configure_sources",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "analysis.health",
@@ -3961,6 +4000,12 @@
       "reason": "Eligible scoped read; explicit client selection required."
     },
     {
+      "operation": "schemas.code_references",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
       "operation": "schemas.index",
       "mode": "Command",
       "disposition": "InternalOnly",
@@ -4030,43 +4075,43 @@
       "operation": "knowledge.record",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.revise",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.relate",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.tag",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.verify",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.retract",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.scope",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.diagnostics",
@@ -4078,13 +4123,13 @@
       "operation": "knowledge.delete_by_source",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.delete_selected",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.write_status",
@@ -4137,20 +4182,20 @@
     {
       "operation": "knowledge.import_user_data",
       "mode": "Command",
-      "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "disposition": "InternalOnly",
+      "reason": "Native import requires the human actor that supplied the retained user data."
     },
     {
       "operation": "knowledge.promote",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.challenge",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "knowledge.tagged_lessons",
@@ -4216,13 +4261,13 @@
       "operation": "dreaming.review",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "documents.import",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "documents.list",
@@ -4245,38 +4290,38 @@
     {
       "operation": "documents.share",
       "mode": "Command",
-      "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "disposition": "InternalOnly",
+      "reason": "Document transfers require the source and destination project coordinators."
     },
     {
       "operation": "documents.move",
       "mode": "Command",
-      "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "disposition": "InternalOnly",
+      "reason": "Document transfers require the source and destination project coordinators."
     },
     {
       "operation": "documents.index",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "documents.retry",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "documents.disable_retrieval",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "documents.remove_index",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "artifacts.save",
@@ -4321,6 +4366,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "artifacts.tag",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Artifact organization is outside the selected command set."
+    },
+    {
       "operation": "conventions.list",
       "mode": "Query",
       "disposition": "PublishCandidate",
@@ -4336,7 +4387,7 @@
       "operation": "conventions.edit",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.version",
@@ -4348,37 +4399,37 @@
       "operation": "conventions.applicability",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.retire",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.index",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.import",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.delete",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.move",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.resources",
@@ -4390,7 +4441,7 @@
       "operation": "conventions.delete_resource",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "conventions.search",
@@ -4439,6 +4490,12 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "skills.set_enabled",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Native skills configuration."
     },
     {
       "operation": "roles.read",
@@ -4492,7 +4549,13 @@
       "operation": "approvals.record_human_decision",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
+      "operation": "approvals.review_queue",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private human approval queue."
     },
     {
       "operation": "notifications.list",
@@ -4523,6 +4586,12 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "notifications.mark_read",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Native notification state."
     },
     {
       "operation": "git.worktree",
@@ -5053,6 +5122,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "router.embedding_spaces",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private provider and embedding configuration."
+    },
+    {
       "operation": "mcp.servers",
       "mode": "Query",
       "disposition": "InternalOnly",
@@ -5071,6 +5146,18 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "mcp.disable",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private outgoing MCP administration."
+    },
+    {
+      "operation": "mcp.remove",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private outgoing MCP administration."
+    },
+    {
       "operation": "mcp.discover",
       "mode": "Command",
       "disposition": "InternalOnly",
@@ -5081,6 +5168,12 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
+      "operation": "mcp.classify_tool",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private outgoing MCP administration."
     },
     {
       "operation": "mcp.resources",
@@ -5161,6 +5254,30 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "addons.invoke",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private package dispatch."
+    },
+    {
+      "operation": "addons.run_workflow",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private package workflow dispatch."
+    },
+    {
+      "operation": "addons.read_content",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private package result access."
+    },
+    {
+      "operation": "addons.invocation",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private package invocation state."
+    },
+    {
       "operation": "help.search",
       "mode": "Query",
       "disposition": "PublishCandidate",
@@ -5188,7 +5305,7 @@
       "operation": "help.generate_capability_docs",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "workspace.diagnostics",
@@ -5200,19 +5317,19 @@
       "operation": "workspace.backup",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "workspace.restore",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "workspace.migrate",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "workspace.update_status",
@@ -5224,7 +5341,7 @@
       "operation": "workspace.approve_install",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "workspace.logs",
@@ -5260,7 +5377,7 @@
       "operation": "repositories.remove_index",
       "mode": "Command",
       "disposition": "PublishCandidate",
-      "reason": "Explicit command grant plus all existing domain authority and recovery."
+      "reason": "Explicit command grant plus existing domain authority and recovery."
     },
     {
       "operation": "repositories.readme",
@@ -5284,31 +5401,31 @@
       "operation": "queue.inspect",
       "mode": "Query",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "queue.resolve",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "queue.retry",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "queue.consumer_status",
       "mode": "Query",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "queue.reconcile",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "imports.preview",
@@ -5344,25 +5461,25 @@
       "operation": "maintenance.prune_diagnostics",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "maintenance.prune_index_runs",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "maintenance.prune_messages",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "maintenance.prune_sessions",
       "mode": "Command",
       "disposition": "InternalOnly",
-      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
     },
     {
       "operation": "repository_docs.generate",
@@ -5393,6 +5510,42 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
+      "operation": "evals.grade",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private evaluation execution."
+    },
+    {
+      "operation": "evals.results",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private evaluation results."
+    },
+    {
+      "operation": "watch.create",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private watcher control with possible process execution."
+    },
+    {
+      "operation": "watch.list",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private watcher state."
+    },
+    {
+      "operation": "watch.inspect",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Private watcher state."
+    },
+    {
+      "operation": "watch.cancel",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Private watcher control."
     }
   ]
 }
