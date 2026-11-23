@@ -495,24 +495,39 @@ impl NativeProviders {
                     .cmp(b.capability_id.as_str())
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
-            let mut external = Vec::new();
+            let mut selected_aliases = Vec::new();
+            let is_analysis =
+                |id: &str| crate::analysis_tools::Alias::from_capability(id).is_some();
+            if tools
+                .iter()
+                .any(|tool| is_analysis(tool.capability_id.as_str()))
+            {
+                selected_aliases.extend(
+                    self.schemas
+                        .selected_builtins(&context)?
+                        .into_iter()
+                        .filter(|tool| is_analysis(tool.capability_id.as_str())),
+                );
+            }
             if tools
                 .iter()
                 .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
             {
-                external.extend(self.schemas.selected_mcp_tools(&context)?);
+                selected_aliases.extend(self.schemas.selected_mcp_tools(&context)?);
             }
             if tools.iter().any(|tool| {
                 let id = tool.capability_id.as_str();
-                !id.starts_with("mcp/") && super::schemas::builtin_operation(id).is_none()
+                !id.starts_with("mcp/")
+                    && !is_analysis(id)
+                    && super::schemas::builtin_operation(id).is_none()
             }) {
-                external.extend(self.schemas.selected_package_tools(&context)?);
+                selected_aliases.extend(self.schemas.selected_package_tools(&context)?);
             }
             if tools.iter().any(|tool| {
                 self.schemas
                     .builtin_binding(&tool.capability_id, &tool.input_schema)
                     .is_none()
-                    && !external.iter().any(|selected| {
+                    && !selected_aliases.iter().any(|selected| {
                         selected.capability_id == tool.capability_id
                             && selected.wire_name == tool.wire_name
                             && selected.input_schema.schema_id == tool.input_schema.schema_id
@@ -520,8 +535,8 @@ impl NativeProviders {
                             && selected.input_schema.sha256 == tool.input_schema.sha256
                     })
             }) {
-                // Only the exact selected MCP and installed package aliases have a durable
-                // dispatcher. A caller cannot qualify a different wire name or schema.
+                // An alias needs a durable dispatcher and its exact current selection, including
+                // the wire name and schema.
                 return Err(StorageError::unavailable(
                     Unavailable::UnsupportedRuntime,
                     "external tool dispatch is unavailable",
