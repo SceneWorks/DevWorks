@@ -1,6 +1,6 @@
 //! A live native credential and durable scope witness back each selected gateway call.
 
-use super::targets::{IndexTargets, WorktreeTarget};
+use super::targets::{DocumentTarget, IndexTargets, WorktreeTarget, document_targets};
 use super::{AuthenticatedClient, Binding, Configuration, current, selected_operation};
 use crate::admission::{project_targets, work_targets};
 use crate::authority::DenialReason;
@@ -8,8 +8,8 @@ use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::sha256_hex;
 use crate::operations::{OperationInput, conventions, features, history, indexing, issues, tasks};
 use crate::ports::storage::{
-    DELETED, EventFilter, HistoryRead, LedgerEntry, ProjectRead, ReadSnapshot, StorageError,
-    WorkRead, WriteTransaction,
+    ArtifactRead, DELETED, EventFilter, HistoryRead, LedgerEntry, ProjectRead, ReadSnapshot,
+    StorageError, WorkRead, WriteTransaction,
 };
 use crate::ports::{AuthorityFence, AuthorityRequest, Authorization};
 use crate::protocol::data::DataScope;
@@ -66,6 +66,8 @@ pub struct AccessFence {
     recovering_receipt: Option<CommandId>,
     recovering_operation: Option<OperationId>,
     worktrees: Vec<WorktreeTarget>,
+    #[serde(default)]
+    documents: Vec<DocumentTarget>,
     work: Vec<WorkScope>,
 }
 
@@ -129,6 +131,8 @@ fn selected_repositories(input: &OperationInput) -> Vec<Id> {
         OperationInput::Issues(issues::Input::List(input)) => input.repository_ids.0.clone(),
         OperationInput::Tasks(tasks::Input::List(input)) => input.repository_ids.0.clone(),
         OperationInput::Issues(issues::Input::Create(input)) => input.repository_ids.0.clone(),
+        OperationInput::Issues(issues::Input::Link(input)) => vec![input.repository_id.clone()],
+        OperationInput::Issues(issues::Input::Publish(input)) => vec![input.repository_id.clone()],
         OperationInput::Tasks(tasks::Input::Create(input)) => input.repository_ids.0.clone(),
         OperationInput::Indexing(indexing::Input::Index(input)) => input.repository_ids.0.clone(),
         OperationInput::Indexing(indexing::Input::Reindex(input)) => input.repository_ids.0.clone(),
@@ -202,6 +206,8 @@ fn supported_target(operation: &str) -> bool {
             | "issues.get"
             | "issues.create"
             | "issues.edit"
+            | "issues.link"
+            | "issues.publish"
             | "issues.prioritize"
             | "tasks.list"
             | "tasks.get"
@@ -235,6 +241,13 @@ fn supported_target(operation: &str) -> bool {
             | "knowledge.challenge"
             | "history.command_receipt"
             | "history.operation_status"
+            | "documents.import"
+            | "documents.share"
+            | "documents.move"
+            | "documents.index"
+            | "documents.retry"
+            | "documents.disable_retrieval"
+            | "documents.remove_index"
             | "conventions.edit"
             | "conventions.applicability"
             | "conventions.retire"
@@ -298,13 +311,12 @@ pub(crate) fn authorize(
         .client(&proof.client)
         .ok_or(DenialReason::UnboundPrincipal)?;
     let exact = IndexTargets::resolve(read, ctx, request.input, &client.access.worktree_ids.0)
-        .map_err(|error| match error {
-            StorageError::ScopeDenied => DenialReason::OutOfProjectScope,
-            _ => DenialReason::AuthorityUnavailable,
-        })?;
+        .map_err(target_error)?;
     let mut repositories = selected_repositories(request.input);
     repositories.extend(exact.repositories);
     let mut worktrees = exact.worktrees;
+    let mut documents =
+        document_targets(read.artifacts(), project, request.input).map_err(target_error)?;
     let full_project_repositories = full_project_repositories(operation);
     if full_project_repositories {
         repositories.extend(
@@ -323,6 +335,13 @@ pub(crate) fn authorize(
     {
         repositories.extend(original.repositories.iter().cloned());
         worktrees.extend(original.worktrees.iter().cloned());
+        for prior in &original.documents {
+            documents.push(
+                prior
+                    .current(read.artifacts(), project)
+                    .map_err(target_error)?,
+            );
+        }
         for witness in &original.work {
             if !work_targets.contains(&witness.id) {
                 work_targets.push(witness.id.clone());
@@ -366,6 +385,7 @@ pub(crate) fn authorize(
         recovering_receipt: recovering_receipt.map(|(command, _)| command),
         recovering_operation: recovering_operation.map(|(operation, _)| operation),
         worktrees,
+        documents,
         work,
     };
     if fence
@@ -375,6 +395,13 @@ pub(crate) fn authorize(
         Ok(fence)
     } else {
         Err(DenialReason::OutOfProjectScope)
+    }
+}
+
+fn target_error(error: StorageError) -> DenialReason {
+    match error {
+        StorageError::ScopeDenied => DenialReason::OutOfProjectScope,
+        _ => DenialReason::AuthorityUnavailable,
     }
 }
 
@@ -534,6 +561,12 @@ impl AccessFence {
                 .repositories
                 .iter()
                 .any(|repo| !current_request.repositories.contains(repo))
+            || self.documents.iter().any(|previous| {
+                !current_request
+                    .documents
+                    .iter()
+                    .any(|current| current.covers(previous))
+            })
         {
             return Ok(false);
         }
@@ -644,6 +677,15 @@ impl AccessFence {
         Ok(true)
     }
 
+    fn documents_hold(&self, artifacts: &dyn ArtifactRead) -> Result<bool, StorageError> {
+        for target in &self.documents {
+            if !target.holds(artifacts, &self.project)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) fn holds(&self, read: &dyn ReadSnapshot) -> Result<bool, StorageError> {
         let stamp = read.stamp();
         let (_, configuration) = current(read.configuration())?;
@@ -654,7 +696,8 @@ impl AccessFence {
             stamp.now_ms,
         ) && self.project_holds(read.projects())?
             && self.worktrees_hold(read.indexing())?
-            && self.work_holds(read.work())?)
+            && self.work_holds(read.work())?
+            && self.documents_hold(read.artifacts())?)
     }
 
     pub(crate) fn holds_in(&self, tx: &mut dyn WriteTransaction) -> Result<bool, StorageError> {
@@ -667,6 +710,7 @@ impl AccessFence {
             tx.now_ms(),
         ) && self.project_holds(tx.projects())?
             && self.worktrees_hold(tx.indexing())?
-            && self.work_holds(tx.work())?)
+            && self.work_holds(tx.work())?
+            && self.documents_hold(tx.artifacts())?)
     }
 }

@@ -1,12 +1,13 @@
 //! Resolve the native repository and exact index views of selected MCP requests.
 
 use crate::context::InvocationContext;
-use crate::operations::{OperationInput, code, indexing, repositories};
+use crate::operations::{OperationInput, code, documents, indexing, repositories};
 use crate::ports::storage::{
-    IndexRead, OVERLAY_UNAVAILABLE, ReadSnapshot, StorageError, StoredOverlay,
+    ArtifactRead, ArtifactRetention, ArtifactState, IndexRead, OVERLAY_UNAVAILABLE, ReadSnapshot,
+    StorageError, StoredOverlay,
 };
-use crate::protocol::Id;
-use crate::protocol::data::IndexCommand;
+use crate::protocol::data::{ArtifactCommand, DataScope, IndexCommand};
+use crate::protocol::{Id, ProjectId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,4 +201,110 @@ impl IndexTargets {
         }
         Ok(exact)
     }
+}
+
+/// The durable audience of an existing artifact addressed by a document mutation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct DocumentTarget {
+    id: Id,
+    scope_revision: i64,
+    owner_required: bool,
+}
+
+impl DocumentTarget {
+    fn resolve(
+        artifacts: &dyn ArtifactRead,
+        project: &ProjectId,
+        id: &Id,
+        owner_required: bool,
+    ) -> Result<Self, StorageError> {
+        let artifact = artifacts
+            .artifact(id)?
+            .filter(|row| {
+                row.state == ArtifactState::Live && row.retention == ArtifactRetention::Explicit
+            })
+            .ok_or(StorageError::ScopeDenied)?;
+        let owns = artifact.scope.project() == Some(project);
+        if !owns && (owner_required || !artifacts.shares(id)?.contains(project)) {
+            return Err(StorageError::ScopeDenied);
+        }
+        Ok(Self {
+            id: id.clone(),
+            scope_revision: artifact.scope_revision,
+            owner_required,
+        })
+    }
+
+    pub fn current(
+        &self,
+        artifacts: &dyn ArtifactRead,
+        project: &ProjectId,
+    ) -> Result<Self, StorageError> {
+        Self::resolve(artifacts, project, &self.id, self.owner_required)
+    }
+
+    pub fn holds(
+        &self,
+        artifacts: &dyn ArtifactRead,
+        project: &ProjectId,
+    ) -> Result<bool, StorageError> {
+        match self.current(artifacts, project) {
+            Ok(current) => Ok(&current == self),
+            Err(StorageError::ScopeDenied) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn covers(&self, previous: &Self) -> bool {
+        self.id == previous.id && (!previous.owner_required || self.owner_required)
+    }
+}
+
+pub(super) fn document_targets(
+    read: &dyn ArtifactRead,
+    project: &ProjectId,
+    input: &OperationInput,
+) -> Result<Vec<DocumentTarget>, StorageError> {
+    let OperationInput::Documents(input) = input else {
+        return Ok(Vec::new());
+    };
+    let id = match input {
+        documents::Input::Import(input) => {
+            if !matches!(&input.scope, DataScope::Project { project_id } if project_id == project) {
+                return Err(StorageError::ScopeDenied);
+            }
+            let mut targets = vec![DocumentTarget::resolve(
+                read,
+                project,
+                &input.source.artifact_id,
+                false,
+            )?];
+            if let Some(replacement) = &input.replace_document_id {
+                targets.push(DocumentTarget::resolve(read, project, replacement, true)?);
+            }
+            return Ok(targets);
+        }
+        documents::Input::Index(input) => &input.document_id,
+        documents::Input::Retry(input) => &input.document_id,
+        documents::Input::Share(request)
+        | documents::Input::Move(request)
+        | documents::Input::DisableRetrieval(request)
+        | documents::Input::RemoveIndex(request) => match &request.command {
+            ArtifactCommand::Share {
+                artifact_id,
+                target_project_id,
+                ..
+            }
+            | ArtifactCommand::Move {
+                artifact_id,
+                target_project_id,
+                ..
+            } if target_project_id == project => artifact_id,
+            ArtifactCommand::DisableRetrieval { artifact_id, .. }
+            | ArtifactCommand::RemoveIndex { artifact_id, .. } => artifact_id,
+            _ => return Err(StorageError::ScopeDenied),
+        },
+        _ => return Ok(Vec::new()),
+    };
+    Ok(vec![DocumentTarget::resolve(read, project, id, true)?])
 }

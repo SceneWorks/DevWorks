@@ -1,16 +1,20 @@
 use super::{Harness, T0};
 use crate::mcp_inbound::authenticate_http;
 use crate::storage::sqlite::SqliteStore;
-use devworks_core::authority::HostAuthority;
+use devworks_core::admission::{Selection, decode};
+use devworks_core::authority::{DenialReason, HostAuthority};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::secrets::{Secret, SessionSecrets};
 use devworks_core::ports::storage::{
-    ApplicationStore, ReadOptions, StoredProject, WriteOptions, read_snapshot, run_write,
+    ApplicationStore, ArtifactRetention, ArtifactScope, ArtifactState, ReadOptions, StoredArtifact,
+    StoredProject, StoredRepository, StoredWork, WriteOptions, read_snapshot, run_write,
 };
+use devworks_core::ports::{AuthorityDenial, AuthorityPort, AuthorityRequest, Authorization};
 use devworks_core::protocol::records::McpClientAccess;
 use devworks_core::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use devworks_core::protocol::{ActorId, CommandReply, Counter, Id, ProjectId, Revision};
+use devworks_core::registry::Mode;
 use devworks_core::services::UseCases;
 use devworks_core::services::knowledge::KnowledgeService;
 use devworks_core::services::mcp_inbound::{Binding, CredentialError, Credentials};
@@ -144,12 +148,22 @@ impl Fixture {
     }
 
     fn replace(&self, key: &str, current: &McpClientAccess, commands: &[&str]) -> McpClientAccess {
+        self.replace_scoped(key, current, &[], commands)
+    }
+
+    fn replace_scoped(
+        &self,
+        key: &str,
+        current: &McpClientAccess,
+        repositories: &[&str],
+        commands: &[&str],
+    ) -> McpClientAccess {
         let OperationResult::McpServerSetClientAccess { value } = self.admin(
             key, "mcp_server.set_client_access",
             json!({"action": {
                 "kind": "Replace", "clientId": current.client_id, "expectedRevision": current.revision,
                 "name": current.name, "enabled": true, "projectIds": ["first"],
-                "repositoryIds": [], "worktreeIds": [], "readOperations": ["projects.get"],
+                "repositoryIds": repositories, "worktreeIds": [], "readOperations": ["projects.get"],
                 "commandOperations": commands
             }}),
         ) else {
@@ -294,6 +308,195 @@ fn selected_knowledge_command_keeps_authority_and_receipts_in_sqlite() {
     assert!(matches!(
         fx.claim(&current_ctx, "closed", "first", None),
         CommandReply::Rejected { .. }
+    ));
+}
+
+fn authorize(
+    fx: &Fixture,
+    context: &InvocationContext,
+    operation: &str,
+    mut body: Value,
+) -> Result<Authorization, AuthorityDenial> {
+    body["kind"] = json!(operation);
+    let request = json!({
+        "protocol": "1.0-draft.1", "mode": "Command", "requestKey": "scope-test", "body": body
+    });
+    let admitted = decode(
+        Selection {
+            operation,
+            mode: Mode::Command,
+        },
+        request.to_string().as_bytes(),
+    )
+    .unwrap();
+    HostAuthority {
+        store: &*fx.store,
+        clock: &*fx.h.clock,
+        protected_branches: &[],
+    }
+    .authorize(
+        context,
+        &AuthorityRequest {
+            descriptor: admitted.descriptor,
+            binding: admitted.binding,
+            effect: admitted.effect,
+            action: admitted.action,
+            input: &admitted.input,
+            fingerprint: &admitted.fingerprint,
+        },
+    )
+}
+
+#[test]
+fn issue_command_requires_the_explicit_repository_and_the_issues_project() {
+    let fx = Fixture::new();
+    run_write(&*fx.store, WriteOptions::fixture(), |tx| {
+        let project = ProjectId(id("first"));
+        for name in ["granted", "withheld"] {
+            tx.projects().insert_repository(&StoredRepository {
+                id: id(name),
+                location: format!("https://example.invalid/{name}"),
+                name: name.into(),
+                remote_url: None,
+                primary: false,
+                lifecycle: "Active".into(),
+                languages: Vec::new(),
+                revision: 1,
+                registered_at_ms: T0,
+            })?;
+        }
+        tx.projects()
+            .set_members(&project, &[id("granted"), id("withheld")])?;
+        for (issue, project_id) in [
+            ("local-issue", project),
+            ("other-issue", ProjectId(id("second"))),
+        ] {
+            tx.work().insert_work(&StoredWork {
+                id: id(issue),
+                project_id,
+                kind: "issue".into(),
+                parent_feature_id: None,
+                status_id: None,
+                title: issue.into(),
+                priority: 0,
+                manual_order: 0,
+                revision: 1,
+                scope_revision: 1,
+                created_at_ms: T0,
+                updated_at_ms: T0,
+                created_by: None,
+                updated_by: None,
+                search_key: String::new(),
+                caller_ref: None,
+                completion: None,
+                brief: json!({}),
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    fx.configure(8147);
+    let active = fx.replace_scoped(
+        "enable",
+        &fx.register(),
+        &["granted"],
+        &["issues.link", "issues.publish"],
+    );
+    let token = fx
+        .credentials
+        .provision(&fx.human, &active.client_id, &active.revision)
+        .unwrap();
+    let ctx = fx
+        .credentials
+        .authenticate(Binding::LoopbackHttp { port: 8147 }, &token)
+        .unwrap()
+        .invocation(
+            id("issue-call"),
+            ProjectId(id("first")),
+            Revision::new(1).unwrap(),
+        );
+    for operation in ["issues.link", "issues.publish"] {
+        let check = |repo, issue| {
+            let mut input =
+                json!({"issueId": issue, "repositoryId": repo, "expectedRevision": "1"});
+            if operation == "issues.link" {
+                input["remoteIssueNumber"] = json!("17");
+            }
+            authorize(&fx, &ctx, operation, input)
+        };
+        assert!(check("granted", "local-issue").is_ok(), "{operation}");
+        assert!(
+            matches!(
+                check("withheld", "local-issue"),
+                Err(AuthorityDenial::Policy(DenialReason::OutOfProjectScope))
+            ),
+            "{operation}"
+        );
+        assert!(
+            matches!(
+                check("granted", "other-issue"),
+                Err(AuthorityDenial::Policy(DenialReason::OutOfProjectScope))
+            ),
+            "{operation}"
+        );
+    }
+}
+
+#[test]
+fn document_command_rechecks_the_artifact_owner_before_deferred_dispatch() {
+    let fx = Fixture::new();
+    let first = ProjectId(id("first"));
+    let second = ProjectId(id("second"));
+    let document = id("document");
+    let stored = document.clone();
+    let owner = first.clone();
+    run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
+        tx.artifacts().insert_artifact(&StoredArtifact {
+            id: stored,
+            origin_project_id: Some(owner.clone()),
+            origin_work_id: None,
+            title: "Document".into(),
+            revision: 1,
+            scope: ArtifactScope::Project(owner),
+            owner: None,
+            retention: ArtifactRetention::Explicit,
+            scope_revision: 1,
+            reference_revision: 1,
+            current_version_id: None,
+            state: ArtifactState::Live,
+            created_at_ms: T0,
+            provenance: json!({"managedDocument":true}),
+        })
+    })
+    .unwrap();
+    fx.configure(8147);
+    let active = fx.replace("enable", &fx.register(), &["documents.index"]);
+    let token = fx
+        .credentials
+        .provision(&fx.human, &active.client_id, &active.revision)
+        .unwrap();
+    let ctx = fx
+        .credentials
+        .authenticate(Binding::LoopbackHttp { port: 8147 }, &token)
+        .unwrap()
+        .invocation(id("document-call"), first, Revision::new(1).unwrap());
+    let input = json!({"documentId":document,"versionId":"version","expectedRevision":"1"});
+    let authority = authorize(&fx, &ctx, "documents.index", input.clone()).unwrap();
+    run_write(&*fx.store, WriteOptions::fixture(), move |tx| {
+        let mut artifact = tx.artifacts().artifact(&document)?.unwrap();
+        artifact.scope = ArtifactScope::Project(second);
+        artifact.scope_revision += 1;
+        tx.artifacts().update_artifact(&artifact)
+    })
+    .unwrap();
+    let holds = read_snapshot(&*fx.store, &ReadOptions::default(), |snapshot| {
+        devworks_core::authority::authorization_holds(snapshot, &authority)
+    })
+    .unwrap();
+    assert!(!holds);
+    assert!(matches!(
+        authorize(&fx, &ctx, "documents.index", input),
+        Err(AuthorityDenial::Policy(DenialReason::OutOfProjectScope))
     ));
 }
 
