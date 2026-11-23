@@ -1,0 +1,67 @@
+name: DW-417 Windows 11 native qualification preflight
+
+on:
+  push:
+    branches: [codex/dw-417-arm-sdk-preflight]
+    paths: [.github/workflows/windows-upgrade-native-preflight.yml]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  arm:
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 49ae9e1ba66722ef46d38cd583c40b68fb603352
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: c7ead308c59aed408b2b1fe8f02c2703c0cb8c91
+          path: candidate
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: devworks-native-pdf-aarch64-pc-windows-msvc
+          run-id: '45090958551'
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/reference
+      - name: Check the real ARM64 SDK, passive PE parser and process fixture
+        shell: pwsh
+        run: |
+          . ./trusted/tools/ci/windows-test-installer.ps1
+          $os = Get-CimInstance Win32_OperatingSystem
+          $os | Select-Object Caption,BuildNumber | Format-List
+          if ($os.Caption -notmatch 'Windows 11' -or $os.BuildNumber -ne '26200' -or
+              [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -cne 'Arm64') {
+            throw 'The preflight must run on the adopted Windows 11 ARM64 client'
+          }
+          Get-Command 7z.exe,python.exe,openssl.exe -ErrorAction Stop | Select-Object Name
+          $signTool = Get-TestSignTool arm64
+          Get-Item -LiteralPath $signTool | Select-Object Name,Directory
+          $fixture = Join-Path $env:RUNNER_TEMP 'reference/devworks-native-pdf-aarch64-pc-windows-msvc.zip'
+          if ((Get-Sha256 $fixture) -cne 'b02c87721f5ca8b2a86f8a7728204180d4bdbcb4a5c1f931651684de6467499a') {
+            throw 'The preflight must use the exact previously tested ARM64 archive'
+          }
+          $image = Join-Path $env:RUNNER_TEMP 'image'
+          Expand-Archive -LiteralPath $fixture -DestinationPath $image
+          Assert-UnsignedTestPe (Join-Path $image 'devworks-desktop.exe') 0xaa64
+          Assert-UnsignedTestPe (Join-Path $image 'devworks-pdf-worker.exe') 0xaa64
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'candidate/tools/ci/qualify-windows-update.py'
+          @'
+          from pathlib import Path
+          import json
+          import runpy
+          import sys
+
+          tool, image = (Path(arg) for arg in sys.argv[1:])
+          probe = runpy.run_path(str(tool))["native_output"]
+          evidence = json.loads(probe(image / "devworks-desktop.exe", "--release-evidence", 0xaa64))
+          assert evidence["target"] == "aarch64-pc-windows-msvc"
+          probe(image / "devworks-pdf-worker.exe", "--check-pdf-worker-memory", 0xaa64)
+          '@ | python -I - $helper $image
+          if ($LASTEXITCODE -ne 0) { throw 'ARM64 PowerShell and native process preflight failed' }
