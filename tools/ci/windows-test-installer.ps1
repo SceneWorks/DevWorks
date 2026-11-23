@@ -45,15 +45,15 @@ function Expand-TestArtifact([string]$Archive, [string]$ExpectedHash, [string]$D
     Assert-ExactFiles $Destination $Names
 }
 
-function Get-X64PeSubsystem([string]$Path) {
+function Get-TestPeSubsystem([string]$Path, [UInt16]$Machine) {
     $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($Path))
     try {
         if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Missing MZ signature' }
         $reader.BaseStream.Position = 0x3c
         $header = $reader.ReadUInt32()
         $reader.BaseStream.Position = $header
-        if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) {
-            throw "Expected an x64 PE file at $Path"
+        if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne $Machine) {
+            throw ("Expected PE machine {0:x4} at {1}" -f $Machine, $Path)
         }
         $optional = $header + 24
         $reader.BaseStream.Position = $optional
@@ -65,14 +65,22 @@ function Get-X64PeSubsystem([string]$Path) {
     }
 }
 
-function Assert-UnsignedX64([string]$Path) {
-    $subsystem = Get-X64PeSubsystem $Path
+function Get-X64PeSubsystem([string]$Path) {
+    Get-TestPeSubsystem $Path 0x8664
+}
+
+function Assert-UnsignedTestPe([string]$Path, [UInt16]$Machine) {
+    $subsystem = Get-TestPeSubsystem $Path $Machine
     if ([IO.Path]::GetFileName($Path) -ceq 'devworks-test-launcher.exe' -and $subsystem -ne 2) {
         throw "Expected a Windows GUI launcher at $Path"
     }
     if ((Get-AuthenticodeSignature -LiteralPath $Path).Status -ne 'NotSigned') {
         throw "Expected unsigned input at $Path"
     }
+}
+
+function Assert-UnsignedX64([string]$Path) {
+    Assert-UnsignedTestPe $Path 0x8664
 }
 
 function New-TestLauncher([string]$Root, [string]$Payload) {
@@ -86,7 +94,21 @@ function New-TestLauncher([string]$Root, [string]$Payload) {
     Copy-Item -LiteralPath $launcher -Destination $Payload
 }
 
-function Get-VerifiedTestSignature([string]$Path) {
+function Get-TestSignTool([ValidateSet('x64','arm64')][string]$Architecture = 'x64') {
+    $kit = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+    $versions = @(Get-ChildItem -LiteralPath $kit -Filter signtool.exe -Recurse |
+        Where-Object { $_.Directory.Parent.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+        Sort-Object { [version]$_.Directory.Parent.Name } -Descending)
+    $signTool = $versions | Where-Object { $_.Directory.Name -eq $Architecture } | Select-Object -First 1
+    if (-not $signTool -and $Architecture -eq 'arm64') {
+        $signTool = $versions | Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+        if ($signTool) { Write-Host 'Using the x64 SDK SignTool to inspect passive ARM64 files' }
+    }
+    if (-not $signTool) { throw "Windows SDK SignTool unavailable for $Architecture" }
+    $signTool.FullName
+}
+
+function Get-VerifiedTestSignature([string]$Path, [string]$SignTool) {
     $signature = Get-AuthenticodeSignature -LiteralPath $Path
     if ($signature.Status -ne 'Valid' -or $signature.SignatureType -ne 'Authenticode' -or
         -not $signature.TimeStamperCertificate) {
@@ -98,13 +120,8 @@ function Get-VerifiedTestSignature([string]$Path) {
     if ($script:profileEku -notin $purposes -or $script:artifactSigningEku -notin $purposes) {
         throw "Unexpected Azure signing profile for $Path"
     }
-    $kit = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-    $signTool = Get-ChildItem -LiteralPath $kit -Filter signtool.exe -Recurse |
-        Where-Object { $_.Directory.Name -eq 'x64' -and $_.Directory.Parent.Name -match '^\d+(\.\d+){3}$' } |
-        Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
-        Select-Object -First 1
-    if (-not $signTool) { throw 'Windows SDK SignTool unavailable' }
-    $report = & $signTool.FullName verify /pa /all /tw /v $Path 2>&1
+    if (-not $SignTool) { $SignTool = Get-TestSignTool }
+    $report = & $SignTool verify /pa /all /tw /v $Path 2>&1
     $report | Write-Host
     if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $Path" }
     [ordered]@{
