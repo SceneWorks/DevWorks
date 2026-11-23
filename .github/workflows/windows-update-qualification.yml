@@ -53,10 +53,18 @@ jobs:
       - name: Test the exact Windows updater trust implementation
         shell: pwsh
         run: |
-          cargo test --locked -p devworks-desktop --lib app_updates::windows_trust::tests::configuration_requires_a_canonical_azure_profile_oid -- --exact
-          if ($LASTEXITCODE -ne 0) { throw 'Windows profile configuration validation failed' }
-          cargo test --locked -p devworks-desktop --lib app_updates::windows_trust::tests::real_rotated_profiles_and_modified_image -- --ignored --exact --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'Native Azure profile validation failed' }
+          $configuration = 'app_updates::windows_trust::tests::configuration_requires_a_canonical_azure_profile_oid'
+          $result = cargo test --locked -p devworks-desktop --lib $configuration -- --exact
+          $result | Write-Host
+          if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $configuration ... ok") {
+            throw 'Windows profile configuration validation failed or did not run'
+          }
+          $publisher = 'app_updates::windows_trust::tests::real_rotated_profiles_and_modified_image'
+          $result = cargo test --locked -p devworks-desktop --lib $publisher -- --ignored --exact --nocapture
+          $result | Write-Host
+          if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $publisher ... ok") {
+            throw 'Native Azure profile validation failed or did not run'
+          }
       - name: Record signer rotation and expiry of the verified fixtures
         shell: pwsh
         run: |
@@ -82,8 +90,14 @@ jobs:
         run: |
           $testName = 'app_updates::windows_trust::tests::managed_entry_does_not_fall_through_with_invalid_configuration'
           Remove-Item Env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID
-          cargo test --locked -p devworks-desktop --lib $testName -- --ignored --exact --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'Managed startup accepted a missing signing profile' }
+          $result = cargo test --locked -p devworks-desktop --lib $testName -- --ignored --exact --nocapture
+          $result | Write-Host
+          if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $testName ... ok") {
+            throw 'Managed startup did not prove refusal of a missing signing profile'
+          }
           $env:DEVWORKS_WINDOWS_SIGNING_PROFILE_OID = '1.3.6.1.4.1.311.97.1.0'
-          cargo test --locked -p devworks-desktop --lib $testName -- --ignored --exact --nocapture
-          if ($LASTEXITCODE -ne 0) { throw 'Managed startup accepted a malformed signing profile' }
+          $result = cargo test --locked -p devworks-desktop --lib $testName -- --ignored --exact --nocapture
+          $result | Write-Host
+          if ($LASTEXITCODE -ne 0 -or $result -cnotcontains "test $testName ... ok") {
+            throw 'Managed startup did not prove refusal of a malformed signing profile'
+          }

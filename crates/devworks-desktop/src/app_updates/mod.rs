@@ -648,12 +648,14 @@ fn private_options(options: &mut OpenOptions) {
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
-    let mut build = fs::DirBuilder::new();
+    let build = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let build = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut build = build;
         build.mode(0o700);
-    }
+        build
+    };
     build.create(path)
 }
 

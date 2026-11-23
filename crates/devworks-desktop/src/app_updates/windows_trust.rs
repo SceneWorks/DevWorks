@@ -182,23 +182,16 @@ unsafe fn has_profile_eku(cert: &CERT_CONTEXT, profile: &str) -> bool {
     // SAFETY: CryptoAPI reports the required size first, then writes identifiers within
     // the caller-owned, pointer-aligned buffer. Read only the signed extension.
     unsafe {
+        let extension_only = CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG.0;
         let mut size = 0;
-        if CertGetEnhancedKeyUsage(cert, CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG, None, &mut size)
-            .is_err()
+        if CertGetEnhancedKeyUsage(cert, extension_only, None, &mut size).is_err()
             || !(std::mem::size_of::<CTL_USAGE>() as u32..=65536).contains(&size)
         {
             return false;
         }
         let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
         let usage = buffer.as_mut_ptr().cast::<CTL_USAGE>();
-        if CertGetEnhancedKeyUsage(
-            cert,
-            CERT_FIND_EXT_ONLY_ENHKEY_USAGE_FLAG,
-            Some(usage),
-            &mut size,
-        )
-        .is_err()
-        {
+        if CertGetEnhancedKeyUsage(cert, extension_only, Some(usage), &mut size).is_err() {
             return false;
         }
         let usage = &*usage;
