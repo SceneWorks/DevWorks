@@ -276,69 +276,7 @@ fn windows_signature(_: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 pub(super) fn windows_signature(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::Security::WinTrust::*;
-    use windows::core::PCWSTR;
-
-    let pin = option_env!("DEVWORKS_SIGNING_CERT_SHA256")
-        .ok_or("The app has no pinned Windows signer.")?;
-    let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-    let mut policy = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    let mut info = WINTRUST_FILE_INFO {
-        cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32,
-        pcwszFilePath: PCWSTR(path.as_ptr()),
-        ..Default::default()
-    };
-    let mut data = WINTRUST_DATA {
-        cbStruct: std::mem::size_of::<WINTRUST_DATA>() as u32,
-        dwUIChoice: WTD_UI_NONE,
-        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
-        dwUnionChoice: WTD_CHOICE_FILE,
-        Anonymous: WINTRUST_DATA_0 { pFile: &mut info },
-        dwStateAction: WTD_STATEACTION_VERIFY,
-        dwProvFlags: WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | WTD_CACHE_ONLY_URL_RETRIEVAL,
-        ..Default::default()
-    };
-    // SAFETY: the file info and its UTF-16 path outlive the verification state. Provider
-    // pointers are inspected only after verification, only up to close, and with null checks.
-    let valid = unsafe {
-        let status = WinVerifyTrust(
-            HWND::default(),
-            &mut policy,
-            (&mut data as *mut WINTRUST_DATA).cast(),
-        );
-        let valid = if status == 0 {
-            let provider = WTHelperProvDataFromStateData(data.hWVTStateData);
-            (!provider.is_null())
-                .then(|| WTHelperGetProvSignerFromChain(provider, 0, false, 0))
-                .filter(|ptr| !ptr.is_null())
-                .and_then(|signer| WTHelperGetProvCertFromChain(signer, 0).as_ref())
-                .and_then(|cert| cert.pCert.as_ref())
-                .filter(|cert| {
-                    !cert.pbCertEncoded.is_null() && (1..=65536).contains(&cert.cbCertEncoded)
-                })
-                .is_some_and(|cert| {
-                    let bytes =
-                        std::slice::from_raw_parts(cert.pbCertEncoded, cert.cbCertEncoded as usize);
-                    devworks_core::fingerprint::sha256_hex(bytes) == pin
-                })
-        } else {
-            false
-        };
-        data.dwStateAction = WTD_STATEACTION_CLOSE;
-        let _ = WinVerifyTrust(
-            HWND::default(),
-            &mut policy,
-            (&mut data as *mut WINTRUST_DATA).cast(),
-        );
-        valid
-    };
-    if valid {
-        Ok(())
-    } else {
-        Err("The Windows executable does not match the DevWorks platform signing identity.".into())
-    }
+    super::windows_trust::verify(path)
 }
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]

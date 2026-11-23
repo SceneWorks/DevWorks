@@ -151,12 +151,10 @@ pub fn run_internal() -> Option<Result<(), String>> {
         Err(error) => Some(Err(error)),
         Ok(None) => {
             #[cfg(windows)]
-            if let Ok(install) = Installation::locate()
-                && install.owner == InstallOwner::WindowsPerUser
-                && std::env::current_exe()
-                    .is_ok_and(|path| path == install.root.join("DevWorks.exe"))
-            {
-                return Some(windows_launcher(install));
+            match Installation::is_windows_launcher() {
+                Ok(true) => return Some(Installation::locate().and_then(windows_launcher)),
+                Ok(false) => {}
+                Err(error) => return Some(Err(error)),
             }
             None
         }
