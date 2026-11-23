@@ -474,7 +474,9 @@ fn bridge_child_uses_the_test_desktop_image() {
 fn cli_bridge_leaves_a_missing_profile_untouched() {
     let root = common::Root::new("no-running-desktop");
     let absent = root.0.join("absent-profile");
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_devworks-desktop"))
+    let desktop = std::env::var_os("DEVWORKS_MCP_PACKAGED_DESKTOP")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_devworks-desktop").into());
+    let status = std::process::Command::new(desktop)
         .arg("mcp")
         .arg("--data-dir")
         .arg(&absent)

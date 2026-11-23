@@ -1,0 +1,84 @@
+name: DW-62 native MCP qualification
+
+on:
+  push:
+    branches: [codex/dw-62-composed-analysis]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dw62-native-mcp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Incoming MCP (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    env:
+      CARGO_BUILD_JOBS: "3"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      DEVWORKS_REQUIRE_ALL_MCP: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Verify test inputs and native toolchain
+        shell: bash
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          test -f crates/devworks-desktop/tests/mcp_inbound_transport.rs
+          test -f tools/ci/package-pdf-qualification.py
+          channel="$(sed -n 's/^channel *= *"\([^"]*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel-$NATIVE_TARGET" --profile minimal --component clippy
+          rustup override set "$channel-$NATIVE_TARGET"
+          rustc -vV | grep -Fx "host: $NATIVE_TARGET"
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: native-dw62-${{ matrix.target }}
+          cache-targets: "false"
+      - name: Lint changed application paths
+        run: cargo clippy --locked -p devworks-desktop --bin devworks-desktop --test mcp_inbound_transport -- -D warnings
+      - name: Stage and attest the native application archive
+        shell: bash
+        env:
+          NATIVE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo build --locked -p devworks-desktop --bins
+          target_dir="$(cargo metadata --no-deps --locked --format-version 1 | python -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+          python tools/ci/package-pdf-qualification.py --binaries "$target_dir/debug" --output "$RUNNER_TEMP/dw62" --target "$NATIVE_TARGET"
+      - name: Exercise both native transports and the staged command
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$DEVWORKS_PDF_PACKAGED_DESKTOP"
+          export DEVWORKS_MCP_PACKAGED_DESKTOP="$DEVWORKS_PDF_PACKAGED_DESKTOP"
+          cargo test --locked -p devworks-desktop --test mcp_inbound_transport -- --nocapture 2>&1 | tee "$RUNNER_TEMP/dw62/mcp-native.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dw62-native-proof-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/dw62/qualification.json
+            ${{ runner.temp }}/dw62/mcp-native.log
+          if-no-files-found: ignore
