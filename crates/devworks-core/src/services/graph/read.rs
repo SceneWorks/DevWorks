@@ -317,6 +317,21 @@ impl<'a> Reader<'a> {
         Ok(GraphScope { views })
     }
 
+    pub fn note_index_limits(&mut self, visits: bool, memory: bool) {
+        for (limited, gap) in [
+            (visits, "graph_visited_limit"),
+            (memory, "graph_memory_limit"),
+        ] {
+            if limited && !self.gaps.contains(&gap) {
+                self.gaps.push(gap);
+            }
+        }
+    }
+
+    pub fn index_limited(&self) -> bool {
+        self.gaps.contains(&"graph_visited_limit") || self.gaps.contains(&"graph_memory_limit")
+    }
+
     pub fn raw_nodes(
         &mut self,
         scope: &GraphScope,

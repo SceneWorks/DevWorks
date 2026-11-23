@@ -1,8 +1,10 @@
 //! Query-local bounded materializations for algorithms needing a composed adjacency set.
 use super::{budget::Budget, scan};
 use crate::ports::storage::*;
+use crate::protocol::data::Direction;
 use crate::services::indexing::views::ViewLayers;
 use crate::services::kernel::Failure;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Key = (String, String, String);
 
@@ -94,6 +96,149 @@ pub(super) fn edges(
         Ok(true)
     })?;
     Ok(Edges { linked, unmapped })
+}
+
+type Endpoint<'a> = (&'a str, &'a str, &'a str);
+
+fn endpoint(identity: &GraphNodeIdentity) -> Endpoint<'_> {
+    (
+        identity.repository_id.as_str(),
+        &identity.unit_key,
+        &identity.node_id,
+    )
+}
+
+#[derive(Default)]
+struct Incident {
+    incoming: Vec<usize>,
+    outgoing: Vec<usize>,
+}
+
+/// Index a composed scan once. Package derivations and overlay masking still come from that
+/// scan. Offsets preserve its ordering for shortest paths, matching ties and continuation.
+pub(super) struct Adjacency<'a> {
+    edges: &'a [scan::Edge],
+    incident: BTreeMap<Endpoint<'a>, Incident>,
+}
+
+impl<'a> Adjacency<'a> {
+    pub fn new(
+        edges: &'a [scan::Edge],
+        starts: &[GraphNodeIdentity],
+        budget: &mut Budget,
+    ) -> (Self, bool) {
+        let (incident, partial) = budget.reserve_retention(|budget| {
+            let mut incident = BTreeMap::<_, Incident>::new();
+            let starts: BTreeSet<_> = starts.iter().map(endpoint).collect();
+            // Reserve space for useful seed edges first, even when they appear late in the scan.
+            // Each endpoint is filled in scan order in just one of the two linear passes.
+            'passes: for first in [true, false] {
+                if first && starts.is_empty() {
+                    continue;
+                }
+                for (index, edge) in edges.iter().enumerate() {
+                    if !budget.check() {
+                        break 'passes;
+                    }
+                    for (identity, outgoing) in [(&edge.source, true), (&edge.target, false)] {
+                        let key = endpoint(identity);
+                        if starts.contains(&key) != first {
+                            continue;
+                        }
+                        if !budget.retain(2 * std::mem::size_of::<usize>()) {
+                            break 'passes;
+                        }
+                        let entry = match incident.entry(key) {
+                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                if !budget
+                                    .retain(std::mem::size_of::<(Endpoint<'_>, Incident)>() + 32)
+                                {
+                                    break 'passes;
+                                }
+                                entry.insert(Incident::default())
+                            }
+                        };
+                        if outgoing {
+                            entry.outgoing.push(index);
+                        } else {
+                            entry.incoming.push(index);
+                        }
+                    }
+                }
+            }
+            incident
+        });
+        (Self { edges, incident }, partial)
+    }
+
+    fn offsets<'s>(
+        &'s self,
+        node: &'s GraphNodeIdentity,
+        direction: &'s Direction,
+    ) -> impl Iterator<Item = usize> + use<'s, 'a> {
+        let entry = self.incident.get(&endpoint(node));
+        let mut outgoing = entry
+            .filter(|_| !matches!(direction, Direction::Reverse))
+            .map_or(&[][..], |entry| entry.outgoing.as_slice())
+            .iter()
+            .copied()
+            .peekable();
+        let mut incoming = entry
+            .filter(|_| !matches!(direction, Direction::Forward))
+            .map_or(&[][..], |entry| entry.incoming.as_slice())
+            .iter()
+            .copied()
+            .peekable();
+        std::iter::from_fn(move || match (outgoing.peek(), incoming.peek()) {
+            (Some(a), Some(b)) if a == b => {
+                incoming.next();
+                outgoing.next()
+            }
+            (Some(a), Some(b)) if a < b => outgoing.next(),
+            (_, Some(_)) => incoming.next(),
+            _ => outgoing.next(),
+        })
+    }
+
+    pub fn around<'s>(
+        &'s self,
+        node: &'s GraphNodeIdentity,
+        direction: &'s Direction,
+    ) -> impl Iterator<Item = &'s scan::Edge> + use<'s, 'a> {
+        self.offsets(node, direction)
+            .map(move |index| &self.edges[index])
+    }
+
+    pub fn around_all<'n>(
+        &self,
+        nodes: impl IntoIterator<Item = &'n GraphNodeIdentity>,
+        direction: &Direction,
+        budget: &mut Budget,
+    ) -> (Vec<&scan::Edge>, bool) {
+        budget.reserve_retention(|budget| {
+            let mut offsets = BTreeSet::new();
+            'nodes: for node in nodes {
+                for index in self.offsets(node, direction) {
+                    if !budget.check() {
+                        break 'nodes;
+                    }
+                    if offsets.contains(&index) {
+                        continue;
+                    }
+                    // Account for the ordered set and the returned slice of references.
+                    if !budget.retain(4 * std::mem::size_of::<usize>()) {
+                        break 'nodes;
+                    }
+                    offsets.insert(index);
+                }
+            }
+            offsets
+                .into_iter()
+                .map(move |index| &self.edges[index])
+                .collect()
+        })
+    }
 }
 
 pub(super) fn low_node(node: &GraphNode) -> bool {
