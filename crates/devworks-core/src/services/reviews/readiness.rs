@@ -299,7 +299,7 @@ impl ReviewService {
     }
 }
 
-fn collect_local_blockers(
+pub(super) fn collect_local_blockers(
     snapshot: &dyn ReadSnapshot,
     review: &ReviewStateRecord,
     reviewed: &LocalReviewTarget,

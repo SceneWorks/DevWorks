@@ -24,7 +24,7 @@ pub enum EffectOutcome {
 /// not perform the effect again.
 pub trait JournaledEffect: Send + Sync + 'static {
     /// This service's observed outcomes are sufficient to safely requeue the receipt for settlement.
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         false
     }
     fn observes_delivery_cancellation(&self) -> bool {

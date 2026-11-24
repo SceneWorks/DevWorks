@@ -1,7 +1,7 @@
 //! Feature creation, the feature-owned plan slot, plan-approval requests and their decision
 //! seam, atomic plans and re-planning by reference.
 use super::items::{
-    NewCard, apply_metadata, bump, check_evidence, completion_for, feature_scope, open_feature,
+    NewCard, apply_metadata, bump, check_evidence, feature_scope, open_feature, task_completion,
     tx_record,
 };
 use super::model::{ActivePlan, PendingPlan, WorkBrief, active_of, pending_of};
@@ -950,7 +950,7 @@ impl WorkService {
             .and_then(|s| semantic_of(&statuses, s))
             .unwrap_or("")
             .to_owned();
-        after.completion = completion_for(&semantic, &brief.acceptance);
+        after.completion = task_completion(tx, w, &semantic, &brief.acceptance)?;
         after.search_key = super::model::search_key(&after.title, &brief.description);
         after.brief = brief.value();
         after.revision = w.revision + 1;

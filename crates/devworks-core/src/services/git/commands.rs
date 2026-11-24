@@ -1,6 +1,10 @@
 //! Journaled writes of the Git owner. A worktree reservation serializes writes; an unknown
 //! result keeps the reservation until observation proves the requested postcondition.
 mod attach;
+mod feature_delivery;
+pub(crate) use feature_delivery::{
+    feature_head_digest, requires_local_integration, waits_for_publication,
+};
 mod pull_request;
 mod push;
 use super::*;
@@ -60,6 +64,10 @@ enum Action {
         description: String,
         expected: GitOid,
         covered: Vec<(Id, i64)>,
+        #[serde(default)]
+        final_feature: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        integrated_heads: Vec<GitOid>,
     },
     Create,
     Inspect,
@@ -77,6 +85,8 @@ enum Action {
         expected: GitOid,
         remote_head: Option<GitOid>,
         force: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_publication: Option<Box<feature_delivery::TaskPublication>>,
     },
 }
 struct StagedMessage(Result<String, DomainErrorCode>, Option<Value>);
@@ -390,19 +400,17 @@ impl GitService {
                 &repository.id,
             ));
         }
-        if let Some(feature) = &work.parent_feature_id
-            && !tx
-                .git()
-                .git_worktrees(feature, None, MAX_PAGE)?
-                .iter()
-                .any(|t| {
-                    t.repository_id == repository.id
-                        && !t.removed
-                        && t.pending_operation_id.is_none()
-                        && t.head == input.base
-                })
-        {
-            return Err(refuse(DomainErrorCode::Conflict, "feature_branch", feature));
+        if let Some(feature) = &work.parent_feature_id {
+            feature_delivery::require_published_branch(tx, feature, &repository.id, &input.base)?;
+            if feature_delivery::uses_local_integration(tx, feature, &repository.id)?
+                && !tx.work().open_prerequisites(&work.id)?.is_empty()
+            {
+                return Err(refuse(
+                    DomainErrorCode::Conflict,
+                    "task_prerequisites",
+                    &work.id,
+                ));
+            }
         }
         Ok(root)
     }
@@ -452,11 +460,6 @@ impl GitService {
                         // IDs do not become path syntax. Hex encoding is reversible and collision free.
                         let component: String =
                             id.as_str().bytes().map(|b| format!("{b:02x}")).collect();
-                        let role = if work.kind == FEATURE {
-                            "feature"
-                        } else {
-                            "task"
-                        };
                         let work_component: String = work
                             .id
                             .as_str()
@@ -480,7 +483,11 @@ impl GitService {
                             owner_assignment_id: ctx.assignment_id().cloned(),
                             registered_root_id: input.registered_root_id.clone(),
                             path,
-                            branch: format!("refs/heads/devworks/{role}-{work_component}"),
+                            branch: if work.kind == FEATURE {
+                                format!("refs/heads/feature/{work_component}")
+                            } else {
+                                format!("refs/heads/devworks/task-{work_component}")
+                            },
                             head: input.base.clone(),
                             revision: 1,
                             removed: false,
@@ -636,6 +643,16 @@ impl GitService {
                 affected.push(root);
             }
         }
+        if let Action::Push {
+            task_publication: Some(publication),
+            ..
+        } = &action
+        {
+            let task = RootId(publication.proof.task_id.clone());
+            if !affected.contains(&task) {
+                affected.push(task);
+            }
+        }
         let root_epochs = affected
             .into_iter()
             .map(|root| {
@@ -650,7 +667,17 @@ impl GitService {
         };
         let job = Job {
             delivery_id: queue.clone(),
-            feature_id: work.parent_feature_id.clone(),
+            feature_id: if matches!(
+                &action,
+                Action::PullRequest {
+                    final_feature: true,
+                    ..
+                }
+            ) {
+                Some(work.id.clone())
+            } else {
+                work.parent_feature_id.clone()
+            },
             actor: ctx.principal().clone(),
             kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
@@ -678,7 +705,7 @@ impl GitService {
             capability: command.descriptor().name.into(),
             schema_version: 1,
             args_digest: command.fingerprint().as_str().into(),
-            payload: serde_json::to_value(job)
+            payload: serde_json::to_value(&job)
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         })?;
         if let Some(previous_owner) = previous_owner {
@@ -709,7 +736,7 @@ impl GitService {
         tx.history().append(NewEvent {
             id: event.clone(),
             actor: ctx.principal().clone(),
-            project_id: Some(work.project_id),
+            project_id: Some(work.project_id.clone()),
             root_id: ctx.root_id().cloned(),
             operation_id: Some(op.clone()),
             aggregate_kind: "git_worktree".into(),
@@ -726,11 +753,20 @@ impl GitService {
         })?;
 
         let now = tx.now_ms();
+        // A human may act on a linked task directly, even when only its feature owns a run.
+        let mut delivery_root = ctx.root_id().cloned();
+        if ctx.principal_kind() == PrincipalKind::Human
+            && ctx.root_id().is_some_and(|root| root.0 == work.id)
+            && tx.runs().root_control(&RootId(work.id.clone()))?.is_none()
+            && let Some(feature) = &job.feature_id
+        {
+            delivery_root = Some(RootId(feature.clone()));
+        }
         tx.queue().enqueue(NewQueueEntry {
             id: queue,
             consumer: EFFECT_CONSUMER.into(),
             event_id: event,
-            root_id: ctx.root_id().cloned(),
+            root_id: delivery_root,
             operation_id: Some(op.clone()),
             partition,
             priority: 0,
@@ -784,6 +820,13 @@ impl GitService {
                 .projects()
                 .repository(&tree.repository_id)?
                 .ok_or(StorageError::ScopeDenied)?;
+            if let Action::Push {
+                task_publication: Some(task),
+                ..
+            } = &j.action
+            {
+                feature_delivery::publication_current(tx, &work, &j.tree, task)?;
+            }
             // Domain scope checks below run on the same current snapshot as the reservation.
             if work.revision != j.work_revision || repository.revision != j.repository_revision {
                 return Err(StorageError::ScopeDenied);
@@ -791,7 +834,28 @@ impl GitService {
             let brief = crate::services::work::model::WorkBrief::of(&work)?;
             let managing =
                 matches!(j.action, Action::PullRequest { .. }) && Self::pr_manager(tx, &c, &work)?;
-            if let Action::PullRequest { covered, .. } = &j.action {
+            if let Action::PullRequest {
+                covered,
+                final_feature,
+                integrated_heads,
+                ..
+            } = &j.action
+            {
+                if *final_feature {
+                    let coverage = feature_delivery::final_pr_coverage(tx, &work, &tree)
+                        .map_err(Failure::into_storage)?;
+                    if coverage
+                        .iter()
+                        .map(|(id, rev, _)| (id, *rev))
+                        .ne(covered.iter().map(|(id, rev)| (id, *rev)))
+                        || coverage
+                            .iter()
+                            .map(|(_, _, head)| head)
+                            .ne(integrated_heads)
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                }
                 for (id, revision) in covered {
                     let covered_work = tx.work().work(id)?.ok_or(StorageError::ScopeDenied)?;
                     if covered_work.revision != *revision
@@ -1002,6 +1066,13 @@ impl GitService {
                     }),
                     created_at_ms: now,
                 })?;
+            }
+            if let Action::Push {
+                task_publication: Some(task),
+                ..
+            } = &j.action
+            {
+                feature_delivery::settle_task_publication(tx, &ctx, &updated, &op, task)?;
             }
             Ok(())
         });
@@ -1233,6 +1304,13 @@ impl GitService {
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let authorization = crate::ports::Authorization::direct().fenced_by(job.fences.clone());
             if !crate::authority::authorization_holds(snapshot, &authorization)?
+                || snapshot
+                    .projects()
+                    .repository(&job.tree.repository_id)?
+                    .is_none_or(|repository| {
+                        repository.lifecycle != ACTIVE
+                            || repository.revision != job.repository_revision
+                    })
                 || snapshot.git().git_worktree(&job.tree.id)?.as_ref() != Some(&job.tree)
                 || snapshot
                     .work()
@@ -1249,6 +1327,14 @@ impl GitService {
                 && snapshot.runs().assignment(assignment)?.is_none_or(|a| {
                     !a.state.is_live() || Some(a.generation) != job.assignment_generation
                 })
+            {
+                return Ok(true);
+            }
+            if let Action::Push {
+                task_publication: Some(publication),
+                ..
+            } = &job.action
+                && !publication.current_in(snapshot, job)?
             {
                 return Ok(true);
             }
@@ -1684,13 +1770,21 @@ impl GitService {
             }
         }
         if let Action::PullRequest {
-            repository, head, ..
+            repository,
+            head,
+            final_feature,
+            ..
         } = &job.action
         {
             let Some(client) = &self.config.github else {
                 return EffectOutcome::Unknown("GitHub observation is unavailable".into());
             };
-            return match client.find(&*self.store, repository, head) {
+            let observed = if *final_feature {
+                client.find_feature(&*self.store, repository, head)
+            } else {
+                client.find(&*self.store, repository, head)
+            };
+            return match observed {
                 Ok(Some(pr)) => self.finish_pull_request(job, &operation.id, pr),
                 _ => EffectOutcome::Unknown(
                     "PR outcome has not been established; no write was repeated".into(),
@@ -1745,6 +1839,7 @@ impl GitService {
                 target,
                 expected,
                 transport_digest,
+                task_publication,
                 ..
             } => {
                 let transport = match self.push_transport(
@@ -1775,8 +1870,11 @@ impl GitService {
                         .remote_head(path, url, target)
                         .ok()
                         .flatten()
-                        .as_deref()
-                        == Some(&expected.hex)
+                        .is_some_and(|remote| {
+                            remote == expected.hex
+                                || (task_publication.is_some()
+                                    && git.is_ancestor(path, &expected.hex, &remote) == Ok(true))
+                        })
             }
             Action::PullRequest { .. } => unreachable!("handled above"),
         };
@@ -1869,6 +1967,24 @@ impl CommandHandler for GitService {
         };
         Ok(Some(Prepared::new(StagedMessage(text, manifest))))
     }
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        prepared: Option<&Prepared>,
+        reply: Option<&crate::protocol::results::DomainCommandReply>,
+        _env: &Preparation<'_>,
+    ) {
+        let Some(staged) = prepared
+            .and_then(|p| p.get::<push::StagedPush>())
+            .and_then(push::StagedPush::integration_diff)
+        else {
+            return;
+        };
+        let committed = matches!(reply, Some(crate::protocol::CommandReply::Recorded { receipt, replayed: false, .. })
+            if matches!(receipt.decision, DomainDecision::Accepted {..}));
+        self.artifacts
+            .settle_host_bytes(self.store.as_ref(), staged, committed);
+    }
     fn decide(
         &self,
         ctx: &InvocationContext,
@@ -1884,6 +2000,14 @@ impl CommandHandler for GitService {
 }
 
 impl JournaledEffect for GitService {
+    fn resumes_after_observation(&self, operation: &OperationRecord) -> bool {
+        self.job(operation).is_ok_and(|job| match job.action {
+            Action::Push { .. } => job.tree.branch.starts_with("refs/heads/feature/"),
+            Action::PullRequest { final_feature, .. } => final_feature,
+            _ => false,
+        })
+    }
+
     fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
         GitService::execute(self, operation)
     }

@@ -12990,9 +12990,14 @@
       1,
       3
     ],
+    "git.push": [
+      1,
+      16
+    ],
     "git.pull_request": [
       1,
-      2
+      2,
+      16
     ],
     "browser.sessions": [
       1,
@@ -13698,7 +13703,7 @@
     "git.diff": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "git.commit": {"assignmentScope": "assignment", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.push": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
-    "git.pull_request": {"assignmentScope": "assignment", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "git.pull_request": {"assignmentScope": "assignment", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.integrate": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.cleanup": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "reviews.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

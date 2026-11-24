@@ -239,7 +239,7 @@ impl Verifier {
 }
 
 impl JournaledEffect for Verifier {
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         true
     }
     fn observes_delivery_cancellation(&self) -> bool {

@@ -19,7 +19,7 @@ use crate::ports::{Clock, IdSource};
 use crate::protocol::data::DeliveryBarrier;
 use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{LocalReviewTarget, ReviewRecord};
-use crate::protocol::{ActorId, DomainErrorCode, Id};
+use crate::protocol::{ActorId, DomainErrorCode, Id, RootId};
 use crate::services::kernel::{Failure, Refusal, not_found};
 use crate::services::{artifacts::ArtifactService, git::GitService};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -35,6 +35,103 @@ pub struct ReviewService {
     artifacts: Arc<ArtifactService>,
     clock: Arc<dyn Clock>,
     github: Option<Arc<crate::services::github::GitHubService>>,
+}
+
+/// Reuse the same local finding and exact-candidate rules before the Git owner admits
+/// publication. Review attribution remains attached to the task's original diff.
+pub(crate) fn integration_review(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    feature: &RootId,
+    repository: &Id,
+    proof: &crate::protocol::data::FeatureTaskIntegration,
+) -> Result<i64, Failure> {
+    let (row, state) = visible_review(snapshot, ctx, &proof.review_id)?;
+    let ReviewTarget::Local { target } = &state.target else {
+        return Err(StorageError::ScopeDenied.into());
+    };
+    if &row.root_id != feature
+        || target.task_id != proof.task_id
+        || state.revision_of_policy != ctx.policy_revision().get()
+        || !matches!(
+            state.value.state,
+            crate::protocol::records::ReviewState::Ready
+        )
+        || !target.diffs.0.iter().any(|diff| {
+            &diff.repository_id == repository
+                && diff.worktree_id == proof.task_worktree_id
+                && diff.base == proof.reviewed_base
+                && diff.head == proof.reviewed_head
+        })
+    {
+        return Err(StorageError::ScopeDenied.into());
+    }
+    let mut candidate = target.clone();
+    for diff in &mut candidate.diffs.0 {
+        let tree = snapshot
+            .git()
+            .git_worktree(&diff.worktree_id)?
+            .filter(|tree| {
+                tree.work_id == proof.task_id
+                    && tree.repository_id == diff.repository_id
+                    && !tree.removed
+                    && tree.pending_operation_id.is_none()
+            })
+            .ok_or(StorageError::ScopeDenied)?;
+        diff.head = tree.head;
+        if &diff.repository_id == repository && diff.head != proof.task_head {
+            return Err(StorageError::ScopeDenied.into());
+        }
+    }
+    let mut blockers = Vec::new();
+    readiness::collect_local_blockers(snapshot, &state, target, &candidate, &mut blockers)?;
+    if !blockers.is_empty() {
+        return Err(StorageError::ScopeDenied.into());
+    }
+    Ok(row.revision)
+}
+
+pub(crate) fn recorded_no_changes(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+    root: &RootId,
+    task: &Id,
+    review: &Id,
+    repository: &Id,
+) -> Result<bool, StorageError> {
+    let Some(row) = tx.git().code_review(review)? else {
+        return Ok(false);
+    };
+    let saved: ReviewStateRecord = decode(&row.body).map_err(Failure::into_storage)?;
+    let ReviewTarget::Local { target } = saved.target else {
+        return Ok(false);
+    };
+    if &row.root_id != root
+        || &target.task_id != task
+        || !matches!(
+            saved.value.state,
+            crate::protocol::records::ReviewState::Ready
+        )
+    {
+        return Ok(false);
+    }
+    let Some(diff) = target
+        .diffs
+        .0
+        .iter()
+        .find(|diff| &diff.repository_id == repository && diff.base == diff.head)
+    else {
+        return Ok(false);
+    };
+    Ok(tx
+        .git()
+        .git_worktree(&diff.worktree_id)?
+        .is_some_and(|tree| {
+            !tree.removed
+                && tree.pending_operation_id.is_none()
+                && tree.work_id == *task
+                && tree.repository_id == *repository
+                && tree.head == diff.head
+        }))
 }
 
 impl ReviewService {

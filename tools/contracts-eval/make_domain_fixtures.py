@@ -1022,6 +1022,20 @@ case('reject-model-supplied-browser-source','domain-request.r3',forged,False,Fal
 pr={'protocol':'1.0-draft.1','schemaRevision':2,'requestKey':'group-pr','command':{'kind':'OpenPullRequest','repositoryId':'repo-a','headRef':'refs/heads/task-a','baseRef':'refs/heads/feature-a','expectedHead':BASE['GitOid'],'description':ART,'coveredWorkIds':['task-a','task-b']}}
 case('r2-input-git.pull_request','git-command-request.r2',pr)
 case('r2-result-git.pull_request','operation-result.r2',result('git.pull_request',LEGACY_RESULTS['git.pull_request']))
+publication={'protocol':'1.0-draft.1','schemaRevision':16,'requestKey':'feature-task-publication','command':{
+ 'kind':'Push','worktreeId':'feature-tree','remoteId':'origin','targetRef':'refs/heads/feature/fixture',
+ 'expectedHead':{'format':'Sha1','hex':'b'*40},'expectedRemote':BASE['GitOid'],'mode':'Normal',
+ 'taskIntegration':{'taskId':'task-a','expectedTaskRevision':'1','taskWorktreeId':'task-tree',
+  'reviewId':'review-once','reviewedBase':BASE['GitOid'],'reviewedHead':{'format':'Sha1','hex':'c'*40},
+  'taskHead':{'format':'Sha1','hex':'c'*40},'predecessor':BASE['GitOid'],'verification':ART,
+  'focusedChecks':['feature-candidate-tests']}}}
+case('r16-input-git.push-task-integration','git-command-request.r16',publication)
+bad_publication=copy.deepcopy(publication);bad_publication['command']['taskIntegration']['predecessor']={'format':'Sha1','hex':'a'*40}
+if bad_publication['command']['taskIntegration']['predecessor']==publication['command']['expectedRemote']:
+ bad_publication['command']['taskIntegration']['predecessor']['hex']='d'*40
+case('reject-task-integration-with-different-predecessor','git-command-request.r16',bad_publication,False,True)
+legacy_publication=copy.deepcopy(publication);legacy_publication.pop('schemaRevision')
+case('reject-r1-task-integration-evidence','git-command-request',legacy_publication,False,False)
 bad=copy.deepcopy(pr);bad['command']['coveredWorkIds']=None
 case('reject-null-group-pr','git-command-request.r2',bad,False,False)
 bad=copy.deepcopy(pr);bad['schemaRevision']=1

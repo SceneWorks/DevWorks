@@ -2034,6 +2034,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         || containers.is_some()
         || workspace_replies.is_some()
         || github.is_some()
+        || git.is_some()
     {
         let observing = dispatcher.clone();
         let stopping = workspace_replies.clone();

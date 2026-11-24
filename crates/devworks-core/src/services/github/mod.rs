@@ -30,7 +30,10 @@ pub use publish::CONSUMER as EFFECT_CONSUMER;
 pub use resolution::settle_effect;
 
 impl crate::services::effect::JournaledEffect for GitHubService {
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(
+        &self,
+        _operation: &crate::ports::storage::OperationRecord,
+    ) -> bool {
         true
     }
 

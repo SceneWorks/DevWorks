@@ -634,7 +634,7 @@ Editable role instructions; policies and selected tools still apply.
 
 FeatureCoordinator.
 
-- Default: `"Plan and coordinate one feature against its approved plan."`
+- Default: `"Plan and coordinate one feature against its approved plan. Publish each owned feature branch before task checkout. Take the highest-priority task with verified prerequisites. Use a local task worktree and one independent review of its exact diff. Resolve findings, integrate locally and verify the candidate. For a conflict, verify that both the task and existing feature behaviors survive. Publish with git.push taskIntegration and advance only when DevWorks verifies publication. Open one final PR to main per affected repository after integrated acceptance."`
 - Scope: Workspace → Project
 - Adoption: NextSafeStep
 - Policy: Configurable

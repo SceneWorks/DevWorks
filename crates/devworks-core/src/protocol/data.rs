@@ -1707,6 +1707,55 @@ pub enum PushMode {
     Normal,
     ForceWithLease,
 }
+/// The coordinator's evidence for publishing one repository of a feature task. Git provides
+/// both revisions of the reviewed source and separately verifies the actual integration delta.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FeatureTaskIntegration {
+    pub task_id: Id,
+    pub expected_task_revision: Revision,
+    pub task_worktree_id: Id,
+    pub review_id: Id,
+    pub reviewed_base: GitOid,
+    pub reviewed_head: GitOid,
+    pub task_head: GitOid,
+    pub predecessor: GitOid,
+    pub verification: ArtifactRef,
+    #[schemars(length(min = 1, max = 32))]
+    pub focused_checks: Vec<Id>,
+}
+
+impl FeatureTaskIntegration {
+    fn validate(&self, candidate: &GitOid) -> Result<(), &'static str> {
+        for oid in [
+            &self.reviewed_base,
+            &self.reviewed_head,
+            &self.task_head,
+            &self.predecessor,
+        ] {
+            oid.validate()?;
+            if oid.format != candidate.format {
+                return Err("mixed feature integration object formats");
+            }
+        }
+        self.verification.validate()?;
+        if self.predecessor == *candidate
+            || self.focused_checks.is_empty()
+            || self.focused_checks.len() > 32
+            || self
+                .focused_checks
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<HashSet<_>>()
+                .len()
+                != self.focused_checks.len()
+        {
+            return Err("invalid feature integration candidate or focused checks");
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
 pub enum GitCommand {
@@ -1723,6 +1772,13 @@ pub enum GitCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_remote: Option<GitOid>,
         mode: PushMode,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::support::gated_member"
+        )]
+        #[schemars(with = "FeatureTaskIntegration", extend("x-since" = 16))]
+        task_integration: Option<FeatureTaskIntegration>,
     },
     OpenPullRequest {
         repository_id: Id,
@@ -1784,9 +1840,20 @@ impl GitCommandRequest {
                 expected_head,
                 expected_remote,
                 mode,
+                task_integration,
                 ..
             } => {
                 expected_head.validate()?;
+                if let Some(integration) = task_integration {
+                    integration.validate(expected_head)?;
+                    if !matches!(mode, PushMode::Normal)
+                        || expected_remote.as_ref() != Some(&integration.predecessor)
+                    {
+                        return Err(
+                            "feature integration requires a normal push against its exact predecessor",
+                        );
+                    }
+                }
                 if !branch_ref(target_ref) {
                     return Err("invalid push target");
                 }
@@ -1836,6 +1903,13 @@ impl GitCommandRequest {
 }
 impl super::support::Revisioned for GitCommandRequest {
     fn retain_revision(&mut self, revision: u32) {
+        if revision < 16
+            && let GitCommand::Push {
+                task_integration, ..
+            } = &mut self.command
+        {
+            *task_integration = None;
+        }
         if revision < 2
             && let GitCommand::OpenPullRequest {
                 covered_work_ids, ..

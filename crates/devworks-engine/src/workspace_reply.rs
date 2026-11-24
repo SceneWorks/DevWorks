@@ -191,7 +191,7 @@ impl EffectExecutor for ReplyEffects {
         self.run(operation, Some(capacity))
     }
 
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         true
     }
 
