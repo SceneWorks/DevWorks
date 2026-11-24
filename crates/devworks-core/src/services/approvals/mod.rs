@@ -73,6 +73,15 @@ pub(crate) use service::{prepare_authority, validate_authority};
 
 pub(crate) use writes::authority_binding;
 pub use writes::stage_saved;
+pub(crate) fn prepared_commit_matches(
+    prepared: &crate::ports::Prepared,
+    manifest: &serde_json::Value,
+) -> bool {
+    prepared
+        .get::<service::PreparedOwner>()
+        .is_some_and(|owner| &owner.preview.binding["commitManifest"] == manifest)
+}
+
 /// Canonical digest for a source-typed risk proposal; saved operations use requests::decode().fingerprint.
 pub fn content_digest(content: &crate::protocol::records::ApprovalContent) -> String {
     model::hash(&serde_json::to_value(content).expect("typed approval content"))

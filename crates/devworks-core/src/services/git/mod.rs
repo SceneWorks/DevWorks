@@ -24,7 +24,9 @@ use crate::services::artifacts::{ArtifactService, AuthorizedScope};
 use crate::services::git::client::{Git, GitFault};
 use crate::services::git::helper::{HelperFault, HelperRunner};
 use crate::services::kernel::{Failure, Refusal, query_fault, rev};
+pub(crate) use commands::DOCUMENTATION_PATCH_ARGS;
 pub use commands::{EFFECT_CONSUMER, RegisteredGitRoot};
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,6 +61,10 @@ pub struct GitService {
     config: GitConfig,
     stopping: std::sync::atomic::AtomicBool,
     approval_control: std::sync::RwLock<Option<Arc<crate::services::runs::ControlService>>>,
+    repository_analysis:
+        std::sync::OnceLock<Arc<crate::services::graph::repository_analysis::AnalysisService>>,
+    documentation_approvals:
+        std::sync::OnceLock<std::sync::Weak<crate::services::approvals::ApprovalService>>,
 }
 #[derive(Clone)]
 struct Target {
@@ -142,11 +148,26 @@ impl GitService {
             config,
             stopping: std::sync::atomic::AtomicBool::new(false),
             approval_control: std::sync::RwLock::new(None),
+            repository_analysis: std::sync::OnceLock::new(),
+            documentation_approvals: std::sync::OnceLock::new(),
         }
     }
     pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
         *self.approval_control.write_locked() = Some(control);
     }
+    pub fn install_documentation_analysis(
+        &self,
+        analysis: Arc<crate::services::graph::repository_analysis::AnalysisService>,
+    ) -> bool {
+        self.repository_analysis.set(analysis).is_ok()
+    }
+    pub fn install_documentation_approvals(
+        &self,
+        approvals: &Arc<crate::services::approvals::ApprovalService>,
+    ) {
+        let _ = self.documentation_approvals.set(Arc::downgrade(approvals));
+    }
+
     pub fn stop(&self) {
         self.stopping
             .store(true, std::sync::atomic::Ordering::SeqCst);

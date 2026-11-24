@@ -105,6 +105,17 @@ impl Modules {
         })
     }
 
+    /// The exact captured directory of a uniquely identified module.
+    pub fn directory(&self, repository: &str, name: &str) -> Option<&str> {
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|module| module.repository == repository && module.name == name)
+            .map(|module| module.directory.as_str());
+        let first = matches.next()?;
+        matches.all(|directory| directory == first).then_some(first)
+    }
+
     /// Whether [`Modules::owner`] reads the projects for `node`: it names no project of its own
     /// and is not a repository.
     pub fn needed(node: &GraphNode) -> bool {

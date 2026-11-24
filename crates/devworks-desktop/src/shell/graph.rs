@@ -250,6 +250,19 @@ impl GraphCtl<'_, '_> {
                     self.graph.analysis.notice = Some(notice);
                 }
             }
+            (GraphSlot::RepositoryDocumentation(generation), Reply::Task(result)) => {
+                let state = &mut self.graph.analysis;
+                if self.graph.opened && state.generation == generation {
+                    state.loading = false;
+                    match result {
+                        Ok(TaskOutput::RepositoryDocumentation(notice)) => {
+                            state.notice = Some(notice)
+                        }
+                        Err(error) => state.error = Some(error),
+                        _ => return None,
+                    }
+                }
+            }
             (GraphSlot::AnalysisEvidence(generation), Reply::Task(result)) => {
                 let state = &mut self.graph.analysis;
                 if self.graph.opened && state.generation == generation {
@@ -745,6 +758,38 @@ impl GraphCtl<'_, '_> {
                 self.graph.selected = None;
             }
             AnalysisAction::OpenWork(id) => self.open_work(id.as_str()),
+            AnalysisAction::GenerateDocumentation {
+                run,
+                binding,
+                revision,
+                delivery,
+            } => {
+                let Some(project) = self.graph.project.as_deref().and_then(crate::frame::id) else {
+                    self.graph.analysis.error = Some(
+                        "Open the repository from its project to generate its documentation."
+                            .into(),
+                    );
+                    return;
+                };
+                let generation = self.graph.analysis.generation;
+                if self.online().is_ok()
+                    && let Some(client) = self.client.as_mut()
+                {
+                    let project = devworks_core::protocol::ProjectId(project);
+                    client.task(
+                        GraphSlot::RepositoryDocumentation(generation).into(),
+                        "Generating repository documentation",
+                        move |backend| {
+                            backend
+                                .generate_repository_documentation(
+                                    &run, &project, &binding, &revision, delivery,
+                                )
+                                .map(TaskOutput::RepositoryDocumentation)
+                        },
+                    );
+                    self.graph.analysis.loading = true;
+                }
+            }
             AnalysisAction::Evidence(report) => {
                 let generation = self.graph.analysis.generation;
                 if self.online().is_ok()

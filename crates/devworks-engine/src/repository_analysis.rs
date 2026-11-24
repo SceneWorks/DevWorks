@@ -413,3 +413,72 @@ pub(crate) fn index_consumer(service: Arc<AnalysisService>) -> Consumer {
         max_in_flight: Some(2),
     }
 }
+
+struct RepositoryDocumentation {
+    git: Arc<devworks_core::services::git::GitService>,
+    authority: Arc<dyn devworks_core::ports::AuthorityPort>,
+}
+
+impl crate::dispatch::AsyncDeliveryHandler for RepositoryDocumentation {
+    fn start(&self, delivery: crate::dispatch::AsyncDelivery) -> crate::dispatch::AsyncFuture {
+        use crate::dispatch::AsyncOutcome;
+        use devworks_core::protocol::{CommandReply, results::DomainDecision};
+        let (git, authority) = (self.git.clone(), self.authority.clone());
+        let mut cancelled = delivery.cancelled;
+        Box::pin(async move {
+            let cancellation = CancelOnDrop(Cancellation::new());
+            let token = cancellation.0.clone();
+            let claimed = delivery.delivery;
+            let mut worker = tokio::task::spawn_blocking(move || {
+                git.admit_repository_documentation(
+                    &*authority,
+                    &claimed.entry,
+                    &claimed.event,
+                    &token,
+                )
+            });
+            let result = tokio::select! {
+                result = &mut worker => result,
+                _ = cancelled.changed() => {
+                    cancellation.0.cancel();
+                    worker.await
+                },
+            };
+            match result {
+                Ok(Ok(CommandReply::Recorded { receipt, .. })) => match receipt.decision {
+                    DomainDecision::Refused { .. } => AsyncOutcome::Hold(
+                        "Repository documentation was refused by the current owner policy".into(),
+                    ),
+                    _ => AsyncOutcome::Committed,
+                },
+                Ok(Err(
+                    devworks_core::services::kernel::Failure::Refused(_)
+                    | devworks_core::services::kernel::Failure::Storage(
+                        StorageError::ScopeDenied | StorageError::InvalidRecord(_),
+                    ),
+                )) => AsyncOutcome::Poison(
+                    "Repository documentation lost its exact synthesis or worktree".into(),
+                ),
+                _ => AsyncOutcome::Retry(
+                    "Repository documentation admission could not be recorded".into(),
+                ),
+            }
+        })
+    }
+}
+
+pub(crate) fn documentation_consumer(
+    git: Arc<devworks_core::services::git::GitService>,
+    authority: Arc<dyn devworks_core::ports::AuthorityPort>,
+) -> Consumer {
+    Consumer {
+        name: devworks_core::services::graph::repository_analysis::DOCS_CONSUMER.into(),
+        handler: Arc::new(Settled),
+        effect: None,
+        async_handler: Some(Arc::new(RepositoryDocumentation { git, authority })),
+        eligibility: None,
+        stop_grace_ms: 5000,
+        retry: RetryPolicy::default(),
+        max_in_flight: Some(2),
+    }
+}

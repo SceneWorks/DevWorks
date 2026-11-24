@@ -495,6 +495,21 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "imports.runs",
             "imports.settings",
             "imports.sync",
+            "documents.disable_retrieval",
+            "documents.import",
+            "documents.index",
+            "documents.list",
+            "documents.move",
+            "documents.read",
+            "documents.remove_index",
+            "documents.share",
+            "dreaming.propose",
+            "dreaming.report",
+            "dreaming.review",
+            "dreaming.run",
+            "dreaming.runs",
+            "dreaming.settings",
+            "repository_docs.generate",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail

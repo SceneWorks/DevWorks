@@ -191,6 +191,7 @@ def main():
         'repositories':'repositories', 'indexing':'indexing', 'work':'workflow',
         'notifications':'approvals', 'help':'help', 'usage':'usage',
         'prices':'usage', 'graph':'code-exploration', 'repository_analysis':'code-exploration',
+        'repository_documentation':'code-exploration',
         'instructions':'settings-Instructions',
         'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
         'schemas':'databases', 'database':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',

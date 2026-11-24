@@ -14,6 +14,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RepositoryDocsDelivery {
+    Stage,
+    Commit,
+    CommitAndPush,
+}
+impl Check for RepositoryDocsDelivery {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackageContent {
     pub package_id: Id,
@@ -26382,6 +26394,20 @@ pub enum DomainCommand {
         expected_revision: Revision,
         output_root_id: Id,
         topics: NonEmpty<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 14))]
+        analysis_run_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "RepositoryDocsDelivery", extend("x-since" = 14))]
+        delivery: Option<RepositoryDocsDelivery>,
     },
     #[serde(rename = "mcp_server.configure")]
     McpServerConfigure {
@@ -28653,12 +28679,16 @@ impl Check for DomainCommand {
                 expected_revision,
                 output_root_id,
                 topics,
+                analysis_run_id,
+                delivery,
             } => {
                 repository_id.check()?;
                 views.check()?;
                 expected_revision.check()?;
                 output_root_id.check()?;
                 topics.check()?;
+                analysis_run_id.check()?;
+                delivery.check()?;
             }
             Self::McpServerConfigure {
                 expected_revision,
@@ -29326,6 +29356,18 @@ impl Revisioned for DomainCommand {
                 config.retain_revision(revision);
                 if revision < 2 {
                     *approve = None;
+                }
+            }
+            Self::RepositoryDocsGenerate {
+                analysis_run_id,
+                delivery,
+                ..
+            } => {
+                if revision < 14 {
+                    *analysis_run_id = None;
+                }
+                if revision < 14 {
+                    *delivery = None;
                 }
             }
             Self::TasksPrioritize { placement, .. } => {

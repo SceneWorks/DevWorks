@@ -385,6 +385,16 @@ pub trait Backend: Send + Sync {
     ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
         Err("package view actions are not available here".into())
     }
+    fn generate_repository_documentation(
+        &self,
+        _run: &Id,
+        _project: &devworks_core::protocol::ProjectId,
+        _binding: &devworks_core::protocol::records::AnalysisViewBinding,
+        _revision: &devworks_core::protocol::Revision,
+        _delivery: devworks_core::protocol::records::RepositoryDocsDelivery,
+    ) -> Result<String, String> {
+        Err("Repository documentation generation is unavailable".into())
+    }
     /// The index source configuration of the workspace (or a project) section, read for the
     /// form that edits it through `indexing.configure_sources` (none without indexing).
     fn index_sources(
@@ -604,6 +614,7 @@ pub enum TaskOutput {
     McpContent(String),
     WorkImportReport(String),
     AnalysisEvidence(String),
+    RepositoryDocumentation(String),
     SystemOneCompletion(Box<Option<devworks_core::protocol::results::OperationCompletion>>),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),

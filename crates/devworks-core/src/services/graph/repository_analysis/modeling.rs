@@ -1,4 +1,5 @@
 //! Project analysis and synthesis inputs and checked provider output.
+pub(super) mod documentation;
 mod evidence;
 use super::super::{budget::Budget, dataset, modules::Modules, scan};
 use super::{
@@ -136,6 +137,8 @@ pub(super) struct Subject {
     pub view: Id,
     pub name: String,
     pub repository_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_directory: Option<String>,
     pub evidence: Vec<GraphNodeIdentity>,
 }
 
@@ -322,10 +325,13 @@ pub(super) fn project_prompts(
             evidence.push(node.clone());
         }
         clipped |= source.append(&repo, &name, &rows[..evidence.len()], &mut text)?;
+        let project_directory = modules.directory(repo.as_str(), &name).map(str::to_owned);
         Ok(Prompt {
             subject: Subject {
                 id, repository: repo, view: view.clone(), name,
-                repository_name: repository_name.clone(), evidence,
+                repository_name: repository_name.clone(),
+                project_directory,
+                evidence,
             },
             text, partial: clipped,
         })

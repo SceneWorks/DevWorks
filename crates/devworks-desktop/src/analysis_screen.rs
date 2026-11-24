@@ -177,6 +177,12 @@ pub enum Action {
     },
     OpenWork(Id),
     Evidence(ArtifactRef),
+    GenerateDocumentation {
+        run: devworks_core::protocol::Id,
+        binding: devworks_core::protocol::records::AnalysisViewBinding,
+        revision: Revision,
+        delivery: devworks_core::protocol::records::RepositoryDocsDelivery,
+    },
 }
 
 #[derive(Default)]
@@ -281,6 +287,41 @@ impl AnalysisScreen {
                     actions.push(Action::Evidence(report.clone()));
                 }
                 value.observation.as_ref().and_then(|data| {
+                    if commands
+                        && self.query == Some(Query::Status)
+                        && data.bindings.0.len() == 1
+                        && data.phases.as_ref().is_some_and(|phases| {
+                            phases.0.iter().any(|phase| {
+                                phase.phase.0 == "synthesis"
+                                    && phase.state
+                                        == devworks_core::protocol::OperationState::ObservedComplete
+                            })
+                        })
+                    {
+                        use devworks_core::protocol::records::RepositoryDocsDelivery;
+                        ui.add_enabled_ui(enabled, |ui| {
+                            ui.menu_button("Generate repository documentation", |ui| {
+                                for (label, delivery) in [
+                                    ("Stage files", RepositoryDocsDelivery::Stage),
+                                    ("Request commit review", RepositoryDocsDelivery::Commit),
+                                    (
+                                        "Request commit and push reviews",
+                                        RepositoryDocsDelivery::CommitAndPush,
+                                    ),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        actions.push(Action::GenerateDocumentation {
+                                            run: value.id.clone(),
+                                            binding: data.bindings.0[0].clone(),
+                                            revision: value.revision.clone(),
+                                            delivery,
+                                        });
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
+                    }
                     observation(ui, data, &mut actions);
                     if self.query == Some(Query::Health) {
                         trend(ui, data);

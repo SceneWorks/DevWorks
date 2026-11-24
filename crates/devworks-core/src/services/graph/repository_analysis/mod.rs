@@ -4,6 +4,7 @@ mod commands;
 mod communities;
 mod community;
 mod deterministic;
+mod documentation;
 mod http;
 pub(super) mod links;
 mod modeling;
@@ -21,6 +22,11 @@ mod vitals;
 mod work;
 
 pub use commands::{CONSUMER, QueueHook};
+pub use documentation::DOCS_CONSUMER;
+pub(crate) use documentation::synthesis_request;
+pub(crate) use documentation::{
+    DocumentationDraft, DocumentationEvidence, DocumentationSourceFacts,
+};
 pub use modeling::{
     AnalysisModel, AnalysisModelInput, MAX_OUTPUT_TOKENS, Observation as ModelObservation,
     ProviderAnalysis,

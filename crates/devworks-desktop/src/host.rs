@@ -1588,6 +1588,55 @@ impl Backend for DesktopBackend {
     fn command(&self, operation: &str, frame: &[u8]) -> CommandOutcome {
         self.host.runtime.command(&self.host.ctx, operation, frame)
     }
+    fn generate_repository_documentation(
+        &self,
+        run: &devworks_core::protocol::Id,
+        project: &devworks_core::protocol::ProjectId,
+        binding: &devworks_core::protocol::records::AnalysisViewBinding,
+        revision: &devworks_core::protocol::Revision,
+        delivery: devworks_core::protocol::records::RepositoryDocsDelivery,
+    ) -> Result<String, String> {
+        use devworks_core::protocol::{CommandReply, results::DomainDecision};
+
+        let runtime = &self.host.runtime;
+        let (context, root) = devworks_core::services::git::context::documentation_destination(
+            &**runtime.store(),
+            &self.host.ctx,
+            project,
+            &binding.repository_id,
+            &binding.snapshot.head,
+        )
+        .map_err(|error| error.to_string())?;
+        let operation = "repository_docs.generate";
+        let frame = serde_json::json!({
+            "mode": "Command", "protocol": "1.0-draft.1", "schemaRevision": 14,
+            "requestKey": self.host.ids.next_id(devworks_core::ports::IdKind::Invocation),
+            "body": {
+                "kind": operation, "repositoryId": binding.repository_id,
+                "views": {"kind": "Exact", "viewIds": [binding.view_id]},
+                "expectedRevision": revision, "outputRootId": root, "topics": ["all"], "analysisRunId": run, "delivery": delivery
+            }
+        })
+        .to_string();
+        let mut reply = runtime.command(&context, operation, frame.as_bytes());
+        for _ in 0..crate::backend::UNKNOWN_RESUBMISSIONS {
+            if !crate::backend::is_unknown(&reply) {
+                break;
+            }
+            reply = runtime.command(&context, operation, frame.as_bytes());
+        }
+        if let Ok(CommandReply::Recorded { receipt, .. }) = &reply
+            && let DomainDecision::Accepted { operation_id } = &receipt.decision
+        {
+            return Ok(format!(
+                "Repository documentation queued as {}.",
+                operation_id.0.as_str()
+            ));
+        }
+        crate::ops::command_result(reply)
+            .map(|_| "Repository documentation request recorded.".to_owned())
+            .map_err(|error| error.describe())
+    }
     fn process_completion(
         &self,
         operation: &devworks_core::protocol::OperationId,

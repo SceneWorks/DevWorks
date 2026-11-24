@@ -265,14 +265,19 @@ impl Gateway<'_> {
             || !(graph_request::is_graph_read(input)
                 || matches!(
                     operation,
-                    "indexing.status" | "indexing.refresh_overlay" | "git.cleanup"
+                    "indexing.status"
+                        | "indexing.refresh_overlay"
+                        | "git.cleanup"
+                        | "analysis.reanalyze"
+                        | "analysis.synthesize"
+                        | "repository_docs.generate"
                 ))
         {
             return Ok(None);
         }
         read_snapshot(self.store, options, |read| {
             use crate::kernel::checkout::AssignmentCheckout;
-            use crate::operations::{git, indexing, repositories};
+            use crate::operations::{analysis, git, indexing, repositories, repository_docs};
             use crate::protocol::data::{GitCommand, IndexCommand, ViewSelection};
             let (repository, worktree) = match input {
                 OperationInput::Indexing(indexing::Input::RefreshOverlay(request)) => {
@@ -305,6 +310,27 @@ impl Gateway<'_> {
                     };
                     (None, Some(worktree_id.clone()))
                 }
+                OperationInput::RepositoryDocs(repository_docs::Input::Generate(request)) => {
+                    (Some(request.repository_id.clone()), None)
+                }
+                OperationInput::Analysis(
+                    analysis::Input::Reanalyze(analysis::ReanalyzeInput { views, .. })
+                    | analysis::Input::Synthesize(analysis::SynthesizeInput { views, .. }),
+                ) => match views {
+                    ViewSelection::Published { repository_ids } if repository_ids.len() == 1 => {
+                        (repository_ids.first().cloned(), None)
+                    }
+                    ViewSelection::Exact { view_ids } if view_ids.len() == 1 => {
+                        let Some(view) = read.indexing().view(&view_ids[0])? else {
+                            return Ok(None);
+                        };
+                        let id = view.worktree_id.or_else(|| {
+                            serde_json::from_value::<Id>(view.coverage["worktreeId"].clone()).ok()
+                        });
+                        (Some(view.repository_id), id)
+                    }
+                    _ => return Ok(None),
+                },
                 operation => {
                     let (view, repository, cursor) =
                         if let Some(request) = graph_request::graph_input(operation) {

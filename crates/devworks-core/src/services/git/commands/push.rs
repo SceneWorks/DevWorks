@@ -394,7 +394,17 @@ impl GitService {
         // after transport loss; never repeat the guarded write as recovery.
         match network.remote_head(path, url, target) {
             Ok(Some(head)) if head == expected.hex => {
-                self.finish_git(job, &operation.id, observation)
+                let docs = match super::documentation::matching_commit(
+                    &*self.store,
+                    git,
+                    path,
+                    job,
+                    &observation.head,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => return storage_failure(error.into_storage()),
+                };
+                self.finish_git(job, &operation.id, observation, docs)
             }
             _ if sent.is_err() => {
                 EffectOutcome::Unknown("push response and remote outcome are unverified".into())

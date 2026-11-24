@@ -19,6 +19,7 @@ const REPORT_MEDIA: &str = "application/vnd.devworks.repository-analysis+json";
 const PIN_TTL_MS: i64 = 300_000;
 
 pub(super) struct PhaseStore {
+    pub repository_documentation: std::sync::atomic::AtomicBool,
     pub store: Arc<dyn ApplicationStore>,
     pub artifacts: Arc<ArtifactService>,
 }
@@ -139,6 +140,9 @@ impl PhaseStore {
         let claim = claim.clone();
         let artifacts = self.artifacts.clone();
         let staged = staged.cloned();
+        let documentation_enabled = self
+            .repository_documentation
+            .load(std::sync::atomic::Ordering::Acquire);
         run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
             claim
                 .validate_in(tx, &current, &selection)
@@ -176,7 +180,7 @@ impl PhaseStore {
             advance(tx, &current, &mut next)?;
             if let Some(reference) = publication {
                 for event in synthesis {
-                    event.append_in(tx, &next, reference.clone())?;
+                    event.append_in(tx, &next, reference.clone(), documentation_enabled)?;
                 }
             }
             if next.terminal() {
@@ -326,6 +330,7 @@ impl SynthesisEvent {
         tx: &mut dyn WriteTransaction,
         run: &StoredAnalysisRun,
         result: ArtifactRef,
+        repository_documentation: bool,
     ) -> Result<(), StorageError> {
         if self.project_checkpoints.is_empty()
             || !run
@@ -356,7 +361,7 @@ impl SynthesisEvent {
         let id = EventId(tx.new_id(IdKind::Event));
         let now = tx.now_ms();
         tx.history().append(NewEvent {
-            id,
+            id: id.clone(),
             actor: run.owner.actor.clone(),
             project_id,
             root_id: run.owner.root.clone(),
@@ -372,6 +377,44 @@ impl SynthesisEvent {
                 "coverage": if self.partial { "Partial" } else { "Complete" },
             }),
         })?;
+        if repository_documentation
+            && (run
+                .owner
+                .worktree
+                .as_ref()
+                .is_some_and(|tree| tree.repository == self.repository)
+                || (run.owner.kind == "Human"
+                    && matches!(run.intent.scope, DataScope::Project { .. })))
+        {
+            let scope = match &run.intent.scope {
+                DataScope::Workspace => ConfigScope::Workspace,
+                DataScope::Project { project_id } => ConfigScope::Project(project_id.clone()),
+            };
+            let delivery_mode =
+                crate::settings::catalog::descriptor("repositories.documentationDelivery")
+                    .and_then(|descriptor| {
+                        let layers =
+                            crate::settings::model::current_chain(tx.configuration(), &scope)
+                                .ok()?;
+                        crate::settings::model::chain(descriptor, &layers)
+                            .ok()?
+                            .into_iter()
+                            .next()
+                    })
+                    .map_or(json!("Stage"), |entry| entry.value.value.0);
+            let delivery = tx.new_id(IdKind::QueueEntry);
+            tx.queue().enqueue(NewQueueEntry {
+                id: delivery,
+                consumer: super::DOCS_CONSUMER.into(),
+                event_id: id,
+                root_id: run.owner.root.clone(),
+                operation_id: None,
+                partition: None,
+                priority: 0,
+                ready_at_ms: now,
+                payload: json!({"runId": run.id, "repositoryId": self.repository, "delivery": delivery_mode}),
+            })?;
+        }
         Ok(())
     }
 }

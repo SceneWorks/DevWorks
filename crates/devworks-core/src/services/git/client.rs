@@ -1300,6 +1300,43 @@ impl Git<'_> {
         Ok(bytes)
     }
 
+    pub(crate) fn index_tracked(&self, dir: &Path, relative: &str) -> Result<bool, GitFault> {
+        self.run(dir, &["ls-files", "--stage", "-z", "--", relative], 8192)
+            .map(|stage| !stage.is_empty())
+    }
+
+    /// Inspect stage zero and read the immutable blob. Working bytes are checked separately.
+    pub(crate) fn index_has_exact_blob(
+        &self,
+        dir: &Path,
+        relative: &str,
+        expected: &[u8],
+    ) -> Result<bool, GitFault> {
+        let stage = self.run(dir, &["ls-files", "--stage", "-z", "--", relative], 8192)?;
+        let Some((entry, path)) = std::str::from_utf8(&stage)
+            .ok()
+            .and_then(|text| text.strip_suffix('\0'))
+            .and_then(|text| text.split_once('\t'))
+        else {
+            return Ok(false);
+        };
+        let fields: Vec<_> = entry.split(' ').collect();
+        let ["100644", oid, "0"] = fields.as_slice() else {
+            return Ok(false);
+        };
+        if path != relative || !oid_ok(oid) {
+            return Ok(false);
+        }
+        let size = self
+            .line(dir, &["cat-file", "-s", oid])?
+            .and_then(|value| value.parse::<usize>().ok());
+        if size != Some(expected.len()) {
+            return Ok(false);
+        }
+        let content = self.read_blobs(dir, &[(*oid).to_owned()], expected.len(), true)?;
+        Ok(content.first().map(Vec::as_slice) == Some(expected))
+    }
+
     /// The contents of `oids`, in order (one `cat-file --batch` process).
     pub fn blobs(
         &self,
@@ -1308,6 +1345,15 @@ impl Git<'_> {
         expected_bytes: usize,
     ) -> Result<Vec<Vec<u8>>, GitFault> {
         self.read_blobs(dir, oids, expected_bytes, false)
+    }
+
+    pub(crate) fn documentation_blobs(
+        &self,
+        dir: &Path,
+        oids: &[String],
+        expected_bytes: usize,
+    ) -> Result<Vec<Vec<u8>>, GitFault> {
+        self.read_blobs(dir, oids, expected_bytes, true)
     }
 
     fn read_blobs(

@@ -274,9 +274,28 @@ pub(crate) fn check_evidence(
 ) -> R<()> {
     const KINDS: [&str; 5] = ["evidence", "review", "outcome", "git", "pull_request"];
     for e in ids {
-        match tx.sessions().link(e)? {
-            Some(l) if &l.project_id == project && KINDS.contains(&l.kind.as_str()) => {}
-            _ => return Err(not_found("evidence", e).into()),
+        let Some(link) = tx
+            .sessions()
+            .link(e)?
+            .filter(|link| &link.project_id == project && KINDS.contains(&link.kind.as_str()))
+        else {
+            return Err(not_found("evidence", e).into());
+        };
+        if link.target_kind == "repository_documentation" {
+            let event = tx
+                .history()
+                .event(&crate::protocol::EventId(link.event_id.clone()))?;
+            if !event.is_some_and(|event| {
+                event.kind == "RepositoryDocumentationPublished"
+                    && event.project_id.as_ref() == Some(project)
+                    && event.payload["complete"] == true
+                    && event.payload["deliveredHead"].as_str() == link.revision.as_deref()
+                    && event.payload["files"]
+                        .as_array()
+                        .is_some_and(|files| !files.is_empty())
+            }) {
+                return Err(not_found("evidence", e).into());
+            }
         }
     }
     Ok(())

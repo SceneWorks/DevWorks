@@ -19,6 +19,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RepositoryDocsDelivery {
+    Stage,
+    Commit,
+    CommitAndPush,
+}
+impl Check for RepositoryDocsDelivery {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackageContent {
     pub package_id: Id,

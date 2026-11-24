@@ -46,7 +46,12 @@ fn submit(
     mut input: Value,
 ) -> CommandReply<DomainDecision> {
     input["kind"] = json!(operation);
-    let raw = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+    let revision = match operation {
+        "repository_docs.generate" => 14,
+        operation if operation.starts_with("analysis.") => 3,
+        _ => 1,
+    };
+    let raw = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":revision,
         "requestKey":key,"body":input})
     .to_string();
     app.command(ctx, operation, raw.as_bytes()).unwrap()
@@ -63,7 +68,8 @@ fn accepted(reply: CommandReply<DomainDecision>) -> OperationId {
 }
 
 async fn terminal(store: &dyn ApplicationStore, operation: &OperationId) -> OperationRecord {
-    within("analysis dispatcher settles provider evidence", async {
+    let label = format!("dispatcher settles operation {}", operation.0.as_str());
+    within(&label, async {
         loop {
             let row = read(store, |s| s.operations().operation(operation)).unwrap();
             if matches!(
@@ -83,16 +89,29 @@ async fn terminal(store: &dyn ApplicationStore, operation: &OperationId) -> Oper
 
 fn prepare_repo(base: &Path) {
     let repo = base.join("analysis-native");
-    std::fs::create_dir_all(repo.join("src")).unwrap();
+    let project = repo.join("components").join("support");
+    std::fs::create_dir_all(project.join("src")).unwrap();
     std::fs::write(
-        repo.join("src/lib.rs"),
+        project.join("DocSupport.csproj"),
+        "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/lib.rs"),
         "pub fn fixture_first_party() -> u32 { 4 }\n",
     )
     .unwrap();
+    let remote = base.join("documentation-origin.git");
+    let remote_path = remote.to_str().unwrap();
     for command in [
         vec!["init", "-q"],
         vec!["add", "-A"],
         vec!["commit", "-qm", "fixture"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@example.test"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["init", "--bare", remote_path],
+        vec!["remote", "add", "origin", remote_path],
     ] {
         let output = Command::new("git")
             .current_dir(&repo)
@@ -154,6 +173,20 @@ fn repository_analysis_uses_the_router_and_records_synthesis_once() {
                 ..Default::default()
             },
             enrichers: Vec::new(),
+        });
+        let docs_root = f.h.root.join("documentation-worktrees");
+        std::fs::create_dir(&docs_root).unwrap();
+        composition.git = Some(devworks_engine::git::GitComposition {
+            config: devworks_core::services::git::GitConfig {
+                transport: Some(Arc::new(devworks_adapters::git_transport::NativeGitTransportFiles)),
+                roots: vec![devworks_core::services::git::RegisteredGitRoot {
+                    id: id("documentation-worktrees"),
+                    path: std::fs::canonicalize(&docs_root).unwrap(),
+                }],
+                filesystem: Some(Arc::new(NativeFilesystem::new())),
+                ..Default::default()
+            },
+            github_http: None,
         });
         let app = devworks_engine::boot(composition).await.unwrap();
         let discovered = json!({"mode":"Query","protocol":"1.0-draft.1","queryId":"analysis-sources",
@@ -393,6 +426,7 @@ async fn check_agent_analysis(
             .is_ok()
     );
 
+    check_repository_documentation(f, app, user, &project, &repository).await;
     write(f.store.as_ref(), move |tx| {
         tx.projects().set_members(&project, &[])
     })
@@ -406,7 +440,467 @@ async fn check_agent_analysis(
             .read_exact(f.store.as_ref(), &work, &reference, 16 * 1024 * 1024)
             .is_err()
     );
-    assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 3);
+    assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(), 5);
+}
+
+async fn check_repository_documentation(
+    f: &Fx,
+    app: &devworks_engine::Runtime,
+    user: &InvocationContext,
+    project: &devworks_core::protocol::ProjectId,
+    repository: &Id,
+) {
+    use devworks_core::protocol::{DomainErrorCode, RootId, records::AnalysisRecord};
+    use devworks_core::services::git::context::documentation_destination;
+    let task = id("document-the-repository");
+    let context =
+        user.clone()
+            .with_lineage(Some(project.clone()), Some(RootId(task.clone())), None);
+    let (project_id, task_id, repo_id) = (project.clone(), task.clone(), repository.clone());
+    write(f.store.as_ref(), move |tx| {
+        let now = tx.now_ms();
+        tx.work().insert_work(&StoredWork {
+            id: task_id.clone(),
+            project_id,
+            kind: "task".into(),
+            title: "Document repository".into(),
+            parent_feature_id: None,
+            status_id: None,
+            priority: 0,
+            manual_order: 0,
+            revision: 1,
+            scope_revision: 1,
+            created_at_ms: now,
+            updated_at_ms: now,
+            created_by: None,
+            updated_by: None,
+            search_key: "documentation".into(),
+            caller_ref: None,
+            completion: None,
+            brief: json!({"acceptance":[{
+                "id":"docs-delivered","text":"Publish complete repository documentation",
+                "evidenceIds":[],"state":"Unmet"
+            }]}),
+        })?;
+        tx.work().set_work_repositories(&task_id, &[repo_id])
+    })
+    .unwrap();
+    let views = json!({"kind":"Published","repositoryIds":[repository]});
+    let scope = json!({"kind":"Project","projectId":project});
+    let query = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,"queryId":"documentation-view",
+        "body":{"kind":"analysis.status","scope":scope,"views":views,"page":{"limit":10},"filters":[]}});
+    let status = || -> AnalysisRecord {
+        let result = app
+            .query(user, "analysis.status", query.to_string().as_bytes())
+            .unwrap();
+        let DomainQueryReply::Result {
+            result: OperationResult::AnalysisStatus { value },
+            ..
+        } = result
+        else {
+            panic!("{result:?}")
+        };
+        value
+    };
+    let observed = status();
+    let head = observed.observation.as_ref().unwrap().bindings.0[0]
+        .snapshot
+        .head
+        .clone();
+    let checkout = accepted(submit(
+        app,
+        &context,
+        "git.worktree",
+        "documentation-worktree",
+        json!({
+            "workId":task, "repositoryId":repository, "expectedRevision":"1", "action":"Create",
+            "base":head, "registeredRootId":"documentation-worktrees"
+        }),
+    ));
+    let completed = terminal(f.store.as_ref(), &checkout).await;
+    assert_eq!(
+        completed.state,
+        OperationState::ObservedComplete,
+        "{completed:?}"
+    );
+    let tree = read(f.store.as_ref(), |read| {
+        read.git().git_worktrees(&task, None, 5)
+    })
+    .remove(0);
+    let path = Path::new(&tree.path);
+    std::fs::write(path.join("local-user-notes.md"), "my notes\n").unwrap();
+
+    f.http.lock().unwrap().body = VecDeque::from([response(json!({
+        "summary":"A repository with a validated docs destination.",
+        "confidence":"high","endpoints":[],"services":[],"databaseTables":[],
+        "externalDependencies":[],"nodes":[]
+    }))
+    .into_bytes()]);
+    let plan = json!({"scope":scope,"views":views,"expectedSourceRevision":"1","nodeIds":[],"batchLimit":2});
+    let mut analyze = plan.clone();
+    analyze["refreshMode"] = json!("WithProjectAnalysis");
+    analyze["includeAllSource"] = json!(true);
+    let projects = accepted(submit(
+        app,
+        user,
+        "analysis.reanalyze",
+        "document-projects",
+        analyze,
+    ));
+    let completed = terminal(f.store.as_ref(), &projects).await;
+    assert_eq!(
+        completed.state,
+        OperationState::ObservedComplete,
+        "{completed:?}"
+    );
+
+    let (bound, root) =
+        documentation_destination(f.store.as_ref(), user, project, repository, &head).unwrap();
+    f.http.lock().unwrap().body = VecDeque::from([response(json!({
+        "repoSummary":"A durable repository documentation acceptance fixture.", "confidence":"high"
+    }))
+    .into_bytes()]);
+    let summary = accepted(submit(
+        app,
+        user,
+        "analysis.synthesize",
+        "documentation-synthesis",
+        plan,
+    ));
+    let completed = terminal(f.store.as_ref(), &summary).await;
+    assert_eq!(
+        completed.state,
+        OperationState::ObservedComplete,
+        "{completed:?}"
+    );
+    let evidence = within(
+        "synthesis generates owned repository documentation",
+        async {
+            loop {
+                let page = read(f.store.as_ref(), |read| {
+                    read.history().page(&EventFilter::All, 0, 500)
+                });
+                if let Some(event) = page
+                    .events
+                    .iter()
+                    .find(|event| event.kind == "RepositoryDocumentationGenerated")
+                {
+                    break event.clone();
+                }
+                let synthesis = page
+                    .events
+                    .iter()
+                    .find(|event| {
+                        event.kind == "RepositoryAnalysisSynthesized"
+                            && event.operation_id.as_ref() == Some(&summary)
+                    })
+                    .expect("project synthesis event");
+                let delivery = read(f.store.as_ref(), |read| {
+                    read.queue().delivery(
+                        devworks_core::services::graph::repository_analysis::DOCS_CONSUMER,
+                        &synthesis.id,
+                    )
+                })
+                .expect("documentation delivery");
+                assert!(
+                    !matches!(delivery.state, QueueState::Failed | QueueState::Reconciling),
+                    "{delivery:?}"
+                );
+                if delivery.state == QueueState::Completed {
+                    let tree =
+                        read(f.store.as_ref(), |read| read.git().git_worktree(&tree.id)).unwrap();
+                    if let Some(op) = &tree.pending_operation_id {
+                        let effect =
+                            read(f.store.as_ref(), |read| read.operations().operation(op)).unwrap();
+                        assert!(
+                            !matches!(
+                                effect.state,
+                                OperationState::Failed | OperationState::OutcomeUnknown
+                            ),
+                            "{effect:?}"
+                        );
+                    } else {
+                        assert_eq!(tree.last_operation_id.as_ref(), Some(&checkout), "{tree:?}");
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        },
+    )
+    .await;
+    let document = std::fs::read_to_string(path.join("CODEGRAPH.md")).unwrap();
+    assert!(document.contains("A durable repository documentation acceptance fixture."));
+    assert!(document.contains(&head.hex));
+    assert_eq!(
+        std::fs::read_to_string(path.join("local-user-notes.md")).unwrap(),
+        "my notes\n"
+    );
+    assert_eq!(evidence.payload["repositoryId"], json!(repository));
+    assert_eq!(evidence.payload["sourceHead"], json!(head));
+    let index = Command::new("git")
+        .arg("diff")
+        .arg("--cached")
+        .arg("--name-only")
+        .current_dir(path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(index.stdout).unwrap().trim(),
+        "CODEGRAPH.md\ncomponents/support/CODEGRAPH.md"
+    );
+    assert!(
+        std::fs::read_to_string(path.join("components/support/CODEGRAPH.md"))
+            .unwrap()
+            .contains("A repository with a validated docs destination.")
+    );
+    let input = json!({
+        "repositoryId":repository, "views":{"kind":"Exact","viewIds":[evidence.payload["viewId"]]},
+        "expectedRevision":evidence.payload["analysisRevision"], "outputRootId":root,
+        "topics":["all"], "analysisRunId":evidence.payload["analysisRunId"],
+    });
+    let manual = accepted(submit(
+        app,
+        &bound,
+        "repository_docs.generate",
+        "manual-docs",
+        input.clone(),
+    ));
+    let completed = terminal(f.store.as_ref(), &manual).await;
+    assert_eq!(
+        completed.state,
+        OperationState::ObservedComplete,
+        "{completed:?}"
+    );
+    assert_eq!(
+        manual,
+        accepted(submit(
+            app,
+            &bound,
+            "repository_docs.generate",
+            "manual-docs",
+            input.clone()
+        ))
+    );
+    let mut wrong = input.clone();
+    wrong["outputRootId"] = json!("another-output-root");
+    assert!(rejected(
+        submit(
+            app,
+            &bound,
+            "repository_docs.generate",
+            "wrong-docs-root",
+            wrong
+        ),
+        DomainErrorCode::PermissionDenied,
+    ));
+    assert_eq!(
+        std::fs::read_to_string(path.join("CODEGRAPH.md")).unwrap(),
+        document
+    );
+
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["update-index", "--assume-unchanged", "--", "CODEGRAPH.md"]);
+    std::fs::write(
+        path.join("CODEGRAPH.md"),
+        "unrelated edit to the generated file\n",
+    )
+    .unwrap();
+    let collision = submit(
+        app,
+        &bound,
+        "repository_docs.generate",
+        "doc-edit",
+        input.clone(),
+    );
+    assert!(rejected(collision, DomainErrorCode::SourceChanged));
+    assert_eq!(
+        std::fs::read_to_string(path.join("CODEGRAPH.md")).unwrap(),
+        "unrelated edit to the generated file\n"
+    );
+    assert!(
+        read(f.store.as_ref(), |read| read.git().git_worktree(&tree.id))
+            .unwrap()
+            .pending_operation_id
+            .is_none()
+    );
+    git(&[
+        "update-index",
+        "--no-assume-unchanged",
+        "--",
+        "CODEGRAPH.md",
+    ]);
+    std::fs::write(path.join("CODEGRAPH.md"), document).unwrap();
+    std::fs::remove_file(path.join("local-user-notes.md")).unwrap();
+
+    assert!(
+        read(f.store.as_ref(), |read| {
+            read.sessions()
+                .links(&RootId(task.clone()), &["evidence"], None, 25)
+        })
+        .iter()
+        .all(|link| link.target_kind != "repository_documentation"),
+        "staged files do not qualify as published evidence"
+    );
+    let mut delivery = input;
+    delivery["delivery"] = json!("CommitAndPush");
+    let generated = accepted(submit(
+        app,
+        &bound,
+        "repository_docs.generate",
+        "doc-delivery",
+        delivery,
+    ));
+    assert_eq!(
+        terminal(f.store.as_ref(), &generated).await.state,
+        OperationState::ObservedComplete
+    );
+    assert_eq!(
+        git(&["rev-parse", "HEAD"]),
+        head.hex,
+        "generation itself must not commit"
+    );
+    accept_documentation_review(f, app, user, project, "git.commit").await;
+    let committed = check_docs_git_effect(f, &tree.id, "git.commit").await;
+    assert_eq!(
+        committed.state,
+        OperationState::ObservedComplete,
+        "{committed:?}"
+    );
+    accept_documentation_review(f, app, user, project, "git.push").await;
+    let push = check_docs_git_effect(f, &tree.id, "git.push").await;
+    assert_eq!(push.state, OperationState::ObservedComplete, "{push:?}");
+    let doc_filter = EventFilter::Aggregate {
+        kind: "repository_documentation".into(),
+        id: tree.id.as_str().into(),
+    };
+    let delivered = read(f.store.as_ref(), |read| {
+        read.history().page(&doc_filter, 0, 100)
+    })
+    .events
+    .into_iter()
+    .find(|event| event.kind == "RepositoryDocumentationPublished")
+    .expect("the verified push records publication");
+    assert_eq!(
+        delivered.payload["deliveredHead"],
+        git(&["rev-parse", "HEAD"])
+    );
+    let remote_head = git(&["ls-remote", "--heads", "origin", &tree.branch]);
+    assert_eq!(
+        remote_head.split_whitespace().next(),
+        delivered.payload["deliveredHead"].as_str()
+    );
+    assert_eq!(delivered.payload["files"].as_array().unwrap().len(), 2);
+    let evidence = read(f.store.as_ref(), |read| {
+        read.sessions()
+            .links(&RootId(task.clone()), &["evidence"], None, 25)
+    })
+    .into_iter()
+    .find(|link| link.event_id == delivered.id.0 && link.target_kind == "repository_documentation")
+    .expect("only verified publication supplies documentation acceptance evidence");
+    let result = submit(
+        app,
+        user,
+        "tasks.acceptance_evidence",
+        "accept-doc-delivery",
+        json!({
+            "taskId": task, "expectedRevision":"1", "criteria":[{
+                "id":"docs-delivered","text":"Publish complete repository documentation",
+                "evidenceIds":[evidence.id],"state":"Met"
+            }]
+        }),
+    );
+    assert!(matches!(result, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })));
+}
+
+async fn accept_documentation_review(
+    f: &Fx,
+    app: &devworks_engine::Runtime,
+    user: &InvocationContext,
+    project: &devworks_core::protocol::ProjectId,
+    name: &str,
+) {
+    let query = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,
+        "queryId":"documentation-approvals","body":{"kind":"approvals.list",
+            "scope":{"kind":"Project","projectId":project},"page":{"limit":25}}});
+    let label = format!("documentation enters {name} review");
+    let review = within(&label, async {
+        loop {
+            let reply = app
+                .query(user, "approvals.list", query.to_string().as_bytes())
+                .unwrap();
+            let view = serde_json::to_value(reply).unwrap();
+            if let Some(found) = view["result"]["value"]["items"]
+                .as_array()
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|item| item["operationKind"] == name && item["state"] == "Pending")
+                })
+            {
+                break found.clone();
+            }
+            f.h.advance(30);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await;
+    let vote = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+        "requestKey":format!("accept-docs-{}", name.replace('.', "-")),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":review["id"],"expectedRevision":review["revision"],"contentDigest":review["contentDigest"],
+            "decision":"Approve","rationale":"Checked exact generated documentation contents and destination"}});
+    let result = app
+        .record_human_decision(user, vote.to_string().as_bytes())
+        .unwrap();
+    assert!(
+        matches!(result, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })),
+        "{name} human decision"
+    );
+}
+
+async fn check_docs_git_effect(f: &Fx, tree: &Id, capability: &str) -> OperationRecord {
+    let filter = EventFilter::Aggregate {
+        kind: "git_worktree".into(),
+        id: tree.as_str().into(),
+    };
+    let label = format!("approved documentation {capability} enters the operation journal");
+    let id = within(&label, async {
+        loop {
+            let operation = read(f.store.as_ref(), |read| {
+                let page = read.history().page(&filter, 0, 100)?;
+                for id in page
+                    .events
+                    .iter()
+                    .filter_map(|event| event.operation_id.as_ref())
+                {
+                    if read
+                        .operations()
+                        .operation(id)?
+                        .is_some_and(|row| row.capability == capability)
+                    {
+                        return Ok(Some(id.clone()));
+                    }
+                }
+                Ok(None)
+            });
+            if let Some(id) = operation {
+                break id;
+            }
+            f.h.advance(30);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await;
+    terminal(f.store.as_ref(), &id).await
 }
 
 fn rejected(
