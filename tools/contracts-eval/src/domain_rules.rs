@@ -295,6 +295,20 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
 }
 
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name == "WatchGithubTarget" {
+        require(
+            present(v, "workflowRunId") != present(v, "pullRequestNumber"),
+            "a GitHub watcher names one workflow run or pull request",
+        )?;
+        require(
+            ["workflowRunId", "pullRequestNumber"]
+                .iter()
+                .filter_map(|name| v[*name].as_str())
+                .all(|id| id.parse::<i64>().is_ok_and(|id| id > 0)),
+            "GitHub workflow run and pull request IDs must be positive",
+        )?;
+    }
+
     if name == "WatchTimer" {
         require(
             present(v, "atMs") != present(v, "afterMs"),
@@ -660,14 +674,14 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
         )?
     }
     if op == "watch.create" {
-        let sources = ["process", "probe", "timer", "file"]
+        let sources = ["process", "probe", "timer", "file", "github"]
             .iter()
             .filter(|k| present(v, k))
             .count();
         require(sources == 1, "a watcher names exactly one source")?;
         require(
-            !present(v, "maxLifetimeMs") || present(v, "probe") || present(v, "file"),
-            "only a probe or file watcher takes a maximum lifetime",
+            !present(v, "maxLifetimeMs") || present(v, "probe") || present(v, "file") || present(v, "github"),
+            "only a polling watcher takes a maximum lifetime",
         )?;
         require(
             !present(v, "matching") || present(v, "process") || present(v, "file"),
@@ -678,8 +692,8 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             "a file watcher needs a match",
         )?;
         require(
-            !present(v, "tailBytes") || !present(v, "timer"),
-            "a timer watcher has no output tail",
+            !present(v, "tailBytes") || !(present(v, "timer") || present(v, "github")),
+            "a timer or GitHub watcher has no output tail",
         )?;
     }
     if op == "indexing.status" {

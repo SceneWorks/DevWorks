@@ -37,9 +37,25 @@ impl GitHubService {
         self.stopping.load(Ordering::SeqCst)
     }
 
+    pub(super) fn poll_deferred_until(&self, now: i64) -> Option<i64> {
+        let until = self.poll_deferred_until_ms.load(Ordering::Acquire);
+        (until > now).then_some(until)
+    }
+
+    pub(super) fn defer_polls(&self, until: i64) {
+        self.poll_deferred_until_ms
+            .fetch_max(until, Ordering::AcqRel);
+    }
+
     /// Read at most one registration page and capture at most one endpoint page per registration.
     /// A throttle ends the pass and the runtime waits before proceeding to other registrations.
     pub fn poll_pass(&self, after: Option<Id>) -> Result<PollPass, StorageError> {
+        if let Some(until) = self.poll_deferred_until(self.clock.now_ms().get()) {
+            return Ok(PollPass {
+                after,
+                defer_until_ms: Some(until),
+            });
+        }
         let (page, next) = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let Some(account) = snapshot.github().github_account()? else {
                 return Ok((Vec::new(), None));
@@ -90,6 +106,7 @@ impl GitHubService {
                 && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
                     self.poll_configured_issues(&row.local, mode)
             {
+                self.defer_polls(next_due_at_ms);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(next_due_at_ms),
@@ -99,6 +116,7 @@ impl GitHubService {
                 && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
                     self.poll_default_ref(&row.local)
             {
+                self.defer_polls(next_due_at_ms);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(next_due_at_ms),
@@ -108,6 +126,7 @@ impl GitHubService {
                 && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
                     self.poll_pull_requests(&row.local)
             {
+                self.defer_polls(next_due_at_ms);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(next_due_at_ms),
@@ -116,6 +135,7 @@ impl GitHubService {
             if row.policy.sync
                 && let Ok(Some(until)) = self.poll_scheduled_comments(&row.local)
             {
+                self.defer_polls(until);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(until),
@@ -124,6 +144,7 @@ impl GitHubService {
             if row.policy.changes
                 && let Ok(Some(until)) = self.poll_scheduled_evidence(&row.local)
             {
+                self.defer_polls(until);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(until),

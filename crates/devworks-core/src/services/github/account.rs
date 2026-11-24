@@ -26,7 +26,7 @@ use crate::services::git::github::{Fault, GitHubClient};
 use crate::services::kernel::{Failure, Refusal, decided, label, query_fault, rev};
 use crate::settings::model::current_layer;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 
 pub struct GitHubService {
     pub(super) store: Arc<dyn ApplicationStore>,
@@ -34,6 +34,7 @@ pub struct GitHubService {
     ids: Arc<dyn IdSource>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) stopping: AtomicBool,
+    pub(super) poll_deferred_until_ms: AtomicI64,
 }
 
 struct CheckedAccount {
@@ -56,6 +57,7 @@ impl GitHubService {
             ids,
             clock,
             stopping: AtomicBool::new(false),
+            poll_deferred_until_ms: AtomicI64::new(0),
         }
     }
 

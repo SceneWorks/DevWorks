@@ -58,7 +58,7 @@ pub struct StoredWatcher {
     pub id: Id,
     pub revision: i64,
     pub phase: WatcherPhase,
-    /// `Process`, `Probe` or `Timer`.
+    /// The source kind persisted by the watcher service.
     pub source_kind: String,
     pub project_id: Option<ProjectId>,
     pub session_id: Id,
@@ -87,6 +87,23 @@ pub struct StoredWatcher {
     pub matching: Option<StoredMatch>,
     /// The watched file (`File` only), resolved when the watcher was created.
     pub file_path: Option<String>,
+    pub github: Option<StoredGithubWatch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredGithubWatch {
+    pub registration: Id,
+    pub remote_user: String,
+    pub remote_repository: Id,
+    pub subject: GithubWatchSubject,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GithubWatchSubject {
+    WorkflowRun(u64),
+    PullRequest(u64),
 }
 
 /// A watcher's match rule and its progress through the source.

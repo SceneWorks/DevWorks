@@ -859,6 +859,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                     clock.clone(),
                 )
                 .with_root_control(control.clone())
+                .with_github(github.clone())
                 .with_diagnostics(diagnostics.clone()),
             ),
         ))

@@ -110,7 +110,7 @@ impl GitHubService {
         Ok(())
     }
 
-    fn observe_pull_head(
+    pub(super) fn observe_pull_head(
         &self,
         target: &PollTarget,
         number: &str,
