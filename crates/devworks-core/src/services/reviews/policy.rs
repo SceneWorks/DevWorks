@@ -2,7 +2,7 @@
 use crate::protocol::Id;
 use crate::protocol::data::GitOid;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ReviewStage {
@@ -85,9 +85,9 @@ pub enum RepairReason {
 pub struct CandidateRepair {
     pub reviewed_head: GitOid,
     pub candidate_head: GitOid,
-    pub diagnosed_failed_checks: BTreeMap<Id, String>,
+    pub diagnosed_failed_checks: HashMap<Id, String>,
     pub changes: BTreeMap<ChangeDigest, RepairReason>,
-    pub focused_check_ids: BTreeSet<Id>,
+    pub focused_check_ids: HashSet<Id>,
 }
 
 #[derive(Debug)]
@@ -105,7 +105,7 @@ pub struct FocusedCheck {
     pub preserves_product_behavior: bool,
     pub preserves_coverage: bool,
     pub preserves_required_gates: bool,
-    pub findings_verified: BTreeSet<Id>,
+    pub findings_verified: HashSet<Id>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,9 +131,9 @@ pub struct CurrentCandidate<'a> {
     pub reviewed_head: &'a GitOid,
     pub head: &'a GitOid,
     pub complete_delta: &'a BTreeSet<ChangeDigest>,
-    pub failed_checks: &'a BTreeMap<Id, RequiredCheckFailure>,
-    pub actionable_findings: &'a BTreeMap<Id, FindingSeverity>,
-    pub focused_checks: &'a BTreeMap<Id, FocusedCheck>,
+    pub failed_checks: &'a HashMap<Id, RequiredCheckFailure>,
+    pub actionable_findings: &'a HashMap<Id, FindingSeverity>,
+    pub focused_checks: &'a HashMap<Id, FocusedCheck>,
     pub requires_fresh_review: bool,
 }
 
@@ -161,7 +161,7 @@ impl CandidateRepair {
             return Err(RepairFault::IncompleteDelta);
         }
 
-        let mut fixes = BTreeSet::new();
+        let mut fixes = HashSet::new();
         for reason in self.changes.values() {
             match reason {
                 RepairReason::RequiredCheck { failed_check_id } => {
@@ -256,7 +256,7 @@ mod tests {
         let other_change = ChangeDigest("unclassified-change".into());
         let complete = BTreeSet::from([change.clone()]);
         let incomplete = BTreeSet::from([change.clone(), other_change]);
-        let failed_checks = BTreeMap::from([(
+        let failed_checks = HashMap::from([(
             failure.clone(),
             RequiredCheckFailure {
                 head: reviewed.clone(),
@@ -264,7 +264,7 @@ mod tests {
             },
         )]);
         let focus = |preserves_required_gates| {
-            BTreeMap::from([(
+            HashMap::from([(
                 focused.clone(),
                 FocusedCheck {
                     head: candidate.clone(),
@@ -272,7 +272,7 @@ mod tests {
                     preserves_product_behavior: true,
                     preserves_coverage: true,
                     preserves_required_gates,
-                    findings_verified: BTreeSet::new(),
+                    findings_verified: HashSet::new(),
                 },
             )])
         };
@@ -281,14 +281,14 @@ mod tests {
         let repair = CandidateRepair {
             reviewed_head: reviewed.clone(),
             candidate_head: candidate.clone(),
-            diagnosed_failed_checks: BTreeMap::from([(failure.clone(), "fixture failure".into())]),
+            diagnosed_failed_checks: HashMap::from([(failure.clone(), "fixture failure".into())]),
             changes: BTreeMap::from([(
                 change,
                 RepairReason::RequiredCheck {
                     failed_check_id: failure,
                 },
             )]),
-            focused_check_ids: BTreeSet::from([focused.clone()]),
+            focused_check_ids: HashSet::from([focused.clone()]),
         };
         let mut current = CurrentCandidate {
             stage: ReviewStage::FinalFeature,
@@ -298,7 +298,7 @@ mod tests {
             head: &candidate,
             complete_delta: &complete,
             failed_checks: &failed_checks,
-            actionable_findings: &BTreeMap::new(),
+            actionable_findings: &HashMap::new(),
             focused_checks: &green,
             requires_fresh_review: false,
         };

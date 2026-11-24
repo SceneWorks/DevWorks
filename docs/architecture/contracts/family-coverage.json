@@ -12772,6 +12772,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -12816,6 +12824,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -12864,11 +12880,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Journaled",
-          "semanticRules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights.",
+          "semanticRules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights. Revision 15 can request a single independent review of an exact local task diff or submit candidate repair evidence to the last completed round. Verifying a candidate does not start a review or change the head attributed to the reviewer.",
           "familyRules": "Exact heads/policies and independent verified-read evidence. Actionable findings require resolution; changed heads invalidate readiness.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -12908,6 +12932,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -12956,6 +12988,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -13002,6 +13042,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -13048,11 +13096,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source.",
+          "semanticRules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source. Revision 15 also projects exact local review or qualified post-cap evidence. Final merge still requires current separate delivery gates.",
           "familyRules": "Exact heads/policies and independent verified-read evidence. Actionable findings require resolution; changed heads invalidate readiness.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

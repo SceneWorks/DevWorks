@@ -5,6 +5,7 @@ impl WorkCtl<'_, '_> {
     /// Applies a reply for one of the work slots; returns it back when it is not one.
     pub(super) fn apply_work(&mut self, slot: WorkSlot, reply: Reply) -> Option<(WorkSlot, Reply)> {
         let (slot, reply) = self.apply_workflow(slot, reply)?;
+        let (slot, reply) = self.apply_code_review(slot, reply)?;
         match (slot, reply) {
             (WorkSlot::KeepWorking(project), Reply::Task(result)) => {
                 if self.selected_project.as_deref() == Some(project.as_str()) {

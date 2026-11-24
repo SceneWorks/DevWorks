@@ -176,9 +176,12 @@ async fn drive_agent_turn(
         // Keep the sender until the loop ends: a closed channel would end every wait at once.
         std::future::pending::<()>().await;
     });
-    let mut reviews = is_feature_coordinator.then(|| CoordinatorReview {
+    let is_coordinator = is_feature_coordinator
+        || coordinator.role_id.as_str() == AgentRole::IssueCoordinator.as_str();
+    let mut reviews = is_coordinator.then(|| CoordinatorReview {
         agents: &agents,
         offered_reports: HashSet::new(),
+        feature: is_feature_coordinator,
     });
     let mut retry_at_ms = None;
     let mut credentials_rejected = false;
@@ -229,6 +232,17 @@ async fn drive_agent_turn(
             .await
             .map_err(Into::into)
         };
+    } else if coordinator.role_id.as_str() == AgentRole::CodeReviewer.as_str()
+        && !cancellation.is_cancelled()
+    {
+        if result.is_ok() {
+            result = crate::code_review::complete(&engine, &ctx)
+                .await
+                .map_err(Into::into);
+        }
+        if result.is_err() {
+            let _ = crate::code_review::fail(&engine, &ctx).await;
+        }
     } else if let Some(reviews) = reviews.as_mut() {
         // The active coordinator still owns any review discovered while its children drain.
         let mut commits = engine.commit_changes();
@@ -244,8 +258,31 @@ async fn drive_agent_turn(
                 break;
             }
             commits.borrow_and_update();
-            let scheduled =
-                plan_review::schedule(&engine, &agents, &ctx, &mut drain_stop, true).await;
+            if let Err(error) = crate::code_review::schedule(&engine, &agents, &ctx).await {
+                result = Err(error.into());
+                break;
+            }
+            match crate::code_review::pending(&engine, &ctx).await {
+                Ok(true) => {
+                    if let Err(error) =
+                        plan_review::wait_for_change(&mut commits, &mut drain_stop).await
+                    {
+                        result = Err(error.into());
+                        break;
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            }
+            let scheduled = if reviews.feature {
+                plan_review::schedule(&engine, &agents, &ctx, &mut drain_stop, true).await
+            } else {
+                Ok(ScheduleResult::Idle)
+            };
             let scheduled = match scheduled {
                 Ok(scheduled) => scheduled,
                 Err(error) => {
@@ -447,6 +484,7 @@ async fn wait_for_state_change(
 const STALE_HEAD_ATTEMPTS: u32 = 3;
 
 struct CoordinatorReview<'a> {
+    feature: bool,
     agents: &'a Arc<devworks_core::services::agents::AgentService>,
     offered_reports: HashSet<Id>,
 }
@@ -509,7 +547,11 @@ async fn run_native_loop(
                 return Err(StorageError::ScopeDenied.into());
             }
         }
+        if let Some(review) = review.as_ref() {
+            crate::code_review::schedule(engine, review.agents, ctx).await?;
+        }
         if let Some(review) = review.as_ref()
+            && review.feature
             && matches!(
                 plan_review::schedule(engine, review.agents, ctx, &mut stop.stopped, false).await?,
                 ScheduleResult::Failed { .. }
@@ -2486,14 +2528,20 @@ fn publish_first_context_until(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let mut bound = if is_plan_reviewer(agent) {
+    let code_review = if agent.role_id.as_str() == AgentRole::CodeReviewer.as_str() {
+        crate::code_review::bound(engine, ctx)?
+    } else {
+        None
+    };
+    let isolated = is_plan_reviewer(agent) || code_review.is_some();
+    let mut bound = if let Some(input) = code_review {
+        crate::code_review::bind_prompt(engine, ctx, prompt, input)?
+    } else if is_plan_reviewer(agent) {
         crate::plan_review::bind_prompt(engine, ctx, prompt)?
     } else {
         engine.bind_provider_instructions(ctx, prompt, &[])?
     };
-    if !is_plan_reviewer(agent)
-        && let Some(packages) = engine.packages()
-    {
+    if !isolated && let Some(packages) = engine.packages() {
         use crate::package_host::context_hook::append_context_suggestions;
         use devworks_extension_protocol::package::HookPhase;
         let materialized = serde_json::to_vec(&bound)
@@ -2651,8 +2699,10 @@ fn plan_request(
         return Err(StorageError::ScopeDenied);
     }
     let tools = match window {
-        Some(window) => offered_tools(engine, ctx, window)?,
-        None => Vec::new(),
+        Some(window) if crate::code_review::bound(engine, ctx)?.is_none() => {
+            offered_tools(engine, ctx, window)?
+        }
+        _ => Vec::new(),
     };
     let compaction = window.is_none();
     let tool_bytes = serde_json::to_vec(&tools)

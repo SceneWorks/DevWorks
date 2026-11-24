@@ -4676,6 +4676,223 @@ impl Check for NotificationConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeReviewSeverity {
+    Blocker,
+    Major,
+    Minor,
+    Informational,
+}
+impl Check for CodeReviewSeverity {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeReviewResolution {
+    FixVerified {
+        candidate_head: GitOid,
+        focused_check_ids: Items<Id>,
+    },
+    NotActionable {},
+    Followup {
+        bug_id: Id,
+        review_thread_reply: Url,
+    },
+    NeedsHuman {
+        decision_id: Id,
+    },
+}
+impl Check for CodeReviewResolution {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::FixVerified {
+                candidate_head,
+                focused_check_ids,
+            } => {
+                candidate_head.check()?;
+                focused_check_ids.check()?;
+            }
+            Self::NotActionable {} => {}
+            Self::Followup {
+                bug_id,
+                review_thread_reply,
+            } => {
+                bug_id.check()?;
+                review_thread_reply.check()?;
+            }
+            Self::NeedsHuman { decision_id } => {
+                decision_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalReviewDiff {
+    pub repository_id: Id,
+    pub worktree_id: Id,
+    pub base: GitOid,
+    pub head: GitOid,
+}
+impl Check for LocalReviewDiff {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.worktree_id.check()?;
+        self.base.check()?;
+        self.head.check()?;
+        super::domain_rules::record(
+            "LocalReviewDiff",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalReviewTarget {
+    pub task_id: Id,
+    pub diffs: Items<LocalReviewDiff>,
+}
+impl Check for LocalReviewTarget {
+    fn check(&self) -> Result<(), String> {
+        self.task_id.check()?;
+        self.diffs.check()?;
+        super::domain_rules::record(
+            "LocalReviewTarget",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalReviewEvidence {
+    pub target: LocalReviewTarget,
+    pub diff_digest: Digest,
+    pub state: ReviewObservationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_actor_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<Counter>,
+    pub finding_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<ArtifactRef>,
+}
+impl Check for LocalReviewEvidence {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.diff_digest.check()?;
+        self.state.check()?;
+        self.reviewer_actor_id.check()?;
+        self.reviewer_session_id.check()?;
+        self.completed_at.check()?;
+        self.finding_count.check()?;
+        self.report.check()?;
+        super::domain_rules::record(
+            "LocalReviewEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCheckDiagnosis {
+    pub failed_check_id: Id,
+    pub diagnosis: Content,
+}
+impl Check for ReviewCheckDiagnosis {
+    fn check(&self) -> Result<(), String> {
+        self.failed_check_id.check()?;
+        self.diagnosis.check()?;
+        super::domain_rules::record(
+            "ReviewCheckDiagnosis",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ReviewChangeReason {
+    RequiredCheck { failed_check_id: Id },
+    Finding { finding_id: Id },
+}
+impl Check for ReviewChangeReason {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::RequiredCheck { failed_check_id } => {
+                failed_check_id.check()?;
+            }
+            Self::Finding { finding_id } => {
+                finding_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewClassifiedChange {
+    pub change_digest: Digest,
+    pub reason: ReviewChangeReason,
+}
+impl Check for ReviewClassifiedChange {
+    fn check(&self) -> Result<(), String> {
+        self.change_digest.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "ReviewClassifiedChange",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCandidateRepair {
+    pub original_review_id: Id,
+    pub expected_review_revision: Revision,
+    pub repository_id: Id,
+    pub reviewed_head: GitOid,
+    pub candidate_head: GitOid,
+    pub diagnoses: Items<ReviewCheckDiagnosis>,
+    pub changes: Rows<ReviewClassifiedChange>,
+    pub focused_check_ids: Items<Id>,
+    pub verification_report: ArtifactRef,
+}
+impl Check for ReviewCandidateRepair {
+    fn check(&self) -> Result<(), String> {
+        self.original_review_id.check()?;
+        self.expected_review_revision.check()?;
+        self.repository_id.check()?;
+        self.reviewed_head.check()?;
+        self.candidate_head.check()?;
+        self.diagnoses.check()?;
+        self.changes.check()?;
+        self.focused_check_ids.check()?;
+        self.verification_report.check()?;
+        super::domain_rules::record(
+            "ReviewCandidateRepair",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRecord {
     pub id: Id,
@@ -4687,6 +4904,20 @@ pub struct ReviewRecord {
     pub finding_ids: Items<Id>,
     pub head_digest: Digest,
     pub sources: Items<ReviewSourceEvidence>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LocalReviewEvidence", extend("x-since" = 15))]
+    pub local_review: Option<LocalReviewEvidence>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReviewCandidateRepair", extend("x-since" = 15))]
+    pub candidate_repair: Option<ReviewCandidateRepair>,
 }
 impl Check for ReviewRecord {
     fn check(&self) -> Result<(), String> {
@@ -4698,11 +4929,24 @@ impl Check for ReviewRecord {
         self.finding_ids.check()?;
         self.head_digest.check()?;
         self.sources.check()?;
+        self.local_review.check()?;
+        self.candidate_repair.check()?;
         super::domain_rules::record(
             "ReviewRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReviewRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.local_review = None;
+        }
+        if revision < 15 {
+            self.candidate_repair = None;
+        }
     }
 }
 
@@ -4720,6 +4964,20 @@ pub struct ReviewFinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<Content>,
     pub evidence: Items<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeReviewSeverity", extend("x-since" = 15))]
+    pub code_severity: Option<CodeReviewSeverity>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeReviewResolution", extend("x-since" = 15))]
+    pub resolution: Option<CodeReviewResolution>,
 }
 impl Check for ReviewFinding {
     fn check(&self) -> Result<(), String> {
@@ -4732,11 +4990,24 @@ impl Check for ReviewFinding {
         self.actionable.check()?;
         self.response.check()?;
         self.evidence.check()?;
+        self.code_severity.check()?;
+        self.resolution.check()?;
         super::domain_rules::record(
             "ReviewFinding",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReviewFinding {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.code_severity = None;
+        }
+        if revision < 15 {
+            self.resolution = None;
+        }
     }
 }
 
@@ -4748,6 +5019,13 @@ pub struct ReviewReadiness {
     pub blocker_ids: Items<Id>,
     pub head_digest: Digest,
     pub policy_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<ReviewCandidateRepair>", extend("x-since" = 15))]
+    pub candidate_repairs: Option<Items<ReviewCandidateRepair>>,
 }
 impl Check for ReviewReadiness {
     fn check(&self) -> Result<(), String> {
@@ -4756,11 +5034,20 @@ impl Check for ReviewReadiness {
         self.blocker_ids.check()?;
         self.head_digest.check()?;
         self.policy_revision.check()?;
+        self.candidate_repairs.check()?;
         super::domain_rules::record(
             "ReviewReadiness",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReviewReadiness {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.candidate_repairs = None;
+        }
     }
 }
 
@@ -20999,10 +21286,24 @@ pub enum DomainQuery {
     #[serde(rename = "reviews.findings")]
     ReviewsFindings { review_id: Id, page: PageRequest },
     #[serde(rename = "reviews.readiness")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "barrier", "policyRevision"]}, {"required": ["kind", "rootId", "policyRevision", "localTarget"], "x-since": 15}]))]
     ReviewsReadiness {
         root_id: RootId,
-        barrier: DeliveryBarrier,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DeliveryBarrier")]
+        barrier: Option<DeliveryBarrier>,
         policy_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "LocalReviewTarget", extend("x-since" = 15))]
+        local_target: Option<LocalReviewTarget>,
     },
     #[serde(rename = "releases.inspect")]
     ReleasesInspect { release_id: Id },
@@ -22567,10 +22868,12 @@ impl Check for DomainQuery {
                 root_id,
                 barrier,
                 policy_revision,
+                local_target,
             } => {
                 root_id.check()?;
                 barrier.check()?;
                 policy_revision.check()?;
+                local_target.check()?;
             }
             Self::ReleasesInspect { release_id } => {
                 release_id.check()?;
@@ -23366,6 +23669,11 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *completion_only = None;
+                }
+            }
+            Self::ReviewsReadiness { local_target, .. } => {
+                if revision < 15 {
+                    *local_target = None;
                 }
             }
             Self::GithubPollStatus { page, .. } => {
@@ -24869,11 +25177,32 @@ pub enum DomainCommand {
         worktree_id: Option<Id>,
     },
     #[serde(rename = "reviews.request")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "expectedRevision", "barrier", "policyRevision"]}, {"required": ["kind", "rootId", "expectedRevision", "policyRevision", "localTarget"], "x-since": 15}, {"required": ["kind", "rootId", "expectedRevision", "policyRevision", "candidateRepair"], "x-since": 15}]))]
     ReviewsRequest {
         root_id: RootId,
         expected_revision: Revision,
-        barrier: DeliveryBarrier,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DeliveryBarrier")]
+        barrier: Option<DeliveryBarrier>,
         policy_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "LocalReviewTarget", extend("x-since" = 15))]
+        local_target: Option<LocalReviewTarget>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ReviewCandidateRepair", extend("x-since" = 15))]
+        candidate_repair: Option<ReviewCandidateRepair>,
     },
     #[serde(rename = "reviews.respond")]
     ReviewsRespond {
@@ -24889,6 +25218,13 @@ pub enum DomainCommand {
         actionable: bool,
         rationale: Content,
         evidence: Items<ArtifactRef>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "CodeReviewResolution", extend("x-since" = 15))]
+        resolution: Option<CodeReviewResolution>,
     },
     #[serde(rename = "github.account")]
     GithubAccount {
@@ -27054,11 +27390,15 @@ impl Check for DomainCommand {
                 expected_revision,
                 barrier,
                 policy_revision,
+                local_target,
+                candidate_repair,
             } => {
                 root_id.check()?;
                 expected_revision.check()?;
                 barrier.check()?;
                 policy_revision.check()?;
+                local_target.check()?;
+                candidate_repair.check()?;
             }
             Self::ReviewsRespond {
                 finding_id,
@@ -27077,12 +27417,14 @@ impl Check for DomainCommand {
                 actionable,
                 rationale,
                 evidence,
+                resolution,
             } => {
                 finding_id.check()?;
                 expected_revision.check()?;
                 actionable.check()?;
                 rationale.check()?;
                 evidence.check()?;
+                resolution.check()?;
             }
             Self::GithubAccount {
                 action,
@@ -28242,6 +28584,23 @@ impl Revisioned for DomainCommand {
             Self::ApprovalsPropose { payload, .. } => {
                 if revision < 3 {
                     *payload = None;
+                }
+            }
+            Self::ReviewsRequest {
+                local_target,
+                candidate_repair,
+                ..
+            } => {
+                if revision < 15 {
+                    *local_target = None;
+                }
+                if revision < 15 {
+                    *candidate_repair = None;
+                }
+            }
+            Self::ReviewsAdjudicate { resolution, .. } => {
+                if revision < 15 {
+                    *resolution = None;
                 }
             }
             Self::ResourcesAcquire {
@@ -30239,6 +30598,13 @@ impl Revisioned for OperationResult {
             Self::NotificationsList { value } => value.retain_revision(revision),
             Self::NotificationsRead { value } => value.retain_revision(revision),
             Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
+            Self::ReviewsList { value } => value.retain_revision(revision),
+            Self::ReviewsInspect { value } => value.retain_revision(revision),
+            Self::ReviewsRequest { value } => value.retain_revision(revision),
+            Self::ReviewsFindings { value } => value.retain_revision(revision),
+            Self::ReviewsRespond { value } => value.retain_revision(revision),
+            Self::ReviewsAdjudicate { value } => value.retain_revision(revision),
+            Self::ReviewsReadiness { value } => value.retain_revision(revision),
             Self::GithubAccount { value } => value.retain_revision(revision),
             Self::GithubPollStatus { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),

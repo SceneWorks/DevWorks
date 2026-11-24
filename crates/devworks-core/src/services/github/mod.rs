@@ -2,6 +2,7 @@
 mod account;
 pub mod api;
 mod binding;
+pub(crate) mod code_review;
 mod comments;
 pub(crate) mod credentials;
 pub mod identity;

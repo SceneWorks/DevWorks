@@ -1251,6 +1251,39 @@ impl Git<'_> {
         self.run(dir, &args, MAX_LISTING_BYTES)
     }
 
+    /// An immutable patch for an independent review. Do not accept local object replacements,
+    /// diff drivers, text conversion or helpers as part of the review's source.
+    pub(crate) fn review_patch(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(base) || !oid_ok(head) {
+            return Err(GitFault::Malformed("review commit".into()));
+        }
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.reviewed_read(
+            dir,
+            &[
+                "--no-replace-objects",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--ignore-submodules=none",
+                "--binary",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                base,
+                head,
+                "--",
+            ],
+            MAX_LISTING_BYTES,
+            &policy,
+        )
+    }
+
     /// The branch `HEAD` points at (`refs/heads/...`), `None` when detached.
     pub fn branch(&self, dir: &Path) -> Result<Option<String>, GitFault> {
         // `HEAD` itself when detached; an unborn branch has no resolvable `HEAD` (Git answers
@@ -1657,7 +1690,7 @@ impl Git<'_> {
         } else {
             "--ignore-submodules=dirty"
         };
-        let mut args = vec!["diff"];
+        let mut args = vec!["--no-replace-objects", "diff"];
         if staged {
             args.push("--cached");
         }
@@ -1739,7 +1772,7 @@ impl Git<'_> {
                     self.stop,
                 )?
             } else {
-                let mut args = vec!["diff"];
+                let mut args = vec!["--no-replace-objects", "diff"];
                 if staged {
                     args.push("--cached");
                 }

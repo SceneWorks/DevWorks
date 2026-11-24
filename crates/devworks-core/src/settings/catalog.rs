@@ -236,8 +236,6 @@ impl AgentRole {
 pub const NOT_YET_ACTIVE: &[&str] = &[
     // Exact-head review resolution, the review/fix cycle and merge: DW-41.
     "delivery.autoMerge",
-    "delivery.maxReviewFixCycles",
-    "reviews.automationWaitSeconds",
     // Vision extraction of scanned documents: DW-288.
     "knowledge.visionExtraction",
 ];
@@ -794,14 +792,12 @@ fn build() -> Vec<SettingDescriptor> {
         ),
         setting!(
             "delivery.maxReviewFixCycles",
-            "Review fix cycles",
-            "Not yet active: the review/fix cycle is not built yet, so this value \
-                changes nothing. Once it is, this is the maximum number of review/fix \
-                cycles before asking for help. Engineering default.",
+            "Review rounds",
+            "Set a lower limit for automated reviews. Feature pull requests allow up to five rounds, and standalone pull requests up to three.",
             Delivery,
             DELIVERY,
             ValueKind::Integer { min: 1, max: 20 },
-            3,
+            5,
             NextAdmission
         ),
         setting!(
@@ -849,13 +845,24 @@ fn build() -> Vec<SettingDescriptor> {
         setting!(
             "reviews.automationWaitSeconds",
             "Automated review wait (seconds)",
-            "Not yet active: the review gate is not built yet, so this value changes \
-                nothing. Once it is, this is the finite wait for a registered review \
-                source before the gate escalates. Engineering default.",
+            "After this time, DevWorks may use one independent in-app reviewer for the same round.",
             Delivery,
             DELIVERY,
             POSITIVE,
             900,
+            NextAdmission
+        ),
+        setting!(
+            "reviews.githubBotId",
+            "GitHub review bot ID",
+            "The registered bot's numeric GitHub actor ID. Set to zero to use an independent in-app reviewer.",
+            Delivery,
+            DELIVERY,
+            ValueKind::Integer {
+                min: 0,
+                max: 9_007_199_254_740_991
+            },
+            0,
             NextAdmission
         ),
         setting!(

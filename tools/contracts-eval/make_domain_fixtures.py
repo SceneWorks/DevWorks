@@ -207,6 +207,39 @@ mutate('eval-text-proxy-predicate','input-evals.grade-Command',['body','suite','
 mutate('reject-eval-false-enforced-rule','input-evals.grade-Command',['body','suite','checks',0,'measurement'],'EnforcedRule',typed=False,schema=True)
 mutate('eval-valid-text-proxy','input-evals.grade-Command',['body','suite','checks',0],{'id':'check-a','ruleRef':'RULE-1','measurement':'Proxy','predicate':{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'}},typed=True,schema=True)
 
+# Exact local task reviews use no PR identity. Candidate evidence uses its original final review
+# plus a complete classified diff, and is a separate selected write within the request operation.
+_review_root={'rootId':'feature-a','expectedRevision':'2','policyRevision':'3'}
+_review_base={'format':'Sha1','hex':'a'*40}
+_review_head={'format':'Sha1','hex':'b'*40}
+_local_review={'taskId':'task-a','diffs':[
+ {'repositoryId':'repo-a','worktreeId':'tree-a','base':_review_base,'head':_review_head}
+]}
+_review_repair={'originalReviewId':'review-a','expectedReviewRevision':'4','repositoryId':'repo-a',
+ 'reviewedHead':_review_base,'candidateHead':_review_head,
+ 'diagnoses':[{'failedCheckId':'failed-a','diagnosis':'Repair the failing CI environment'}],
+ 'changes':[{'changeDigest':'a'*64,'reason':{'kind':'RequiredCheck','failedCheckId':'failed-a'}}],
+ 'focusedCheckIds':['focused-a'],'verificationReport':copy.deepcopy(ART)}
+def _review_request(revision=15, **members):
+ return {'mode':'Command','protocol':'1.0-draft.1','schemaRevision':revision,
+  'requestKey':'review-request','body':{'kind':'reviews.request',**_review_root,**members}}
+case('input-reviews.request-local','domain-request.r15',_review_request(localTarget=_local_review))
+case('input-reviews.request-candidate','domain-request.r15',_review_request(candidateRepair=_review_repair))
+case('reject-reviews.request-local-legacy','domain-request',_review_request(revision=1,localTarget=_local_review),False,False)
+case('reject-reviews.request-two-targets','domain-request.r15',_review_request(localTarget=_local_review,candidateRepair=_review_repair),False,False)
+case('reject-reviews.request-duplicate-local-repo','domain-request.r15',
+     _review_request(localTarget={**_local_review,'diffs':_local_review['diffs']*2}),False,True)
+case('input-reviews.readiness-local','domain-request.r15',{'mode':'Query','protocol':'1.0-draft.1',
+ 'schemaRevision':15,'queryId':'review-query','body':{'kind':'reviews.readiness','rootId':'feature-a',
+ 'policyRevision':'3','localTarget':_local_review}})
+for name in ('list','inspect','findings','respond','adjudicate'):
+ op='reviews.'+name
+ frame=request(op,OPS[op]['mode'])
+ frame['schemaRevision']=15
+ case('input-'+op+'-r15','domain-request.r15',frame)
+
+
+
 for source in TYPES['EvalRecordSource']['values']:
  mutate('eval-record-field-'+source,'input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':source,'pointer':'/state','expected':{'observed':True}},typed=True,schema=True)
 mutate('reject-eval-unknown-record-source','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':'ArbitrarySql','pointer':'/state','expected':'value'})

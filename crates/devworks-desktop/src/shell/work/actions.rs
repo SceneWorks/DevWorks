@@ -5,6 +5,7 @@ impl WorkCtl<'_, '_> {
     pub(crate) fn work_act(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::CodeReview(action) => self.code_review_act(action),
                 Action::KeepWorking(enabled) => {
                     let Some(project) = self.selected_project.clone() else {
                         continue;

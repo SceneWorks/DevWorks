@@ -572,6 +572,7 @@ struct Engine {
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
+    code_reviews: Option<Arc<devworks_core::services::reviews::ReviewService>>,
     github: Option<Arc<devworks_core::services::github::GitHubService>>,
     github_triage: Option<Arc<crate::github_triage::TriageWorker>>,
     browser: Option<Arc<BrowserService>>,
@@ -888,6 +889,23 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(service) = &git {
         use_cases = use_cases.with_git(service.clone());
         consumers.push(crate::git::consumer(service.clone()));
+    }
+    let code_reviews = git.as_ref().map(|git| {
+        Arc::new(devworks_core::services::reviews::ReviewService::new(
+            ids.clone(),
+            store.clone(),
+            git.clone(),
+            artifacts.clone(),
+            clock.clone(),
+            github.clone(),
+        ))
+    });
+    if let Some(service) = &code_reviews {
+        consumers.push(crate::code_review::consumer(
+            service.clone(),
+            store.as_ref(),
+        ));
+        use_cases = use_cases.with_reviews(service.clone());
     }
     if let Some(service) = &github {
         use_cases = use_cases.with_github(service.clone());
@@ -1524,6 +1542,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         process_tools,
         containers,
         git,
+        code_reviews,
         github,
         github_triage,
         browser,
@@ -1635,6 +1654,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         process_tools,
         containers,
         git,
+        code_reviews,
         github,
         github_triage,
         browser,
@@ -1869,6 +1889,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let turn = Arc::new(crate::turn_engine::TurnEngine {
         store: store.clone(),
         clock: clock.clone(),
+        code_reviews,
         artifacts: artifacts.clone(),
         providers: providers.clone(),
         inference_router: use_cases.inference_router(),

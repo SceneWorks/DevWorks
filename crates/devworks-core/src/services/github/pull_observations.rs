@@ -451,6 +451,10 @@ fn evidence_rows(
             "submittedAt": row["submitted_at"].as_str(),
             "startedAt": row["started_at"].as_str(), "completedAt": row["completed_at"].as_str(),
             "updatedAt": row["updated_at"].as_str(), "body": row["body"].as_str().map(|v| v.chars().take(65_536).collect::<String>()),
+            "path": row["path"].as_str().map(|v| v.chars().take(1024).collect::<String>()),
+            "line": row["line"].as_u64().or_else(|| row["original_line"].as_u64()),
+            "inReplyToId": row["in_reply_to_id"].as_u64(),
+            "authorId": row["user"]["id"].as_u64(), "authorType": row["user"]["type"].as_str(),
         });
         out.push(StoredGithubObservation {
             id: Id::new("unpublished-github-evidence").expect("static GitHub observation ID"),

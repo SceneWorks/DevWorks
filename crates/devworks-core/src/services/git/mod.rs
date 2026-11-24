@@ -250,6 +250,96 @@ impl GitService {
             worktree: tree,
         })
     }
+    /// Read an exact local review input from the same registered worktree as Git inspection.
+    pub(crate) fn capture_local_review_patch(
+        &self,
+        ctx: &InvocationContext,
+        env: &Preparation<'_>,
+        task: &Id,
+        item: &crate::protocol::records::LocalReviewDiff,
+    ) -> Result<(StoredGitWorktree, i64, Vec<u8>), Failure> {
+        let target = env.read(|snapshot| {
+            Ok(self.target(snapshot, ctx, &item.repository_id, Some(&item.worktree_id)))
+        })??;
+        let changed = || {
+            refuse(
+                DomainErrorCode::SourceChanged,
+                "review_worktree",
+                &item.worktree_id,
+            )
+        };
+        let tree = target.worktree.as_ref().ok_or_else(changed)?;
+        if tree.work_id != *task
+            || tree.location.is_none()
+            || tree.pending_operation_id.is_some()
+            || tree.head != item.head
+        {
+            return Err(changed());
+        }
+        let stop = || env.stopped(self.clock.now_ms().get());
+        let git = Git {
+            runner: &*self.helpers,
+            ctx,
+            program: &self.config.program,
+            deadline: self.config.deadline,
+            stop: &stop,
+        };
+        let path = target.path();
+        self.verify_target(&git, &target)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        let observed = git
+            .head_observation(path)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        if observed.head != item.head.hex || observed.branch.as_deref() != Some(&tree.branch) {
+            return Err(changed());
+        }
+        let patch = git
+            .review_patch(path, &item.base.hex, &item.head.hex)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        self.verify_target(&git, &target)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        Ok((tree.clone(), target.repository.revision, patch))
+    }
+
+    pub(crate) fn capture_candidate_changes(
+        &self,
+        ctx: &InvocationContext,
+        env: &Preparation<'_>,
+        item: &crate::protocol::records::LocalReviewDiff,
+    ) -> Result<(StoredGitWorktree, i64, serde_json::Value), Failure> {
+        let target = env.read(|snapshot| {
+            Ok(self.target(snapshot, ctx, &item.repository_id, Some(&item.worktree_id)))
+        })??;
+        let changed = || {
+            refuse(
+                DomainErrorCode::SourceChanged,
+                "review_candidate",
+                &item.worktree_id,
+            )
+        };
+        let tree = target.worktree.as_ref().ok_or_else(changed)?;
+        if tree.location.is_none() || tree.pending_operation_id.is_some() || tree.head != item.head
+        {
+            return Err(changed());
+        }
+        let stopped = || env.stopped(self.clock.now_ms().get());
+        let git = Git {
+            runner: &*self.helpers,
+            ctx,
+            program: &self.config.program,
+            deadline: self.config.deadline,
+            stop: &stopped,
+        };
+        self.verify_target(&git, &target)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        let manifest = git
+            .committed_commit_manifest(target.path(), &item.base.hex, &item.head.hex)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        self.verify_target(&git, &target)
+            .map_err(|error| read_failure(error, &item.repository_id))?;
+        Ok((tree.clone(), target.repository.revision, manifest))
+    }
+
     fn inspect(
         &self,
         ctx: &InvocationContext,

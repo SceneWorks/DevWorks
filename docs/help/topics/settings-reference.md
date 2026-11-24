@@ -356,15 +356,15 @@ Every delivery is reviewed before merge. A harness protection, not an override v
 
 ## delivery.maxReviewFixCycles
 
-Review fix cycles.
+Review rounds.
 
-- Default: `3`
+- Default: `5`
 - Scope: Workspace → Project → Repository
 - Adoption: NextAdmission
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.
+Set a lower limit for automated reviews. Feature pull requests allow up to five rounds, and standalone pull requests up to three.
 
 ## watch.backupEnabled
 
@@ -412,7 +412,19 @@ Automated review wait (seconds).
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.
+After this time, DevWorks may use one independent in-app reviewer for the same round.
+
+## reviews.githubBotId
+
+GitHub review bot ID.
+
+- Default: `0`
+- Scope: Workspace → Project → Repository
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Delivery
+
+The registered bot's numeric GitHub actor ID. Set to zero to use an independent in-app reviewer.
 
 ## agents.maxSubagents
 

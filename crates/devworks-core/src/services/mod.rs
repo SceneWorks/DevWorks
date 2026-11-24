@@ -224,6 +224,22 @@ impl UseCases {
         self
     }
 
+    /// One review use case backs the workspace and agent tools.
+    pub fn with_reviews(mut self, service: Arc<reviews::ReviewService>) -> Self {
+        for operation in [
+            "reviews.list",
+            "reviews.inspect",
+            "reviews.findings",
+            "reviews.readiness",
+        ] {
+            self.register(operation, Some(service.clone()), None);
+        }
+        for operation in ["reviews.request", "reviews.respond", "reviews.adjudicate"] {
+            self.register(operation, None, Some(service.clone()));
+        }
+        self
+    }
+
     /// GitHub account, saved issue history and observations share the native gateway.
     pub fn with_github(mut self, service: Arc<github::GitHubService>) -> Self {
         self.register(
