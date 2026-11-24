@@ -10374,6 +10374,27 @@
     "schemaValid": true
   },
   {
+    "id": "r16-input-git.push-task-integration",
+    "entry": "git-command-request.r16",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":16,\"requestKey\":\"feature-task-publication\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"feature-tree\",\"remoteId\":\"origin\",\"targetRef\":\"refs/heads/feature/fixture\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"expectedRemote\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"mode\":\"Normal\",\"taskIntegration\":{\"taskId\":\"task-a\",\"expectedTaskRevision\":\"1\",\"taskWorktreeId\":\"task-tree\",\"reviewId\":\"review-once\",\"reviewedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewedHead\":{\"format\":\"Sha1\",\"hex\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"taskHead\":{\"format\":\"Sha1\",\"hex\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"predecessor\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"verification\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"focusedChecks\":[\"feature-candidate-tests\"]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-task-integration-with-different-predecessor",
+    "entry": "git-command-request.r16",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":16,\"requestKey\":\"feature-task-publication\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"feature-tree\",\"remoteId\":\"origin\",\"targetRef\":\"refs/heads/feature/fixture\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"expectedRemote\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"mode\":\"Normal\",\"taskIntegration\":{\"taskId\":\"task-a\",\"expectedTaskRevision\":\"1\",\"taskWorktreeId\":\"task-tree\",\"reviewId\":\"review-once\",\"reviewedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewedHead\":{\"format\":\"Sha1\",\"hex\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"taskHead\":{\"format\":\"Sha1\",\"hex\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"predecessor\":{\"format\":\"Sha1\",\"hex\":\"dddddddddddddddddddddddddddddddddddddddd\"},\"verification\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"focusedChecks\":[\"feature-candidate-tests\"]}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-task-integration-evidence",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"feature-task-publication\",\"command\":{\"kind\":\"Push\",\"worktreeId\":\"feature-tree\",\"remoteId\":\"origin\",\"targetRef\":\"refs/heads/feature/fixture\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"expectedRemote\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"mode\":\"Normal\",\"taskIntegration\":{\"taskId\":\"task-a\",\"expectedTaskRevision\":\"1\",\"taskWorktreeId\":\"task-tree\",\"reviewId\":\"review-once\",\"reviewedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewedHead\":{\"format\":\"Sha1\",\"hex\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"taskHead\":{\"format\":\"Sha1\",\"hex\":\"cccccccccccccccccccccccccccccccccccccccc\"},\"predecessor\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"verification\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"focusedChecks\":[\"feature-candidate-tests\"]}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "reject-null-group-pr",
     "entry": "git-command-request.r2",
     "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":2,\"requestKey\":\"group-pr\",\"command\":{\"kind\":\"OpenPullRequest\",\"repositoryId\":\"repo-a\",\"headRef\":\"refs/heads/task-a\",\"baseRef\":\"refs/heads/feature-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"description\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"coveredWorkIds\":null}}",

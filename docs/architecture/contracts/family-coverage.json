@@ -1,6 +1,6 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-19",
+  "date": "2026-11-24",
   "catalogSha256": "65cbae4c70d2f2b698dd23eccd6e2c63bf473691cb6abfdefc1063d49e51139f",
   "familyCount": 50,
   "operationCount": 385,
@@ -12573,6 +12573,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 16,
+              "inputSchema": "git-command-request.r16.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -12627,6 +12635,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 16,
+              "inputSchema": "git-command-request.r16.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Existing host authority contract",

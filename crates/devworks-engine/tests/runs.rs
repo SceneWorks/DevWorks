@@ -8833,3 +8833,7 @@ mod code_review_tests;
 mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
 mod review_capacity_tests;
+
+#[cfg(unix)]
+#[path = "runs/feature_delivery.rs"]
+mod feature_delivery_tests;

@@ -914,7 +914,17 @@ impl Git<'_> {
         if !oid_ok(base) || !oid_ok(head) {
             return Err(GitFault::Malformed("invalid ancestry IDs".into()));
         }
-        match self.run(dir, &["merge-base", "--is-ancestor", base, head], 1024) {
+        match self.run(
+            dir,
+            &[
+                "--no-replace-objects",
+                "merge-base",
+                "--is-ancestor",
+                base,
+                head,
+            ],
+            1024,
+        ) {
             Ok(_) => Ok(true),
             Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => Ok(false),
             Err(error) => Err(error),
@@ -940,7 +950,16 @@ impl Git<'_> {
             return Err(GitFault::Malformed("invalid commit ID".into()));
         }
         let parents = self
-            .line(dir, &["show", "--no-patch", "--format=%P", head])?
+            .line(
+                dir,
+                &[
+                    "--no-replace-objects",
+                    "show",
+                    "--no-patch",
+                    "--format=%P",
+                    head,
+                ],
+            )?
             .unwrap_or_default();
         let parents: Vec<String> = parents.split_whitespace().map(str::to_owned).collect();
         if parents.iter().any(|p| !oid_ok(p)) {

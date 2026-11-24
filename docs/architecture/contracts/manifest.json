@@ -1,6 +1,6 @@
 {
   "contract": "1.0-draft.1",
-  "date": "2026-11-19",
+  "date": "2026-11-24",
   "status": "Adopted architecture candidate; not public SDK v1, production service or platform proof",
   "schemaSource": "../../../tools/contracts-eval/src/lib.rs",
   "schemaSources": [
@@ -229,6 +229,10 @@
     {
       "file": "event.schema.json",
       "sha256": "89aa91f43de3328aba8af7fab44b964c541d04d19445c09be1f5cad64ebd85bc"
+    },
+    {
+      "file": "git-command-request.r16.schema.json",
+      "sha256": "6222a3827a3518fd844c74d6bba30e1d9c507043735096c42e40c9e9ce60dba8"
     },
     {
       "file": "git-command-request.r2.schema.json",

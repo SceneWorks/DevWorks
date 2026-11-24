@@ -37,8 +37,9 @@ impl GitService {
         Ok(principal.is_some_and(|p| {
             p.role == Some(AgentRole::WorkspaceCoordinator)
                 || (p.role == Some(AgentRole::FeatureCoordinator)
-                    && work.parent_feature_id.as_ref().is_some_and(|feature| {
-                        ctx.root_id().is_some_and(|root| &root.0 == feature)
+                    && ctx.root_id().is_some_and(|root| {
+                        work.parent_feature_id.as_ref() == Some(&root.0)
+                            || (work.kind == FEATURE && work.id == root.0)
                     }))
         }))
     }
@@ -200,18 +201,18 @@ impl GitService {
                 repository_id,
             ));
         }
-        // Final feature PRs are admitted by the separate delivery barrier owner (DW-39), not
-        // by this task-PR operation. This prevents an early task delivery path to main.
-        if work.kind == FEATURE {
-            return Err(refuse(
-                DomainErrorCode::PermissionDenied,
-                "feature_delivery_barrier",
-                &work.id,
-            ));
-        }
+        let final_feature = work.kind == FEATURE;
         let base = match &work.parent_feature_id {
+            None if final_feature => "refs/heads/main".into(),
             None => format!("refs/heads/{}", staged.default_branch),
             Some(feature) => {
+                if feature_delivery::uses_local_integration(tx, feature, &repository.id)? {
+                    return Err(refuse(
+                        DomainErrorCode::PermissionDenied,
+                        "local_feature_task",
+                        &work.id,
+                    ));
+                }
                 let trees = tx.git().git_worktrees(feature, None, MAX_PAGE)?;
                 let matches: Vec<_> = trees
                     .iter()
@@ -232,6 +233,46 @@ impl GitService {
                 DomainErrorCode::InvalidArgument,
                 "github_pr_base",
                 &work.id,
+            ));
+        }
+        if final_feature {
+            if !Self::pr_manager(tx, ctx, &work)? || !tree.branch.starts_with("refs/heads/feature/")
+            {
+                return Err(refuse(
+                    DomainErrorCode::PermissionDenied,
+                    "feature_delivery",
+                    &work.id,
+                ));
+            }
+            let covered = feature_delivery::final_pr_coverage(tx, &work, &tree)?;
+            let mut requested = covered_work_ids.as_ref().cloned().unwrap_or_default();
+            requested.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+            if requested.iter().ne(covered.iter().map(|(task, _, _)| task)) {
+                return Err(refuse(
+                    DomainErrorCode::SourceChanged,
+                    "feature_pr_scope",
+                    &work.id,
+                ));
+            }
+            let (covered, integrated_heads) = covered
+                .into_iter()
+                .map(|(task, revision, head)| ((task, revision), head))
+                .unzip();
+            return Ok((
+                tree,
+                repository,
+                work.clone(),
+                Action::PullRequest {
+                    repository: staged.remote.clone(),
+                    head: head_ref["refs/heads/".len()..].to_owned(),
+                    base: "main".into(),
+                    title: work.title,
+                    description: staged.description.clone(),
+                    expected: expected_head.clone(),
+                    covered,
+                    final_feature: true,
+                    integrated_heads,
+                },
             ));
         }
         let ids = covered_work_ids
@@ -284,6 +325,8 @@ impl GitService {
                 description: staged.description.clone(),
                 expected: expected_head.clone(),
                 covered,
+                final_feature: false,
+                integrated_heads: vec![],
             },
         ))
     }
@@ -388,7 +431,17 @@ impl GitService {
                     sequence,
                     repository_id: Some(tree.repository_id.clone()),
                     revision: Some(tree.head.hex.clone()),
-                    summary: format!("Task PR {}", pr.url),
+                    summary: if matches!(
+                        &j.action,
+                        Action::PullRequest {
+                            final_feature: true,
+                            ..
+                        }
+                    ) {
+                        format!("Final feature PR {}", pr.url)
+                    } else {
+                        format!("Task PR {}", pr.url)
+                    },
                     body: json!({
                         "agentSessionId": j.session,
                         "worktreeId": tree.id,
@@ -420,6 +473,8 @@ impl GitService {
             title,
             description,
             expected,
+            final_feature,
+            integrated_heads,
             ..
         } = &job.action
         else {
@@ -432,10 +487,34 @@ impl GitService {
         {
             return denied("local PR head changed");
         }
+        if *final_feature {
+            if integrated_heads
+                .iter()
+                .any(|head| git.is_ancestor(path, &head.hex, &expected.hex) != Ok(true))
+            {
+                return changed(
+                    "the final feature branch no longer contains every recorded task integration",
+                );
+            }
+            if client
+                .branch_head(&*self.store, repository, head)
+                .as_deref()
+                != Ok(expected.hex.as_str())
+            {
+                return changed("the remote feature branch is not at the accepted commit");
+            }
+        }
         if self.git_stopped(job) {
             return denied("work stopped before PR dispatch");
         }
-        let existing = match client.find(&*self.store, repository, head) {
+        let find = || {
+            if *final_feature {
+                client.find_feature(&*self.store, repository, head)
+            } else {
+                client.find(&*self.store, repository, head)
+            }
+        };
+        let existing = match find() {
             Ok(pr) => pr,
             Err(_) => return denied("PR state unavailable before dispatch"),
         };
@@ -445,6 +524,9 @@ impl GitService {
         let written = match existing {
             Some(pr) if Self::pr_matches(job, &pr) => {
                 return self.finish_pull_request(job, &operation.id, pr);
+            }
+            Some(_) if *final_feature => {
+                return changed("the final feature PR differs from the approved candidate");
             }
             Some(pr) => {
                 if pr.sha != expected.hex {
@@ -463,7 +545,7 @@ impl GitService {
         };
         // A create/update response alone is not the verification read. Transport loss is
         // reconciled with the same read; it never causes another POST/PATCH in this attempt.
-        let observed = client.find(&*self.store, repository, head);
+        let observed = find();
         match observed {
             Ok(Some(pr)) if Self::pr_matches(job, &pr) => {
                 self.finish_pull_request(job, &operation.id, pr)
