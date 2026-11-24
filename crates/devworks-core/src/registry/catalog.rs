@@ -6348,7 +6348,7 @@ pub(super) static CATALOG: [OperationDescriptor; 385] = [
         result_type: "DeliverySnapshot",
         result_schema: schema_of::<DeliverySnapshot>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(17)],
         native_execution: true,
         approval_required: false,
         human_only: false,

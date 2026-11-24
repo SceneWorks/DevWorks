@@ -63,6 +63,8 @@ pub struct GitService {
     config: GitConfig,
     stopping: std::sync::atomic::AtomicBool,
     approval_control: std::sync::RwLock<Option<Arc<crate::services::runs::ControlService>>>,
+    delivery_github: Option<Arc<crate::services::github::GitHubService>>,
+    cleanup_schedule: std::sync::Mutex<commands::CleanupSchedule>,
 }
 #[derive(Clone)]
 struct Target {
@@ -146,7 +148,16 @@ impl GitService {
             config,
             stopping: std::sync::atomic::AtomicBool::new(false),
             approval_control: std::sync::RwLock::new(None),
+            delivery_github: None,
+            cleanup_schedule: Default::default(),
         }
+    }
+    pub fn with_delivery_github(
+        mut self,
+        service: Option<Arc<crate::services::github::GitHubService>>,
+    ) -> Self {
+        self.delivery_github = service;
+        self
     }
     pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
         *self.approval_control.write_locked() = Some(control);

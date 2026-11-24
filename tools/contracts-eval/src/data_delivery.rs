@@ -1304,6 +1304,9 @@ pub enum GitCommand {
         expected_barrier_revision: Revision,
         repository_id: Id,
         expected_head: GitOid,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::domain_support::gated_member")]
+        #[schemars(with = "DeliveryBarrier", extend("x-since" = 17))]
+        barrier: Option<DeliveryBarrier>,
     },
     Cleanup {
         worktree_id: Id,
@@ -1396,8 +1399,18 @@ impl GitCommandRequest {
                     return Err("invalid PR refs");
                 }
             }
-            GitCommand::Integrate { expected_head, .. }
-            | GitCommand::Cleanup { expected_head, .. } => expected_head.validate()?,
+            GitCommand::Integrate { delivery_id, expected_barrier_revision, repository_id, expected_head, barrier } => {
+                expected_head.validate()?;
+                if let Some(barrier) = barrier {
+                    barrier.validate()?;
+                    if &barrier.delivery_id != delivery_id || &barrier.revision != expected_barrier_revision
+                        || !barrier.repositories.iter().any(|entry| &entry.repository_id == repository_id && &entry.expected_head == expected_head)
+                    {
+                        return Err("integration does not match its delivery barrier");
+                    }
+                }
+            }
+            GitCommand::Cleanup { expected_head, .. } => expected_head.validate()?,
         }
         Ok(())
     }
@@ -1903,6 +1916,9 @@ pub struct ArtifactDeletionRequest {
 
 impl crate::domain_support::Revisioned for GitCommandRequest {
     fn retain_revision(&mut self, revision: u32) {
+        if revision < 17 && let GitCommand::Integrate { barrier, .. } = &mut self.command {
+            *barrier = None;
+        }
         if revision < 16
             && let GitCommand::Push { task_integration, .. } = &mut self.command
         {

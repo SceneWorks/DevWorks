@@ -344,11 +344,36 @@ pub(crate) fn finish_integrated_task(
     ctx: &InvocationContext,
     before: &StoredWork,
 ) -> Result<(), StorageError> {
-    if before.completion.as_deref() == Some(VERIFIED) {
-        return Ok(());
+    let brief = WorkBrief::of(before)?;
+    if brief.acceptance.is_empty() || verified(&brief.acceptance) {
+        complete_verified_work(tx, ctx, before, brief, "WorkIntegrated")?;
     }
-    let mut brief = WorkBrief::of(before)?;
-    if !brief.acceptance.is_empty() && !verified(&brief.acceptance) {
+    Ok(())
+}
+
+/// Final delivery completes only after the Git owner verified every registered repository.
+pub(crate) fn finish_delivered_work(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    before: &StoredWork,
+) -> Result<(), StorageError> {
+    complete_verified_work(
+        tx,
+        ctx,
+        before,
+        WorkBrief::of(before)?,
+        "WorkDeliveryVerified",
+    )
+}
+
+fn complete_verified_work(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    before: &StoredWork,
+    mut brief: WorkBrief,
+    kind: &str,
+) -> Result<(), StorageError> {
+    if before.completion.as_deref() == Some(VERIFIED) {
         return Ok(());
     }
     let statuses = workflow::ensure_workflow(tx, &before.project_id)?;
@@ -382,10 +407,9 @@ pub(crate) fn finish_integrated_task(
         tx,
         ctx,
         &after,
-        "WorkIntegrated",
+        kind,
         json!({"completion":after.completion}),
-    )?;
-    Ok(())
+    )
 }
 
 /// The completion a card records in a status of `semantic` with `acceptance`.

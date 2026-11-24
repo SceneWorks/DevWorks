@@ -217,6 +217,7 @@ impl UseCases {
             "git.commit",
             "git.push",
             "git.pull_request",
+            "git.integrate",
             "git.cleanup",
         ] {
             self.register(operation, Some(service.clone()), Some(service.clone()));
