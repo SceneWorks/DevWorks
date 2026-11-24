@@ -64,6 +64,17 @@ impl ReviewService {
             after = page.last().map(|row| row.id.clone());
         }
         if let Some(local) = &input.local_target {
+            let task = crate::services::work::visible_work(snapshot.work(), ctx, &local.task_id)?;
+            let selected = snapshot.work().work_repositories(&task.id)?;
+            if task.parent_feature_id.as_ref() != Some(&root.id)
+                || task.project_id != root.project_id
+                || selected.len() != local.diffs.0.len()
+                || selected
+                    .iter()
+                    .any(|id| !local.diffs.0.iter().any(|diff| &diff.repository_id == id))
+            {
+                return Err(StorageError::ScopeDenied.into());
+            }
             let saved = states.iter().find(|state| match &state.target {
                 ReviewTarget::Local { target } => {
                     target.task_id == local.task_id
@@ -111,6 +122,17 @@ impl ReviewService {
             {
                 return Err(StorageError::ScopeDenied.into());
             }
+            let selected = snapshot.work().work_repositories(&root.id)?;
+            if selected.len() != barrier.repositories.len()
+                || selected.iter().any(|id| {
+                    !barrier
+                        .repositories
+                        .iter()
+                        .any(|entry| &entry.repository_id == id)
+                })
+            {
+                return Err(StorageError::ScopeDenied.into());
+            }
             let mut repairs = Vec::new();
             for entry in &barrier.repositories {
                 let Some(pull_link) =
@@ -127,30 +149,57 @@ impl ReviewService {
                     out.blocker_ids.0.push(entry.repository_id.clone());
                     continue;
                 };
+                let settings = crate::settings::service::review_settings(
+                    snapshot.configuration(),
+                    &root.project_id,
+                    &entry.repository_id,
+                )?;
+                let linked_number = super::final_review::pull_number(&pull_link.target_id);
+                if !settings.final_review_required {
+                    if entry.policy_revision != input.policy_revision
+                        || !linked_number
+                            .map(|number| {
+                                observed_current_pull(
+                                    snapshot,
+                                    &root.project_id,
+                                    &entry.repository_id,
+                                    number,
+                                    &entry.expected_head.hex,
+                                    &entry.observed_base.hex,
+                                )
+                            })
+                            .transpose()?
+                            .unwrap_or(false)
+                    {
+                        out.blocker_ids.0.push(entry.repository_id.clone());
+                    }
+                    continue;
+                }
                 let current = states
                     .iter()
                     .flat_map(|state| state.final_rounds.iter().map(move |round| (state, round)))
                     .filter(|(_, round)| {
                         round.repository_id == entry.repository_id
-                            && pull_link
-                                .target_id
-                                .rsplit('/')
-                                .next()
-                                .is_some_and(|number| {
-                                    number.parse::<u64>() == Ok(round.pull_number)
-                                })
+                            && Some(round.pull_number) == linked_number
+                            && round.pull_id == pull_link.id
                     })
                     .max_by_key(|(_, round)| round.cycle);
                 let Some((saved, round)) = current else {
                     out.blocker_ids.0.push(entry.repository_id.clone());
                     continue;
                 };
-                let settings = crate::settings::service::review_settings(
-                    snapshot.configuration(),
-                    &root.project_id,
-                    &entry.repository_id,
-                )?;
+                let original_target = match &saved.target {
+                    ReviewTarget::PullRequests { barrier } => {
+                        barrier.repositories.iter().find(|target| {
+                            target.repository_id == entry.repository_id
+                                && target.pull_request_id == entry.pull_request_id
+                        })
+                    }
+                    _ => None,
+                };
                 let qualified = round.settings_digest == settings.digest
+                    && original_target
+                        .is_some_and(|original| original.observed_base == entry.observed_base)
                     && entry.policy_revision == input.policy_revision
                     && observed_current_pull(
                         snapshot,
@@ -162,6 +211,17 @@ impl ReviewService {
                     )?;
                 if !qualified {
                     out.blocker_ids.0.push(entry.repository_id.clone());
+                    continue;
+                }
+                if saved.value.sources.0.iter().any(|source| {
+                    source.repository_id == entry.repository_id
+                        && matches!(
+                            source.source_kind,
+                            crate::protocol::records::ReviewSourceKind::InAppFallback
+                        )
+                        && matches!(source.state, ReviewObservationState::Running)
+                }) {
+                    out.blocker_ids.0.push(saved.value.id.clone());
                     continue;
                 }
                 let source = saved.value.sources.0.iter().find(|source| {
@@ -191,7 +251,6 @@ impl ReviewService {
                         head: &source.head.hex,
                         pull_number: &number,
                         bot_id,
-                        requested_at_ms: round.requested_at_ms,
                     };
                     if let CodeReviewObservation::Completed { review, comments } =
                         code_review_observation(snapshot, &query)?
@@ -215,7 +274,8 @@ impl ReviewService {
                     collect_open(
                         snapshot,
                         earlier,
-                        Some(&entry.repository_id),
+                        &entry.repository_id,
+                        &entry.expected_head,
                         &mut out.blocker_ids.0,
                     )?;
                 }
@@ -233,7 +293,8 @@ impl ReviewService {
         out.blocker_ids.0.dedup();
         out.review_ids.0.truncate(128);
         out.blocker_ids.0.truncate(128);
-        out.ready = out.blocker_ids.0.is_empty() && !out.review_ids.0.is_empty();
+        out.ready = out.blocker_ids.0.is_empty()
+            && (input.barrier.is_some() || !out.review_ids.0.is_empty());
         Ok((out, rev(root.revision).get()))
     }
 }
@@ -286,7 +347,8 @@ fn collect_local_blockers(
 fn collect_open(
     snapshot: &dyn ReadSnapshot,
     state: &ReviewStateRecord,
-    repo: Option<&Id>,
+    repository: &Id,
+    head: &crate::protocol::data::GitOid,
     blockers: &mut Vec<Id>,
 ) -> Result<(), Failure> {
     for id in &state.value.finding_ids.0 {
@@ -294,18 +356,25 @@ fn collect_open(
             .git()
             .code_finding(id)?
             .ok_or(StorageError::ScopeDenied)?;
-        if repo.is_some_and(|repo| row.repository_id.as_ref().is_some_and(|id| id != repo)) {
+        if row
+            .repository_id
+            .as_ref()
+            .is_some_and(|id| id != repository)
+        {
             continue;
         }
         let finding: ReviewFinding = decode(&row.body)?;
-        if super::findings::is_open(&finding) {
+        if super::findings::is_open(&finding)
+            || matches!(&finding.resolution, Some(CodeReviewResolution::FixVerified { candidate_head, .. })
+                if candidate_head != head)
+        {
             blockers.push(id.clone());
         }
     }
     Ok(())
 }
 
-fn observed_current_pull(
+pub(super) fn observed_current_pull(
     snapshot: &dyn ReadSnapshot,
     project: &crate::protocol::ProjectId,
     repository: &Id,

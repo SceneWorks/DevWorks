@@ -13,7 +13,10 @@ use crate::gateway::AdmittedQuery;
 use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, git as ops};
 use crate::ports::storage::ArtifactScope;
-use crate::ports::storage::{ApplicationStore, ReadSnapshot, StoredGitWorktree, StoredRepository};
+use crate::ports::storage::{
+    ApplicationStore, ReadOptions, ReadSnapshot, StorageError, StoredGitWorktree, StoredRepository,
+    read_snapshot,
+};
 use crate::ports::{Clock, IdKind, IdSource, Preparation, Prepared, QueryAnswer, QueryHandler};
 use crate::protocol::data::{GitOid, ObjectFormat};
 use crate::protocol::records::GitInspection;
@@ -338,6 +341,50 @@ impl GitService {
         self.verify_target(&git, &target)
             .map_err(|error| read_failure(error, &item.repository_id))?;
         Ok((tree.clone(), target.repository.revision, manifest))
+    }
+
+    /// A focused process can attest to an owned, clean worktree at both lifetime boundaries.
+    pub(crate) fn check_subject(
+        &self,
+        ctx: &InvocationContext,
+        worktree: &Id,
+        process_directory: &std::path::Path,
+    ) -> Option<serde_json::Value> {
+        let target = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            let tree = snapshot
+                .git()
+                .git_worktree(worktree)?
+                .ok_or(StorageError::ScopeDenied)?;
+            self.target(snapshot, ctx, &tree.repository_id, Some(worktree))
+                .map_err(Failure::into_storage)
+        })
+        .ok()?;
+        let tree = target.worktree.as_ref().filter(|tree| {
+            !tree.removed
+                && tree.pending_operation_id.is_none()
+                && tree.location.is_some()
+                && process_directory.starts_with(std::path::Path::new(&tree.path))
+        })?;
+        let git = Git {
+            runner: &*self.helpers,
+            ctx,
+            program: &self.config.program,
+            deadline: self.config.deadline,
+            stop: &|| false,
+        };
+        self.verify_target(&git, &target).ok()?;
+        let observation = git.revision_observation(target.path()).ok()?;
+        if observation.dirty
+            || observation.head != tree.head.hex
+            || observation.branch.as_deref() != Some(&tree.branch)
+        {
+            return None;
+        }
+        self.verify_target(&git, &target).ok()?;
+        Some(serde_json::json!({
+            "worktreeId":tree.id, "repositoryId":tree.repository_id,
+            "workId":tree.work_id, "head":tree.head, "worktreeRevision":tree.revision
+        }))
     }
 
     fn inspect(

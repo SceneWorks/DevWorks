@@ -140,7 +140,10 @@ pub(super) fn qualified(
             .artifacts()
             .artifact(&prepared.evidence.artifact_id)?
             .is_none_or(|artifact| {
-                artifact.owner.as_ref() != Some(ctx.principal())
+                (artifact.owner.as_ref() != Some(ctx.principal())
+                    && (artifact.origin_work_id.as_ref() != Some(&finding.root_id)
+                        || artifact.provenance["producedBy"].as_str()
+                            != Some(ctx.principal().0.as_str())))
                     || artifact.scope.project() != Some(&finding.project_id)
             })
     {
@@ -155,10 +158,17 @@ pub(super) fn qualified(
                 && (check.root_id.as_ref() == Some(&finding.root_id)
                     || check.root_id.as_ref() == Some(&task))
                 && check.latest_attempt().is_some_and(|attempt| {
-                    attempt
-                        .observations
-                        .iter()
-                        .any(|entry| entry["result"]["value"]["exitCode"].as_i64() == Some(0))
+                    attempt.observations.iter().any(|entry| {
+                        let subject = &entry["verifiedWorktree"];
+                        entry["result"]["value"]["exitCode"].as_i64() == Some(0)
+                            && subject["worktreeId"].as_str() == Some(prepared.git_tree.id.as_str())
+                            && subject["repositoryId"].as_str()
+                                == Some(prepared.git_tree.repository_id.as_str())
+                            && subject["workId"].as_str() == Some(target.task_id.as_str())
+                            && subject["head"] == serde_json::json!(candidate_head)
+                            && subject["worktreeRevision"].as_i64()
+                                == Some(prepared.git_tree.revision)
+                    })
                 })
         }) {
             return Ok(false);

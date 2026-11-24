@@ -2,6 +2,7 @@
 mod candidate;
 mod commands;
 mod effect;
+pub(crate) mod escalation;
 mod final_review;
 mod findings;
 mod local;

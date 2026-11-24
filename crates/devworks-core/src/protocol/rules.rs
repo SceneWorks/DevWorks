@@ -915,15 +915,14 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 .ok_or("local review requires exact diffs")?;
             let mut repositories = std::collections::HashSet::new();
             require(
-                !diffs.is_empty()
+                diffs.iter().any(|diff| diff["base"] != diff["head"])
                     && diffs.iter().all(|diff| {
                         diff["repositoryId"]
                             .as_str()
                             .is_some_and(|id| repositories.insert(id))
-                            && diff["base"] != diff["head"]
                             && diff["base"]["format"] == diff["head"]["format"]
                     }),
-                "local review needs one changed base/head per repository",
+                "local review needs one exact base/head per repository and at least one changed repository",
             )?;
         }
         "LocalReviewEvidence" if v["state"] == "Completed" => {

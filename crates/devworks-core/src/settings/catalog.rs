@@ -781,14 +781,24 @@ fn build() -> Vec<SettingDescriptor> {
         ),
         setting!(
             "delivery.mandatoryReview",
-            "Mandatory review",
-            "Every delivery is reviewed before merge. A harness protection, not an override value.",
+            "Independent local review",
+            "Every feature task requires one independent review before integration.",
             Delivery,
             WORKSPACE,
             ValueKind::Bool,
             true,
             Immediate,
             HarnessEnforced
+        ),
+        setting!(
+            "delivery.finalPullRequestReview",
+            "Require final pull request review",
+            "Require exact-head review evidence for final GitHub pull requests. Local feature task review always applies.",
+            Delivery,
+            DELIVERY,
+            ValueKind::Bool,
+            true,
+            NextAdmission
         ),
         setting!(
             "delivery.maxReviewFixCycles",

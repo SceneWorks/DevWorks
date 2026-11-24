@@ -7,6 +7,7 @@ use std::process::Command;
 struct CodeReviewWire {
     reviews: Mutex<Vec<Value>>,
     requests: Mutex<Vec<Value>>,
+    report_finding: bool,
 }
 impl StreamingHttp for CodeReviewWire {
     fn open(
@@ -31,7 +32,9 @@ impl StreamingHttp for CodeReviewWire {
             );
             self.reviews.lock().unwrap().push(payload);
         }
-        let content = if reviewed {
+        let content = if reviewed && self.report_finding {
+            r#"{"findings":[{"summary":"The runtime fixture must check the corrected marker.","location":"lib.rs:1","severity":"Major","repositoryId":"review-git-repository"}]}"#
+        } else if reviewed {
             r#"{"findings":[]}"#
         } else {
             "done"
@@ -72,6 +75,16 @@ pub(super) fn git(path: &Path, args: &[&str]) -> String {
 
 #[test]
 fn local_code_review_runs_once_over_the_saved_diff_and_satisfies_exact_readiness() {
+    local_review_case(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn local_code_review_fixes_require_an_observed_check_of_the_corrected_worktree() {
+    local_review_case(true);
+}
+
+fn local_review_case(report_finding: bool) {
     let _case = native_runtime_case();
     let fx = Fx::new();
     fx.scope.approve(&rid("root-f"), 1, &[]);
@@ -92,7 +105,9 @@ fn local_code_review_runs_once_over_the_saved_diff_and_satisfies_exact_readiness
         let branch = "devworks/task-review-fixture";
         git(&source, &["worktree", "add", "-qb", branch, location.to_str().unwrap(), &base]);
         std::fs::write(location.join("lib.rs"), "fn saved_review_source() {}\n").unwrap();
-        git(&location, &["add", "lib.rs"]);
+        std::fs::create_dir(location.join("checks")).unwrap();
+        std::fs::write(location.join("checks/fixture"), "check fixture\n").unwrap();
+        git(&location, &["add", "lib.rs", "checks/fixture"]);
         git(&location, &["commit", "-qm", "Exact task change"]);
         let head = git(&location, &["rev-parse", "HEAD"]);
         let fs = NativeFilesystem::new();
@@ -124,7 +139,8 @@ fn local_code_review_runs_once_over_the_saved_diff_and_satisfies_exact_readiness
             pending_operation_id: None, last_operation_id: None, last_result: None,
         };
         write(&*fx.store, {
-            let (repo, project, source, tree) = (repo.clone(), project.clone(), source.clone(), tree.clone());
+            let (repo, project, source, tree, base) =
+                (repo.clone(), project.clone(), source.clone(), tree.clone(), base.clone());
             move |tx| {
               let now = tx.now_ms();
               tx.projects().insert_repository(&StoredRepository {
@@ -132,13 +148,22 @@ fn local_code_review_runs_once_over_the_saved_diff_and_satisfies_exact_readiness
                 name:"Review fixture".into(), remote_url:None, primary:true, lifecycle:"Active".into(),
                 languages:vec!["rust".into()], revision:1, registered_at_ms:now,
               })?;
-              tx.projects().set_members(&project, &[repo.clone()])?;
-              tx.work().set_work_repositories(&id("root-f"), &[repo.clone()])?;
-              tx.work().set_work_repositories(&id("task-f1"), &[repo])?;
-              tx.git().insert_git_worktree(&tree)
+              tx.projects().set_members(&project, std::slice::from_ref(&repo))?;
+              tx.work().set_work_repositories(&id("root-f"), std::slice::from_ref(&repo))?;
+              tx.work().set_work_repositories(&id("task-f1"), std::slice::from_ref(&repo))?;
+              tx.git().insert_git_worktree(&tree)?;
+              tx.history().append(devworks_core::ports::storage::NewEvent {
+                  id:devworks_core::protocol::EventId(id("task-worktree-created")),
+                  actor:tree.owner.clone(),project_id:Some(project),root_id:Some(rid("root-f")),
+                  operation_id:None,aggregate_kind:"git_worktree".into(),aggregate_id:tree.id.as_str().into(),
+                  aggregate_revision:1,kind:"GitWriteObserved".into(),
+                  payload:json!({"workId":tree.work_id,"repositoryId":repo,
+                      "head":{"format":"Sha1","hex":base}}),
+              })?;
+              Ok(())
             }
         }).unwrap();
-        let wire = Arc::new(CodeReviewWire { reviews: Mutex::new(Vec::new()), requests: Mutex::default() });
+        let wire = Arc::new(CodeReviewWire { reviews: Mutex::new(Vec::new()), requests: Mutex::default(), report_finding });
         let mut composed = composition_with(
             &fx, None, Arc::new(FakePower::default()),
             Arc::new(HostAuthorityForTest { store: fx.store.clone(), clock: fx.h.clock() }),
@@ -154,6 +179,19 @@ fn local_code_review_runs_once_over_the_saved_diff_and_satisfies_exact_readiness
                 ..Default::default()
             },
         });
+        #[cfg(unix)]
+        if report_finding {
+            use devworks_core::services::process::tools::{RegisteredExecutable, RegisteredWorkingRoot, ToolBindings};
+            composed.config.process_tools = Some(devworks_engine::runtime::ProcessToolComposition {
+                bindings:ToolBindings::new(
+                    [RegisteredExecutable { id:id("review-test"),path:"/bin/sh".into() }],
+                    Vec::<RegisteredWorkingRoot>::new(),
+                ).unwrap(),
+                filesystem:Arc::new(NativeFilesystem::new()),
+                protected_roots:ProtectedRoots::new(Vec::new(),Vec::new(),None),
+                secrets:Arc::new(devworks_core::ports::secrets::SessionSecrets::new()),
+            });
+        }
         composed.indexing = Some(devworks_engine::IndexComposition {
             parser: Arc::new(devworks_adapters::index::treesitter::TreeSitterParser::new()),
             source: Arc::new(devworks_adapters::index::NativeSourceTree::new()),
@@ -240,10 +278,96 @@ fn local_code_review_runs_once_over_the_saved_diff_and_satisfies_exact_readiness
         let result = app.query(&fx.user,"reviews.readiness",readiness.to_string().as_bytes()).unwrap();
         assert!(matches!(result, DomainQueryReply::Result {
             result:devworks_core::protocol::results::OperationResult::ReviewsReadiness{value},..}
-            if value.ready && value.review_ids.0.len() == 1));
+            if value.ready != report_finding && value.review_ids.0.len() == 1));
         let replay = app.command(&fx.user, "reviews.request", command.to_string().as_bytes()).unwrap();
         assert!(matches!(replay, CommandReply::Recorded { replayed: true, .. }));
         assert_eq!(wire.reviews.lock().unwrap().len(), 1);
+        #[cfg(unix)]
+        if report_finding {
+            let review = read(&*fx.store, |s| {
+                Ok(s.git().code_reviews(Some(&project),Some(&rid("root-f")),None,3)?.remove(0))
+            });
+            let finding = review.body["value"]["findingIds"][0].as_str().unwrap();
+            let owner = fx.user.clone().with_lineage(Some(project.clone()),Some(rid("root-f")),None);
+            let checking = |key: &str, script: &str| {
+                let command = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":1,
+                    "requestKey":key,"body":{"kind":"process.execute","spec":{
+                        "executableRef":"review-test","args":["-c",script],
+                        "workingDirectory":{"rootId":tree.id,"relative":"checks"},"environment":[],
+                        "profile":"Full","timeoutMs":"10000","outputLimitBytes":"4096",
+                }}});
+                let reply = app.command(&owner,"process.execute",command.to_string().as_bytes()).unwrap();
+                match reply {
+                    CommandReply::Recorded {receipt,..} => match receipt.decision {
+                        DomainDecision::Accepted {operation_id} => operation_id,
+                        other => panic!("focused check {other:?}"),
+                    },
+                    other => panic!("focused check receipt {other:?}"),
+                }
+            };
+            let old_check = checking("before-review-fix", "test -f fixture");
+            let settled = |operation: &OperationId| read(&*fx.store, |s| s.operations().operation(operation)).unwrap();
+            within("original process check settles", async {
+                while settled(&old_check).state != OperationState::ObservedComplete {
+                    assert_ne!(settled(&old_check).state, OperationState::Failed, "{:?}", settled(&old_check));
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await;
+
+            std::fs::write(location.join("lib.rs"), "fn fixed_review_source() {}\n").unwrap();
+            git(&location, &["add","lib.rs"]);
+            git(&location, &["commit","-qm","Fix the local review finding"]);
+            let fixed = git(&location,&["rev-parse","HEAD"]);
+            let fixed_head = json!({"format":"Sha1","hex":fixed});
+            fx.tx({
+                let (tree, fixed) = (tree.id.clone(),fixed.clone());
+                move |_,tx| {
+                    let mut recorded = tx.git().git_worktree(&tree)?.unwrap();
+                    recorded.revision += 1;
+                    recorded.head.hex = fixed;
+                    tx.git().update_git_worktree(&recorded,1)
+                }
+            });
+            let corrected_check = checking("after-review-fix", "grep -q fixed_review_source ../lib.rs");
+            within("corrected process check settles", async {
+                while settled(&corrected_check).state != OperationState::ObservedComplete {
+                    assert_ne!(settled(&corrected_check).state, OperationState::Failed, "{:?}", settled(&corrected_check));
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await;
+            let verify = |key: &str, check: &OperationId| {
+                let report = json!({"reviewId":review.id,"findingId":finding,"candidateHead":fixed_head,
+                    "focusedCheckIds":[check],"rationale":"The focused source check verifies the changed marker."});
+                let artifact = app.artifacts().publish_evidence(&*fx.store,
+                    devworks_core::services::artifacts::evidence::Evidence {
+                        scope:ArtifactScope::Project(project.clone()),producer:owner.principal().clone(),
+                        principal_kind:"Human".into(),agent_session:None,root:Some(rid("root-f")),
+                        assignment:None,title:"Local fixture check".into(),media_type:"application/json".into(),
+                        tags:vec![],source:json!({"kind":"Fixture"}),
+                    },report.to_string().as_bytes(),|_,_|Ok(())
+                ).unwrap().0;
+                let command = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":15,
+                    "requestKey":key,"body":{"kind":"reviews.adjudicate","findingId":finding,
+                        "expectedRevision":"1","actionable":true,"rationale":"Checked the corrected exact commit.",
+                        "evidence":[artifact],"resolution":{"kind":"FixVerified","candidateHead":fixed_head,
+                            "focusedCheckIds":[check]},
+                    }});
+                app.command(&owner,"reviews.adjudicate",command.to_string().as_bytes()).unwrap()
+            };
+            let stale = verify("original-check-refusal",&old_check);
+            assert!(matches!(stale, CommandReply::Recorded {receipt,..}
+                if matches!(receipt.decision, DomainDecision::Refused {..})));
+            let corrected = verify("corrected-check-evidence",&corrected_check);
+            assert!(matches!(&corrected, CommandReply::Recorded {receipt,..}
+                if matches!(receipt.decision, DomainDecision::Applied {..})), "{corrected:?}; {:?}", settled(&corrected_check));
+            let mut fixed_request = readiness.clone();
+            fixed_request["queryId"] = json!("fixed-local-readiness");
+            fixed_request["body"]["localTarget"]["diffs"][0]["head"] = fixed_head;
+            let answer = app.query(&owner,"reviews.readiness",fixed_request.to_string().as_bytes()).unwrap();
+            assert!(matches!(answer, DomainQueryReply::Result {
+                result:devworks_core::protocol::results::OperationResult::ReviewsReadiness{value},..}
+                if value.ready && value.review_ids.0 == vec![review.id]));
+        }
         app.shutdown().await;
     });
 }

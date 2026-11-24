@@ -556,7 +556,7 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
                     json!({"values":{"reviews.githubBotId":{"schema":schema(bot),"value":42},
                         "delivery.maxReviewFixCycles":{"schema":schema("delivery.maxReviewFixCycles"),"value":1}
                     }}))?;
-                tx.work().set_work_repositories(&root.0, &[repository.clone()])?;
+                tx.work().set_work_repositories(&root.0, std::slice::from_ref(&repository))?;
                 tx.git().insert_git_worktree(&worktree)?;
                 let operation = OperationId(id("observed-pr-operation"));
                 tx.operations().record_intent(NewOperation {
@@ -642,7 +642,8 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
         assert_eq!(review.body["value"]["sources"][0]["head"], json!(oid(&head)));
         assert_eq!(review.body["value"]["sources"][0]["zeroFindingsConfirmed"], true);
 
-        let changed_path = "ci.env";
+        let changed_path = "ci/retry.env";
+        std::fs::create_dir(location.join("ci")).unwrap();
         std::fs::write(location.join(changed_path), "CI_RETRY=1\n").unwrap();
         git(&location, &["add", changed_path]);
         git(&location, &["commit", "-qm", "Repair CI fixture"]);
@@ -667,11 +668,15 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
                     payload:json!({"resourceId":25,"state":"open","baseRef":"main","baseHead":base}),
                     source_updated_at_ms:Some(T0+1),observed_at_ms:T0+1,
                 })?;
-                for (check_id, head, conclusion) in [("build-original-failure", head,"failure"),("build-repaired-success",candidate,"success")] {
+                for (check_id, name, head, conclusion) in [
+                    ("build-original-failure", "build", head, "failure"),
+                    ("unrelated-candidate-success", "style", candidate.clone(), "success"),
+                    ("build-repaired-success", "build", candidate, "success"),
+                ] {
                     tx.github().append_github_observation(&StoredGithubObservation {
                         id:id(check_id),repository_id:remote.clone(),kind:"CheckRun".into(),subject_id:"42".into(),
                         remote_revision:check_id.into(),url:format!("{pull}/checks"),head:Some(head),
-                        payload:json!({"name":"build","appId":999,"state":"completed","conclusion":conclusion}),
+                        payload:json!({"name":name,"appId":999,"state":"completed","conclusion":conclusion}),
                         source_updated_at_ms:Some(T0+1),observed_at_ms:T0+1,
                     })?;
                 }
@@ -690,40 +695,47 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
                 "mode":"Command","protocol":PROTOCOL,"schemaRevision":15,"requestKey":key,"body":body
             }).to_string().as_bytes()).unwrap()
         };
-        let refused = |reply: CommandReply| {
+        let refused = |reply: DomainCommandReply, expected: &str| {
             assert!(matches!(&reply,
                 CommandReply::Recorded {receipt,..}
-                if matches!(receipt.decision, DomainDecision::Refused {..})
+                if matches!(&receipt.decision, DomainDecision::Refused {fault}
+                    if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == expected))
             ), "{reply:?}");
         };
-        refused(request("review-at-cap", "barrier", &candidate_barrier));
+        refused(request("review-at-cap", "barrier", &candidate_barrier), "review_round_cap");
         let report = json!({
             "repositoryId":repository,"originalReviewId":review.id,"reviewedHead":oid(&head),
             "candidateHead":oid(&candidate),"preservesProductBehavior":true,"preservesCoverage":true,
             "preservesRequiredGates":true,"rationale":"Only the CI environment fixture changes.",
             "focusedChecks":[{"id":"build-repaired-success","findingsVerified":[]}]
         });
-        let report = app.artifacts().publish_evidence(&*fx.store, Evidence {
+        let save_report = |report: &Value| app.artifacts().publish_evidence(&*fx.store, Evidence {
             scope:ArtifactScope::Project(project.clone()),producer:fx.user.principal().clone(),
             principal_kind:"Human".into(),agent_session:None,root:Some(root.clone()),
             assignment:None,title:"Focused CI verification".into(),media_type:"application/json".into(),
             tags:vec![],source:json!({"kind":"Fixture"}),
         }, report.to_string().as_bytes(), |_,_| Ok(())).unwrap().0;
+        let mut unrelated_report = report.clone();
+        unrelated_report["focusedChecks"][0]["id"] = json!("unrelated-candidate-success");
         let proof = json!({
             "originalReviewId":review.id,"expectedReviewRevision":review.revision.to_string(),
             "repositoryId":repository,"reviewedHead":oid(&head),"candidateHead":oid(&candidate),
             "diagnoses":[{"failedCheckId":"build-original-failure","diagnosis":"The test runner lacked its CI retry flag."}],
             "changes":[{"changeDigest":change,"reason":{"kind":"RequiredCheck","failedCheckId":"build-original-failure"}}],
-            "focusedCheckIds":["build-repaired-success"],"verificationReport":report
+            "focusedCheckIds":["build-repaired-success"],"verificationReport":save_report(&report)
         });
         let mut unrelated = proof.clone();
         unrelated["changes"][0]["changeDigest"] = json!("f".repeat(64));
-        refused(request("unrelated-repair", "candidateRepair", &unrelated));
-        applied(request("exact-ci-repair", "candidateRepair", &proof));
+        refused(request("unrelated-repair", "candidateRepair", &unrelated), "review_candidate_delta");
+        unrelated = proof.clone();
+        unrelated["focusedCheckIds"] = json!(["unrelated-candidate-success"]);
+        unrelated["verificationReport"] = json!(save_report(&unrelated_report));
+        refused(request("unrelated-check", "candidateRepair", &unrelated), "review_candidate_delta");
+        applied(&request("exact-ci-repair", "candidateRepair", &proof));
         assert!(matches!(readiness("verified-ci-repair", &candidate_barrier), DomainQueryReply::Result {
             result:OperationResult::ReviewsReadiness {value},..
         } if value.ready && value.review_ids.0 == vec![review.id]
-            && value.candidate_repairs.unwrap().0[0].reviewed_head == oid(&head)));
+            && value.candidate_repairs.as_ref().unwrap().0[0].reviewed_head == oid(&head)));
         app.shutdown().await;
     });
 }

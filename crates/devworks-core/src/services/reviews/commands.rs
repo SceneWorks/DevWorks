@@ -7,8 +7,8 @@ use crate::fingerprint::{canonical_digest, sha256_hex};
 use crate::gateway::AdmittedCommand;
 use crate::operations::{OperationInput, reviews as ops};
 use crate::ports::storage::{
-    ArtifactScope, FEATURE, NewEvent, NewOperation, NewQueueEntry, StorageError, StoredCodeReview,
-    StoredGitWorktree, WriteTransaction,
+    ArtifactScope, EventFilter, FEATURE, NewEvent, NewOperation, NewQueueEntry, StorageError,
+    StoredCodeReview, StoredGitWorktree, WriteTransaction,
 };
 use crate::ports::{CommandHandler, Decided, HandlerFailure, IdKind, Preparation, Prepared};
 use crate::protocol::provider::Digest;
@@ -81,6 +81,11 @@ impl ReviewService {
             let (worktree, repository_revision, patch) = self
                 .git
                 .capture_local_review_patch(ctx, env, &work, &diff)?;
+            let patch = if patch.is_empty() && diff.base == diff.head {
+                format!("No tree changes at {}.\n", diff.head.hex).into_bytes()
+            } else {
+                patch
+            };
             size = size.saturating_add(patch.len());
             if patch.is_empty() || size > MAX_REVIEW_BYTES {
                 return Err(refused(
@@ -203,6 +208,50 @@ impl ReviewService {
             after = rows.last().map(|row| row.id.clone());
         }
         let selected = tx.work().work_repositories(&task.id)?;
+        if selected.len() != local.diffs.0.len()
+            || selected
+                .iter()
+                .any(|id| !local.diffs.0.iter().any(|diff| &diff.repository_id == id))
+        {
+            return Err(refused(
+                DomainErrorCode::SourceChanged,
+                "review_task_repositories",
+                &task.id,
+            ));
+        }
+        for diff in &local.diffs.0 {
+            let filter = EventFilter::Aggregate {
+                kind: "git_worktree".into(),
+                id: diff.worktree_id.as_str().into(),
+            };
+            let mut after = 0;
+            let base = loop {
+                let page = tx.history().page(&filter, after, 128)?;
+                if let Some(event) = page.events.iter().find(|event| {
+                    event.kind == "GitWriteObserved"
+                        && event.project_id.as_ref() == Some(&feature.project_id)
+                        && event.payload["workId"].as_str() == Some(task.id.as_str())
+                        && event.payload["repositoryId"].as_str()
+                            == Some(diff.repository_id.as_str())
+                }) {
+                    break serde_json::from_value::<crate::protocol::data::GitOid>(
+                        event.payload["head"].clone(),
+                    )
+                    .ok();
+                }
+                if !page.has_more {
+                    break None;
+                }
+                after = page.next_after;
+            };
+            if base.as_ref() != Some(&diff.base) {
+                return Err(refused(
+                    DomainErrorCode::SourceChanged,
+                    "review_task_base",
+                    &diff.worktree_id,
+                ));
+            }
+        }
         for patch in &prepared.patches {
             if tx.git().git_worktree(&patch.worktree.id)?.as_ref() != Some(&patch.worktree)
                 || !selected.contains(&patch.worktree.repository_id)

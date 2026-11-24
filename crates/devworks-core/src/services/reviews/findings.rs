@@ -275,19 +275,7 @@ impl ReviewService {
                     }
                 }
                 CodeReviewResolution::NeedsHuman { decision_id } => {
-                    if tx
-                        .decisions()
-                        .approval(decision_id)?
-                        .is_none_or(|approval| {
-                            approval.scope
-                                != crate::ports::storage::ConfigScope::Project(
-                                    row.project_id.clone(),
-                                )
-                                || approval.state != "Pending"
-                        })
-                    {
-                        return Err(not_found("review_decision", decision_id).into());
-                    }
+                    super::escalation::stage(tx, ctx, decision_id, &row, &state, input)?;
                 }
             }
         }

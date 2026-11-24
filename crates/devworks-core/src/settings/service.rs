@@ -1353,6 +1353,7 @@ pub fn effective_setting(
 
 /// Resolved delivery review settings, including the revisions that produced the policy.
 pub struct ReviewSettings {
+    pub final_review_required: bool,
     pub cap: u8,
     pub wait_seconds: i64,
     pub github_bot_id: Option<u64>,
@@ -1371,6 +1372,7 @@ pub fn review_settings(
             repository: repository.clone(),
         },
         &[
+            "delivery.finalPullRequestReview",
             "delivery.maxReviewFixCycles",
             "reviews.automationWaitSeconds",
             "reviews.githubBotId",
@@ -1381,12 +1383,14 @@ pub fn review_settings(
         Failure::Refused(_) => StorageError::ScopeDenied,
     })?;
     let invalid = || StorageError::InvalidRecord("review policy setting".into());
-    let [cap, wait, bot]: [SettingEntry; 3] = entries.try_into().map_err(|_| invalid())?;
+    let [required, cap, wait, bot]: [SettingEntry; 4] =
+        entries.try_into().map_err(|_| invalid())?;
     let digest = crate::fingerprint::canonical_digest(
-        &serde_json::to_value((&cap, &wait, &bot)).map_err(|_| invalid())?,
+        &serde_json::to_value((&required, &cap, &wait, &bot)).map_err(|_| invalid())?,
     )
     .map_err(|_| invalid())?;
     Ok(ReviewSettings {
+        final_review_required: required.value.value.0.as_bool().ok_or_else(invalid)?,
         cap: cap
             .value
             .value

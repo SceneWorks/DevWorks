@@ -344,7 +344,7 @@ Not yet active: DevWorks does not merge pull requests yet, so this switch change
 
 ## delivery.mandatoryReview
 
-Mandatory review.
+Independent local review.
 
 - Default: `true`
 - Scope: Workspace only
@@ -352,7 +352,19 @@ Mandatory review.
 - Policy: HarnessEnforced
 - Section: Delivery
 
-Every delivery is reviewed before merge. A harness protection, not an override value.
+Every feature task requires one independent review before integration.
+
+## delivery.finalPullRequestReview
+
+Require final pull request review.
+
+- Default: `true`
+- Scope: Workspace → Project → Repository
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Delivery
+
+Require exact-head review evidence for final GitHub pull requests. Local feature task review always applies.
 
 ## delivery.maxReviewFixCycles
 

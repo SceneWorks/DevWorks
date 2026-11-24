@@ -14,7 +14,6 @@ pub struct CodeReviewQuery<'a> {
     pub pull_number: &'a str,
     pub head: &'a str,
     pub bot_id: u64,
-    pub requested_at_ms: i64,
 }
 
 #[derive(Debug)]
@@ -123,10 +122,7 @@ pub(crate) fn code_review_observation(
             row.payload["submittedAt"]
                 .as_str()
                 .and_then(|value| value.parse::<jiff::Timestamp>().ok())
-                .is_some_and(|at| {
-                    at.as_millisecond() >= query.requested_at_ms
-                        && at.as_millisecond() <= complete_through
-                })
+                .is_some_and(|at| at.as_millisecond() <= complete_through)
         })
         .max_by_key(|row| (row.payload["submittedAt"].as_str(), row.observed_at_ms));
     let Some(review) = review else {

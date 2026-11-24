@@ -25,6 +25,7 @@ impl ReviewService {
         operation: &OperationRecord,
         refresh: bool,
     ) -> Result<(), StorageError> {
+        self.reconcile_cancelled_reviewer(operation)?;
         self.observe_final(operation, refresh)
     }
 
@@ -85,7 +86,6 @@ impl ReviewService {
                 head: &source.expected_head.hex,
                 pull_number: &pull_number,
                 bot_id,
-                requested_at_ms: round.requested_at_ms,
             };
             let observed = if !refresh {
                 read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
@@ -305,25 +305,27 @@ fn publish_finding(
         (Some(path), Some(line)) => format!("{path}:{line} · {}", observation.url),
         _ => observation.url.clone(),
     };
+    let code_severity = if overall {
+        CodeReviewSeverity::Major
+    } else {
+        remote_severity(&body)
+    };
+    let severity = match code_severity {
+        CodeReviewSeverity::Blocker | CodeReviewSeverity::Major => Severity::Error,
+        CodeReviewSeverity::Minor => Severity::Warning,
+        CodeReviewSeverity::Informational => Severity::Info,
+    };
     let value = ReviewFinding {
         id: id.clone(),
         revision: rev(1),
         review_id: review.id.clone(),
         summary: content(summary),
         location: Some(BoundedText(location.chars().take(1024).collect())),
-        severity: if overall {
-            Severity::Error
-        } else {
-            Severity::Warning
-        },
+        severity,
         actionable: true,
         response: None,
         evidence: BoundedList(Vec::new()),
-        code_severity: Some(if overall {
-            CodeReviewSeverity::Major
-        } else {
-            CodeReviewSeverity::Minor
-        }),
+        code_severity: Some(code_severity),
         resolution: None,
     };
     tx.git().put_code_finding(
@@ -341,6 +343,28 @@ fn publish_finding(
         None,
     )?;
     Ok(Some(id))
+}
+
+fn remote_severity(body: &str) -> CodeReviewSeverity {
+    // GitHub inline reviews have no severity field. Use an explicit label from the
+    // configured reviewer and require adjudication of anything that cannot be classified.
+    for line in body.lines().take(4) {
+        for part in line.split('|') {
+            let label = part
+                .trim()
+                .trim_matches(['*', '_', '`'])
+                .trim()
+                .to_ascii_lowercase();
+            match label.strip_prefix("severity:").unwrap_or(&label).trim() {
+                "blocker" | "critical" => return CodeReviewSeverity::Blocker,
+                "major" => return CodeReviewSeverity::Major,
+                "minor" => return CodeReviewSeverity::Minor,
+                "informational" | "info" => return CodeReviewSeverity::Informational,
+                _ => {}
+            }
+        }
+    }
+    CodeReviewSeverity::Major
 }
 
 pub(super) fn update_final_state(

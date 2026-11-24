@@ -51,6 +51,7 @@ pub(super) struct PreparedCandidate {
     tree: StoredGitWorktree,
     repository_revision: i64,
     changes: BTreeSet<ChangeDigest>,
+    ci_changes: BTreeSet<ChangeDigest>,
     report: VerificationReport,
     rules: DeliveryReviewRules,
 }
@@ -70,17 +71,36 @@ impl ReviewService {
             ))
         })??;
         let project = row.project_id;
-        let pull = state
+        let round = state
             .final_rounds
             .iter()
             .find(|round| round.repository_id == proof.repository_id)
-            .map(|round| round.pull_id.clone())
+            .ok_or(StorageError::ScopeDenied)?;
+        let ReviewTarget::PullRequests { barrier } = &state.target else {
+            return Err(StorageError::ScopeDenied.into());
+        };
+        let delivery = barrier
+            .repositories
+            .iter()
+            .find(|entry| {
+                entry.repository_id == proof.repository_id && entry.pull_request_id == round.pull_id
+            })
             .ok_or(StorageError::ScopeDenied)?;
         let worktree = env.read(|snapshot| {
             let link = snapshot
                 .sessions()
-                .link(&pull)?
+                .link(&round.pull_id)?
                 .ok_or(StorageError::ScopeDenied)?;
+            if !super::readiness::observed_current_pull(
+                snapshot,
+                &project,
+                &proof.repository_id,
+                round.pull_number,
+                &proof.candidate_head.hex,
+                &delivery.observed_base.hex,
+            )? {
+                return Err(StorageError::ScopeDenied);
+            }
             serde_json::from_value::<Id>(link.body["worktreeId"].clone())
                 .map_err(|_| StorageError::ScopeDenied)
         })?;
@@ -103,9 +123,16 @@ impl ReviewService {
                 let patch = file["sha256"].as_str().ok_or(StorageError::ScopeDenied)?;
                 let digest = crate::fingerprint::canonical_digest(&json!([name, patch]))
                     .map_err(|_| StorageError::InvalidRecord("candidate patch digest".into()))?;
-                Ok(ChangeDigest(digest))
+                let text = file["patch"].as_str().ok_or(StorageError::ScopeDenied)?;
+                Ok((ChangeDigest(digest), ci_only_path(name, text)))
             })
-            .collect::<Result<BTreeSet<_>, StorageError>>()?;
+            .collect::<Result<BTreeMap<_, _>, StorageError>>()?;
+        let ci_changes = changes
+            .iter()
+            .filter(|(_, ci)| **ci)
+            .map(|(digest, _)| digest.clone())
+            .collect();
+        let changes = changes.into_keys().collect();
         let (bytes, _) = self
             .artifacts
             .read_exact(
@@ -143,6 +170,7 @@ impl ReviewService {
             tree,
             repository_revision,
             changes,
+            ci_changes,
             report,
             rules,
         })
@@ -206,7 +234,12 @@ impl ReviewService {
         let artifact = tx
             .artifacts()
             .artifact(&proof.verification_report.artifact_id)?
-            .filter(|artifact| artifact.owner.as_ref() == Some(ctx.principal()))
+            .filter(|artifact| {
+                artifact.owner.as_ref() == Some(ctx.principal())
+                    || (artifact.origin_work_id.as_ref() == Some(&input.root_id)
+                        && artifact.provenance["producedBy"].as_str()
+                            == Some(ctx.principal().0.as_str()))
+            })
             .ok_or_else(invalid)?;
         if artifact.scope.project() != Some(&root.project_id)
             || tx.git().git_worktree(&prepared.tree.id)?.as_ref() != Some(&prepared.tree)
@@ -303,6 +336,7 @@ impl ReviewService {
             project_id: Some(root.project_id.clone()),
         };
         let mut failed = HashMap::new();
+        let mut failed_contexts = HashMap::new();
         let mut diagnoses = HashMap::new();
         for item in &proof.diagnoses.0 {
             let evidence = tx
@@ -325,9 +359,12 @@ impl ReviewService {
             {
                 return Err(invalid());
             }
+            let context = check_context(&evidence).ok_or_else(invalid)?;
+            failed_contexts.insert(evidence.id.clone(), context);
             diagnoses.insert(evidence.id, item.diagnosis.0.clone());
         }
         let mut checks = HashMap::new();
+        let mut passed_contexts = HashSet::new();
         for statement in &report.focused_checks {
             let evidence = tx
                 .github()
@@ -337,6 +374,9 @@ impl ReviewService {
                         && passed_check(observation)
                 })
                 .ok_or_else(invalid)?;
+            if let Some(context) = check_context(&evidence) {
+                passed_contexts.insert(context);
+            }
             if checks
                 .insert(
                     evidence.id,
@@ -392,8 +432,22 @@ impl ReviewService {
                 (ChangeDigest(change.change_digest.0.clone()), reason)
             })
             .collect::<BTreeMap<_, _>>();
-        if classified.len() != proof.changes.0.len() {
-            return Err(invalid());
+        if classified.len() != proof.changes.0.len()
+            || classified.iter().any(|(digest, reason)| match reason {
+                RepairReason::RequiredCheck { failed_check_id } => {
+                    !prepared.ci_changes.contains(digest)
+                        || !failed_contexts
+                            .get(failed_check_id)
+                            .is_some_and(|context| passed_contexts.contains(context))
+                }
+                RepairReason::Finding { .. } => false,
+            })
+        {
+            return Err(refused(
+                DomainErrorCode::Conflict,
+                "review_candidate_delta",
+                &proof.repository_id,
+            ));
         }
         let focused_check_ids: HashSet<_> = proof.focused_check_ids.0.iter().cloned().collect();
         if focused_check_ids.len() != checks.len()
@@ -452,6 +506,55 @@ impl ReviewService {
             result: OperationResult::ReviewsRequest { value: saved.value },
         })
     }
+}
+
+fn check_context(observation: &StoredGithubObservation) -> Option<(String, Option<u64>)> {
+    Some((
+        observation.payload["name"].as_str()?.to_owned(),
+        observation.payload["appId"].as_u64(),
+    ))
+}
+
+fn ci_only_path(path: &str, patch: &str) -> bool {
+    let ci_path = [
+        ".github/workflows/",
+        ".github/actions/",
+        ".ci/",
+        "ci/",
+        "tools/ci/",
+        "scripts/ci/",
+        ".circleci/",
+        ".buildkite/",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+        || matches!(
+            path,
+            "Jenkinsfile" | ".gitlab-ci.yml" | "azure-pipelines.yml"
+        );
+    ci_path
+        && !patch.lines().any(|line| {
+            if line.starts_with("deleted file mode") || line.starts_with("GIT binary patch") {
+                return true;
+            }
+            let Some(change) = line.strip_prefix(['+', '-']) else {
+                return false;
+            };
+            let change = change.trim_start();
+            [
+                "if:",
+                "continue-on-error:",
+                "paths:",
+                "paths-ignore:",
+                "branches:",
+                "branches-ignore:",
+                "permissions:",
+                "needs:",
+                "required_status_checks:",
+            ]
+            .iter()
+            .any(|key| change.starts_with(key))
+        })
 }
 
 fn failing_required_check(

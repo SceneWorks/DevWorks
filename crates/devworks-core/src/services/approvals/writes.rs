@@ -232,6 +232,9 @@ impl ApprovalService {
             }
             if approve {
                 match p.payload["content"]["kind"].as_str() {
+                    None if p.operation_kind == crate::services::reviews::escalation::OPERATION => {
+                        crate::services::reviews::escalation::validate(tx, &p)?;
+                    }
                     None if p.operation_kind == "process.request_system_install" => {
                         // This proposal records an exact human decision only. It never starts a
                         // system installer or grants a native process implicit elevation.

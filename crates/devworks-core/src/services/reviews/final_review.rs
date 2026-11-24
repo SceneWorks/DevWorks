@@ -100,26 +100,26 @@ fn qualified_pull(
     if observed.operation_id.is_none() {
         return Err(missing().into());
     }
-    let url = url::Url::parse(&link.target_id)
-        .ok()
-        .filter(|url| {
-            url.scheme() == "https"
-                && url.host_str() == Some("github.com")
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.query().is_none()
-                && url.fragment().is_none()
-        })
-        .ok_or_else(missing)?;
-    let bits = url.path_segments().ok_or_else(missing)?.collect::<Vec<_>>();
-    let number = match bits.as_slice() {
+    let number = pull_number(&link.target_id).ok_or_else(missing)?;
+    Ok((link, number))
+}
+
+pub(super) fn pull_number(raw: &str) -> Option<u64> {
+    let url = url::Url::parse(raw).ok().filter(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some("github.com")
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })?;
+    let bits = url.path_segments()?.collect::<Vec<_>>();
+    match bits.as_slice() {
         [_, _, "pull", number] => number.parse::<u64>().ok().filter(|parsed| {
             *parsed > 0 && *parsed <= i64::MAX as u64 && parsed.to_string() == *number
         }),
         _ => None,
     }
-    .ok_or_else(missing)?;
-    Ok((link, number))
 }
 
 impl ReviewService {
@@ -147,6 +147,17 @@ impl ReviewService {
                                 && link.kind == "pull_request"
                         })
                         .ok_or(StorageError::ScopeDenied)?;
+                    let number = pull_number(&link.target_id).ok_or(StorageError::ScopeDenied)?;
+                    if !super::readiness::observed_current_pull(
+                        snapshot,
+                        &work.project_id,
+                        &entry.repository_id,
+                        number,
+                        &entry.expected_head.hex,
+                        &entry.observed_base.hex,
+                    )? {
+                        return Err(StorageError::ScopeDenied);
+                    }
                     let worktree_id = serde_json::from_value::<Id>(link.body["worktreeId"].clone())
                         .map_err(|_| StorageError::ScopeDenied)?;
                     let tree = snapshot
@@ -305,6 +316,9 @@ impl ReviewService {
                 &work.project_id,
                 &entry.repository_id,
             )?;
+            if !settings.final_review_required {
+                continue;
+            }
             if settings.github_bot_id.is_some()
                 != matches!(entry.review_source, ReviewSource::GitHubAutomated)
             {

@@ -53,8 +53,8 @@ fn pending_for_root(
     git: &dyn GitRead,
     root: &RootId,
     binding: Option<(&AssignmentId, &Id, &ActorId)>,
+    mut after: Option<Id>,
 ) -> Result<Option<(StoredCodeReview, ReviewStateRecord)>, Failure> {
-    let mut after = None;
     loop {
         let rows = git.code_reviews(None, Some(root), after.as_ref(), 128)?;
         for row in &rows {
@@ -151,26 +151,27 @@ impl ReviewService {
             .root_id()
             .ok_or(StorageError::ScopeDenied)?
             .clone();
-        let Some((mut row, mut state)) = pending_for_root(tx.git(), &root, None)? else {
-            return Ok(None);
+        let mut after = None;
+        let (mut row, mut state) = loop {
+            let Some((row, state)) = pending_for_root(tx.git(), &root, None, after)? else {
+                return Ok(None);
+            };
+            after = Some(row.id.clone());
+            if coordinator.project_id() != Some(&row.project_id)
+                || coordinator.policy_revision().get() != state.revision_of_policy
+                || tx.store().restore_epoch != state.restore_epoch
+            {
+                continue;
+            }
+            let operation = tx
+                .operations()
+                .operation(&state.operation)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if crate::ports::storage::is_terminal(operation.state) {
+                continue;
+            }
+            break (row, state);
         };
-        if coordinator.project_id() != Some(&row.project_id)
-            || coordinator.policy_revision().get() != state.revision_of_policy
-            || tx.store().restore_epoch != state.restore_epoch
-        {
-            return Err(StorageError::ScopeDenied.into());
-        }
-        let operation = tx
-            .operations()
-            .operation(&state.operation)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if matches!(
-            operation.state,
-            crate::protocol::OperationState::CancelledBeforeDispatch
-                | crate::protocol::OperationState::Failed
-        ) {
-            return Ok(None);
-        }
         let (tasks, repositories) = match &state.target {
             ReviewTarget::Local { target } => (
                 vec![target.task_id.clone()],
@@ -291,6 +292,7 @@ impl ReviewService {
             snapshot.git(),
             root,
             Some((assignment, session, ctx.principal())),
+            None,
         )
         .map_err(Failure::into_storage)?;
         let Some((row, state)) = found else {
@@ -494,6 +496,74 @@ impl ReviewService {
             }
         })
     }
+    pub(super) fn reconcile_cancelled_reviewer(
+        &self,
+        operation: &crate::ports::storage::OperationRecord,
+    ) -> Result<(), StorageError> {
+        let id = serde_json::from_value::<Id>(operation.payload["reviewId"].clone())
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let cancelled = |snapshot: &dyn ReadSnapshot| {
+            let row = snapshot
+                .git()
+                .code_review(&id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let state: ReviewStateRecord = decode(&row.body).map_err(Failure::into_storage)?;
+            if state.operation != operation.id || !matches!(state.value.state, ReviewState::Running)
+            {
+                return Ok(None);
+            }
+            let Some(binding) = state.local_binding.as_ref() else {
+                return Ok(None);
+            };
+            Ok(snapshot
+                .runs()
+                .assignment(&binding.assignment_id)?
+                .filter(|assignment| !assignment.state.is_live())
+                .map(|_| row.revision))
+        };
+        let Some(expected) =
+            read_snapshot(self.store.as_ref(), &ReadOptions::default(), cancelled)?
+        else {
+            return Ok(());
+        };
+        run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
+            let mut row = tx
+                .git()
+                .code_review(&id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if row.revision != expected {
+                return Ok(());
+            }
+            let mut state: ReviewStateRecord = decode(&row.body).map_err(Failure::into_storage)?;
+            state.failure =
+                Some("The independent review assignment ended before reporting.".into());
+            state.value.state = ReviewState::Blocked;
+            if let Some(local) = state.value.local_review.as_mut() {
+                local.state = ReviewObservationState::Failed;
+            }
+            if let Some(binding) = state.local_binding.as_ref() {
+                for source in &mut state.value.sources.0 {
+                    if source.run_id.as_ref() == Some(&binding.session_id)
+                        && matches!(source.state, ReviewObservationState::Running)
+                    {
+                        source.state = ReviewObservationState::Failed;
+                    }
+                }
+            }
+            let store = tx.store();
+            let host = InvocationContext::new(
+                store.host_actor.clone(),
+                PrincipalKind::Host,
+                id,
+                Id::new("code-review").expect("static ingress"),
+                store.store_id.clone(),
+                counter(store.restore_epoch),
+                rev(state.revision_of_policy),
+            );
+            write_local(tx, &mut row, &mut state, &host, "CodeReviewAssignmentEnded")
+        })
+    }
+
     /// Record the reason the bound child could not complete; unrelated work may proceed.
     pub fn fail_local(&self, ctx: &InvocationContext, reason: &str) -> Result<(), StorageError> {
         let Some(input) =

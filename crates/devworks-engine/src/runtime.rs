@@ -710,20 +710,6 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             package_tools.clone(),
         ));
     }
-    let process_tools = config.process_tools.as_ref().map(|composition| {
-        Arc::new(
-            devworks_core::services::process::tools::ProcessToolService::new(
-                store.clone(),
-                supervisor.clone(),
-                authority.clone(),
-                composition.secrets.clone(),
-                composition.bindings.clone(),
-                composition.filesystem.clone(),
-                composition.protected_roots.clone(),
-                ids.clone(),
-            ),
-        )
-    });
     let containers = config.containers.as_ref().map(|composition| {
         let runner = Arc::new(
             devworks_core::services::containers::runner::ContainerRunner::new(
@@ -811,6 +797,21 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         }
         None => None,
     };
+    let process_tools = config.process_tools.as_ref().map(|composition| {
+        Arc::new(
+            devworks_core::services::process::tools::ProcessToolService::new(
+                store.clone(),
+                supervisor.clone(),
+                authority.clone(),
+                composition.secrets.clone(),
+                composition.bindings.clone(),
+                composition.filesystem.clone(),
+                composition.protected_roots.clone(),
+                ids.clone(),
+            )
+            .with_git_source(git.clone()),
+        )
+    });
     let browser = browser.map(|b| {
         Arc::new(
             BrowserService::new(
