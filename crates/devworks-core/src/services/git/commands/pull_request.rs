@@ -43,7 +43,7 @@ impl GitService {
                     }))
         }))
     }
-    fn pr_command(
+    pub(super) fn pr_command(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
@@ -57,7 +57,10 @@ impl GitService {
             .work()
             .work(&tree.work_id)?
             .ok_or_else(|| refuse(DomainErrorCode::NotFound, "work", &tree.work_id))?;
-        if tree.owner == *ctx.principal() {
+        if tree.owner == *ctx.principal()
+            && (ctx.root_id().is_some_and(|root| root.0 == work.id)
+                || !Self::pr_manager(tx, ctx, &work)?)
+        {
             return self.owned_command(tx, ctx, id);
         }
         let repository = tx

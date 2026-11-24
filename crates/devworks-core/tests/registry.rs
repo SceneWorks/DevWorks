@@ -357,6 +357,7 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "browser.upload",
             "dreaming.instructions",
             "dreaming.revert",
+            "git.integrate",
             "git.pull_request",
             "git.push",
             "history.command_receipt",

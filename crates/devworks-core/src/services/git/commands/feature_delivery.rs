@@ -480,7 +480,7 @@ pub(super) fn published_task(
     }
 }
 
-fn registered_publication(
+pub(super) fn registered_publication(
     tx: &mut dyn WriteTransaction,
     task: &Id,
     repository: &Id,

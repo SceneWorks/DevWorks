@@ -672,6 +672,36 @@ impl Git<'_> {
         Ok(result)
     }
 
+    /// Remove only the branch named by an exact, verified cleanup reservation.
+    /// The typed owner has proved integration and authority before satisfying the generic
+    /// Git destructive-command hold. Use Git's compare-and-delete, with hooks disabled.
+    pub(crate) fn retire_owned_branch(
+        &self,
+        dir: &Path,
+        branch: &str,
+        head: &str,
+        operation: &OperationId,
+    ) -> Result<(), GitFault> {
+        if !branch.starts_with("refs/heads/") || !oid_ok(head) {
+            return Err(GitFault::SourceChanged);
+        }
+        let policy = self.reviewed_commit_policy(dir)?;
+        let args = ["update-ref", "--no-deref", "-d", branch, head];
+        let spec = self.reviewed_spec(dir, &args, None, &policy)?;
+        self.runner.run_recorded(
+            self.ctx,
+            spec,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 1024,
+            },
+            self.stop,
+            operation,
+            true,
+        )?;
+        Ok(())
+    }
+
     /// Local-only configuration inventory for the host-owned transport boundary. Values may
     /// contain credentials: callers must never publish them as approval or journal evidence.
     pub(crate) fn transport_configuration(&self, dir: &Path) -> Result<Vec<u8>, GitFault> {

@@ -249,6 +249,10 @@ pub(crate) struct DeliveryReviewRules {
     pub digest: String,
     pub fresh_review: bool,
     pub required_checks: Vec<(String, Option<u64>)>,
+    #[serde(default)]
+    pub merge_queue_method: Option<String>,
+    #[serde(default)]
+    pub required_approvals: bool,
 }
 
 impl GitHubService {
@@ -321,6 +325,11 @@ impl GitHubService {
             .and_then(Value::as_array)
             .ok_or_else(invalid)?;
         let approvals = &legacy["required_pull_request_reviews"];
+        let mut required_approvals = approvals["required_approving_review_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+            || approvals["require_code_owner_reviews"] == true;
+        let mut merge_queue_method = None;
         let mut fresh_review = approvals["dismiss_stale_reviews"] == true
             || approvals["require_last_push_approval"] == true;
         let mut required_checks = Vec::new();
@@ -337,7 +346,24 @@ impl GitHubService {
         for rule in rules {
             let parameters = &rule["parameters"];
             match rule["type"].as_str() {
+                Some("merge_queue") => {
+                    let method = parameters["merge_method"]
+                        .as_str()
+                        .ok_or_else(invalid)?
+                        .to_ascii_lowercase();
+                    if !matches!(method.as_str(), "merge" | "squash" | "rebase")
+                        || merge_queue_method
+                            .replace(method.clone())
+                            .is_some_and(|old| old != method)
+                    {
+                        return Err(invalid());
+                    }
+                }
                 Some("pull_request") => {
+                    required_approvals |= parameters["required_approving_review_count"]
+                        .as_u64()
+                        .is_some_and(|count| count > 0)
+                        || parameters["require_code_owner_review"] == true;
                     fresh_review |= parameters["dismiss_stale_reviews_on_push"] == true
                         || parameters["require_last_push_approval"] == true;
                 }
@@ -366,6 +392,8 @@ impl GitHubService {
             digest,
             fresh_review,
             required_checks,
+            merge_queue_method,
+            required_approvals,
         })
     }
 }

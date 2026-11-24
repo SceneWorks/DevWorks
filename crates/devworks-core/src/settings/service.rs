@@ -1351,6 +1351,23 @@ pub fn effective_setting(
     Ok(effective_entries(read, scope, &[key])?.remove(0))
 }
 
+/// Snapshot of the repository's effective Auto-Merge setting and its scope revisions.
+pub(crate) fn delivery_auto_merge(
+    read: &dyn ConfigurationRead,
+    project: &ProjectId,
+    repository: &Id,
+) -> Result<SettingEntry, Failure> {
+    Ok(effective_entries(
+        read,
+        &ConfigScope::Repository {
+            project: project.clone(),
+            repository: repository.clone(),
+        },
+        &["delivery.autoMerge"],
+    )?
+    .remove(0))
+}
+
 /// Resolved delivery review settings, including the revisions that produced the policy.
 pub struct ReviewSettings {
     pub final_review_required: bool,
