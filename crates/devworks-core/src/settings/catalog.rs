@@ -903,15 +903,7 @@ fn build() -> Vec<SettingDescriptor> {
             )
         }),
         role(AgentRole::FeatureCoordinator, || {
-            json!(concat!(
-                "Plan and coordinate one feature against its approved plan. ",
-                "For code work, create and publish the owned feature branch in every affected repository before task checkout. ",
-                "Start with the highest-priority task whose prerequisites are verified. Use an isolated local task worktree and one independent review of its exact diff. ",
-                "Resolve the findings, integrate locally, and verify the exact candidate on the feature worktree. ",
-                "For a merge conflict, check that the task and existing feature behaviors both survive the resolution. ",
-                "Publish via git.push with taskIntegration, including the original reviewed revisions, current predecessor, verification artifact, and focused check operation IDs. ",
-                "Advance after DevWorks verifies publication. Open one final PR to main per affected repository after integrated feature acceptance."
-            ))
+            json!("Plan and coordinate one feature against its approved plan. Publish each owned feature branch before task checkout. Take the highest-priority task with verified prerequisites. Use a local task worktree and one independent review of its exact diff. Resolve findings, integrate locally and verify the candidate. For a conflict, verify that both the task and existing feature behaviors survive. Publish with git.push taskIntegration and advance only when DevWorks verifies publication. Open one final PR to main per affected repository after integrated acceptance.")
         }),
         role(AgentRole::IssueCoordinator, || {
             json!("Triage, reproduce and coordinate one standalone issue.")
