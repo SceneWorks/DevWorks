@@ -5,6 +5,13 @@ $script:payloadNames = @('devworks-desktop.exe', 'devworks-test-launcher.exe', '
 $script:profileEku = '1.3.6.1.4.1.311.97.840169298.24257481.644551716.202800253'
 $script:artifactSigningEku = '1.3.6.1.4.1.311.97.1.0'
 
+function Get-TestInstallerTarget([ValidateSet('x64','arm64')][string]$Architecture) {
+    if ($Architecture -eq 'arm64') {
+        return @{ rust = 'aarch64-pc-windows-msvc'; machine = 0xaa64; msi = 'Arm64' }
+    }
+    @{ rust = 'x86_64-pc-windows-msvc'; machine = 0x8664; msi = 'x64' }
+}
+
 function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -79,18 +86,15 @@ function Assert-UnsignedTestPe([string]$Path, [UInt16]$Machine) {
     }
 }
 
-function Assert-UnsignedX64([string]$Path) {
-    Assert-UnsignedTestPe $Path 0x8664
-}
-
-function New-TestLauncher([string]$Root, [string]$Payload) {
+function New-TestLauncher([string]$Root, [string]$Payload, [ValidateSet('x64','arm64')][string]$Architecture = 'x64') {
     # MSVC can emit side files. Stage only the executable in the sealed payload.
     $build = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'launcher-build')
     $launcher = Join-Path $build.FullName 'devworks-test-launcher.exe'
-    rustc --edition 2024 --target x86_64-pc-windows-msvc -D warnings -O -C strip=symbols `
+    $target = Get-TestInstallerTarget $Architecture
+    rustc --edition 2024 --target $target.rust -D warnings -O -C strip=symbols `
         (Join-Path $Root 'packaging/windows/devworks-test-launcher.rs') -o $launcher
     if ($LASTEXITCODE -ne 0) { throw 'Windows Start launcher build failed' }
-    Assert-UnsignedX64 $launcher
+    Assert-UnsignedTestPe $launcher $target.machine
     Copy-Item -LiteralPath $launcher -Destination $Payload
 }
 
@@ -133,17 +137,32 @@ function Get-VerifiedTestSignature([string]$Path, [string]$SignTool) {
     }
 }
 
-function New-TestInstaller([string]$Root, [string]$Payload, [string]$Installer) {
+function Assert-TestMsiArchitecture($Database, [string]$Architecture) {
+    # Windows Installer's PID_TEMPLATE holds the platform followed by the language list.
+    $summary = $Database.GetType().InvokeMember('SummaryInformation', 'GetProperty', $null, $Database, @(0))
+    try {
+        $template = $summary.GetType().InvokeMember('Property', 'GetProperty', $null, $summary, @(7))
+    } finally {
+        $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($summary)
+    }
+    $expected = (Get-TestInstallerTarget $Architecture).msi
+    if (($template -split ';', 2)[0] -cne $expected) {
+        throw "Unexpected MSI platform: $template (expected $expected)"
+    }
+}
+
+function New-TestInstaller([string]$Root, [string]$Payload, [string]$Installer, [ValidateSet('x64','arm64')][string]$Architecture = 'x64') {
     Assert-ExactFiles $Payload $script:payloadNames
     $recipe = Join-Path $Root 'packaging\windows\devworks-test.wxs'
     $object = [IO.Path]::ChangeExtension($Installer, 'wixobj')
-    & (Join-Path $env:WIX 'bin\candle.exe') -nologo -arch x64 "-dPayload=$Payload" -out $object $recipe | Write-Host
+    & (Join-Path $env:WIX 'bin\candle.exe') -nologo -arch $Architecture "-dPayload=$Payload" -out $object $recipe | Write-Host
     if ($LASTEXITCODE -ne 0) { throw 'WiX recipe compilation failed' }
     & (Join-Path $env:WIX 'bin\light.exe') -nologo -spdb -out $Installer $object | Write-Host
     if ($LASTEXITCODE -ne 0) { throw 'WiX installer linking or validation failed' }
     Remove-Item -LiteralPath $object
     $installerApi = New-Object -ComObject WindowsInstaller.Installer
     $database = $installerApi.OpenDatabase($Installer, 0)
+    Assert-TestMsiArchitecture $database $Architecture
     $files = $database.OpenView('SELECT FileName FROM File')
     $null = $files.Execute()
     $names = @()
