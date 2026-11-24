@@ -55,6 +55,9 @@ pub enum WorkSlot {
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),
+    CodeReviews(String, bool),
+    CodeReviewFindings(String, String, bool),
+    CodeReviewFindingCommand(String, String),
     ReadinessHistory(String, u64),
     WorkGitInspect(String, String),
     /// A change of one work item (one at a time per item).

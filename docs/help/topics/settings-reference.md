@@ -344,7 +344,7 @@ Not yet active: DevWorks does not merge pull requests yet, so this switch change
 
 ## delivery.mandatoryReview
 
-Mandatory review.
+Independent local review.
 
 - Default: `true`
 - Scope: Workspace only
@@ -352,19 +352,31 @@ Mandatory review.
 - Policy: HarnessEnforced
 - Section: Delivery
 
-Every delivery is reviewed before merge. A harness protection, not an override value.
+Every feature task requires one independent review before integration.
 
-## delivery.maxReviewFixCycles
+## delivery.finalPullRequestReview
 
-Review fix cycles.
+Require final pull request review.
 
-- Default: `3`
+- Default: `true`
 - Scope: Workspace → Project → Repository
 - Adoption: NextAdmission
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.
+Require exact-head review evidence for final GitHub pull requests. Local feature task review always applies.
+
+## delivery.maxReviewFixCycles
+
+Review rounds.
+
+- Default: `5`
+- Scope: Workspace → Project → Repository
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Delivery
+
+Set a lower limit for automated reviews. Feature pull requests allow up to five rounds, and standalone pull requests up to three.
 
 ## watch.backupEnabled
 
@@ -412,7 +424,19 @@ Automated review wait (seconds).
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.
+After this time, DevWorks may use one independent in-app reviewer for the same round.
+
+## reviews.githubBotId
+
+GitHub review bot ID.
+
+- Default: `0`
+- Scope: Workspace → Project → Repository
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Delivery
+
+The registered bot's numeric GitHub actor ID. Set to zero to use an independent in-app reviewer.
 
 ## agents.maxSubagents
 

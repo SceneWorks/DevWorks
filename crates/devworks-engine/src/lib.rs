@@ -211,6 +211,7 @@ mod analysis_tools;
 pub mod approvals;
 mod auto_routing;
 pub mod browser;
+mod code_review;
 mod compaction;
 mod context_epoch;
 pub mod conventions;

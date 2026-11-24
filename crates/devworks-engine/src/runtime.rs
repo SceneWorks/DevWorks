@@ -572,6 +572,7 @@ struct Engine {
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
     git: Option<Arc<devworks_core::services::git::GitService>>,
+    code_reviews: Option<Arc<devworks_core::services::reviews::ReviewService>>,
     github: Option<Arc<devworks_core::services::github::GitHubService>>,
     github_triage: Option<Arc<crate::github_triage::TriageWorker>>,
     browser: Option<Arc<BrowserService>>,
@@ -709,20 +710,6 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             package_tools.clone(),
         ));
     }
-    let process_tools = config.process_tools.as_ref().map(|composition| {
-        Arc::new(
-            devworks_core::services::process::tools::ProcessToolService::new(
-                store.clone(),
-                supervisor.clone(),
-                authority.clone(),
-                composition.secrets.clone(),
-                composition.bindings.clone(),
-                composition.filesystem.clone(),
-                composition.protected_roots.clone(),
-                ids.clone(),
-            ),
-        )
-    });
     let containers = config.containers.as_ref().map(|composition| {
         let runner = Arc::new(
             devworks_core::services::containers::runner::ContainerRunner::new(
@@ -810,6 +797,21 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         }
         None => None,
     };
+    let process_tools = config.process_tools.as_ref().map(|composition| {
+        Arc::new(
+            devworks_core::services::process::tools::ProcessToolService::new(
+                store.clone(),
+                supervisor.clone(),
+                authority.clone(),
+                composition.secrets.clone(),
+                composition.bindings.clone(),
+                composition.filesystem.clone(),
+                composition.protected_roots.clone(),
+                ids.clone(),
+            )
+            .with_git_source(git.clone()),
+        )
+    });
     let browser = browser.map(|b| {
         Arc::new(
             BrowserService::new(
@@ -888,6 +890,23 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(service) = &git {
         use_cases = use_cases.with_git(service.clone());
         consumers.push(crate::git::consumer(service.clone()));
+    }
+    let code_reviews = git.as_ref().map(|git| {
+        Arc::new(devworks_core::services::reviews::ReviewService::new(
+            ids.clone(),
+            store.clone(),
+            git.clone(),
+            artifacts.clone(),
+            clock.clone(),
+            github.clone(),
+        ))
+    });
+    if let Some(service) = &code_reviews {
+        consumers.push(crate::code_review::consumer(
+            service.clone(),
+            store.as_ref(),
+        ));
+        use_cases = use_cases.with_reviews(service.clone());
     }
     if let Some(service) = &github {
         use_cases = use_cases.with_github(service.clone());
@@ -1524,6 +1543,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         process_tools,
         containers,
         git,
+        code_reviews,
         github,
         github_triage,
         browser,
@@ -1635,6 +1655,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         process_tools,
         containers,
         git,
+        code_reviews,
         github,
         github_triage,
         browser,
@@ -1869,6 +1890,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     let turn = Arc::new(crate::turn_engine::TurnEngine {
         store: store.clone(),
         clock: clock.clone(),
+        code_reviews,
         artifacts: artifacts.clone(),
         providers: providers.clone(),
         inference_router: use_cases.inference_router(),
@@ -2174,12 +2196,19 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(service) = &github {
         let stop = service.clone();
         let clock = clock.clone();
+        let reviews = turn.code_reviews.clone();
         workers.start(
             StopAt::Work,
             None,
             Arc::new(
                 Loop::new("github", |stopped| {
-                    crate::github::run(service.clone(), clock.clone(), stopped, commits("github"))
+                    crate::github::run(
+                        service.clone(),
+                        reviews.clone(),
+                        clock.clone(),
+                        stopped,
+                        commits("github"),
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),

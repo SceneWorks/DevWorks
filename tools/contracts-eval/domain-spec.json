@@ -1807,6 +1807,100 @@
         "kinds": "Items<Label>"
       }
     },
+    "CodeReviewSeverity": {
+      "kind": "enum",
+      "values": [
+        "Blocker",
+        "Major",
+        "Minor",
+        "Informational"
+      ]
+    },
+    "CodeReviewResolution": {
+      "kind": "union",
+      "variants": {
+        "FixVerified": {
+          "candidate_head": "GitOid",
+          "focused_check_ids": "Items<Id>"
+        },
+        "NotActionable": {},
+        "Followup": {
+          "bug_id": "Id",
+          "review_thread_reply": "Url"
+        },
+        "NeedsHuman": {
+          "decision_id": "Id"
+        }
+      }
+    },
+    "LocalReviewDiff": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "worktree_id": "Id",
+        "base": "GitOid",
+        "head": "GitOid"
+      }
+    },
+    "LocalReviewTarget": {
+      "kind": "record",
+      "fields": {
+        "task_id": "Id",
+        "diffs": "Items<LocalReviewDiff>"
+      }
+    },
+    "LocalReviewEvidence": {
+      "kind": "record",
+      "fields": {
+        "target": "LocalReviewTarget",
+        "diff_digest": "Digest",
+        "state": "ReviewObservationState",
+        "reviewer_actor_id": "?Id",
+        "reviewer_session_id": "?Id",
+        "completed_at": "?Counter",
+        "finding_count": "Counter",
+        "report": "?ArtifactRef"
+      }
+    },
+    "ReviewCheckDiagnosis": {
+      "kind": "record",
+      "fields": {
+        "failed_check_id": "Id",
+        "diagnosis": "Content"
+      }
+    },
+    "ReviewChangeReason": {
+      "kind": "union",
+      "variants": {
+        "RequiredCheck": {
+          "failed_check_id": "Id"
+        },
+        "Finding": {
+          "finding_id": "Id"
+        }
+      }
+    },
+    "ReviewClassifiedChange": {
+      "kind": "record",
+      "fields": {
+        "change_digest": "Digest",
+        "reason": "ReviewChangeReason"
+      }
+    },
+    "ReviewCandidateRepair": {
+      "kind": "record",
+      "fields": {
+        "original_review_id": "Id",
+        "expected_review_revision": "Revision",
+        "repository_id": "Id",
+        "reviewed_head": "GitOid",
+        "candidate_head": "GitOid",
+        "diagnoses": "Items<ReviewCheckDiagnosis>",
+        "changes": "Rows<ReviewClassifiedChange>",
+        "focused_check_ids": "Items<Id>",
+        "verification_report": "ArtifactRef"
+      }
+    },
     "ReviewRecord": {
       "kind": "record",
       "fields": {
@@ -1817,7 +1911,13 @@
         "barrier": "?ArtifactRef",
         "finding_ids": "Items<Id>",
         "head_digest": "Digest",
-        "sources": "Items<ReviewSourceEvidence>"
+        "sources": "Items<ReviewSourceEvidence>",
+        "local_review": "?LocalReviewEvidence",
+        "candidate_repair": "?ReviewCandidateRepair"
+      },
+      "since": {
+        "local_review": 15,
+        "candidate_repair": 15
       }
     },
     "ReviewFinding": {
@@ -1831,7 +1931,13 @@
         "severity": "Severity",
         "actionable": "bool",
         "response": "?Content",
-        "evidence": "Items<ArtifactRef>"
+        "evidence": "Items<ArtifactRef>",
+        "code_severity": "?CodeReviewSeverity",
+        "resolution": "?CodeReviewResolution"
+      },
+      "since": {
+        "code_severity": 15,
+        "resolution": 15
       }
     },
     "ReviewReadiness": {
@@ -1841,7 +1947,11 @@
         "review_ids": "Items<Id>",
         "blocker_ids": "Items<Id>",
         "head_digest": "Digest",
-        "policy_revision": "Revision"
+        "policy_revision": "Revision",
+        "candidate_repairs": "?Items<ReviewCandidateRepair>"
+      },
+      "since": {
+        "candidate_repairs": 15
       }
     },
     "GitInspection": {
@@ -10015,13 +10125,24 @@
       "fields": {
         "root_id": "RootId",
         "expected_revision": "Revision",
-        "barrier": "DeliveryBarrier",
-        "policy_revision": "Revision"
+        "barrier": "?DeliveryBarrier",
+        "policy_revision": "Revision",
+        "local_target": "?LocalReviewTarget",
+        "candidate_repair": "?ReviewCandidateRepair"
       },
       "result": "ReviewRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights."
+      "rules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights. Revision 15 can request a single independent review of an exact local task diff or submit candidate repair evidence to the last completed round. Verifying a candidate does not start a review or change the head attributed to the reviewer.",
+      "exactlyOne": [
+        "barrier",
+        "local_target",
+        "candidate_repair"
+      ],
+      "since": {
+        "local_target": 15,
+        "candidate_repair": 15
+      }
     },
     "reviews.findings": {
       "operation": "reviews.findings",
@@ -10057,25 +10178,37 @@
         "expected_revision": "Revision",
         "actionable": "bool",
         "rationale": "Content",
-        "evidence": "Items<ArtifactRef>"
+        "evidence": "Items<ArtifactRef>",
+        "resolution": "?CodeReviewResolution"
       },
       "result": "ReviewFinding",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Resolve through configured independent review policy; author cannot self-waive required review without explicit policy authority."
+      "rules": "Resolve through configured independent review policy; author cannot self-waive required review without explicit policy authority.",
+      "since": {
+        "resolution": 15
+      }
     },
     "reviews.readiness": {
       "operation": "reviews.readiness",
       "mode": "Query",
       "fields": {
         "root_id": "RootId",
-        "barrier": "DeliveryBarrier",
-        "policy_revision": "Revision"
+        "barrier": "?DeliveryBarrier",
+        "policy_revision": "Revision",
+        "local_target": "?LocalReviewTarget"
       },
       "result": "ReviewReadiness",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source."
+      "rules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source. Revision 15 also projects exact local review or qualified post-cap evidence. Final merge still requires current separate delivery gates.",
+      "exactlyOne": [
+        "barrier",
+        "local_target"
+      ],
+      "since": {
+        "local_target": 15
+      }
     },
     "releases.inspect": {
       "operation": "releases.inspect",
@@ -12249,6 +12382,13 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "reviews.list": [1, 15],
+    "reviews.inspect": [1, 15],
+    "reviews.request": [1, 15],
+    "reviews.findings": [1, 15],
+    "reviews.respond": [1, 15],
+    "reviews.adjudicate": [1, 15],
+    "reviews.readiness": [1, 15],
     "issues.publish": [1, 3],
     "issues.link": [1, 3],
     "github.account": [1, 3],

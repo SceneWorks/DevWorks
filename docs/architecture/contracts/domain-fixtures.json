@@ -1269,7 +1269,7 @@
   {
     "id": "input-reviews.request-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"root-a\",\"expectedRevision\":\"1\",\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]},\"policyRevision\":\"1\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"root-a\",\"expectedRevision\":\"1\",\"policyRevision\":\"1\",\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -1297,7 +1297,7 @@
   {
     "id": "input-reviews.readiness-Query",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"reviews.readiness\",\"rootId\":\"root-a\",\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]},\"policyRevision\":\"1\"}}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"reviews.readiness\",\"rootId\":\"root-a\",\"policyRevision\":\"1\",\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"root-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pr-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"},{\"repositoryId\":\"repo-b\",\"pullRequestId\":\"pr-b\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"reviewSource\":\"GitHubAutomated\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[{\"before\":\"repo-a\",\"after\":\"repo-b\"}]}}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -5400,6 +5400,83 @@
     "id": "eval-valid-text-proxy",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.grade\",\"sessionId\":\"id-a\",\"suite\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"checks\":[{\"id\":\"check-a\",\"ruleRef\":\"RULE-1\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"TranscriptContains\",\"entryKind\":\"UserMessage\",\"text\":\"hello\"}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.request-local",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"schemaRevision\":15,\"requestKey\":\"review-request\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"feature-a\",\"expectedRevision\":\"2\",\"policyRevision\":\"3\",\"localTarget\":{\"taskId\":\"task-a\",\"diffs\":[{\"repositoryId\":\"repo-a\",\"worktreeId\":\"tree-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.request-candidate",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"schemaRevision\":15,\"requestKey\":\"review-request\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"feature-a\",\"expectedRevision\":\"2\",\"policyRevision\":\"3\",\"candidateRepair\":{\"originalReviewId\":\"review-a\",\"expectedReviewRevision\":\"4\",\"repositoryId\":\"repo-a\",\"reviewedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"candidateHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"diagnoses\":[{\"failedCheckId\":\"failed-a\",\"diagnosis\":\"Repair the failing CI environment\"}],\"changes\":[{\"changeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"reason\":{\"kind\":\"RequiredCheck\",\"failedCheckId\":\"failed-a\"}}],\"focusedCheckIds\":[\"focused-a\"],\"verificationReport\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-reviews.request-local-legacy",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"schemaRevision\":1,\"requestKey\":\"review-request\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"feature-a\",\"expectedRevision\":\"2\",\"policyRevision\":\"3\",\"localTarget\":{\"taskId\":\"task-a\",\"diffs\":[{\"repositoryId\":\"repo-a\",\"worktreeId\":\"tree-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}]}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-reviews.request-two-targets",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"schemaRevision\":15,\"requestKey\":\"review-request\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"feature-a\",\"expectedRevision\":\"2\",\"policyRevision\":\"3\",\"localTarget\":{\"taskId\":\"task-a\",\"diffs\":[{\"repositoryId\":\"repo-a\",\"worktreeId\":\"tree-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}]},\"candidateRepair\":{\"originalReviewId\":\"review-a\",\"expectedReviewRevision\":\"4\",\"repositoryId\":\"repo-a\",\"reviewedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"candidateHead\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"diagnoses\":[{\"failedCheckId\":\"failed-a\",\"diagnosis\":\"Repair the failing CI environment\"}],\"changes\":[{\"changeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"reason\":{\"kind\":\"RequiredCheck\",\"failedCheckId\":\"failed-a\"}}],\"focusedCheckIds\":[\"focused-a\"],\"verificationReport\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-reviews.request-duplicate-local-repo",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"schemaRevision\":15,\"requestKey\":\"review-request\",\"body\":{\"kind\":\"reviews.request\",\"rootId\":\"feature-a\",\"expectedRevision\":\"2\",\"policyRevision\":\"3\",\"localTarget\":{\"taskId\":\"task-a\",\"diffs\":[{\"repositoryId\":\"repo-a\",\"worktreeId\":\"tree-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}},{\"repositoryId\":\"repo-a\",\"worktreeId\":\"tree-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}]}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.readiness-local",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"schemaRevision\":15,\"queryId\":\"review-query\",\"body\":{\"kind\":\"reviews.readiness\",\"rootId\":\"feature-a\",\"policyRevision\":\"3\",\"localTarget\":{\"taskId\":\"task-a\",\"diffs\":[{\"repositoryId\":\"repo-a\",\"worktreeId\":\"tree-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}}]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.list-r15",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"reviews.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":15}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.inspect-r15",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"reviews.inspect\",\"reviewId\":\"id-a\"},\"schemaRevision\":15}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.findings-r15",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"reviews.findings\",\"reviewId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":15}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.respond-r15",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"reviews.respond\",\"findingId\":\"id-a\",\"expectedRevision\":\"1\",\"response\":\"Fixture content\",\"evidence\":[]},\"schemaRevision\":15}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-reviews.adjudicate-r15",
+    "entry": "domain-request.r15",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"reviews.adjudicate\",\"findingId\":\"id-a\",\"expectedRevision\":\"1\",\"actionable\":false,\"rationale\":\"Fixture content\",\"evidence\":[]},\"schemaRevision\":15}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -9842,42 +9919,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1406",
+    "id": "r3-preview-source-13-1417",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1406",
+    "id": "r3-delete-source-13-1417",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1408",
+    "id": "r3-preview-source-15-1419",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1408",
+    "id": "r3-delete-source-15-1419",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1410",
+    "id": "r3-preview-source-256-1421",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1410",
+    "id": "r3-delete-source-256-1421",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

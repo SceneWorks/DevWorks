@@ -128,6 +128,7 @@ pub fn notice_consumer_with_services(
 
 pub(crate) async fn run(
     service: Arc<GitHubService>,
+    reviews: Option<Arc<devworks_core::services::reviews::ReviewService>>,
     clock: Arc<dyn devworks_core::ports::Clock>,
     stopped: crate::workers::Stopped,
     commits: crate::workers::Commits,
@@ -139,12 +140,14 @@ pub(crate) async fn run(
 
     let live = service.clone();
     let cursor = Arc::new(Mutex::new((None, None)));
+    let review_cursor = Arc::new(Mutex::new(None));
     commits
         .run(
             stopped,
             move || !live.is_stopped(),
             move || {
                 let (service, cursor, clock) = (service.clone(), cursor.clone(), clock.clone());
+                let (reviews, review_cursor) = (reviews.clone(), review_cursor.clone());
                 async move {
                     let (after, throttled) = cursor.locked().clone();
                     let now = clock.now_ms().get();
@@ -153,9 +156,22 @@ pub(crate) async fn run(
                     {
                         return Next::Within(Duration::from_millis((until - now) as u64));
                     }
-                    match tokio::task::spawn_blocking(move || service.poll_pass(after)).await {
-                        Ok(Ok(pass)) => {
-                            let more = pass.after.is_some();
+                    let after_review = review_cursor.locked().clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let pass = service.poll_pass(after)?;
+                        let next = reviews.and_then(|reviews| {
+                            reviews
+                                .reconcile_late_page(after_review.as_ref())
+                                .ok()
+                                .flatten()
+                        });
+                        Ok::<_, StorageError>((pass, next))
+                    })
+                    .await
+                    {
+                        Ok(Ok((pass, next_review))) => {
+                            let more = pass.after.is_some() || next_review.is_some();
+                            *review_cursor.locked() = next_review;
                             *cursor.locked() = (pass.after, pass.defer_until_ms);
                             match pass.defer_until_ms {
                                 Some(until) => Next::Within(Duration::from_millis(

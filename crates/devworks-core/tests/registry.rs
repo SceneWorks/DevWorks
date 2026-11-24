@@ -491,6 +491,13 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "watch.create",
             "watch.list",
             "watch.inspect",
+            "reviews.adjudicate",
+            "reviews.findings",
+            "reviews.inspect",
+            "reviews.list",
+            "reviews.readiness",
+            "reviews.request",
+            "reviews.respond",
             "watch.cancel",
             // GitHub account diagnostics, resumable poll status and explicit issue links (DW-40).
             "github.account",

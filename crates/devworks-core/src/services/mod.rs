@@ -39,6 +39,7 @@ pub mod process;
 pub mod projects;
 pub mod queue;
 pub mod resources;
+pub mod reviews;
 pub mod router;
 pub mod runs;
 pub mod schemas;
@@ -219,6 +220,22 @@ impl UseCases {
             "git.cleanup",
         ] {
             self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// One review use case backs the workspace and agent tools.
+    pub fn with_reviews(mut self, service: Arc<reviews::ReviewService>) -> Self {
+        for operation in [
+            "reviews.list",
+            "reviews.inspect",
+            "reviews.findings",
+            "reviews.readiness",
+        ] {
+            self.register(operation, Some(service.clone()), None);
+        }
+        for operation in ["reviews.request", "reviews.respond", "reviews.adjudicate"] {
+            self.register(operation, None, Some(service.clone()));
         }
         self
     }

@@ -39,6 +39,7 @@ mod builders;
 mod forms;
 mod replies;
 mod requests;
+pub(crate) mod reviews;
 pub(crate) mod workflow;
 
 pub use crate::work_screen::activity::{activity_line, event_summary};
@@ -113,6 +114,7 @@ pub struct WorkUi {
         BTreeMap<String, Paged<devworks_core::protocol::records::LineageRecord>>,
     /// Each root's source-control links: a re-read keeps the list on screen until every page
     /// arrived, so a refresh never shifts the controls beneath it.
+    pub code_reviews: BTreeMap<String, reviews::ReviewPane>,
     pub git: BTreeMap<String, Paged<devworks_core::protocol::records::AttributedGitLink>>,
     pub runs: BTreeMap<String, RootSnapshot>,
     pub git_inspections:
@@ -320,6 +322,7 @@ pub(crate) enum Action {
     SelectCard(Option<String>),
     OpenDetail(String),
     RefreshGit(String),
+    CodeReview(reviews::ReviewAction),
     ReadinessHistory(String, bool),
     InspectGit(String, String),
     OpenGitSession(String),

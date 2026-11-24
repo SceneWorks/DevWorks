@@ -21,3 +21,8 @@ Local issues stay local until you explicitly link them to an existing GitHub iss
 Blockers have stable IDs. Self-links, duplicates, cycles, invalid scope, and stale revisions are refused atomically. Adding a blocker fences affected future dispatch. Finishing or removing one dependency does not clear user pauses, approval waits, budgets, or resource holds. Independent work can continue.
 
 Use History to distinguish a membership edit, an execution stop, a tool effect, and a verified completion. See [Features](help:features), [Workflow](help:workflow), [Controls](help:work-controls), and [Recovery](help:recovery).
+
+
+## Code reviews
+
+Open **Code reviews** in the work detail to inspect each reviewed commit or local diff, its source, findings, and responses. Record a response or explain why a finding is not actionable. DevWorks keeps the original reviewed head in history when it verifies a repair. A new head or changed policy can require additional evidence before delivery.

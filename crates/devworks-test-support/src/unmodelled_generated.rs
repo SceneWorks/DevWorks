@@ -1082,6 +1082,29 @@ impl EvalRepository for Unmodelled {
     }
 }
 impl GitRead for Unmodelled {
+    fn code_review(&self, _: &Id) -> Result<Option<StoredCodeReview>, StorageError> {
+        unmodelled()
+    }
+    fn code_reviews(
+        &self,
+        _: Option<&devworks_core::protocol::ProjectId>,
+        _: Option<&RootId>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredCodeReview>, StorageError> {
+        unmodelled()
+    }
+    fn code_finding(&self, _: &Id) -> Result<Option<StoredCodeFinding>, StorageError> {
+        unmodelled()
+    }
+    fn code_findings(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredCodeFinding>, StorageError> {
+        unmodelled()
+    }
     fn git_worktree_for_branch(
         &self,
         _: &Id,
@@ -1120,6 +1143,20 @@ impl GitRead for Unmodelled {
     }
 }
 impl GitRepository for Unmodelled {
+    fn put_code_review(
+        &mut self,
+        _: &StoredCodeReview,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_code_finding(
+        &mut self,
+        _: &StoredCodeFinding,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn insert_git_worktree(&mut self, _: &StoredGitWorktree) -> Result<(), StorageError> {
         Err(StorageError::InvalidRecord(
             "Git test store not configured".into(),

@@ -176,9 +176,12 @@ async fn drive_agent_turn(
         // Keep the sender until the loop ends: a closed channel would end every wait at once.
         std::future::pending::<()>().await;
     });
-    let mut reviews = is_feature_coordinator.then(|| CoordinatorReview {
+    let is_coordinator = is_feature_coordinator
+        || coordinator.role_id.as_str() == AgentRole::IssueCoordinator.as_str();
+    let mut reviews = is_coordinator.then(|| CoordinatorReview {
         agents: &agents,
         offered_reports: HashSet::new(),
+        feature: is_feature_coordinator,
     });
     let mut retry_at_ms = None;
     let mut credentials_rejected = false;
@@ -229,6 +232,17 @@ async fn drive_agent_turn(
             .await
             .map_err(Into::into)
         };
+    } else if coordinator.role_id.as_str() == AgentRole::CodeReviewer.as_str()
+        && !cancellation.is_cancelled()
+    {
+        if result.is_ok() {
+            result = crate::code_review::complete(&engine, &ctx)
+                .await
+                .map_err(Into::into);
+        }
+        if result.is_err() {
+            let _ = crate::code_review::fail(&engine, &ctx).await;
+        }
     } else if let Some(reviews) = reviews.as_mut() {
         // The active coordinator still owns any review discovered while its children drain.
         let mut commits = engine.commit_changes();
@@ -244,8 +258,31 @@ async fn drive_agent_turn(
                 break;
             }
             commits.borrow_and_update();
-            let scheduled =
-                plan_review::schedule(&engine, &agents, &ctx, &mut drain_stop, true).await;
+            if let Err(error) = crate::code_review::schedule(&engine, &agents, &ctx).await {
+                result = Err(error.into());
+                break;
+            }
+            match crate::code_review::pending(&engine, &ctx).await {
+                Ok(true) => {
+                    if let Err(error) =
+                        plan_review::wait_for_change(&mut commits, &mut drain_stop).await
+                    {
+                        result = Err(error.into());
+                        break;
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    result = Err(error.into());
+                    break;
+                }
+            }
+            let scheduled = if reviews.feature {
+                plan_review::schedule(&engine, &agents, &ctx, &mut drain_stop, true).await
+            } else {
+                Ok(ScheduleResult::Idle)
+            };
             let scheduled = match scheduled {
                 Ok(scheduled) => scheduled,
                 Err(error) => {
@@ -447,6 +484,7 @@ async fn wait_for_state_change(
 const STALE_HEAD_ATTEMPTS: u32 = 3;
 
 struct CoordinatorReview<'a> {
+    feature: bool,
     agents: &'a Arc<devworks_core::services::agents::AgentService>,
     offered_reports: HashSet<Id>,
 }
@@ -489,6 +527,8 @@ async fn run_native_loop(
     let mut changes = engine.state_changes();
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     ensure_membership_context(engine, ctx, agent)?;
+    let isolated_code_review = agent.role_id.as_str() == AgentRole::CodeReviewer.as_str()
+        && crate::code_review::bound(engine, ctx)?.is_some();
     let mut recovered = engine.recover_native_context_head(ctx, session_id)?;
     let mut sweep = ToolWindowSweep::default();
     // The digest of the last context this turn compacted to.
@@ -509,7 +549,11 @@ async fn run_native_loop(
                 return Err(StorageError::ScopeDenied.into());
             }
         }
+        if let Some(review) = review.as_ref() {
+            crate::code_review::schedule(engine, review.agents, ctx).await?;
+        }
         if let Some(review) = review.as_ref()
+            && review.feature
             && matches!(
                 plan_review::schedule(engine, review.agents, ctx, &mut stop.stopped, false).await?,
                 ScheduleResult::Failed { .. }
@@ -543,17 +587,19 @@ async fn run_native_loop(
                     cancellation.clone(),
                 );
                 let (head, binding) = tokio::task::spawn_blocking(move || {
-                    let tools_required = !engine
-                        .providers()
-                        .ok_or(StorageError::ScopeDenied)?
-                        .schemas()
-                        .selected_agent_tools(&ctx)?
-                        .is_empty();
-                    let needs_images = context_has_images(&initial_context(
-                        engine.store().as_ref(),
-                        &ctx,
-                        &agent,
-                    )?);
+                    let tools_required = !isolated_code_review
+                        && !engine
+                            .providers()
+                            .ok_or(StorageError::ScopeDenied)?
+                            .schemas()
+                            .selected_agent_tools(&ctx)?
+                            .is_empty();
+                    let needs_images = !isolated_code_review
+                        && context_has_images(&initial_context(
+                            engine.store().as_ref(),
+                            &ctx,
+                            &agent,
+                        )?);
                     let route = route_context_head(
                         &engine,
                         &ctx,
@@ -697,6 +743,7 @@ async fn run_native_loop(
         // A context this turn just compacted is sent as it is, even if it still reaches the
         // threshold: compacting it again could not shrink it.
         if !is_plan_reviewer(agent)
+            && !isolated_code_review
             && compacted.as_deref() != Some(head.sha256.as_str())
             && compaction_due(engine, ctx, &route, &head, window)?
         {
@@ -980,13 +1027,18 @@ pub(crate) fn prepare_generation_context(
     mut binding: NativeBinding,
     is_reviewer: bool,
 ) -> Result<(ArtifactRef, NativeBinding, RouteChoice, usize), TurnError> {
-    head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
-    let selected_count = engine
-        .providers()
-        .ok_or(StorageError::ScopeDenied)?
-        .schemas()
-        .selected_agent_tools(ctx)?
-        .len();
+    let isolated_code_review = crate::code_review::bound(engine, ctx)?.is_some();
+    let selected_count = if isolated_code_review {
+        0
+    } else {
+        head = engine.refresh_native_tool_context(ctx, session_id, &head)?;
+        engine
+            .providers()
+            .ok_or(StorageError::ScopeDenied)?
+            .schemas()
+            .selected_agent_tools(ctx)?
+            .len()
+    };
     let tools_required = selected_count != 0;
     let windows = tool_window_count(selected_count);
     let needs_images = context_head_has_images(engine, ctx, &head)?;
@@ -1017,7 +1069,7 @@ pub(crate) fn prepare_generation_context(
         head = engine.change_provider_epoch(ctx, session_id, &head, &binding, &next)?;
         binding = next;
     }
-    if !is_reviewer {
+    if !is_reviewer && !isolated_code_review {
         head = engine.adopt_instruction_epoch(ctx, session_id, &head, &binding, &[])?;
     }
     binding = engine
@@ -2486,14 +2538,20 @@ fn publish_first_context_until(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let mut bound = if is_plan_reviewer(agent) {
+    let code_review = if agent.role_id.as_str() == AgentRole::CodeReviewer.as_str() {
+        crate::code_review::bound(engine, ctx)?
+    } else {
+        None
+    };
+    let isolated = is_plan_reviewer(agent) || code_review.is_some();
+    let mut bound = if let Some(input) = code_review {
+        crate::code_review::bind_prompt(engine, ctx, prompt, input)?
+    } else if is_plan_reviewer(agent) {
         crate::plan_review::bind_prompt(engine, ctx, prompt)?
     } else {
         engine.bind_provider_instructions(ctx, prompt, &[])?
     };
-    if !is_plan_reviewer(agent)
-        && let Some(packages) = engine.packages()
-    {
+    if !isolated && let Some(packages) = engine.packages() {
         use crate::package_host::context_hook::append_context_suggestions;
         use devworks_extension_protocol::package::HookPhase;
         let materialized = serde_json::to_vec(&bound)
@@ -2651,8 +2709,10 @@ fn plan_request(
         return Err(StorageError::ScopeDenied);
     }
     let tools = match window {
-        Some(window) => offered_tools(engine, ctx, window)?,
-        None => Vec::new(),
+        Some(window) if crate::code_review::bound(engine, ctx)?.is_none() => {
+            offered_tools(engine, ctx, window)?
+        }
+        _ => Vec::new(),
     };
     let compaction = window.is_none();
     let tool_bytes = serde_json::to_vec(&tools)

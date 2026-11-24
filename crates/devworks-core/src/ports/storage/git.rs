@@ -65,7 +65,50 @@ impl StoredGitWorktree {
             .map_err(|e| StorageError::InvalidRecord(e.into()))
     }
 }
+/// A durable review inherits the scope of its work root. The body is the service's
+/// versioned review state with the exact source, external identities and expiry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredCodeReview {
+    pub id: Id,
+    pub project_id: crate::protocol::ProjectId,
+    pub root_id: RootId,
+    pub revision: i64,
+    pub state: String,
+    pub body: serde_json::Value,
+}
+
+/// A finding has its own compare-and-set revision so independent replies do not
+/// invalidate each other or change the run's immutable source witnesses.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredCodeFinding {
+    pub id: Id,
+    pub review_id: Id,
+    pub repository_id: Option<Id>,
+    pub source_observation_id: Option<Id>,
+    pub project_id: crate::protocol::ProjectId,
+    pub root_id: RootId,
+    pub revision: i64,
+    pub body: serde_json::Value,
+}
+
 pub trait GitRead {
+    fn code_review(&self, id: &Id) -> Result<Option<StoredCodeReview>, StorageError>;
+    fn code_reviews(
+        &self,
+        project: Option<&crate::protocol::ProjectId>,
+        root: Option<&RootId>,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredCodeReview>, StorageError>;
+    fn code_finding(&self, id: &Id) -> Result<Option<StoredCodeFinding>, StorageError>;
+    fn code_findings(
+        &self,
+        review: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<StoredCodeFinding>, StorageError>;
     fn git_worktree_for_branch(
         &self,
         repository: &Id,
@@ -94,6 +137,17 @@ pub trait GitRead {
     ) -> Result<Vec<StoredGitWorktree>, StorageError>;
 }
 pub trait GitRepository: GitRead {
+    fn put_code_review(
+        &mut self,
+        record: &StoredCodeReview,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError>;
+    fn put_code_finding(
+        &mut self,
+        record: &StoredCodeFinding,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError>;
+
     fn insert_git_worktree(&mut self, record: &StoredGitWorktree) -> Result<(), StorageError>;
     /// Resource/work/location identity is immutable. A current-authority, quiescent ownership
     /// transfer advances ownership_revision as well as the CAS revision; head observations do
