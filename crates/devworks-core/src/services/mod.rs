@@ -39,6 +39,7 @@ pub mod process;
 pub mod projects;
 pub mod queue;
 pub mod resources;
+pub mod reviews;
 pub mod router;
 pub mod runs;
 pub mod schemas;
