@@ -49,6 +49,14 @@ impl WatchSupervisor {
     pub fn tick(&self) -> Result<WatchTick, StorageError> {
         self.service.tick(&self.host())
     }
+    pub(crate) fn tick_local(&self) -> Result<WatchTick, StorageError> {
+        self.service.tick_local(&self.host())
+    }
+
+    pub(crate) fn tick_github(&self) -> Result<WatchTick, StorageError> {
+        self.service.tick_github(&self.host())
+    }
+
     /// The settling half of a pass alone: events are recorded, not yet delivered.
     pub fn settle(&self) -> Result<usize, StorageError> {
         self.service.settle_observed()

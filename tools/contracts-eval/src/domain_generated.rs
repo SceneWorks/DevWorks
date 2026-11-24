@@ -18668,9 +18668,54 @@ pub enum WatchSourceKind {
     Probe,
     Timer,
     File,
+    #[schemars(extend("x-since" = 9))]
+    GitHub,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchSourceKind {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision < 9 && matches!(self, Self::GitHub) {
+            return Err("enum variant predates its introduction: GitHub".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["repositoryId", "workflowRunId"]}, {"required": ["repositoryId", "pullRequestNumber"]}]))]
+pub struct WatchGithubTarget {
+    pub repository_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter")]
+    pub workflow_run_id: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter")]
+    pub pull_request_number: Option<Counter>,
+}
+impl Check for WatchGithubTarget {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.workflow_run_id.check()?;
+        self.pull_request_number.check()?;
+        super::domain_rules::record(
+            "WatchGithubTarget",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -18920,6 +18965,16 @@ impl Check for WatcherPage {
     }
 }
 
+impl Revisioned for WatcherPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.items.check_revision(revision)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WatchOwner {
@@ -18960,6 +19015,13 @@ pub struct WatcherRecord {
     pub source_kind: WatchSourceKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<WatchProcessSource>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchGithubTarget", extend("x-since" = 9))]
+    pub github: Option<WatchGithubTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<WatchProbeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18997,6 +19059,7 @@ impl Check for WatcherRecord {
         self.state.check()?;
         self.source_kind.check()?;
         self.process.check()?;
+        self.github.check()?;
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
@@ -19018,6 +19081,19 @@ impl Check for WatcherRecord {
             "WatcherRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatcherRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        self.source_kind.retain_revision(revision);
+        if revision < 9 {
+            self.github = None;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.source_kind.check_revision(revision)?;
         Ok(())
     }
 }
@@ -24210,6 +24286,13 @@ pub enum DomainCommand {
         timer: Option<WatchTimer>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file: Option<WatchFile>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "WatchGithubTarget", extend("x-since" = 9))]
+        github: Option<WatchGithubTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         matching: Option<WatchMatch>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26386,6 +26469,7 @@ impl Check for DomainCommand {
                 probe,
                 timer,
                 file,
+                github,
                 matching,
                 tail_bytes,
                 max_lifetime_ms,
@@ -26394,6 +26478,7 @@ impl Check for DomainCommand {
                 probe.check()?;
                 timer.check()?;
                 file.check()?;
+                github.check()?;
                 matching.check()?;
                 tail_bytes.check()?;
                 max_lifetime_ms.check()?;
@@ -26874,6 +26959,11 @@ impl Revisioned for DomainCommand {
             Self::TasksPrioritize { placement, .. } => {
                 if revision < 2 {
                     *placement = None;
+                }
+            }
+            Self::WatchCreate { github, .. } => {
+                if revision < 9 {
+                    *github = None;
                 }
             }
             _ => {}
@@ -28725,6 +28815,10 @@ impl Revisioned for OperationResult {
             Self::ApprovalsReviewQueue { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
             Self::RouterEmbeddingSpaces { value } => value.retain_revision(revision),
+            Self::WatchCreate { value } => value.retain_revision(revision),
+            Self::WatchList { value } => value.retain_revision(revision),
+            Self::WatchInspect { value } => value.retain_revision(revision),
+            Self::WatchCancel { value } => value.retain_revision(revision),
             Self::HistoryCommandReceipt { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
@@ -28870,6 +28964,10 @@ impl Revisioned for OperationResult {
             Self::HelpTopicForScreen { value } => value.check_revision(revision),
             Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::WatchCreate { value } => value.check_revision(revision),
+            Self::WatchList { value } => value.check_revision(revision),
+            Self::WatchInspect { value } => value.check_revision(revision),
+            Self::WatchCancel { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
             Self::CodeArchitecture { value } => value.check_revision(revision),
             Self::CodeDependency { value } => value.check_revision(revision),

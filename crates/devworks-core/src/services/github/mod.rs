@@ -22,6 +22,7 @@ mod sync;
 pub mod triage;
 pub mod triage_case;
 pub mod verification;
+pub(crate) mod watch;
 
 pub use account::GitHubService;
 pub use publish::CONSUMER as EFFECT_CONSUMER;

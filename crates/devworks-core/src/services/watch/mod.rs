@@ -13,7 +13,7 @@ use crate::ports::process::{Probe, ProcessSpec as NativeProcessSpec};
 use crate::ports::storage::{
     ApplicationStore, ArtifactScope, ConfigScope, ConfigurationRead, MAX_WATCH_TAIL_BYTES,
     NewEvent, OperationRecord, ProcessPhase, ReadOptions, ReadSnapshot, StorageError,
-    StoredAssignment, StoredMatch, StoredProbe, StoredProcess, StoredWatchEvent,
+    StoredAssignment, StoredGithubWatch, StoredMatch, StoredProbe, StoredProcess, StoredWatchEvent,
     StoredWatchOutcome, StoredWatcher, WatchEventState, WatcherFilter, WatcherPhase, WriteOptions,
     WriteTransaction, read_snapshot, run_write,
 };
@@ -53,6 +53,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod file_scan;
+mod github;
 use file_scan::{FileScan, scan_file};
 
 /// Store bound on an event body (`watcher_events.payload_json`), with room for its envelope.
@@ -72,6 +73,7 @@ type PreparedLaunch = Result<Prepped, BindingRefusal>;
 enum Prepped {
     Launch(Option<(NativeProcessSpec, CommandVerdict)>),
     File(std::path::PathBuf),
+    Github(Option<StoredGithubWatch>),
 }
 /// Least time between two match events when the watcher sets none.
 const DEFAULT_MATCH_INTERVAL_MS: i64 = 30_000;
@@ -116,6 +118,23 @@ pub struct WatchTick {
     pub backup: Option<BackupPass>,
 }
 
+#[derive(Clone, Copy)]
+enum Sources {
+    All,
+    Local,
+    Github,
+}
+
+impl Sources {
+    fn includes(self, github: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Local => !github,
+            Self::Github => github,
+        }
+    }
+}
+
 pub struct WatchService {
     store: Arc<dyn ApplicationStore>,
     processes: Arc<ProcessToolService>,
@@ -128,8 +147,10 @@ pub struct WatchService {
     diagnostics: Option<Arc<DiagnosticService>>,
     /// When the backup check last came due (store clock), or `None` before the first tick.
     last_backup_ms: std::sync::Mutex<Option<i64>>,
+    last_github_backup_ms: std::sync::Mutex<Option<i64>>,
     /// When each open watcher last checked its source in this process (store clock).
     last_polled: std::sync::Mutex<HashMap<Id, i64>>,
+    github: Option<github::GithubWatch>,
 }
 
 /// What one watcher backup check did (WATCH-12).
@@ -158,7 +179,9 @@ impl WatchService {
             control: None,
             diagnostics: None,
             last_backup_ms: std::sync::Mutex::new(None),
+            last_github_backup_ms: std::sync::Mutex::new(None),
             last_polled: std::sync::Mutex::new(HashMap::new()),
+            github: None,
         }
     }
 
@@ -175,6 +198,14 @@ impl WatchService {
         self
     }
 
+    pub fn with_github(
+        mut self,
+        github: Option<Arc<crate::services::github::GitHubService>>,
+    ) -> Self {
+        self.github = github.map(github::GithubWatch::new);
+        self
+    }
+
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
     }
@@ -182,9 +213,26 @@ impl WatchService {
     /// Settles every open watcher whose process outcome is now observed, then delivers every
     /// pending event to its session. `host` must be a host context.
     pub fn tick(&self, host: &InvocationContext) -> Result<WatchTick, StorageError> {
-        let settled = self.settle_observed()?;
-        let delivered = self.deliver_pending(host)?;
-        let backup = self.backup_if_due(host)?;
+        self.tick_sources(host, Sources::All)
+    }
+
+    /// Native supervision keeps network timeouts off the local watcher lane.
+    pub fn tick_local(&self, host: &InvocationContext) -> Result<WatchTick, StorageError> {
+        self.tick_sources(host, Sources::Local)
+    }
+
+    pub fn tick_github(&self, host: &InvocationContext) -> Result<WatchTick, StorageError> {
+        self.tick_sources(host, Sources::Github)
+    }
+
+    fn tick_sources(
+        &self,
+        host: &InvocationContext,
+        sources: Sources,
+    ) -> Result<WatchTick, StorageError> {
+        let settled = self.settle_sources(sources)?;
+        let delivered = self.deliver_events(host, sources, false)?;
+        let backup = self.backup_sources_if_due(host, sources)?;
         Ok(WatchTick {
             settled,
             delivered,
@@ -197,7 +245,12 @@ impl WatchService {
     /// probe run that is due and schedules the next after a run that did not meet its condition.
     /// Returns how many watchers it settled.
     pub fn settle_observed(&self) -> Result<usize, StorageError> {
+        self.settle_sources(Sources::All)
+    }
+
+    fn settle_sources(&self, sources: Sources) -> Result<usize, StorageError> {
         let mut settled = 0;
+        let github_pass = self.github.as_ref().map(|github| github.pass(false));
         let mut after: Option<Id> = None;
         loop {
             let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
@@ -208,7 +261,9 @@ impl WatchService {
             };
             after = Some(last.id.clone());
             for watcher in &page {
-                if self.advance(watcher)? {
+                if sources.includes(watcher.github.is_some())
+                    && self.advance(watcher, github_pass)?
+                {
                     settled += 1;
                     self.last_polled.locked().remove(&watcher.id);
                 }
@@ -227,12 +282,25 @@ impl WatchService {
         &self,
         host: &InvocationContext,
     ) -> Result<Option<BackupPass>, StorageError> {
+        self.backup_sources_if_due(host, Sources::All)
+    }
+
+    fn backup_sources_if_due(
+        &self,
+        host: &InvocationContext,
+        sources: Sources,
+    ) -> Result<Option<BackupPass>, StorageError> {
         let now = self.clock.now_ms().get();
         let (enabled, interval) = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             backup_settings(read.configuration())
         })?;
         {
-            let mut last = self.last_backup_ms.locked();
+            let clock = if matches!(sources, Sources::Github) {
+                &self.last_github_backup_ms
+            } else {
+                &self.last_backup_ms
+            };
+            let mut last = clock.locked();
             let Some(since) = *last else {
                 *last = Some(now);
                 return Ok(None);
@@ -249,7 +317,7 @@ impl WatchService {
         if !unfinished {
             return Ok(None);
         }
-        self.backup_pass(host).map(Some)
+        self.backup_sources(host, sources).map(Some)
     }
 
     /// The watcher backup check itself. Each open watcher of an owner that may run is checked by
@@ -260,10 +328,19 @@ impl WatchService {
     /// Every event still undelivered is then delivered as a backup delivery, with its own event
     /// ID, and recorded as a missed primary delivery.
     pub fn backup_pass(&self, host: &InvocationContext) -> Result<BackupPass, StorageError> {
+        self.backup_sources(host, Sources::All)
+    }
+
+    fn backup_sources(
+        &self,
+        host: &InvocationContext,
+        sources: Sources,
+    ) -> Result<BackupPass, StorageError> {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(StorageError::ScopeDenied);
         }
         let mut pass = BackupPass::default();
+        let github_pass = self.github.as_ref().map(|github| github.pass(true));
         let mut after: Option<Id> = None;
         loop {
             let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
@@ -274,10 +351,10 @@ impl WatchService {
             };
             after = Some(last.id.clone());
             for watcher in &page {
-                if !self.owner_may_run(watcher)? {
+                if !sources.includes(watcher.github.is_some()) || !self.owner_may_run(watcher)? {
                     continue;
                 }
-                if let Some(reason) = self.backup_check(watcher)? {
+                if let Some(reason) = self.backup_check(watcher, github_pass)? {
                     pass.reminded += usize::from(self.remind(host, watcher, reason)?);
                 }
             }
@@ -285,23 +362,7 @@ impl WatchService {
                 break;
             }
         }
-        let mut after: Option<(i64, Id)> = None;
-        loop {
-            let page = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-                read.watchers()
-                    .pending_watch_events(after.as_ref().map(|(at, id)| (*at, id)), PAGE)
-            })?;
-            let Some(last) = page.last() else {
-                break;
-            };
-            after = Some((last.created_at_ms, last.id.clone()));
-            for event in &page {
-                pass.caught += usize::from(self.deliver(host, event, true)?);
-            }
-            if page.len() < usize::from(PAGE) {
-                break;
-            }
-        }
+        pass.caught = self.deliver_events(host, sources, true)?;
         Ok(pass)
     }
 
@@ -324,11 +385,20 @@ impl WatchService {
 
     /// Checks one open watcher's source by the backup path; returns why its owner must be
     /// reminded, if it must. An outcome found here is settled (and later delivered as a backup).
-    fn backup_check(&self, watcher: &StoredWatcher) -> Result<Option<&'static str>, StorageError> {
+    fn backup_check(
+        &self,
+        watcher: &StoredWatcher,
+        github_pass: Option<github::PollPass>,
+    ) -> Result<Option<&'static str>, StorageError> {
+        if let Some(source) = &watcher.github {
+            return self
+                .step_github(watcher, source, github_pass)
+                .map(|(_, reason)| reason);
+        }
         let now = self.clock.now_ms().get();
         // A probe past its lifetime ends TimedOut, stalled or not: no reminder for it.
         if watcher.expires_at_ms.is_some_and(|end| now >= end) {
-            self.advance(watcher)?;
+            self.advance(watcher, None)?;
             return Ok(None);
         }
         if watcher.source_kind == "Probe"
@@ -342,7 +412,7 @@ impl WatchService {
             ));
         }
         // Settles whatever the primary pass would have: an observed end, a due timer.
-        if self.advance(watcher)? {
+        if self.advance(watcher, None)? {
             return Ok(None);
         }
         let Some(run) = &watcher.process_operation_id else {
@@ -554,7 +624,11 @@ impl WatchService {
     }
 
     /// One open watcher's step; `true` when it settled.
-    fn advance(&self, watcher: &StoredWatcher) -> Result<bool, StorageError> {
+    fn advance(
+        &self,
+        watcher: &StoredWatcher,
+        github_pass: Option<github::PollPass>,
+    ) -> Result<bool, StorageError> {
         // Most open watchers have nothing new: decide that from a snapshot and write only when
         // something is due or observed (the write re-checks it).
         let now = self.clock.now_ms().get();
@@ -563,7 +637,9 @@ impl WatchService {
         let owner_ended = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             owner_ended(read.sessions(), read.projects(), watcher)
         })?;
-        self.last_polled.locked().insert(watcher.id.clone(), now);
+        if watcher.github.is_none() {
+            self.last_polled.locked().insert(watcher.id.clone(), now);
+        }
         if owner_ended.is_some() {
             let id = watcher.id.clone();
             let step = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
@@ -573,6 +649,11 @@ impl WatchService {
                 self.processes.stop_watched_run(&run.0);
             }
             return Ok(false);
+        }
+        if let Some(source) = &watcher.github {
+            return self
+                .step_github(watcher, source, github_pass)
+                .map(|(settled, _)| settled);
         }
         let observed = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
             let Some(operation_id) = &watcher.process_operation_id else {
@@ -633,6 +714,15 @@ impl WatchService {
 
     /// Delivers every pending event to its session; returns how many it delivered.
     pub fn deliver_pending(&self, host: &InvocationContext) -> Result<usize, StorageError> {
+        self.deliver_events(host, Sources::All, false)
+    }
+
+    fn deliver_events(
+        &self,
+        host: &InvocationContext,
+        sources: Sources,
+        backup: bool,
+    ) -> Result<usize, StorageError> {
         if host.principal_kind() != PrincipalKind::Host {
             return Err(StorageError::ScopeDenied);
         }
@@ -650,7 +740,9 @@ impl WatchService {
             };
             after = Some((last.created_at_ms, last.id.clone()));
             for event in &page {
-                delivered += usize::from(self.deliver(host, event, false)?);
+                if sources.includes(event.payload["sourceKind"].as_str() == Some("GitHub")) {
+                    delivered += usize::from(self.deliver(host, event, backup)?);
+                }
             }
             if page.len() < usize::from(PAGE) {
                 return Ok(delivered);
@@ -833,8 +925,18 @@ impl WatchService {
             return refuse(tx, DomainErrorCode::InvalidArgument, "watcher_session");
         };
         let mut file_path = None;
+        let mut github_source = None;
         match command.prepared::<PreparedLaunch>() {
             Some(Ok(Prepped::File(path))) => file_path = Some(path.to_string_lossy().into_owned()),
+            Some(Ok(Prepped::Github(Some(source)))) => {
+                if !self.github_bound(tx, source, ctx.project_id())? {
+                    return refuse(tx, DomainErrorCode::PermissionDenied, "github_watch");
+                }
+                github_source = Some(source.clone());
+            }
+            Some(Ok(Prepped::Github(None))) => {
+                return refuse(tx, DomainErrorCode::PermissionDenied, "github_watch");
+            }
             Some(Ok(Prepped::Launch(Some((bound, verdict))))) => {
                 // Probe and launch commands pass the shell preflight at creation (WATCH-10),
                 // not only when each run launches.
@@ -913,8 +1015,17 @@ impl WatchService {
             expires_at_ms: None,
             matching,
             file_path: None,
+            github: github_source,
         };
-        if input.file.is_some() {
+        if watcher.github.is_some() {
+            let lifetime = match &input.max_lifetime_ms {
+                Some(ms) => ms.get(),
+                None => max_lifetime_default(tx.configuration(), ctx.project_id())?,
+            };
+            watcher.source_kind = "GitHub".into();
+            watcher.tail_bytes = 0;
+            watcher.expires_at_ms = Some(now.saturating_add(lifetime));
+        } else if input.file.is_some() {
             let Some(path) = file_path.take() else {
                 return refuse(tx, DomainErrorCode::Conflict, "watch_preparation");
             };
@@ -994,6 +1105,7 @@ impl WatchService {
     fn decide_cancel(
         &self,
         ctx: &InvocationContext,
+        command: &AdmittedCommand,
         input: &ops::CancelInput,
         tx: &mut dyn WriteTransaction,
     ) -> Result<Decided, HandlerFailure> {
@@ -1007,7 +1119,9 @@ impl WatchService {
         let Some(mut watcher) = tx.watchers().watcher(&input.watcher_id)? else {
             return decided(tx, Err(not_found().into()));
         };
-        if !Self::visible(ctx, &watcher) {
+        if !Self::visible(ctx, &watcher)
+            || (watcher.github.is_some() && command.schema_revision().0 < github::REVISION)
+        {
             return decided(tx, Err(not_found().into()));
         }
         if input.expected_revision.get() != watcher.revision {
@@ -1126,6 +1240,11 @@ impl CommandHandler for WatchService {
     ) -> Result<Option<Prepared>, StorageError> {
         Ok(match command.input() {
             OperationInput::Watch(ops::Input::Create(input)) => {
+                if let Some(source) = &input.github {
+                    let prepared: PreparedLaunch =
+                        Ok(Prepped::Github(self.prepare_github(source)?));
+                    return Ok(Some(Prepared::new(prepared)));
+                }
                 // The command a process or probe watcher launches, bound and preflighted outside
                 // the write (the preflight resolves paths on disk). A timer launches nothing.
                 let spec = input
@@ -1165,7 +1284,9 @@ impl CommandHandler for WatchService {
             OperationInput::Watch(ops::Input::Create(input)) => {
                 self.decide_create(ctx, command, input, tx)
             }
-            OperationInput::Watch(ops::Input::Cancel(input)) => self.decide_cancel(ctx, input, tx),
+            OperationInput::Watch(ops::Input::Cancel(input)) => {
+                self.decide_cancel(ctx, command, input, tx)
+            }
             _ => decided(
                 tx,
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into()),
@@ -1183,13 +1304,14 @@ impl QueryHandler for WatchService {
     ) -> Result<QueryAnswer, DomainFault> {
         let fault = |error: StorageError| query_fault(error.into(), "watcher", self.correlation());
         let now = self.clock.now_ms().get();
+        let supports_github = query.schema_revision().0 >= github::REVISION;
         let result = match query.input() {
             OperationInput::Watch(ops::Input::Inspect(input)) => {
                 let watcher = snapshot
                     .watchers()
                     .watcher(&input.watcher_id)
                     .map_err(fault)?
-                    .filter(|w| Self::visible(ctx, w))
+                    .filter(|w| Self::visible(ctx, w) && (supports_github || w.github.is_none()))
                     .ok_or_else(|| {
                         Refusal::new(
                             DomainErrorCode::NotFound,
@@ -1238,16 +1360,16 @@ impl QueryHandler for WatchService {
                     .map(|states| states.0.iter().map(phase_of).collect())
                     .unwrap_or_default();
                 let feature = input.feature_id.clone();
-                let binding = CursorBinding::new(
-                    ctx,
-                    "watch.list",
-                    &[
-                        &format!("{filter:?}"),
-                        &format!("{phases:?}"),
-                        &format!("{feature:?}"),
-                    ],
-                    1,
-                );
+                let filters = [
+                    format!("{filter:?}"),
+                    format!("{phases:?}"),
+                    format!("{feature:?}"),
+                ];
+                let mut scope: Vec<_> = filters.iter().map(String::as_str).collect();
+                if supports_github {
+                    scope.push("github");
+                }
+                let binding = CursorBinding::new(ctx, "watch.list", &scope, 1);
                 // Rows another caller may not see are skipped; reading continues until the page
                 // fills.
                 let rows = cursor::page(
@@ -1271,6 +1393,7 @@ impl QueryHandler for WatchService {
                             |w| Some((w.created_at_ms, w.id.clone())),
                             |w| {
                                 Ok(Self::visible(ctx, w)
+                                    && (supports_github || w.github.is_none())
                                     && match &feature {
                                         None => true,
                                         Some(feature) => {
@@ -2343,6 +2466,7 @@ fn record_of(
             "Probe" => WatchSourceKind::Probe,
             "Timer" => WatchSourceKind::Timer,
             "File" => WatchSourceKind::File,
+            "GitHub" => WatchSourceKind::GitHub,
             _ => WatchSourceKind::Process,
         },
         process: watcher.process_operation_id.as_ref().and_then(|op| {
@@ -2351,6 +2475,7 @@ fn record_of(
                 executable_ref: Id::new(watcher.executable_ref.clone()?).ok()?,
             })
         }),
+        github: watcher.github.as_ref().map(github::record),
         probe: watcher.probe.as_ref().map(|p| WatchProbeStatus {
             interval_ms: counter(p.interval_ms),
             runs: counter(p.runs),
@@ -2420,6 +2545,16 @@ fn notice_text(event: &StoredWatchEvent) -> String {
         "File" => (
             "its file watch end".to_owned(),
             "a file under the project's registered root".to_owned(),
+        ),
+        "GitHub" => (
+            "its GitHub watch end".to_owned(),
+            match n("/github/workflowRunId") {
+                Some(run) => format!("GitHub Actions run {run}"),
+                None => format!(
+                    "GitHub PR checks for #{}",
+                    n("/github/pullRequestNumber").unwrap_or_default()
+                ),
+            },
         ),
         "Probe" => (
             "its probe end".to_owned(),
@@ -2569,6 +2704,7 @@ mod tests {
             expires_at_ms: None,
             matching: None,
             file_path: None,
+            github: None,
         }
     }
 

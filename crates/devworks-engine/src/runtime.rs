@@ -859,6 +859,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                     clock.clone(),
                 )
                 .with_root_control(control.clone())
+                .with_github(github.clone())
                 .with_diagnostics(diagnostics.clone()),
             ),
         ))
@@ -1983,22 +1984,37 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     }
 
     if let Some(supervisor) = &watchers {
-        let supervisor = supervisor.clone();
-        let every = config.watch_interval;
-        workers.start(
-            StopAt::Work,
-            None,
-            Arc::new(Loop::new("watchers", |mut stopped| async move {
-                while !stopped.is_set() {
-                    stopped.wait(every).await;
-                    if stopped.is_set() {
-                        break;
+        type Tick = fn(
+            &crate::watch::WatchSupervisor,
+        ) -> Result<
+            devworks_core::services::watch::WatchTick,
+            devworks_core::ports::storage::StorageError,
+        >;
+        let lanes: [(&str, Tick); 2] = [
+            ("watchers", crate::watch::WatchSupervisor::tick_local),
+            (
+                "GitHub watchers",
+                crate::watch::WatchSupervisor::tick_github,
+            ),
+        ];
+        for (name, tick) in lanes {
+            let supervisor = supervisor.clone();
+            let every = config.watch_interval;
+            workers.start(
+                StopAt::Work,
+                None,
+                Arc::new(Loop::new(name, |mut stopped| async move {
+                    while !stopped.is_set() {
+                        stopped.wait(every).await;
+                        if stopped.is_set() {
+                            break;
+                        }
+                        let pass = supervisor.clone();
+                        let _ = tokio::task::spawn_blocking(move || tick(&pass)).await;
                     }
-                    let pass = supervisor.clone();
-                    let _ = tokio::task::spawn_blocking(move || pass.tick()).await;
-                }
-            })),
-        );
+                })),
+            );
+        }
     }
 
     let (imports, collection_wakeup, stop) = (

@@ -260,11 +260,7 @@ impl GitHubService {
         page: Option<ApiPage>,
         error: Fault,
     ) -> Result<IssuePageResult, Failure> {
-        let throttle = page.as_ref().is_some_and(|page| {
-            page.status == 429
-                || page.status == 403
-                    && (page.control.remaining == Some(0) || page.control.retry_after_supplied)
-        });
+        let throttle = page.as_ref().is_some_and(ApiPage::throttled);
         let safe_error = match error {
             Fault::Rejected(401) | Fault::CredentialsRequired => "GitHub authorization required",
             Fault::Rejected(403 | 429) if throttle => "GitHub request rate limited",

@@ -6673,8 +6673,21 @@
         "Process",
         "Probe",
         "Timer",
-        "File"
-      ]
+        "File",
+        "GitHub"
+      ],
+      "introducedVariants": {
+        "GitHub": 9
+      }
+    },
+    "WatchGithubTarget": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "workflow_run_id": "?Counter",
+        "pull_request_number": "?Counter"
+      },
+      "exactlyOne": ["workflow_run_id", "pull_request_number"]
     },
     "WatchOutcomeKind": {
       "kind": "enum",
@@ -6796,6 +6809,7 @@
         "state": "WatcherState",
         "source_kind": "WatchSourceKind",
         "process": "?WatchProcessSource",
+        "github": "?WatchGithubTarget",
         "probe": "?WatchProbeStatus",
         "due_at_ms": "?Counter",
         "expires_at_ms": "?Counter",
@@ -6813,7 +6827,8 @@
         "output_truncated": "bool",
         "stop_requested": "bool",
         "event": "?WatchEvent"
-      }
+      },
+      "since": { "github": 9 }
     }
   },
   "operations": {
@@ -11589,14 +11604,16 @@
         "probe": "?WatchProbe",
         "timer": "?WatchTimer",
         "file": "?WatchFile",
+        "github": "?WatchGithubTarget",
         "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
         "max_lifetime_ms": "?Counter"
       },
+      "since": { "github": 9 },
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A GitHub watcher observes an exact bound workflow run or the current pull request head checks, within the shared account polling budget, and resumes on restart. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers and cannot launch a process through a watcher.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -12680,16 +12697,20 @@
       3
     ],
     "watch.create": [
-      8
+      8,
+      9
     ],
     "watch.list": [
-      8
+      8,
+      9
     ],
     "watch.inspect": [
-      8
+      8,
+      9
     ],
     "watch.cancel": [
-      8
+      8,
+      9
     ]
   },
   "familyRules": {

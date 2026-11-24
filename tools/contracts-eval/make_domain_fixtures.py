@@ -127,6 +127,23 @@ case('input-watch.create-file-match','domain-request.r8',_watch_body(file=_file,
 case('reject-watch.create-file-without-match','domain-request.r8',_watch_body(file=_file),False,True)
 case('reject-watch.create-timer-match','domain-request.r8',_watch_body(timer={'afterMs':'5000'},matching=_match),False,True)
 case('reject-watch.create-match-too-often','domain-request.r8',_watch_body(process=_proc,matching={**_match,'minIntervalMs':'99'}),False,True)
+_github_run={'repositoryId':'github-repository','workflowRunId':'45402362601'}
+_github_pr={'repositoryId':'github-repository','pullRequestNumber':'263'}
+def _github_watch(target,revision=9,**extra):
+ frame=_watch_body(github=target,**extra); frame['schemaRevision']=revision; return frame
+case('input-watch.create-github-run','domain-request.r9',_github_watch(_github_run,maxLifetimeMs='60000'))
+case('input-watch.create-github-pr','domain-request.r9',_github_watch(_github_pr))
+case('reject-watch.create-github-r8','domain-request.r8',_github_watch(_github_run,revision=8),False,False)
+case('reject-watch.create-github-two-targets','domain-request.r9',_github_watch({**_github_run,**_github_pr}),False,False)
+case('reject-watch.create-github-zero','domain-request.r9',_github_watch({**_github_run,'workflowRunId':'0'}),False,True)
+case('reject-watch.create-github-tail','domain-request.r9',_github_watch(_github_run,tailBytes=64),False,True)
+_github_watcher=result('watch.inspect','WatcherRecord')
+_github_watcher['value']['sourceKind']='GitHub'
+_github_watcher['value']['github']=_github_run
+case('result-watch.inspect-github','operation-result.r9',_github_watcher)
+for op in ('watch.list','watch.inspect','watch.cancel'):
+ frame=request(op,OPS[op]['mode']); frame['schemaRevision']=9
+ case('input-'+op+'-r9','domain-request.r9',frame)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):

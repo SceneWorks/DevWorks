@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2129), 2129);
+    assert_eq!(run("domain-fixtures.json", 2139), 2139);
 }
 
 #[test]
@@ -462,7 +462,7 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // router.catalog revision 4 (offeredEfforts) adds one.
     // This also counts revision-3 job and session inputs, revision-4 SystemOne inputs,
     // and five revision-3 GitHub account, status and issue-link admissions.
-    assert_eq!(admitted.len(), 678);
+    assert_eq!(admitted.len(), 682);
 }
 
 #[test]
