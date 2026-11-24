@@ -1,4 +1,5 @@
 //! Native first-generation routing uses the assigned source for both classifier transports.
+use crate::dispatch::EffectCapacity;
 use crate::providers::driver::NativeInvocation;
 use crate::providers::sink::ProviderResult;
 use crate::turn_engine::TurnEngine;
@@ -14,7 +15,9 @@ use devworks_core::protocol::records::{
 };
 use devworks_core::protocol::results::{OperationCompletion, OperationResult};
 use devworks_core::protocol::support::{BoundedList, BoundedText, DynamicJson, PositiveCounter};
-use devworks_core::protocol::{Counter, DomainErrorCode, Id, Protocol, RetryAdvice, Revision};
+use devworks_core::protocol::{
+    Counter, DomainErrorCode, Id, OperationId, Protocol, RetryAdvice, Revision,
+};
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, TextBlock,
 };
@@ -112,6 +115,7 @@ pub(crate) async fn assign(
     origin: String,
     mut material: ProviderContext,
     cancel: &Cancellation,
+    capacity: Option<&mut EffectCapacity<'_>>,
 ) -> Result<(), TurnError> {
     let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     check_cancel(cancel)?;
@@ -194,9 +198,8 @@ pub(crate) async fn assign(
     let material: ProviderContext = serde_json::from_slice(&bytes).map_err(invalid)?;
     let (text, media) = material_for_decision(&material)?;
 
-    if let Some(systemone) = &engine.auto_decisions
-        && let Some(classification) =
-            classify_systemone(engine, systemone, ctx, &source, &text, &media, cancel).await?
+    if let Some(classification) =
+        classify_systemone(engine, ctx, &source, &text, &media, cancel, capacity).await?
     {
         return commit_assignment(engine, ctx, &source, classification, cancel);
     }
@@ -463,13 +466,16 @@ fn material_for_decision(
 
 async fn classify_systemone(
     engine: &TurnEngine,
-    service: &std::sync::Arc<devworks_core::services::router::decisions::DecisionService>,
     ctx: &InvocationContext,
     source: &Source,
     text: &[String],
     media: &[MediaRef],
     cancel: &Cancellation,
+    capacity: Option<&mut EffectCapacity<'_>>,
 ) -> Result<Option<Assignment>, TurnError> {
+    let Some(service) = &engine.auto_decisions else {
+        return Ok(None);
+    };
     let request = DecideInput {
         model_id: None,
         expected_model_revision: None,
@@ -511,13 +517,27 @@ async fn classify_systemone(
     let Some(operation) = operation else {
         return Ok(None);
     };
+    let wait = wait_for_systemone(engine, ctx, source, &operation, cancel);
+    match capacity {
+        Some(capacity) => capacity.while_waiting(cancel, wait).await?,
+        None => wait.await,
+    }
+}
+
+async fn wait_for_systemone(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    source: &Source,
+    operation: &OperationId,
+    cancel: &Cancellation,
+) -> Result<Option<Assignment>, TurnError> {
     let mut changes = engine.commit_changes();
     let wake = std::sync::Arc::new(Wake::default());
     cancel.wake_on_cancel(&wake);
     loop {
         let before = wake.generation();
         check_cancel(cancel)?;
-        match crate::providers::systemone::completion(engine.store().as_ref(), ctx, &operation)
+        match crate::providers::systemone::completion(engine.store().as_ref(), ctx, operation)
             .map_err(|fault| {
                 failure(
                     format!("SystemOne classification: {:?}", fault.code),

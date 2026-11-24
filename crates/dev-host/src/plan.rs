@@ -1,11 +1,18 @@
-//! `dev-host env`: where this worktree builds and keeps temp files.
+//! `dev-host env`: where this worktree builds and keeps temp files, inside this host's folder
+//! `<root>/hosts/<host>/` ([`Host`]).
 //!
-//! - `CARGO_TARGET_DIR` = `<root>/build/<project>/<build-key>/slot-<n>` (sticky per worktree).
-//! - `TMPDIR` (and `TEMP`/`TMP` on Windows) = `<root>/t/<8-char id>`.
+//! - `CARGO_TARGET_DIR` = `<host folder>/build/<project>/<build-key>/slot-<n>` (sticky per
+//!   worktree; the slot registry sits beside the slots, so two hosts never share a slot even
+//!   for the same worktree path).
+//! - `TMPDIR` (and `TEMP`/`TMP` on Windows) = `<host folder>/t/<8-char id>`.
+//!
+//! With `--local-build` both point at a new folder on the local disk instead, outside the root
+//! ([`local_build_assignments`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::host::Host;
 use crate::{Vars, config, digest, is_under, resolve, slots};
 
 /// Environment variables that change build output but that cargo does not track, so builds
@@ -192,19 +199,19 @@ fn now() -> u64 {
 
 /// The build folder for this worktree.
 ///
-/// A caller-set `CARGO_TARGET_DIR` under the root is kept; one outside the root is an error.
-pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result<PathBuf, String> {
+/// A caller-set `CARGO_TARGET_DIR` inside this host's folder, or the `target/` folder that
+/// `env --local-build` made ([`is_local_build_target`]), is kept; any other one is an error
+/// ([`Host::allow_build_dir`]).
+pub fn target_dir(host: &Host, vars: &Vars, cwd: &Path, req: &Request) -> Result<PathBuf, String> {
     if let Some(set) = vars.get("CARGO_TARGET_DIR") {
-        return if is_under(Path::new(set), root, cwd) {
-            Ok(resolve(Path::new(set), cwd))
-        } else {
-            Err(format!(
-                "CARGO_TARGET_DIR={set} is outside DEV_HOST_ROOT={}; unset it so dev-host \
-                 assigns a slot, or point it under the root",
-                root.display()
-            ))
-        };
+        let set = Path::new(set);
+        // The folder `env --local-build` exported: local disk, outside the root, on purpose.
+        if local_temp_base().is_ok_and(|base| is_local_build_target(set, &base, cwd)) {
+            return Ok(resolve(set, cwd));
+        }
+        return host.allow_build_dir("CARGO_TARGET_DIR", set, cwd);
     }
+    let root = host.root();
     let worktree = match &req.worktree {
         Some(w) => resolve(w, cwd),
         None => worktree_of(cwd),
@@ -214,16 +221,17 @@ pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result
         .as_deref()
         .map(sanitize)
         .unwrap_or_else(|| project_of(&worktree));
-    let (toolchain, host) = toolchain(vars, &worktree);
+    let (toolchain, host_triple) = toolchain(vars, &worktree);
     let target = req
         .target
         .clone()
         .or_else(|| vars.get("CARGO_BUILD_TARGET").map(str::to_owned))
-        .or(host)
+        .or(host_triple)
         .unwrap_or_else(|| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
     let inputs = KeyInputs::new(toolchain, target, vars);
-    let key_dir = root.join("build").join(project).join(inputs.key());
-    // A symlinked `build/` (or level below it) would put the build off the root's volume.
+    let key_dir = host.dir().join("build").join(project).join(inputs.key());
+    // A symlinked `hosts/`, host folder, `build/` (or level below it) would put the build off
+    // the root's volume or into another host's folder.
     crate::confine(&key_dir, root, cwd)?;
     std::fs::create_dir_all(&key_dir)
         .map_err(|e| format!("cannot create {}: {e}", key_dir.display()))?;
@@ -232,7 +240,7 @@ pub fn target_dir(root: &Path, vars: &Vars, cwd: &Path, req: &Request) -> Result
         // Informational only (for people and cleanup reports); a failed write doesn't matter.
         let _ = std::fs::write(&key_file, inputs.describe());
     }
-    let cap = config::slots_per_key(req.slots, vars, &config::read(root)?)?;
+    let cap = config::slots_per_key(req.slots, vars, &config::read(root)?.values)?;
     slots::assign(
         &key_dir,
         &worktree.to_string_lossy(),
@@ -271,15 +279,16 @@ pub fn tmp_id(vars: &Vars, session: Option<&str>) -> String {
 /// The temp folder variable this platform's tools read first.
 const TMP_VAR: &str = if cfg!(windows) { "TEMP" } else { "TMPDIR" };
 
-/// The temp folder (created, mode 0700 on Unix). An existing one already under `<root>/t` is
-/// kept, so repeated calls in one session don't scatter folders.
+/// The temp folder (created, mode 0700 on Unix). An existing one already under this host's
+/// `t/` is kept, so repeated calls in one session don't scatter folders.
 pub fn tmp_dir(
-    root: &Path,
+    host: &Host,
     vars: &Vars,
     cwd: &Path,
     session: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let t = root.join("t");
+    let root = host.root();
+    let t = host.dir().join("t");
     crate::confine(&t, root, cwd)?;
     if session.is_none()
         && let Some(current) = vars.get(TMP_VAR)
@@ -305,13 +314,17 @@ pub fn tmp_dir(
 
 /// Every assignment `env` prints, in order.
 pub fn assignments(
-    root: &Path,
+    host: &Host,
     vars: &Vars,
     cwd: &Path,
     req: &Request,
 ) -> Result<Vec<(String, String)>, String> {
-    let target = target_dir(root, vars, cwd, req)?;
-    let tmp = tmp_dir(root, vars, cwd, req.session.as_deref())?;
+    let target = target_dir(host, vars, cwd, req)?;
+    let tmp = tmp_dir(host, vars, cwd, req.session.as_deref())?;
+    Ok(exports(&target, &tmp))
+}
+
+fn exports(target: &Path, tmp: &Path) -> Vec<(String, String)> {
     let tmp = tmp.to_string_lossy().into_owned();
     let mut out = vec![
         (
@@ -324,7 +337,165 @@ pub fn assignments(
         out.push(("TEMP".to_owned(), tmp.clone()));
         out.push(("TMP".to_owned(), tmp));
     }
-    Ok(out)
+    out
+}
+
+/// The system drive's temp location for `env --local-build`, read without `TMPDIR`, `TEMP` or
+/// `TMP` (an earlier `dev-host env` points those at the root): `/tmp` on Unix.
+#[cfg(not(windows))]
+pub fn local_temp_base() -> Result<PathBuf, String> {
+    Ok(PathBuf::from("/tmp"))
+}
+
+/// The system drive's temp location for `env --local-build`, read without `TMPDIR`, `TEMP` or
+/// `TMP` (an earlier `dev-host env` points those at the root): on Windows the user's
+/// `%LOCALAPPDATA%\Temp`, with the local app data folder asked of the shell
+/// (`SHGetKnownFolderPath`), which must be on the system drive.
+#[cfg(windows)]
+pub fn local_temp_base() -> Result<PathBuf, String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStringExt;
+
+    // Only the shell reads the fields, through the pointer.
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct Guid {
+        data1: u32,
+        data2: u16,
+        data3: u16,
+        data4: [u8; 8],
+    }
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHGetKnownFolderPath(
+            rfid: *const Guid,
+            flags: u32,
+            token: *mut c_void,
+            path: *mut *mut u16,
+        ) -> i32;
+    }
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoTaskMemFree(pv: *mut c_void);
+    }
+    // KnownFolders.h: FOLDERID_LocalAppData {F1B32785-6FBA-4FCF-9D55-7B8E7F157091}.
+    const LOCAL_APP_DATA: Guid = Guid {
+        data1: 0xF1B3_2785,
+        data2: 0x6FBA,
+        data3: 0x4FCF,
+        data4: [0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91],
+    };
+    let mut raw: *mut u16 = std::ptr::null_mut();
+    // SAFETY: the GUID outlives the call, a null token means the current user, and `raw`
+    // receives a NUL-terminated string that is freed below with CoTaskMemFree.
+    let hr = unsafe { SHGetKnownFolderPath(&LOCAL_APP_DATA, 0, std::ptr::null_mut(), &mut raw) };
+    let folder = if hr >= 0 && !raw.is_null() {
+        let mut len = 0usize;
+        // SAFETY: `raw` is NUL-terminated.
+        while unsafe { *raw.add(len) } != 0 {
+            len += 1;
+        }
+        // SAFETY: `raw` holds `len` valid UTF-16 units.
+        let units = unsafe { std::slice::from_raw_parts(raw, len) };
+        Some(PathBuf::from(std::ffi::OsString::from_wide(units)))
+    } else {
+        None
+    };
+    // SAFETY: `raw` came from SHGetKnownFolderPath (CoTaskMemFree accepts null).
+    unsafe { CoTaskMemFree(raw.cast()) };
+    let base = folder
+        .ok_or_else(|| format!("cannot find the local app data folder (HRESULT {hr:#x})"))?
+        .join("Temp");
+    let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+    let on_system =
+        crate::check::volume_of(&base).is_some_and(|drive| drive.eq_ignore_ascii_case(&system));
+    if !on_system {
+        return Err(format!(
+            "the local temp folder {} is not on the system drive {system}",
+            base.display()
+        ));
+    }
+    std::fs::create_dir_all(&base).map_err(|e| format!("cannot create {}: {e}", base.display()))?;
+    Ok(base)
+}
+
+/// Whether `path` is the `target/` folder of a `--local-build` folder directly in `base`
+/// (`<base>/dev-host-local-<8 hex>/target`, real folders, no links), so a later cargo shim
+/// launch accepts the `CARGO_TARGET_DIR` that `env --local-build` exported.
+pub fn is_local_build_target(path: &Path, base: &Path, cwd: &Path) -> bool {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let (Some(fresh), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    let id_ok = fresh
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix(LOCAL_PREFIX))
+        .is_some_and(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+    name == "target"
+        && id_ok
+        && real_dir(fresh)
+        && real_dir(&path)
+        && fresh
+            .parent()
+            .is_some_and(|parent| resolve(parent, cwd) == resolve(base, cwd))
+}
+
+const LOCAL_PREFIX: &str = "dev-host-local-";
+
+/// `dev-host env --local-build`: the same variables, pointing at a new folder of its own under
+/// `base` (on the runner's local disk, outside the root), with no build slot and nothing from
+/// the share, so a release signing build reads no state another host can write. Each call makes
+/// a new folder, mode 0700 on Unix, with `target/` and `t/` inside.
+pub fn local_build_assignments(
+    host: &Host,
+    base: &Path,
+    cwd: &Path,
+) -> Result<Vec<(String, String)>, String> {
+    if is_under(base, host.root(), cwd) {
+        return Err(format!(
+            "{} is inside DEV_HOST_ROOT={}; --local-build needs the local disk",
+            base.display(),
+            host.root().display()
+        ));
+    }
+    let base = resolve(base, cwd);
+    let make = |dir: &Path| -> std::io::Result<()> {
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
+        builder.create(dir)
+    };
+    let mut fresh = None;
+    for _ in 0..16 {
+        let dir = base.join(format!("{LOCAL_PREFIX}{}", tmp_id(&Vars::default(), None)));
+        match make(&dir) {
+            Ok(()) => {
+                fresh = Some(dir);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("cannot create {}: {e}", dir.display())),
+        }
+    }
+    let fresh =
+        fresh.ok_or_else(|| format!("cannot find a free folder name in {}", base.display()))?;
+    let (target, tmp) = (fresh.join("target"), fresh.join("t"));
+    for dir in [&target, &tmp] {
+        make(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    Ok(exports(&target, &tmp))
 }
 
 /// Output formats for `env`.
@@ -434,16 +605,21 @@ mod tests {
         assert_eq!(sanitize("Scene Works"), "scene-works");
     }
 
-    fn root(scratch: &Scratch) -> PathBuf {
-        let root = scratch.path().join("root");
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    /// Host `name`'s folder (created) under the scratch root.
+    fn host_named(scratch: &Scratch, name: &str) -> Host {
+        let host = Host::new(scratch.path().join("root"), name).unwrap();
+        std::fs::create_dir_all(host.dir()).unwrap();
+        host
+    }
+
+    fn host(scratch: &Scratch) -> Host {
+        host_named(scratch, "mac-a")
     }
 
     #[test]
     fn target_dir_is_sticky_per_worktree_and_separate_across_worktrees() {
         let scratch = Scratch::new("plan-sticky");
-        let root = root(&scratch);
+        let host = host(&scratch);
         let wt_a = scratch.path().join("a");
         let wt_b = scratch.path().join("b");
         std::fs::create_dir_all(&wt_a).unwrap();
@@ -455,67 +631,116 @@ mod tests {
             ..Request::default()
         };
         let vars = Vars::default();
-        let a1 = target_dir(&root, &vars, scratch.path(), &req(&wt_a)).unwrap();
-        let a2 = target_dir(&root, &vars, scratch.path(), &req(&wt_a)).unwrap();
-        let b = target_dir(&root, &vars, scratch.path(), &req(&wt_b)).unwrap();
+        let a1 = target_dir(&host, &vars, scratch.path(), &req(&wt_a)).unwrap();
+        let a2 = target_dir(&host, &vars, scratch.path(), &req(&wt_a)).unwrap();
+        let b = target_dir(&host, &vars, scratch.path(), &req(&wt_b)).unwrap();
         assert_eq!(a1, a2);
         assert_ne!(a1, b);
-        assert!(a1.starts_with(root.join("build").join("demo")));
+        assert!(a1.starts_with(host.dir().join("build").join("demo")));
         assert!(a1.join(slots::STAMP_FILE).is_file());
 
         let moved: Vars = [("MACOSX_DEPLOYMENT_TARGET", "15.0")].into_iter().collect();
-        let a3 = target_dir(&root, &moved, scratch.path(), &req(&wt_a)).unwrap();
+        let a3 = target_dir(&host, &moved, scratch.path(), &req(&wt_a)).unwrap();
         assert_ne!(a1.parent(), a3.parent(), "a new key gets a new folder");
+    }
+
+    #[test]
+    fn two_hosts_on_one_root_never_share_a_slot_or_temp_folder() {
+        let scratch = Scratch::new("plan-hosts");
+        let (mac_a, mac_b) = (host_named(&scratch, "mac-a"), host_named(&scratch, "mac-b"));
+        let wt = scratch.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let req = Request {
+            project: Some("demo".into()),
+            worktree: Some(wt.clone()),
+            target: Some("aarch64-apple-darwin".into()),
+            session: Some("same-session".into()),
+            ..Request::default()
+        };
+        let vars = Vars::default();
+        let on = |host: &Host| assignments(host, &vars, scratch.path(), &req).unwrap();
+        let (a, b) = (on(&mac_a), on(&mac_b));
+        for (key, _) in &a {
+            let value = |set: &[(String, String)]| {
+                PathBuf::from(&set.iter().find(|(k, _)| k == key).unwrap().1)
+            };
+            let (in_a, in_b) = (value(&a), value(&b));
+            assert!(in_a.starts_with(mac_a.dir()), "{key}: {}", in_a.display());
+            assert!(in_b.starts_with(mac_b.dir()), "{key}: {}", in_b.display());
+        }
+        // Each host keeps its own registry, and nothing lands at the root's top level.
+        let target = |set: &[(String, String)]| PathBuf::from(&set[0].1);
+        for (host, set) in [(&mac_a, &a), (&mac_b, &b)] {
+            let registry = target(set).parent().unwrap().join(slots::REGISTRY_FILE);
+            assert!(registry.starts_with(host.dir().join("build")));
+            assert!(registry.is_file());
+        }
+        let top: Vec<_> = std::fs::read_dir(mac_a.root())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(top, vec![std::ffi::OsString::from("hosts")]);
     }
 
     #[test]
     fn caller_target_dir_is_kept_under_root_and_refused_outside() {
         let scratch = Scratch::new("plan-caller");
-        let root = root(&scratch);
-        let inside = root.join("build/custom");
+        let host = host(&scratch);
+        let inside = host.dir().join("build/custom");
         let vars: Vars = [("CARGO_TARGET_DIR", inside.display().to_string())]
             .into_iter()
             .collect();
         assert_eq!(
-            target_dir(&root, &vars, scratch.path(), &Request::default()),
+            target_dir(&host, &vars, scratch.path(), &Request::default()),
             Ok(resolve(&inside, scratch.path()))
         );
+        let other = host.root().join("hosts/mac-b/build/custom");
+        let vars: Vars = [("CARGO_TARGET_DIR", other.display().to_string())]
+            .into_iter()
+            .collect();
+        let err = target_dir(&host, &vars, scratch.path(), &Request::default()).unwrap_err();
+        assert!(err.contains("another host"), "{err}");
         let outside = scratch.path().join("target");
         let vars: Vars = [("CARGO_TARGET_DIR", outside.display().to_string())]
             .into_iter()
             .collect();
-        let err = target_dir(&root, &vars, scratch.path(), &Request::default()).unwrap_err();
+        let err = target_dir(&host, &vars, scratch.path(), &Request::default()).unwrap_err();
         assert!(err.contains("outside DEV_HOST_ROOT"), "{err}");
     }
 
-    /// A root whose `level` (relative to it) is a symlink to a folder outside the root.
+    /// A host whose `level` (relative to the root) is a symlink to a folder outside the root.
     #[cfg(unix)]
-    fn root_with_link(scratch: &Scratch, level: &str) -> (PathBuf, PathBuf) {
-        let root = root(scratch);
+    fn host_with_link(scratch: &Scratch, level: &str) -> (Host, PathBuf) {
+        let host = Host::new(scratch.path().join("root"), "mac-a").unwrap();
         let outside = scratch.path().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        let link = root.join(level);
+        let link = host.root().join(level);
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&outside, &link).unwrap();
-        (root, outside)
+        (host, outside)
     }
 
     #[cfg(unix)]
     #[test]
     fn generated_target_dir_refuses_symlinked_levels_under_the_root() {
-        for level in ["build", "build/demo"] {
+        for level in [
+            "hosts",
+            "hosts/mac-a",
+            "hosts/mac-a/build",
+            "hosts/mac-a/build/demo",
+        ] {
             let scratch = Scratch::new("plan-link");
-            let (root, outside) = root_with_link(&scratch, level);
+            let (host, outside) = host_with_link(&scratch, level);
             let req = Request {
                 project: Some("demo".into()),
                 worktree: Some(scratch.path().to_path_buf()),
                 target: Some("aarch64-apple-darwin".into()),
                 ..Request::default()
             };
-            let err = target_dir(&root, &Vars::default(), scratch.path(), &req).unwrap_err();
+            let err = target_dir(&host, &Vars::default(), scratch.path(), &req).unwrap_err();
             assert!(err.contains("is a symlink"), "{level}: {err}");
             assert!(
-                err.contains(&root.join(level).display().to_string()),
+                err.contains(&host.root().join(level).display().to_string()),
                 "{err}"
             );
             assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "{level}");
@@ -526,29 +751,41 @@ mod tests {
     #[test]
     fn tmp_dir_refuses_a_symlinked_t() {
         let scratch = Scratch::new("plan-tlink");
-        let (root, outside) = root_with_link(&scratch, "t");
-        let err = tmp_dir(&root, &Vars::default(), scratch.path(), Some("s")).unwrap_err();
+        let (host, outside) = host_with_link(&scratch, "hosts/mac-a/t");
+        let err = tmp_dir(&host, &Vars::default(), scratch.path(), Some("s")).unwrap_err();
         assert!(err.contains("is a symlink"), "{err}");
-        let inherited: Vars = [(TMP_VAR, root.join("t/abc").display().to_string())]
+        let inherited: Vars = [(TMP_VAR, host.dir().join("t/abc").display().to_string())]
             .into_iter()
             .collect();
-        assert!(tmp_dir(&root, &inherited, scratch.path(), None).is_err());
+        assert!(tmp_dir(&host, &inherited, scratch.path(), None).is_err());
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
     }
 
     #[test]
     fn tmp_dir_is_short_stable_per_session_and_created() {
         let scratch = Scratch::new("plan-tmp");
-        let root = root(&scratch);
+        let host = host(&scratch);
         let vars = Vars::default();
-        let a = tmp_dir(&root, &vars, scratch.path(), Some("s-1")).unwrap();
-        let b = tmp_dir(&root, &vars, scratch.path(), Some("s-1")).unwrap();
-        let c = tmp_dir(&root, &vars, scratch.path(), Some("s-2")).unwrap();
+        let a = tmp_dir(&host, &vars, scratch.path(), Some("s-1")).unwrap();
+        let b = tmp_dir(&host, &vars, scratch.path(), Some("s-1")).unwrap();
+        let c = tmp_dir(&host, &vars, scratch.path(), Some("s-2")).unwrap();
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert!(a.is_dir());
         assert_eq!(a.file_name().unwrap().len(), 8);
-        assert_eq!(a.parent().unwrap(), root.join("t"));
+        assert_eq!(a.parent().unwrap(), host.dir().join("t"));
+        // A TMPDIR inherited from another host's folder is not kept.
+        let foreign: Vars = [(
+            TMP_VAR,
+            host.root()
+                .join("hosts/mac-b/t/abcd1234")
+                .display()
+                .to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let d = tmp_dir(&host, &foreign, scratch.path(), None).unwrap();
+        assert!(d.starts_with(host.dir().join("t")), "{}", d.display());
 
         let run: Vars = [("GITHUB_RUN_ID", "42"), ("GITHUB_RUN_ATTEMPT", "1")]
             .into_iter()
@@ -558,6 +795,69 @@ mod tests {
             tmp_id(&Vars::default(), None),
             tmp_id(&Vars::default(), None)
         );
+    }
+
+    #[test]
+    fn local_build_paths_are_fresh_private_and_outside_the_root() {
+        let scratch = Scratch::new("plan-local");
+        let host = host(&scratch);
+        let base = scratch.path().join("local");
+        std::fs::create_dir_all(&base).unwrap();
+        let a = local_build_assignments(&host, &base, scratch.path()).unwrap();
+        let b = local_build_assignments(&host, &base, scratch.path()).unwrap();
+        assert_eq!(a.len(), b.len());
+        for ((key, va), (_, vb)) in a.iter().zip(&b) {
+            let (pa, pb) = (PathBuf::from(va), PathBuf::from(vb));
+            assert!(!is_under(&pa, host.root(), scratch.path()), "{key}: {va}");
+            assert!(pa.starts_with(&base) && pa.is_dir(), "{key}: {va}");
+            assert_ne!(pa.parent(), pb.parent(), "{key} differs per call");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let fresh = PathBuf::from(&a[0].1).parent().unwrap().to_path_buf();
+            let mode = std::fs::metadata(&fresh).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        // Nothing was written to the root, and a base inside the root is refused.
+        assert!(!host.dir().join("build").exists() && !host.dir().join("t").exists());
+        let err = local_build_assignments(&host, &host.dir(), scratch.path()).unwrap_err();
+        assert!(err.contains("inside DEV_HOST_ROOT"), "{err}");
+        assert!(!is_under(
+            &local_temp_base().unwrap(),
+            host.root(),
+            scratch.path()
+        ));
+    }
+
+    #[test]
+    fn local_build_target_dir_is_accepted_and_look_alikes_are_not() {
+        let scratch = Scratch::new("plan-local-accept");
+        let host = host(&scratch);
+        let base = local_temp_base().unwrap();
+        let set = local_build_assignments(&host, &base, scratch.path()).unwrap();
+        let target = PathBuf::from(&set[0].1);
+        let fresh = target.parent().unwrap().to_path_buf();
+        let with = |dir: &Path| -> Vars {
+            [("CARGO_TARGET_DIR", dir.display().to_string())]
+                .into_iter()
+                .collect()
+        };
+        let kept = target_dir(&host, &with(&target), scratch.path(), &Request::default());
+        let tmp = PathBuf::from(&set[1].1);
+        let refused = [
+            tmp.clone(),
+            fresh.clone(),
+            base.join("dev-host-local-zzzzzzzz/target"),
+        ]
+        .map(|dir| target_dir(&host, &with(&dir), scratch.path(), &Request::default()));
+        let other_base = is_local_build_target(&target, scratch.path(), scratch.path());
+        let _ = std::fs::remove_dir_all(&fresh);
+        assert_eq!(kept, Ok(resolve(&target, scratch.path())));
+        for r in refused {
+            assert!(r.is_err(), "{r:?}");
+        }
+        assert!(!other_base, "only directly in the local temp base");
     }
 
     #[test]

@@ -385,6 +385,8 @@ mod tests {
             | TaskOutput::Prepared { .. }
             | TaskOutput::SettingSecret { .. }
             | TaskOutput::PackagePrepared { .. }
+            | TaskOutput::PackageViews { .. }
+            | TaskOutput::PackageViewData(_)
             | TaskOutput::Refreshed
             | TaskOutput::TextPreview(_)
             | TaskOutput::WorkspaceReplyStatus(_)
@@ -392,6 +394,7 @@ mod tests {
             | TaskOutput::Instruction(_)
             | TaskOutput::McpContent(_)
             | TaskOutput::SystemOneCompletion(_)
+            | TaskOutput::AnalysisEvidence(_)
             | TaskOutput::RepositoryDeletionPreview(_)
             | TaskOutput::RepositoryDeleted(_) => {
                 panic!("expected a preview")

@@ -139,8 +139,92 @@ impl AddonsCtl<'_, '_> {
                     self.addons.selected = Some(id);
                     None
                 }
+                AddonsAction::LoadViews { package, digest } => {
+                    if let Some(client) = self.client.as_deref_mut() {
+                        client.task(
+                            AddonsSlot::PackageViews(package.clone()).into(),
+                            "Loading package views",
+                            move |b| {
+                                let views = b.package_views(&package, &digest)?;
+                                let images = a::views::prepare_images(b, &views);
+                                Ok(TaskOutput::PackageViews { views, images })
+                            },
+                        );
+                    }
+                    None
+                }
+                AddonsAction::RefreshView {
+                    package,
+                    digest,
+                    view,
+                    form,
+                } => {
+                    if self.cx.client.is_some() {
+                        let request = self.addons.package_views.request_data(&view);
+                        let client = self.cx.client.as_deref_mut().expect("connected client");
+                        let completed_view = view.clone();
+                        if !client.network_task(
+                            AddonsSlot::PackageViewData {
+                                package: package.clone(),
+                                digest: digest.clone(),
+                                view: view.clone(),
+                                request,
+                            }
+                            .into(),
+                            "Loading package view data",
+                            move |b| {
+                                b.load_package_view_data(&package, &digest, &view, &form)
+                                    .map(TaskOutput::PackageViewData)
+                            },
+                        ) {
+                            self.addons
+                                .package_views
+                                .finish_data(&completed_view, request);
+                        }
+                    }
+                    None
+                }
+                AddonsAction::ViewAction {
+                    package,
+                    digest,
+                    view,
+                    action,
+                    form,
+                } => {
+                    if let Some(client) = self.client.as_deref_mut() {
+                        self.addons.busy = client.task(
+                            AddonsSlot::PrepareViewAction.into(),
+                            "Preparing package action",
+                            move |b| {
+                                let input = b.prepare_package_view_action(
+                                    &package, &digest, &view, &action, &form,
+                                )?;
+                                let frame = a::invoke_view_action_frame(
+                                    b, &package, &digest, &action, input,
+                                );
+                                Ok(TaskOutput::Prepared { frame })
+                            },
+                        );
+                    }
+                    None
+                }
                 AddonsAction::Logs(id) => {
                     self.load_addon_logs(id);
+                    None
+                }
+                AddonsAction::ReadContent {
+                    package,
+                    digest,
+                    contribution,
+                } => {
+                    self.addons.busy = self.command(
+                        AddonsSlot::ReadContent,
+                        "Opening package content",
+                        "addons.read_content",
+                        move |backend| {
+                            a::read_content_frame(backend, &package, &digest, &contribution)
+                        },
+                    );
                     None
                 }
                 AddonsAction::OpenIndexing => {
@@ -296,6 +380,80 @@ impl AddonsCtl<'_, '_> {
                 }
                 self.addons.notice = Some(a::describe(outcome));
                 self.load_addons();
+            }
+            (AddonsSlot::PackageViews(package), Reply::Task(result)) => match result {
+                Ok(TaskOutput::PackageViews { views, images }) => {
+                    self.addons.package_views.load(package, views, images);
+                }
+                Err(error) => self.addons.notice = Some(error),
+                _ => self.addons.notice = Some("Unexpected package view response".into()),
+            },
+            (
+                AddonsSlot::PackageViewData {
+                    package,
+                    digest,
+                    view,
+                    request,
+                },
+                Reply::Task(result),
+            ) if self.addons.package_views.finish_data(&view, request) => match result {
+                Ok(TaskOutput::PackageViewData(data)) => {
+                    self.addons
+                        .package_views
+                        .update_data(&package, &digest, view, data);
+                }
+                Err(error) => self.addons.notice = Some(error),
+                _ => self.addons.notice = Some("Unexpected package view data".into()),
+            },
+            (AddonsSlot::PackageViewData { .. }, Reply::Task(_)) => {}
+            (AddonsSlot::PrepareViewAction, Reply::Task(result)) => match result {
+                Ok(TaskOutput::Prepared { frame }) => {
+                    self.addons.busy = self.command(
+                        AddonsSlot::InvokeViewAction,
+                        "Running package action",
+                        "addons.invoke",
+                        |_| frame,
+                    );
+                }
+                Err(error) => {
+                    self.addons.busy = false;
+                    self.addons.notice = Some(error);
+                }
+                _ => self.addons.busy = false,
+            },
+            (AddonsSlot::InvokeViewAction, Reply::Command(outcome)) => {
+                self.addons.busy = is_unknown(&outcome);
+                self.addons.notice = Some(match ops::command_result(outcome) {
+                    Ok(devworks_core::protocol::results::OperationResult::AddonsInvoke {
+                        value,
+                    }) => {
+                        format!(
+                            "Package action recorded as {}",
+                            value.operation_id.0.as_str()
+                        )
+                    }
+                    Ok(_) => "Unexpected package action response".into(),
+                    Err(error) => error.describe(),
+                });
+            }
+            (AddonsSlot::ReadContent, Reply::Command(outcome)) => {
+                self.addons.busy = is_unknown(&outcome);
+                match ops::command_result(outcome) {
+                    Ok(devworks_core::protocol::results::OperationResult::AddonsReadContent {
+                        value,
+                    }) => {
+                        self.cx
+                            .routes
+                            .entry(Route::Artifacts)
+                            .or_default()
+                            .selection = Some(value.artifact.artifact_id.as_str().to_owned());
+                        self.navigate(Route::Artifacts);
+                    }
+                    Ok(_) => {
+                        self.addons.notice = Some("Unexpected package content response".into())
+                    }
+                    Err(error) => self.addons.notice = Some(error.describe()),
+                }
             }
             (AddonsSlot::AddonsDiscovery, Reply::Task(t)) => {
                 if let Err(e) = t {

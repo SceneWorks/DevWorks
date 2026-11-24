@@ -700,6 +700,27 @@
     "schemaValid": true
   },
   {
+    "id": "input-database.mysql_readonly_query-Query",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"Fixture content\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-database.sensitive_columns-Query",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.sensitive_columns\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-database.edit_sensitive_column_rules-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.edit_sensitive_column_rules\",\"expectedRevision\":\"1\",\"edit\":{\"kind\":\"Upsert\",\"rule\":{\"id\":\"id-a\",\"column\":\"fixture\",\"allow\":false}}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-knowledge.search-Query",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20}}",
@@ -1883,6 +1904,20 @@
     "schemaValid": true
   },
   {
+    "id": "input-addons.read_content-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"addons.read_content\",\"packageId\":\"id-a\",\"contributionId\":\"fixture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-addons.run_workflow-Command",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"addons.run_workflow\",\"workflowId\":\"id-a\",\"packageId\":\"id-a\",\"contributionId\":\"fixture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"input\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"requiredGates\":[]},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-addons.invocation-Query",
     "entry": "domain-request.r8",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"addons.invocation\",\"operationId\":\"operation-a\"},\"schemaRevision\":8}",
@@ -2985,6 +3020,27 @@
     "id": "result-database.configure_sensitive_columns",
     "entry": "operation-result",
     "raw": "{\"kind\":\"database.configure_sensitive_columns\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"name\":\"fixture\",\"engine\":\"Sqlite\",\"state\":\"Enabled\",\"writesEnabled\":false,\"metadataOnly\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-database.mysql_readonly_query",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[],\"rowCount\":1}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-database.sensitive_columns",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.sensitive_columns\",\"value\":{\"revision\":\"1\",\"rules\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-database.edit_sensitive_column_rules",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.edit_sensitive_column_rules\",\"value\":{\"revision\":\"1\",\"rules\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -4137,6 +4193,20 @@
     "schemaValid": true
   },
   {
+    "id": "result-addons.read_content",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"addons.read_content\",\"value\":{\"packageId\":\"id-a\",\"contributionId\":\"fixture\",\"contentKind\":\"fixture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-addons.run_workflow",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"addons.run_workflow\",\"value\":{\"operationId\":\"operation-a\",\"state\":\"ObservedComplete\",\"artifacts\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-addons.invocation",
     "entry": "operation-result.r8",
     "raw": "{\"kind\":\"addons.invocation\",\"value\":{\"operationId\":\"operation-a\",\"state\":\"ObservedComplete\",\"artifacts\":[]}}",
@@ -4947,6 +5017,111 @@
     "raw": "{\"kind\":\"code.repository_dependencies\",\"value\":{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-a\",\"view\":{\"pinId\":\"pin-a\",\"stamp\":{\"storeId\":\"store-a\",\"restoreEpoch\":\"0\",\"sequence\":\"1\",\"policyRevision\":\"1\",\"scopeRevision\":\"1\"},\"expiresAtMs\":\"100\",\"views\":[{\"viewId\":\"view-a\",\"snapshot\":{\"repositoryId\":\"repo-a\",\"base\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"head\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"worktreeId\":\"work-a\",\"captureDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"sourceRevision\":\"1\",\"baseline\":{\"generationId\":\"g-base\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"branch\":{\"generationId\":\"g-branch\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-base\"},\"worktree\":{\"generationId\":\"g-capture\",\"manifestDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentGenerationId\":\"g-branch\"},\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}]},\"completion\":\"Complete\",\"result\":{\"kind\":\"Nodes\",\"nodes\":[]}}}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "input-database.read-scoped-schema-preview",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.read\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"SELECT 1\",\"parameters\":[],\"rowLimit\":20,\"timeoutMs\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"includeSchemaDigest\":true,\"schemaPreview\":\"ALTER TABLE contacts ADD label TEXT\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.read-revision-one-preview",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.read\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"SELECT 1\",\"parameters\":[],\"rowLimit\":20,\"timeoutMs\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"},\"includeSchemaDigest\":true,\"schemaPreview\":\"ALTER TABLE contacts ADD label TEXT\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "input-database.execute_write-scoped",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.execute_write\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"UPDATE fixture SET label = :label\",\"parameters\":[{\"name\":\"label\",\"value\":{\"kind\":\"Text\",\"value\":\"fixture\"}}],\"timeoutMs\":\"1\",\"scope\":{\"kind\":\"Project\",\"projectId\":\"project-a\"}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-database.direct_schema_change-exact-fallback",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.direct_schema_change\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"statement\":\"Fixture content\",\"parameters\":[],\"timeoutMs\":\"1\",\"expectedSchemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"fallbackReason\":\"Approved emergency repair\"},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-database.apply_migration-git-source",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"database.apply_migration\",\"connectionId\":\"id-a\",\"expectedConnectionRevision\":\"1\",\"migration\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"expectedSchemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source\":{\"repositoryId\":\"repo-a\",\"commit\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"path\":\"migrations/001.sql\"}},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-database.read-with-schema-digest",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.read\",\"value\":{\"columns\":[],\"rows\":[],\"truncated\":false,\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.read-result-before-schema-digest",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"database.read\",\"value\":{\"columns\":[],\"rows\":[],\"truncated\":false,\"schemaDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r9-result-database.execute_write",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.execute_write\",\"value\":{\"connectionId\":\"id-a\",\"state\":\"ObservedComplete\",\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-database.direct_schema_change",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.direct_schema_change\",\"value\":{\"connectionId\":\"id-a\",\"state\":\"ObservedComplete\",\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r9-result-database.apply_migration",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.apply_migration\",\"value\":{\"connectionId\":\"id-a\",\"state\":\"ObservedComplete\",\"diagnostics\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-database.mysql_readonly_query-current",
+    "entry": "domain-request.r9",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"SELECT 1 AS item\",\"limit\":1},\"schemaRevision\":10}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.mysql_readonly_query-before-introduction",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"database.mysql_readonly_query\",\"source\":\"fixture\",\"sql\":\"SELECT 1 AS item\",\"limit\":1},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "result-database.mysql_readonly_query-retained-binary",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[{\"payload\":\"AQI=\"}],\"rowCount\":1}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-database.mysql_readonly_query-current-binary",
+    "entry": "operation-result.r10",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[{\"payload\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"rowCount\":1,\"columns\":[{\"name\":\"payload\",\"dataType\":\"blob\",\"sensitive\":false}],\"truncated\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-database.mysql_readonly_query-current-before-revision",
+    "entry": "operation-result.r9",
+    "raw": "{\"kind\":\"database.mysql_readonly_query\",\"value\":{\"rows\":[{\"payload\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}],\"rowCount\":1,\"columns\":[{\"name\":\"payload\",\"dataType\":\"blob\",\"sensitive\":false}],\"truncated\":true}}",
+    "typedValid": false,
+    "schemaValid": false
   },
   {
     "id": "input-watch.create-probe",
@@ -9667,42 +9842,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1381",
+    "id": "r3-preview-source-13-1406",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1381",
+    "id": "r3-delete-source-13-1406",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1383",
+    "id": "r3-preview-source-15-1408",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1383",
+    "id": "r3-delete-source-15-1408",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1385",
+    "id": "r3-preview-source-256-1410",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1385",
+    "id": "r3-delete-source-256-1410",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
@@ -12792,6 +12967,230 @@
     "id": "dw13-r3-binding-github.poll_status",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"github.poll_status\",\"value\":{\"repositoryId\":\"id-a\",\"endpoints\":[],\"intake\":{\"items\":[],\"hasMore\":false},\"intervalSeconds\":\"1\",\"nextAdmissionAtMs\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.health-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.health\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.health",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.health\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.cross_repo_links-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.cross_repo_links\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.cross_repo_links",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.cross_repo_links\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.status-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.status\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.status",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.status\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.clusters-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.clusters\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.clusters",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.clusters\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.cluster_detail-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.cluster_detail\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"clusterId\":\"id-a\",\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.cluster_detail",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.cluster_detail\",\"value\":{\"id\":\"id-a\",\"viewId\":\"id-a\",\"name\":\"fixture\",\"memberNodeIds\":[],\"score\":0.5}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.security-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.security\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.security",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.security\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.metrics-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.metrics\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.metrics",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.metrics\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.hotspots-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.hotspots\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.hotspots",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.hotspots\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.fleet_health-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.fleet_health\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.fleet_health",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.fleet_health\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.archival_candidates-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.archival_candidates\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.archival_candidates",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.archival_candidates\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.file_hotspot-Query",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"analysis.file_hotspot\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"page\":{\"limit\":20},\"path\":\"src/main.rs\",\"filters\":[]},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.file_hotspot",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.file_hotspot\",\"value\":{\"items\":[],\"hasMore\":false,\"observation\":{\"availability\":\"Available\",\"bindings\":[],\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false},\"diagnostics\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.community_analysis-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.community_analysis\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.community_analysis",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.community_analysis\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.link_and_detect-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.link_and_detect\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.link_and_detect",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.link_and_detect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.process_batch-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.process_batch\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.process_batch",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.process_batch\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.reanalyze-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.reanalyze\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.reanalyze",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.reanalyze\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-admission-analysis.synthesize-Command",
+    "entry": "domain-request.r3",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"analysis.synthesize\",\"scope\":{\"kind\":\"Workspace\"},\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedSourceRevision\":\"1\",\"nodeIds\":[],\"batchLimit\":20},\"schemaRevision\":3}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "dw13-r3-binding-analysis.synthesize",
+    "entry": "operation-result.r3",
+    "raw": "{\"kind\":\"analysis.synthesize\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"kind\":\"fixture\",\"state\":\"ObservedComplete\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
     "typedValid": true,
     "schemaValid": true
   },

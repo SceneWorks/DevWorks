@@ -458,6 +458,1024 @@
       "$ref": "#/$defs/AllocationOutcome",
       "x-since": 3
     },
+    "AnalysisAvailability": {
+      "enum": [
+        "Available",
+        "NoData",
+        "Pending",
+        "Stale",
+        "Partial",
+        "Failed",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "AnalysisClusterConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "clusterId": {
+          "$ref": "#/$defs/Id"
+        },
+        "edgeCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "types": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        }
+      },
+      "required": [
+        "clusterId",
+        "edgeCount",
+        "types"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "bridges": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "connections": {
+          "$ref": "#/$defs/List_AnalysisClusterConnection_0_500"
+        },
+        "density": {
+          "$ref": "#/$defs/Finite"
+        },
+        "externalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "internalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "legacyOrdinal": {
+          "$ref": "#/$defs/Counter"
+        },
+        "members": {
+          "$ref": "#/$defs/List_AnalysisClusterMember_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "legacyOrdinal",
+        "internalEdges",
+        "externalEdges",
+        "density",
+        "members",
+        "bridges",
+        "connections"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterGraphEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "crossCluster": {
+          "type": "boolean"
+        },
+        "edgeCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "relationshipCounts": {
+          "$ref": "#/$defs/List_AnalysisClusterRelationshipCount_0_128"
+        },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceViewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetViewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sourceRepositoryId",
+        "sourceViewId",
+        "targetRepositoryId",
+        "targetViewId",
+        "edgeCount",
+        "relationshipCounts",
+        "crossCluster"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterItem": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "$ref": "#/$defs/ClusterRecord"
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterMember": {
+      "additionalProperties": false,
+      "properties": {
+        "centrality": {
+          "$ref": "#/$defs/Finite"
+        },
+        "clusterId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "externalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "foundational": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "framework": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "internalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceGroup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "name",
+        "centrality",
+        "internalEdges",
+        "externalEdges"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterPage": {
+      "additionalProperties": false,
+      "properties": {
+        "clusteredRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "graphEdges": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisClusterGraphEdge_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_AnalysisClusterItem_0_500"
+        },
+        "links": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisLinkEvidence_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modularity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/AnalysisObservation"
+        },
+        "repositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisClusterMember_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totalRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterPageResult": {
+      "$ref": "#/$defs/AnalysisClusterPage",
+      "x-since": 3
+    },
+    "AnalysisClusterRelationshipCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/Counter"
+        },
+        "relationship": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "relationship",
+        "count"
+      ],
+      "type": "object"
+    },
+    "AnalysisFileMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "$ref": "#/$defs/Counter"
+        },
+        "bugFixRatio": {
+          "$ref": "#/$defs/Finite"
+        },
+        "changes90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "churn30d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "churn365d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "churn90d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "complexity": {
+          "$ref": "#/$defs/Counter"
+        },
+        "concern": {
+          "$ref": "#/$defs/Finite"
+        },
+        "couplingPartners": {
+          "$ref": "#/$defs/Counter"
+        },
+        "couplingStrength": {
+          "$ref": "#/$defs/Finite"
+        },
+        "deepLines": {
+          "$ref": "#/$defs/Counter"
+        },
+        "dotnetProject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "functionCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "health": {
+          "$ref": "#/$defs/Finite"
+        },
+        "lastChangeAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "linesAdded90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "linesRemoved90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "lintErrors": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lintWarnings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longestFunction": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maxNesting": {
+          "$ref": "#/$defs/Counter"
+        },
+        "recurringChurn": {
+          "$ref": "#/$defs/Finite"
+        },
+        "risk": {
+          "$ref": "#/$defs/Finite"
+        },
+        "role": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "truckFactor": {
+          "$ref": "#/$defs/Counter"
+        },
+        "trust": {
+          "$ref": "#/$defs/Finite"
+        }
+      },
+      "required": [
+        "health",
+        "risk",
+        "concern",
+        "trust",
+        "complexity",
+        "maxNesting",
+        "deepLines",
+        "functionCount",
+        "longestFunction",
+        "branches",
+        "linesAdded90d",
+        "linesRemoved90d",
+        "changes90d",
+        "churn30d",
+        "churn90d",
+        "churn365d",
+        "bugFixRatio",
+        "recurringChurn",
+        "couplingStrength",
+        "couplingPartners",
+        "truckFactor",
+        "role"
+      ],
+      "type": "object"
+    },
+    "AnalysisFleetTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "alertCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "averageHealth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "belowAlert": {
+          "$ref": "#/$defs/Counter"
+        },
+        "belowHotspot": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hotspotCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryCount": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "repositoryCount",
+        "hotspotCount",
+        "alertCount",
+        "belowHotspot",
+        "belowAlert"
+      ],
+      "type": "object"
+    },
+    "AnalysisHealthSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alerts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "baseScore": {
+          "$ref": "#/$defs/Finite"
+        },
+        "dotnetProject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hotspots": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "baseScore",
+        "files",
+        "hotspots",
+        "alerts"
+      ],
+      "type": "object"
+    },
+    "AnalysisLinkEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "nodeId"
+      ],
+      "type": "object"
+    },
+    "AnalysisLinkEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Finite"
+        },
+        "matchedBy": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "relationship": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "resolution": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "source": {
+          "$ref": "#/$defs/AnalysisLinkEndpoint"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisLinkEndpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetLabel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "relationship",
+        "source",
+        "resolution",
+        "confidence",
+        "matchedBy"
+      ],
+      "type": "object"
+    },
+    "AnalysisMetricItem": {
+      "additionalProperties": false,
+      "properties": {
+        "computedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileMetrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisFileMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "historyCoverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageIndexed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisLinkEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricRecord"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelativePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "metric",
+        "repositoryId",
+        "viewId"
+      ],
+      "type": "object"
+    },
+    "AnalysisMetricPage": {
+      "additionalProperties": false,
+      "properties": {
+        "fleet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisFleetTotals"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "found": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_AnalysisMetricItem_0_500"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageIndexed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/AnalysisObservation"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "AnalysisMetricPageResult": {
+      "$ref": "#/$defs/AnalysisMetricPage",
+      "x-since": 3
+    },
+    "AnalysisNarrative": {
+      "additionalProperties": false,
+      "properties": {
+        "computedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "evidence": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "model": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "summary",
+        "confidence",
+        "model",
+        "computedAtMs",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "AnalysisObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availability": {
+          "$ref": "#/$defs/AnalysisAvailability"
+        },
+        "baseScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindings": {
+          "$ref": "#/$defs/List_AnalysisViewBinding_0_500"
+        },
+        "computedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisHealthSummary_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedBindings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisViewBinding_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missingRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Id_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "narratives": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisNarrative_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phases": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisPhaseStatus_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relatedWorkIds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Id_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "security": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisSecuritySummary_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "topHotspots": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisMetricItem_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trends": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisTrendPoint_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "availability",
+        "bindings",
+        "coverage",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "AnalysisPhaseStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "completedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "phase",
+        "state"
+      ],
+      "type": "object"
+    },
     "AnalysisRecord": {
       "additionalProperties": false,
       "properties": {
@@ -469,6 +1487,10 @@
         },
         "kind": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "observation": {
+          "$ref": "#/$defs/AnalysisObservation",
+          "x-since": 3
         },
         "report": {
           "anyOf": [
@@ -497,6 +1519,104 @@
         "kind",
         "state",
         "coverage"
+      ],
+      "type": "object"
+    },
+    "AnalysisSecuritySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "critical": {
+          "$ref": "#/$defs/Counter"
+        },
+        "high": {
+          "$ref": "#/$defs/Counter"
+        },
+        "low": {
+          "$ref": "#/$defs/Counter"
+        },
+        "medium": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "scannedFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "score": {
+          "$ref": "#/$defs/Finite"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "score",
+        "complete",
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "scannedFiles"
+      ],
+      "type": "object"
+    },
+    "AnalysisTrendPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseScore": {
+          "$ref": "#/$defs/Finite"
+        },
+        "computedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "view": {
+          "$ref": "#/$defs/AnalysisViewBinding"
+        }
+      },
+      "required": [
+        "view",
+        "computedAtMs",
+        "baseScore"
+      ],
+      "type": "object"
+    },
+    "AnalysisViewBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RepositorySnapshot"
+        },
+        "viewDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "viewDigest",
+        "snapshot"
       ],
       "type": "object"
     },
@@ -1484,6 +2604,10 @@
     "ClusterRecord": {
       "additionalProperties": false,
       "properties": {
+        "details": {
+          "$ref": "#/$defs/AnalysisClusterDetails",
+          "x-since": 3
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
@@ -9978,6 +11102,110 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_AnalysisClusterConnection_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterConnection"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterGraphEdge_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterGraphEdge"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterItem_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterItem"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterMember_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterMember"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterRelationshipCount_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterRelationshipCount"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisHealthSummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisHealthSummary"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisLinkEvidence_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisLinkEvidence"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisMetricItem_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisMetricItem"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisNarrative_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisNarrative"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisPhaseStatus_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisPhaseStatus"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisSecuritySummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisSecuritySummary"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisTrendPoint_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisTrendPoint"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisViewBinding_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisViewBinding"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_ApprovalViewRecord_0_500": {
       "items": {
         "$ref": "#/$defs/ApprovalViewRecord"
@@ -10029,14 +11257,6 @@
     "List_BrowserSession_0_500": {
       "items": {
         "$ref": "#/$defs/BrowserSession"
-      },
-      "maxItems": 500,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_ClusterRecord_0_500": {
-      "items": {
-        "$ref": "#/$defs/ClusterRecord"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -10727,14 +11947,6 @@
         "$ref": "#/$defs/MetadataObjectKind"
       },
       "maxItems": 128,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_MetricRecord_0_500": {
-      "items": {
-        "$ref": "#/$defs/MetricRecord"
-      },
-      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -12887,58 +14099,6 @@
         },
         "items": {
           "$ref": "#/$defs/List_IndexRunRecord_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page13": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_MetricRecord_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page14": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_ClusterRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -21174,7 +22334,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -21208,7 +22368,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page14"
+          "$ref": "#/$defs/AnalysisClusterPageResult"
         }
       },
       "required": [
@@ -21259,7 +22419,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -21276,7 +22436,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -21293,7 +22453,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -21310,7 +22470,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -21327,7 +22487,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [

@@ -31,13 +31,13 @@ fn registry_matches_implementation_plan_and_family_register() {
         .map(|o| (o["operation"].as_str().unwrap(), o))
         .collect();
 
-    assert_eq!(registry::all().len(), 380);
+    assert_eq!(registry::all().len(), 385);
     assert_eq!(registry::all().len(), planned.len());
     assert_eq!(
         registry::all().len() as u64,
         register["operationCount"].as_u64().unwrap()
     );
-    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 380);
+    assert_eq!(plan["counts"]["operations"].as_u64().unwrap(), 385);
     assert_eq!(
         registry::families().len() as u64,
         register["familyCount"].as_u64().unwrap()
@@ -159,7 +159,7 @@ fn every_binding_publishes_strict_input_and_result_schemas() {
             count += 1;
         }
     }
-    assert_eq!(count, 385);
+    assert_eq!(count, 390);
 }
 
 /// Every property name declared anywhere in a schema, sorted (the envelope's own negotiated
@@ -268,6 +268,27 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "addons.rollback",
             "addons.uninstall",
             "addons.update",
+            "analysis.archival_candidates",
+            "analysis.cluster_detail",
+            "analysis.clusters",
+            "analysis.community_analysis",
+            "analysis.cross_repo_links",
+            "analysis.file_hotspot",
+            "analysis.fleet_health",
+            "analysis.health",
+            "analysis.hotspots",
+            "analysis.link_and_detect",
+            "analysis.metrics",
+            "analysis.process_batch",
+            "analysis.reanalyze",
+            "analysis.security",
+            "analysis.status",
+            "analysis.synthesize",
+            "database.apply_migration",
+            "database.direct_schema_change",
+            "database.execute_write",
+            "database.mysql_readonly_query",
+            "database.read",
             "desktop.capture",
             "desktop.input",
             "desktop.inspect",
@@ -593,5 +614,26 @@ fn completion_binding_and_action_dependent_classification_match_the_register() {
         .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         assert_ne!(decoded.effect, EffectClass::ActionDependent, "{name}");
         assert!(decoded.action.is_some(), "{name}");
+    }
+}
+
+#[test]
+fn database_revision_pins_preserve_frozen_bindings_and_both_mysql_projections() {
+    for (operation, expected) in [
+        ("database.read", &[1, 9][..]),
+        ("database.execute_write", &[1, 9][..]),
+        ("database.direct_schema_change", &[1, 9][..]),
+        ("database.apply_migration", &[1, 9][..]),
+        ("database.mysql_readonly_query", &[9, 10][..]),
+        ("database.configure_sensitive_columns", &[1, 5][..]),
+        ("database.sensitive_columns", &[9][..]),
+        ("database.edit_sensitive_column_rules", &[9][..]),
+    ] {
+        let descriptor = registry::find(operation).unwrap();
+        assert_eq!(
+            descriptor.revisions.iter().map(|r| r.0).collect::<Vec<_>>(),
+            expected,
+            "{operation}"
+        );
     }
 }

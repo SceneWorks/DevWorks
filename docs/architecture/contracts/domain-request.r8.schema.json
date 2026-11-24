@@ -42,6 +42,28 @@
       ],
       "type": "string"
     },
+    "AnalysisClusterProjection": {
+      "enum": [
+        "Overview",
+        "Graph"
+      ],
+      "type": "string"
+    },
+    "AnalysisLinkMode": {
+      "enum": [
+        "LinksOnly",
+        "LinksAndCommunities"
+      ],
+      "type": "string"
+    },
+    "AnalysisRefreshMode": {
+      "enum": [
+        "VitalsOnly",
+        "WithProjectAnalysis",
+        "WithSynthesis"
+      ],
+      "type": "string"
+    },
     "Applicability": {
       "additionalProperties": false,
       "properties": {
@@ -3461,6 +3483,10 @@
               "const": "analysis.link_and_detect",
               "type": "string"
             },
+            "linkMode": {
+              "$ref": "#/$defs/AnalysisLinkMode",
+              "x-since": 3
+            },
             "nodeIds": {
               "$ref": "#/$defs/List_Id_0_128"
             },
@@ -3543,12 +3569,20 @@
             "expectedSourceRevision": {
               "$ref": "#/$defs/Revision"
             },
+            "includeAllSource": {
+              "type": "boolean",
+              "x-since": 3
+            },
             "kind": {
               "const": "analysis.reanalyze",
               "type": "string"
             },
             "nodeIds": {
               "$ref": "#/$defs/List_Id_0_128"
+            },
+            "refreshMode": {
+              "$ref": "#/$defs/AnalysisRefreshMode",
+              "x-since": 3
             },
             "resumeRunId": {
               "anyOf": [
@@ -8644,8 +8678,16 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "runId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "topHotspots": {
+              "$ref": "#/$defs/Limit",
+              "x-since": 3
             },
             "views": {
               "$ref": "#/$defs/ViewSelection"
@@ -8702,6 +8744,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "runId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -8731,6 +8777,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "projection": {
+              "$ref": "#/$defs/AnalysisClusterProjection",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -8759,6 +8809,10 @@
             "kind": {
               "const": "analysis.cluster_detail",
               "type": "string"
+            },
+            "legacyOrdinal": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
@@ -8793,6 +8847,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "runId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -8812,6 +8870,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "dotnetProject": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
+            },
             "filters": {
               "$ref": "#/$defs/List_Text1To256_0_128"
             },
@@ -8876,6 +8938,10 @@
             "kind": {
               "const": "analysis.fleet_health",
               "type": "string"
+            },
+            "maxHealth": {
+              "$ref": "#/$defs/Finite",
+              "x-since": 3
             },
             "page": {
               "$ref": "#/$defs/PageRequest"

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repositoryId",
+    "commit",
+    "captureDigest",
+    "sourceMode",
+    "files",
+    "runtime"
+  ],
+  "properties": {
+    "repositoryId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "captureDigest": {
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "sourceMode": {
+      "const": "Repository"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "unit",
+          "language",
+          "sha256",
+          "text"
+        ],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "language": {
+            "enum": [
+              "csharp",
+              "visual-basic",
+              "dotnet-context"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "sdkVersion",
+        "runtimeVersion",
+        "runtimeDirectory",
+        "references",
+        "witnesses",
+        "referenceIdentities"
+      ],
+      "properties": {
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "program",
+            "identity"
+          ],
+          "properties": {
+            "program": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "identity": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        },
+        "sdkVersion": {
+          "type": "string",
+          "pattern": "^10\\.0\\.2[0-9]{2}$"
+        },
+        "runtimeVersion": {
+          "type": "string",
+          "pattern": "^10\\.0\\.[0-9]+$"
+        },
+        "runtimeDirectory": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "references": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 256,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          }
+        },
+        "witnesses": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 261,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "program",
+              "identity"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "identity": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            }
+          }
+        },
+        "referenceIdentities": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 256,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

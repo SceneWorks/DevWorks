@@ -34,6 +34,7 @@ use crate::authority::AuthorityCapability;
 use crate::context::{InvocationContext, PrincipalKind, ReceiptIdentity};
 use crate::fingerprint::{self, Fingerprint};
 use crate::kernel::failure::{Refusal as UseCaseRefusal, storage_fault};
+use crate::kernel::{checkout, graph_request};
 use crate::operations::OperationInput;
 use crate::ports::storage::{
     ActorRegistry, ArtifactRepository, AuthorityGrant, AuthorityLedger, AuthorityRead,
@@ -229,6 +230,7 @@ enum Waiting {
 
 struct CommandPreparation {
     admitted: AdmittedCommand,
+    worktree_context: Option<InvocationContext>,
     authorization: Authorization,
     handler: Arc<dyn CommandHandler>,
     options: WriteOptions,
@@ -249,6 +251,127 @@ impl PreparedReceive {
 impl Gateway<'_> {
     fn correlation(&self) -> CorrelationId {
         CorrelationId(self.ids.next_id(IdKind::Correlation))
+    }
+
+    fn assignment_worktree(
+        &self,
+        ctx: &InvocationContext,
+        operation: &str,
+        input: &OperationInput,
+        options: &ReadOptions,
+    ) -> Result<Option<InvocationContext>, StorageError> {
+        if !checkout::applies(ctx)
+            || ctx.worktree().is_some()
+            || !(graph_request::is_graph_read(input)
+                || matches!(
+                    operation,
+                    "indexing.status" | "indexing.refresh_overlay" | "git.cleanup"
+                ))
+        {
+            return Ok(None);
+        }
+        read_snapshot(self.store, options, |read| {
+            use crate::kernel::checkout::AssignmentCheckout;
+            use crate::operations::{git, indexing, repositories};
+            use crate::protocol::data::{GitCommand, IndexCommand, ViewSelection};
+            let (repository, worktree) = match input {
+                OperationInput::Indexing(indexing::Input::RefreshOverlay(request)) => {
+                    let IndexCommand::RefreshOverlay {
+                        repository_id,
+                        worktree_id,
+                        ..
+                    } = &request.command
+                    else {
+                        return Ok(None);
+                    };
+                    (Some(repository_id.clone()), worktree_id.clone())
+                }
+                OperationInput::Indexing(indexing::Input::Status(request)) => {
+                    if let Some(id) = &request.overlay_id {
+                        let Some(overlay) = read.indexing().overlay(id)? else {
+                            return Ok(None);
+                        };
+                        let Some(worktree) = overlay.worktree_id else {
+                            return Ok(None);
+                        };
+                        (Some(overlay.repository_id), Some(worktree))
+                    } else {
+                        (request.repository_id.clone(), None)
+                    }
+                }
+                OperationInput::Git(git::Input::Cleanup(request)) => {
+                    let GitCommand::Cleanup { worktree_id, .. } = &request.command else {
+                        return Ok(None);
+                    };
+                    (None, Some(worktree_id.clone()))
+                }
+                operation => {
+                    let (view, repository, cursor) =
+                        if let Some(request) = graph_request::graph_input(operation) {
+                            (
+                                request.view.as_ref(),
+                                graph_request::target_repository(&request.query),
+                                request.cursor.as_deref(),
+                            )
+                        } else if let OperationInput::Repositories(repositories::Input::Nodes(
+                            request,
+                        )) = operation
+                        {
+                            (
+                                request.views.as_ref(),
+                                Some(&request.repository_id),
+                                request.page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                            )
+                        } else {
+                            return Ok(None);
+                        };
+                    let cursor_pin =
+                        cursor.and_then(|cursor| graph_request::cursor_pin(cursor).ok().flatten());
+                    let pin = cursor_pin.as_ref().or(match view {
+                        Some(ViewSelection::Pinned { pin_id }) => Some(pin_id),
+                        _ => None,
+                    });
+                    let views = if let Some(pin_id) = pin {
+                        read.graph()
+                            .graph_pin(pin_id)?
+                            .filter(|pin| pin.scope.views.len() == 1)
+                            .map(|pin| pin.scope.views[0].view_id.clone())
+                    } else {
+                        match view {
+                            Some(
+                                ViewSelection::Published { .. }
+                                | ViewSelection::SchemaPublished { .. },
+                            ) => return Ok(None),
+                            Some(ViewSelection::Exact { view_ids }) if view_ids.len() == 1 => {
+                                Some(view_ids[0].clone())
+                            }
+                            _ => None,
+                        }
+                    };
+                    let worktree = views
+                        .as_ref()
+                        .map(|view| read.indexing().view(view))
+                        .transpose()?
+                        .flatten()
+                        .and_then(|view| {
+                            serde_json::from_value::<Id>(view.coverage["worktreeId"].clone()).ok()
+                        });
+                    if (pin.is_some() || views.is_some()) && worktree.is_none() {
+                        return Ok(None);
+                    }
+                    (repository.cloned(), worktree)
+                }
+            };
+            checkout::assignment_worktree(
+                read,
+                ctx,
+                AssignmentCheckout {
+                    repository: repository.as_ref(),
+                    worktree: worktree.as_ref(),
+                    any_for_visibility: false,
+                },
+            )
+        })
     }
 
     /// Admits and answers a Query for the host-selected `operation` against one read snapshot.
@@ -289,6 +412,20 @@ impl Gateway<'_> {
                 "query admitted with a command key".into(),
             ));
         };
+        let worktree_context =
+            match self.assignment_worktree(ctx, operation, &decoded.input, &options) {
+                Ok(context) => context,
+                Err(error) => {
+                    let (code, retry) = match error {
+                        StorageError::ScopeDenied => {
+                            (DomainErrorCode::PermissionDenied, RetryAdvice::Never)
+                        }
+                        _ => storage_fault(&error),
+                    };
+                    return Ok(self.query_fault(query_id, code, retry));
+                }
+            };
+        let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let request = AuthorityRequest {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -364,11 +501,17 @@ impl Gateway<'_> {
         });
         // Publication point: authority that was revoked or narrowed while the answer was being
         // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
+        let scoped_worktree = ctx.worktree().is_some()
+            && checkout::applies(ctx)
+            && (graph_request::is_graph_read(&admitted.input) || operation == "indexing.status");
         if matches!(answered, Ok(Some((Ok(_), _))))
-            && (!authorization.fences().is_empty() || !authorization.authority_grants().is_empty())
+            && (scoped_worktree
+                || !authorization.fences().is_empty()
+                || !authorization.authority_grants().is_empty())
         {
-            let holds = read_snapshot(self.store, &ReadOptions::default(), |s| {
-                crate::authority::authorization_holds(s, &authorization)
+            let holds = read_snapshot(self.store, &options, |s| {
+                Ok(crate::authority::authorization_holds(s, &authorization)?
+                    && (!scoped_worktree || checkout::live_custody(s, ctx)?))
             });
             if !matches!(holds, Ok(true)) {
                 return Ok(self.query_fault(
@@ -603,6 +746,28 @@ impl Gateway<'_> {
                 "command admitted with a query key".into(),
             )));
         };
+        // Implicit custody limits the command without changing its caller's retry namespace.
+        let identity = ReceiptIdentity::bind(ctx, request_key.clone());
+        let worktree_context = match self.assignment_worktree(
+            ctx,
+            operation,
+            &decoded.input,
+            &ReadOptions {
+                deadline_ms: options.deadline_ms,
+                cancellation: options.cancellation.clone(),
+            },
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                let code = if matches!(error, StorageError::ScopeDenied) {
+                    Rejection::PermissionDenied
+                } else {
+                    Rejection::StorageUnavailable
+                };
+                return Err(Ok(self.rejected(request_key, code, command_retry(&error))));
+            }
+        };
+        let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let request = AuthorityRequest {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
@@ -636,7 +801,7 @@ impl Gateway<'_> {
         let mut admitted = AdmittedCommand {
             descriptor: decoded.descriptor,
             binding: decoded.binding,
-            identity: ReceiptIdentity::bind(ctx, request_key.clone()),
+            identity,
             input: decoded.input,
             fingerprint: decoded.fingerprint,
             revision: decoded.revision,
@@ -696,6 +861,7 @@ impl Gateway<'_> {
         Ok((
             CommandPreparation {
                 admitted,
+                worktree_context,
                 authorization,
                 handler,
                 options,
@@ -713,11 +879,13 @@ impl Gateway<'_> {
     ) -> CommandOutcome {
         let CommandPreparation {
             admitted,
+            worktree_context,
             authorization,
             handler,
             options,
             request_key,
         } = prepared_command;
+        let ctx = worktree_context.as_ref().unwrap_or(ctx);
         let cancellation = options.cancellation.clone();
         let env = Preparation::new(self.store, cancellation.as_ref(), options.deadline_ms);
         // The use case settles what it prepared once the outcome is known (for example a staged
@@ -1441,6 +1609,17 @@ impl HandlerTx<'_> {
     }
 }
 impl ArtifactRead for HandlerTx<'_> {
+    fn database_artifact_available(
+        &self,
+        access: &crate::ports::storage::DatabaseArtifactAccess,
+        owner: &ActorId,
+        project: Option<&ProjectId>,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .database_artifact_available(access, owner, project)
+    }
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
         self.inner.borrow_mut().artifacts().project_exists(project)
     }
@@ -1508,6 +1687,19 @@ impl ArtifactRead for HandlerTx<'_> {
             .borrow_mut()
             .artifacts()
             .repository_text_readers(artifact)
+    }
+    fn analysis_artifact_available(
+        &self,
+        artifact: &Id,
+        run: &Id,
+        project: Option<&ProjectId>,
+        worktree: Option<(&Id, i64)>,
+        restore_epoch: i64,
+    ) -> Result<bool, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .analysis_artifact_available(artifact, run, project, worktree, restore_epoch)
     }
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
         self.inner.borrow_mut().artifacts().links(artifact)
@@ -1954,6 +2146,9 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn indexing(&mut self) -> &mut dyn crate::ports::storage::IndexRepository {
         self.inner.get_mut().indexing()
+    }
+    fn analysis(&mut self) -> &mut dyn crate::ports::storage::AnalysisRepository {
+        self.inner.get_mut().analysis()
     }
     fn graph(&mut self) -> &mut dyn crate::ports::storage::GraphRepository {
         self.inner.get_mut().graph()

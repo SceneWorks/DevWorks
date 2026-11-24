@@ -4,7 +4,7 @@ Status: architecture baseline 1.1. This is the complete ownership and dependency
 
 ## Success and remaining commitments
 
-The register assigns all 390 requirements, 380 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
+The register assigns all 390 requirements, 385 operations across 50 families, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded source entries retain their reasons and an exclusion audit. There are 80 local slices and no unowned operations, requirements or retained entries.
 
 All 351 operation inputs now have candidate schema bindings, with typed qualified result tags and fault/receipt/completion contracts; no catalog input remains unbound. Actual adoption of those contracts, host authority/SDK/provider behavior, confinement, full native UI integration and all six OS/CPU builds remain implementation acceptance below. The four original architecture feasibility questions are resolved in the final review. AD76–78 adds incoming MCP support in DW-063/064; actual protocol/authentication and two-client acceptance remain explicit. A material failure returns to architecture review with alternatives, without dropping scope or expanding authority.
 
@@ -709,7 +709,7 @@ Read defaults, per-connection write enablement, role/project access, bounded res
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `database.read`, `database.execute_write`, `database.apply_migration`, `database.direct_schema_change`, `database.configure_sensitive_columns`
+**Operations:** `database.read`, `database.execute_write`, `database.apply_migration`, `database.direct_schema_change`, `database.configure_sensitive_columns`, `database.mysql_readonly_query`, `database.sensitive_columns`, `database.edit_sensitive_column_rules`
 
 **Primary requirement cases:** See supporting and integration obligations.
 
@@ -805,7 +805,7 @@ Signed manifests, inventory/dependency/runtime closure, exact agent-authored app
 
 Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests.
 
-**Operations:** `addons.catalog`, `addons.install`, `addons.configure`, `addons.enable`, `addons.disable`, `addons.update`, `addons.propose`, `addons.logs`, `addons.rollback`, `addons.uninstall`, `addons.invoke`, `addons.invocation`
+**Operations:** `addons.catalog`, `addons.install`, `addons.configure`, `addons.enable`, `addons.disable`, `addons.update`, `addons.propose`, `addons.logs`, `addons.rollback`, `addons.uninstall`, `addons.invoke`, `addons.run_workflow`, `addons.read_content`, `addons.invocation`
 
 **Primary requirement cases:** AT-ADDON-01, AT-ADDON-02, AT-ADDON-03, AT-ADDON-04
 

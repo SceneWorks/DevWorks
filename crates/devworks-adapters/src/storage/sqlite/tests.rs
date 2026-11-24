@@ -418,6 +418,54 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
     assert!(has_column);
 }
 
+#[test]
+fn the_watcher_feature_ledger_upgrades_with_its_pending_watch() {
+    let h = Harness::new();
+    let watcher = MIGRATIONS[68];
+    let mut legacy = MIGRATIONS[..66].to_vec();
+    legacy.push(Migration {
+        version: 67,
+        minimum_reader: 67,
+        minimum_writer: 67,
+        ..watcher
+    });
+    let store = SqliteStore::open_with(h.config(), &legacy).unwrap();
+    store.with_writer_connection(|conn| {
+        db(conn.execute_batch(
+            "INSERT INTO actors VALUES('watch-owner','human','Watch owner');
+             INSERT INTO conversations(id,created_at) VALUES('watch-conversation',0);
+             INSERT INTO sessions(id,conversation_id,agent_id,context_epoch,revision)
+                 VALUES('watch-session','watch-conversation','watch-owner',0,1);
+             INSERT INTO watchers(id,revision,phase,source_kind,session_id,actor_id,
+                                  tail_bytes,output_truncated,stop_requested,created_at,updated_at,github_json)
+                 VALUES('pending-watch',1,'Active','GitHub','watch-session','watch-owner',0,0,0,0,0,
+                        '{\"repositoryId\":\"watch-repo\",\"workflowRunId\":\"42\"}');",
+        ))
+    }).unwrap();
+    let old = store.compatibility().unwrap().migrations[66].clone();
+    drop(store);
+
+    let upgraded = SqliteStore::open(h.config()).unwrap();
+    let current = upgraded.compatibility().unwrap();
+    assert_eq!(
+        current.store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
+    assert_eq!(current.migrations[66].checksum, MIGRATIONS[66].checksum());
+    assert_eq!(current.migrations[67].checksum, MIGRATIONS[67].checksum());
+    assert_eq!(current.migrations[68].checksum, old.checksum);
+    assert_eq!(current.migrations[68].app_build, old.app_build);
+    assert_eq!(current.migrations[68].applied_at_ms, old.applied_at_ms);
+    assert_eq!(
+        h.raw().query_row(
+            "SELECT phase || ':' || json_extract(github_json,'$.workflowRunId') FROM watchers WHERE id='pending-watch'",
+            [],
+            |row| row.get::<_, String>(0),
+        ).unwrap(),
+        "Active:42",
+    );
+}
+
 /// A version-1 store with pending deliveries upgrades in place through migrations 2 and 3: their
 /// event sequences are backfilled, they stay unordered and claimable, and older writers are then
 /// refused write access.
@@ -611,6 +659,68 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
 }
 
 /// This build's migrations up to and including `version` (versions may have gaps).
+#[test]
+fn parallel_migrations_adopt_exact_code_intelligence_branch_stores() {
+    for previous in [64, 65] {
+        let h = Harness::new();
+        let mut legacy = through(63);
+        legacy.push(Migration {
+            version: 64,
+            minimum_reader: 57,
+            minimum_writer: 63,
+            ..MIGRATIONS[66]
+        });
+        if previous == 65 {
+            legacy.push(Migration {
+                version: 65,
+                minimum_reader: 57,
+                minimum_writer: 65,
+                ..MIGRATIONS[67]
+            });
+        }
+        drop(SqliteStore::open_with(h.config(), &legacy).unwrap());
+        let conn = h.raw();
+        conn.execute(
+            "INSERT INTO analysis_runs VALUES('prior-analysis','operation','project',?1,?1,7,1,'{}')",
+            ["a".repeat(64)],
+        )
+        .unwrap();
+        if previous == 65 {
+            conn.execute(
+                r#"INSERT INTO database_sensitive_policies VALUES('',NULL,'{"prior":true}')"#,
+                [],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let store = h.store();
+        assert!(store.integrity_check().unwrap().problems.is_empty());
+        drop(store);
+        let conn = h.raw();
+        let ledger = super::migrations::ledger(&conn).unwrap();
+        assert_eq!(ledger.len(), MIGRATIONS.len());
+        for (applied, canonical) in ledger.iter().zip(MIGRATIONS) {
+            assert_eq!(applied.version, canonical.version);
+            assert_eq!(applied.checksum, canonical.checksum());
+        }
+        assert_eq!(
+            conn.query_row("SELECT id FROM analysis_runs", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            "prior-analysis"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM database_sensitive_policies WHERE json_extract(policy_json,'$.prior')=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            i64::from(previous == 65)
+        );
+    }
+}
+
 fn through(version: i64) -> Vec<Migration> {
     MIGRATIONS
         .iter()

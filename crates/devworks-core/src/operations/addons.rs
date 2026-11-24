@@ -121,6 +121,52 @@ impl Revisioned for InvokeInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `addons.run_workflow` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunWorkflowInput {
+    pub workflow_id: Id,
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub manifest_digest: Digest,
+    pub input: ArtifactRef,
+    pub required_gates: Items<PackageWorkflowGate>,
+}
+impl Check for RunWorkflowInput {
+    fn check(&self) -> Result<(), String> {
+        self.workflow_id.check()?;
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.manifest_digest.check()?;
+        self.input.check()?;
+        self.required_gates.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for RunWorkflowInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `addons.read_content` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadContentInput {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub manifest_digest: Digest,
+}
+impl Check for ReadContentInput {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.manifest_digest.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ReadContentInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// `addons.invocation` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -162,6 +208,10 @@ pub enum Input {
     Uninstall(crate::protocol::addons::AddonCommandRequest),
     /// `addons.invoke` (Command).
     Invoke(InvokeInput),
+    /// `addons.run_workflow` (Command).
+    RunWorkflow(RunWorkflowInput),
+    /// `addons.read_content` (Command).
+    ReadContent(ReadContentInput),
     /// `addons.invocation` (Query).
     Invocation(InvocationInput),
 }
@@ -179,6 +229,8 @@ impl Input {
             Self::Rollback(_) => "addons.rollback",
             Self::Uninstall(_) => "addons.uninstall",
             Self::Invoke(_) => "addons.invoke",
+            Self::RunWorkflow(_) => "addons.run_workflow",
+            Self::ReadContent(_) => "addons.read_content",
             Self::Invocation(_) => "addons.invocation",
         }
     }
@@ -195,6 +247,8 @@ impl Input {
             Self::Rollback(_) => Mode::Command,
             Self::Uninstall(_) => Mode::Command,
             Self::Invoke(_) => Mode::Command,
+            Self::RunWorkflow(_) => Mode::Command,
+            Self::ReadContent(_) => Mode::Command,
             Self::Invocation(_) => Mode::Query,
         }
     }
@@ -212,6 +266,8 @@ impl Input {
             Self::Rollback(i) => serde_json::to_value(i),
             Self::Uninstall(i) => serde_json::to_value(i),
             Self::Invoke(i) => serde_json::to_value(i),
+            Self::RunWorkflow(i) => serde_json::to_value(i),
+            Self::ReadContent(i) => serde_json::to_value(i),
             Self::Invocation(i) => serde_json::to_value(i),
         }
     }

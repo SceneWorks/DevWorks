@@ -42,6 +42,28 @@
       ],
       "type": "string"
     },
+    "AnalysisClusterProjection": {
+      "enum": [
+        "Overview",
+        "Graph"
+      ],
+      "type": "string"
+    },
+    "AnalysisLinkMode": {
+      "enum": [
+        "LinksOnly",
+        "LinksAndCommunities"
+      ],
+      "type": "string"
+    },
+    "AnalysisRefreshMode": {
+      "enum": [
+        "VitalsOnly",
+        "WithProjectAnalysis",
+        "WithSynthesis"
+      ],
+      "type": "string"
+    },
     "Applicability": {
       "additionalProperties": false,
       "properties": {
@@ -1102,6 +1124,124 @@
           "required": [
             "kind",
             "projectId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DatabaseMigrationSource": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "$ref": "#/$defs/GitOid"
+        },
+        "path": {
+          "$ref": "#/$defs/RelativePath"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "commit",
+        "path"
+      ],
+      "type": "object"
+    },
+    "DatabaseSensitiveColumnRule": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "boolean"
+        },
+        "catalog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "column": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "column",
+        "allow"
+      ],
+      "type": "object"
+    },
+    "DatabaseSensitiveRuleEdit": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "Upsert",
+              "type": "string"
+            },
+            "rule": {
+              "$ref": "#/$defs/DatabaseSensitiveColumnRule"
+            }
+          },
+          "required": [
+            "kind",
+            "rule"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "Delete",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
           ],
           "type": "object"
         }
@@ -3461,6 +3601,10 @@
               "const": "analysis.link_and_detect",
               "type": "string"
             },
+            "linkMode": {
+              "$ref": "#/$defs/AnalysisLinkMode",
+              "x-since": 3
+            },
             "nodeIds": {
               "$ref": "#/$defs/List_Id_0_128"
             },
@@ -3543,12 +3687,20 @@
             "expectedSourceRevision": {
               "$ref": "#/$defs/Revision"
             },
+            "includeAllSource": {
+              "type": "boolean",
+              "x-since": 3
+            },
             "kind": {
               "const": "analysis.reanalyze",
               "type": "string"
             },
             "nodeIds": {
               "$ref": "#/$defs/List_Id_0_128"
+            },
+            "refreshMode": {
+              "$ref": "#/$defs/AnalysisRefreshMode",
+              "x-since": 3
             },
             "resumeRunId": {
               "anyOf": [
@@ -3770,6 +3922,10 @@
                 }
               ]
             },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 9
+            },
             "statement": {
               "$ref": "#/$defs/Text0To65536"
             },
@@ -3796,6 +3952,14 @@
             "expectedConnectionRevision": {
               "$ref": "#/$defs/Revision"
             },
+            "expectedSchemaDigest": {
+              "$ref": "#/$defs/Digest",
+              "x-since": 9
+            },
+            "fallbackReason": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 9
+            },
             "kind": {
               "const": "database.direct_schema_change",
               "type": "string"
@@ -3812,6 +3976,10 @@
                   "type": "null"
                 }
               ]
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 9
             },
             "statement": {
               "$ref": "#/$defs/Text0To65536"
@@ -3858,6 +4026,14 @@
                   "type": "null"
                 }
               ]
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 9
+            },
+            "source": {
+              "$ref": "#/$defs/DatabaseMigrationSource",
+              "x-since": 9
             }
           },
           "required": [
@@ -3893,6 +4069,38 @@
             "columnIds"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edit": {
+              "$ref": "#/$defs/DatabaseSensitiveRuleEdit"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/Revision"
+            },
+            "kind": {
+              "const": "database.edit_sensitive_column_rules",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "expectedRevision",
+            "edit"
+          ],
+          "type": "object",
+          "x-since": 9
         },
         {
           "additionalProperties": false,
@@ -6799,6 +7007,70 @@
         {
           "additionalProperties": false,
           "properties": {
+            "contributionId": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "kind": {
+              "const": "addons.read_content",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "packageId",
+            "contributionId",
+            "manifestDigest"
+          ],
+          "type": "object",
+          "x-since": 9
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contributionId": {
+              "$ref": "#/$defs/Text1To256"
+            },
+            "input": {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            "kind": {
+              "const": "addons.run_workflow",
+              "type": "string"
+            },
+            "manifestDigest": {
+              "$ref": "#/$defs/Digest"
+            },
+            "packageId": {
+              "$ref": "#/$defs/Id"
+            },
+            "requiredGates": {
+              "$ref": "#/$defs/List_PackageWorkflowGate_0_128"
+            },
+            "workflowId": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "kind",
+            "workflowId",
+            "packageId",
+            "contributionId",
+            "manifestDigest",
+            "input",
+            "requiredGates"
+          ],
+          "type": "object",
+          "x-since": 9
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "expectedHelpRevision": {
               "$ref": "#/$defs/Revision"
             },
@@ -8648,8 +8920,16 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "runId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
+            },
+            "topHotspots": {
+              "$ref": "#/$defs/Limit",
+              "x-since": 3
             },
             "views": {
               "$ref": "#/$defs/ViewSelection"
@@ -8706,6 +8986,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "runId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -8735,6 +9019,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "projection": {
+              "$ref": "#/$defs/AnalysisClusterProjection",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -8763,6 +9051,10 @@
             "kind": {
               "const": "analysis.cluster_detail",
               "type": "string"
+            },
+            "legacyOrdinal": {
+              "$ref": "#/$defs/Counter",
+              "x-since": 3
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
@@ -8797,6 +9089,10 @@
             "page": {
               "$ref": "#/$defs/PageRequest"
             },
+            "runId": {
+              "$ref": "#/$defs/Id",
+              "x-since": 3
+            },
             "scope": {
               "$ref": "#/$defs/DataScope"
             },
@@ -8816,6 +9112,10 @@
         {
           "additionalProperties": false,
           "properties": {
+            "dotnetProject": {
+              "$ref": "#/$defs/Text1To256",
+              "x-since": 3
+            },
             "filters": {
               "$ref": "#/$defs/List_Text1To256_0_128"
             },
@@ -8880,6 +9180,10 @@
             "kind": {
               "const": "analysis.fleet_health",
               "type": "string"
+            },
+            "maxHealth": {
+              "$ref": "#/$defs/Finite",
+              "x-since": 3
             },
             "page": {
               "$ref": "#/$defs/PageRequest"
@@ -9082,6 +9386,10 @@
             "expectedConnectionRevision": {
               "$ref": "#/$defs/Revision"
             },
+            "includeSchemaDigest": {
+              "type": "boolean",
+              "x-since": 9
+            },
             "kind": {
               "const": "database.read",
               "type": "string"
@@ -9091,6 +9399,14 @@
             },
             "rowLimit": {
               "$ref": "#/$defs/Limit"
+            },
+            "schemaPreview": {
+              "$ref": "#/$defs/Text0To65536",
+              "x-since": 9
+            },
+            "scope": {
+              "$ref": "#/$defs/DataScope",
+              "x-since": 9
             },
             "statement": {
               "$ref": "#/$defs/Text0To65536"
@@ -9109,6 +9425,69 @@
             "timeoutMs"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "database.mysql_readonly_query",
+              "type": "string"
+            },
+            "limit": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "scope": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataScope"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            "sql": {
+              "$ref": "#/$defs/Text0To65536"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "sql"
+          ],
+          "type": "object",
+          "x-since": 9
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "const": "database.sensitive_columns",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object",
+          "x-since": 9
         },
         {
           "additionalProperties": false,
@@ -13577,6 +13956,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_PackageWorkflowGate_0_128": {
+      "items": {
+        "$ref": "#/$defs/PackageWorkflowGate"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_PortMapping_0_128": {
       "items": {
         "$ref": "#/$defs/PortMapping"
@@ -14366,6 +14753,30 @@
         "latency"
       ],
       "type": "string"
+    },
+    "PackageWorkflowGate": {
+      "additionalProperties": false,
+      "properties": {
+        "contributionId": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "manifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "packageId": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "packageId",
+        "contributionId",
+        "manifestDigest",
+        "reason"
+      ],
+      "type": "object"
     },
     "PageRequest": {
       "additionalProperties": false,

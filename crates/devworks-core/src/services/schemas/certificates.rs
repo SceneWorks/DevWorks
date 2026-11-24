@@ -51,6 +51,27 @@ fn pem(bytes: &[u8]) -> Result<(), StorageError> {
     }
     Ok(())
 }
+/// The configured certificate travels with the selected source, never with a caller-supplied
+/// replacement or an artifact looked up under a different principal.
+pub(super) fn for_source(
+    read: &dyn SchemaRead,
+    source: &StoredSchemaSource,
+) -> Result<Option<Vec<u8>>, StorageError> {
+    let selected = source
+        .connection
+        .config
+        .as_ref()
+        .and_then(|config| config.ca_certificate.as_ref());
+    let material = read.schema_certificate(&source.connection.id)?;
+    match (selected, material) {
+        (None, None) => Ok(None),
+        (Some(reference), Some(material)) if same(&material.reference, reference) => {
+            Ok(Some(material.pem))
+        }
+        _ => Err(StorageError::ScopeDenied),
+    }
+}
+
 impl SchemaService {
     pub(super) fn prepare_certificate(
         &self,

@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2139), 2139);
+    assert_eq!(run("domain-fixtures.json", 2196), 2196);
 }
 
 #[test]
@@ -460,9 +460,11 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
     // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8;
     // router.catalog revision 4 (offeredEfforts) adds one.
-    // This also counts revision-3 job and session inputs, revision-4 SystemOne inputs,
-    // and five revision-3 GitHub account, status and issue-link admissions.
-    assert_eq!(admitted.len(), 682);
+    // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
+    // DW-F7 adds 26 bindings: sixteen analysis bindings at revision 3, eight database
+    // bindings at revisions 9 and 10, and two package contributions at revision 9.
+    // GitHub synchronization and native remote watchers add nine negotiated bindings.
+    assert_eq!(admitted.len(), 708);
 }
 
 #[test]

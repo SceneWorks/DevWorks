@@ -12,6 +12,7 @@ pub mod browser;
 pub mod containers;
 pub mod conventions;
 pub mod cursor;
+pub mod database;
 pub mod desktop;
 pub mod diagnostics;
 pub mod effect;
@@ -115,6 +116,7 @@ pub fn queue_service() -> queue::QueueService {
     queue::QueueService::new(vec![
         Arc::new(artifacts::replies::ReplyQueueHook),
         Arc::new(schemas::indexing::QueueHook),
+        Arc::new(graph::repository_analysis::QueueHook),
     ])
 }
 
@@ -205,7 +207,7 @@ impl UseCases {
         self
     }
 
-    /// The six owned Git task operations share one service and gateway on every surface.
+    /// The owned Git task operations share one service and gateway on every surface.
     pub fn with_git(mut self, service: Arc<git::GitService>) -> Self {
         for operation in [
             "git.worktree",
@@ -214,6 +216,7 @@ impl UseCases {
             "git.commit",
             "git.push",
             "git.pull_request",
+            "git.cleanup",
         ] {
             self.register(operation, Some(service.clone()), Some(service.clone()));
         }
@@ -510,7 +513,43 @@ impl UseCases {
         self
     }
 
+    /// Native reads and durable mutations share the selected operation gateway.
+    pub fn with_database(mut self, service: Arc<database::DataExecutor>) -> Self {
+        for query in [
+            "database.read",
+            "database.sensitive_columns",
+            "database.mysql_readonly_query",
+        ] {
+            self.register(query, Some(service.clone()), None);
+        }
+        for command in [
+            "database.execute_write",
+            "database.direct_schema_change",
+            "database.configure_sensitive_columns",
+            "database.edit_sensitive_column_rules",
+        ] {
+            self.register(command, None, Some(service.clone()));
+        }
+        if service.versioned_migrations_available() {
+            self.register("database.apply_migration", None, Some(service));
+        }
+        self
+    }
+
     /// Registers the shared exact-view graph query and trust operators.
+    pub fn with_repository_analysis(
+        mut self,
+        service: Arc<graph::repository_analysis::AnalysisService>,
+    ) -> Self {
+        for operation in graph::repository_analysis::COMMANDS {
+            self.register(operation, None, Some(service.clone()));
+        }
+        for operation in graph::repository_analysis::QUERIES {
+            self.register(operation, Some(service.clone()), None);
+        }
+        self
+    }
+
     pub fn with_graph(mut self, service: Arc<graph::GraphService>) -> Self {
         for op in graph::OPERATIONS {
             self.register(op, Some(service.clone()), Some(service.clone()));

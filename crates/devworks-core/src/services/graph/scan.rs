@@ -413,6 +413,71 @@ pub(super) fn edges(
     Ok(())
 }
 
+/// Stream the graph's stored relationships and the analysis linker's exact-view derivations.
+pub(super) fn composed_edges(
+    read: &dyn ReadSnapshot,
+    scope: &GraphScope,
+    layers: &[ViewLayers],
+    kinds: &[&str],
+    budget: &mut Budget,
+    mut visit: impl FnMut(Result<Edge, Unmapped>, &mut Budget) -> Result<bool, Failure>,
+) -> Result<(), Failure> {
+    let mut cross_repository = std::collections::BTreeSet::new();
+    let mut stopped = false;
+    let mut derive = false;
+    edges(read, scope, layers, kinds, budget, |edge, budget| {
+        derive |= scope.views.len() > 1 && super::repository_analysis::links::can_derive(&edge);
+        if let Ok(edge) = &edge
+            && edge.source.repository_id != edge.target.repository_id
+            && matches!(
+                edge.raw.edge.kind.as_str(),
+                "HTTP_CALLS"
+                    | "PUBLISHES"
+                    | "CALLS"
+                    | "USES_TYPE"
+                    | "IMPLEMENTS"
+                    | "RENDERS"
+                    | "INJECTS"
+                    | "REFERENCES_PACKAGE"
+            )
+            && scope.views.len() > 1
+        {
+            let bytes = edge.source.unit_key.len()
+                + edge.target.unit_key.len()
+                + edge.source.node_id.len()
+                + edge.target.node_id.len()
+                + edge.raw.edge.kind.len()
+                + 192;
+            if !budget.retain(bytes) {
+                return Ok(false);
+            }
+            cross_repository.insert((
+                super::dataset::key(&edge.source),
+                super::dataset::key(&edge.target),
+                edge.raw.edge.kind.clone(),
+            ));
+        }
+        stopped = !visit(edge, budget)?;
+        Ok(!stopped)
+    })?;
+    if !derive || stopped || budget.exhausted.is_some() {
+        return Ok(());
+    }
+    for edge in super::repository_analysis::links::graph_edges(
+        read,
+        scope,
+        layers,
+        kinds,
+        budget,
+        cross_repository,
+    )? {
+        if !visit(Ok(edge), budget)? {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Every visible edge of `scope` as the graph operators read it today, an overlay view's
 /// inherited edges relinked against that view; derived package dependencies are left out. The
 /// reference the stored endpoint reads are checked against.

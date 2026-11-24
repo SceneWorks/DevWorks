@@ -14,6 +14,11 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/schema-metadata.yml'
   workflow_dispatch:
+    inputs:
+      sqlserver_data:
+        description: Run only the SQL Server 2022 data fixture
+        type: boolean
+        default: false
 permissions:
   contents: read
 # Matches ci.yml: rust-cache hashes every CARGO* variable into the cache key.
@@ -27,6 +32,7 @@ jobs:
   # One job per qualified server version. Each version list must match the reader's
   # accepted set in crates/devworks-adapters/src/database/network/.
   sqlserver:
+    if: ${{ !inputs.sqlserver_data }}
     name: SQLServer ${{ matrix.version }} native x86 metadata and TLS
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -49,6 +55,7 @@ jobs:
           CARGO_BUILD_JOBS: '2'
         run: python3 tools/ci/schema_sqlserver_fixture.py --version '${{ matrix.version }}'
   network:
+    if: ${{ !inputs.sqlserver_data }}
     name: ${{ matrix.label }} native metadata and TLS
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -79,3 +86,22 @@ jobs:
         env:
           CARGO_BUILD_JOBS: '2'
         run: python3 tools/ci/schema_metadata_fixture.py '${{ matrix.engine }}' '${{ matrix.version }}'
+  sqlserver-data:
+    if: ${{ inputs.sqlserver_data }}
+    name: SQL Server 2022 native x86 data operations
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          shared-key: test-foundation
+          save-if: false
+      - name: Qualify guarded SQL against the disposable native database
+        env:
+          CARGO_BUILD_JOBS: '2'
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: python3 tools/ci/schema_sqlserver_fixture.py --version 2022 --data-only

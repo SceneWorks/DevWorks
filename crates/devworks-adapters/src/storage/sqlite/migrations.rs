@@ -753,11 +753,29 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "ff33a5f40322cc4f8524b653d2e2418531fabcbaba261311a6bcfd25829da83f",
         rebuilds_tables: false,
     },
+    // Existing readers ignore this independent aggregate. Earlier writers do not update its rows.
     Migration {
         version: 67,
-        minimum_reader: 67,
+        minimum_reader: 66,
         minimum_writer: 67,
-        sql: include_str!("migrations/0067_github_watchers.sql"),
+        sql: include_str!("migrations/0067_analysis.sql"),
+        expected_sha256: "a604659ef41800df6389f9094fd42f27c15e4d7623d8718a9efae1c533d1ae01",
+        rebuilds_tables: false,
+    },
+    // Older readers ignore this workspace/source policy. Require current writers to preserve it.
+    Migration {
+        version: 68,
+        minimum_reader: 66,
+        minimum_writer: 68,
+        sql: include_str!("migrations/0068_database_sensitive_policy.sql"),
+        expected_sha256: "a702716325ba7e39d34906db691762fdb215b7321b67e2ea2bd5fa637901ab69",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 69,
+        minimum_reader: 69,
+        minimum_writer: 69,
+        sql: include_str!("migrations/0069_github_watchers.sql"),
         expected_sha256: "b4655417647e74fda9a997fa35e0fb814a8f9ec2b1aa5e83a8ad391a66b494b5",
         rebuilds_tables: true,
     },
@@ -1000,6 +1018,185 @@ fn split_migration<'a>(
         .then_some((systemone, keep_working))
 }
 
+// DW-F7 test builds used 64 for repository analysis and 65 for database policy.
+// The production ledger already owns those numbers. Recognize only the two complete
+// DW-F7 suffixes so partially applied, unknown or counterfeit histories still fail closed.
+fn intelligence_branch<'a>(
+    migrations: &'a [Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+) -> Option<&'a [Migration]> {
+    let canonical = migrations.get(63..68)?;
+    let [systemone, keep_working, routing, analysis, database] = canonical else {
+        return None;
+    };
+    if systemone.version != 64
+        || systemone.expected_sha256 != SYSTEMONE_0064_SHA256
+        || keep_working.version != 65
+        || keep_working.expected_sha256 != KEEP_WORKING_SHA256
+        || routing.version != 66
+        || analysis.version != 67
+        || database.version != 68
+        || applied.len() != usize::try_from(meta.schema_version).ok()?
+        || meta.minimum_reader != 57
+    {
+        return None;
+    }
+    let legacy_analysis = applied.get(63)?;
+    if legacy_analysis.version != 64
+        || legacy_analysis.checksum != analysis.checksum()
+        || !migrations[..63]
+            .iter()
+            .zip(applied)
+            .all(|(wanted, actual)| {
+                wanted.version == actual.version && wanted.checksum() == actual.checksum
+            })
+    {
+        return None;
+    }
+    match (meta.schema_version, meta.minimum_writer) {
+        (64, 63) => Some(&canonical[..4]),
+        (65, 65) if applied[64].version == 65 && applied[64].checksum == database.checksum() => {
+            Some(canonical)
+        }
+        _ => None,
+    }
+}
+
+fn reconcile_intelligence_branch(
+    conn: &Connection,
+    migrations: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    db(conn.execute_batch("BEGIN IMMEDIATE"))?;
+    let result = (|| {
+        let meta = read_meta(conn)?
+            .ok_or_else(|| StorageError::IncompatibleSchema("missing store metadata".into()))?;
+        let applied = ledger(conn)?;
+        let canonical = intelligence_branch(migrations, &meta, &applied).ok_or_else(|| {
+            StorageError::IncompatibleSchema(
+                "DW-F7 migration ledger changed before reconciliation".into(),
+            )
+        })?;
+        for (old, target) in (64..).zip(&canonical[3..]) {
+            let moved = db(conn.execute(
+                "UPDATE schema_migrations SET version=?1 WHERE version=?2 AND checksum=?3",
+                params![target.version, old, target.checksum()],
+            ))?;
+            if moved != 1 {
+                return Err(StorageError::IncompatibleSchema(
+                    "DW-F7 ledger entry disappeared during reconciliation".into(),
+                ));
+            }
+        }
+        for m in &canonical[..3] {
+            db(conn.execute_batch(m.sql))?;
+            db(conn.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at,app_build)
+                 VALUES(?1,?2,?3,?4)",
+                params![m.version, m.checksum(), now_ms, app_build],
+            ))?;
+        }
+        let latest = canonical.last().expect("the DW-F7 suffix is nonempty");
+        db(conn.execute(
+            "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3
+             WHERE singleton=1",
+            params![latest.version, latest.minimum_reader, latest.minimum_writer],
+        ))?;
+        db(conn.pragma_update(None, "user_version", latest.version))?;
+        verify_after(conn)?;
+        Ok(latest.version)
+    })();
+    match result {
+        Ok(version) => {
+            db(conn.execute_batch("COMMIT"))?;
+            Ok(version)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+/// The staged GitHub watcher branch used 67 before analysis and database policy landed.
+fn watcher_branch(
+    conn: &Connection,
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+) -> Result<bool, StorageError> {
+    let Some(watcher) = migrations.get(68) else {
+        return Ok(false);
+    };
+    if watcher.version != 69
+        || watcher.expected_sha256
+            != "b4655417647e74fda9a997fa35e0fb814a8f9ec2b1aa5e83a8ad391a66b494b5"
+        || (
+            meta.schema_version,
+            meta.minimum_reader,
+            meta.minimum_writer,
+        ) != (67, 67, 67)
+        || applied.len() != 67
+        || applied[66].version != 67
+        || applied[66].checksum != watcher.checksum()
+        || !migrations[..66]
+            .iter()
+            .zip(applied)
+            .all(|(expected, actual)| {
+                expected.version == actual.version && expected.checksum() == actual.checksum
+            })
+    {
+        return Ok(false);
+    }
+    Ok(db(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)))? == 67)
+}
+
+fn reconcile_watcher_branch(
+    conn: &Connection,
+    migrations: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    let tx = db(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    ))?;
+    let changed = || {
+        StorageError::IncompatibleSchema(
+            "GitHub watcher migration ledger changed before reconciliation".into(),
+        )
+    };
+    let meta = read_meta(&tx)?.ok_or_else(changed)?;
+    if !watcher_branch(&tx, migrations, &meta, &ledger(&tx)?)? {
+        return Err(changed());
+    }
+    let watcher = &migrations[68];
+    let moved = db(tx.execute(
+        "UPDATE schema_migrations SET version=69 WHERE version=67 AND checksum=?1",
+        [watcher.checksum()],
+    ))?;
+    if moved != 1 {
+        return Err(changed());
+    }
+    for missing in &migrations[66..68] {
+        db(tx.execute_batch(missing.sql))?;
+        db(tx.execute(
+            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+            params![missing.version, missing.checksum(), now_ms, app_build],
+        ))?;
+    }
+    db(tx.execute(
+        "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+        params![watcher.version, watcher.minimum_reader, watcher.minimum_writer],
+    ))?;
+    db(tx.pragma_update(None, "user_version", watcher.version))?;
+    verify_after(&tx)?;
+    db(tx.commit())?;
+    Ok(watcher.version)
+}
+
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
 /// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
 pub(crate) fn check(
@@ -1023,6 +1220,8 @@ pub(crate) fn check(
         )));
     }
     let applied = ledger(conn)?;
+    let intelligence = intelligence_branch(migrations, &meta, &applied);
+    let watcher_history = watcher_branch(conn, migrations, &meta, &applied)?;
     for m in migrations
         .iter()
         .filter(|m| m.version <= meta.schema_version)
@@ -1030,6 +1229,8 @@ pub(crate) fn check(
         match applied.iter().find(|a| a.version == m.version) {
             Some(a) if a.checksum == m.checksum() => {}
             Some(a) if split_migration(migrations, &meta, a).is_some() => {}
+            Some(_) if matches!(m.version, 64 | 65) && intelligence.is_some() => {}
+            Some(_) if m.version == 67 && watcher_history => {}
             Some(a) => {
                 return Err(StorageError::IncompatibleSchema(format!(
                     "migration {} checksum {} does not match this build ({})",
@@ -1085,13 +1286,20 @@ pub(crate) fn prepare(
         return Ok((meta, access));
     }
     let mut version = meta.schema_version;
-    if version == 64
-        && let Some((systemone, keep_working)) = ledger(conn)?
+    if matches!(version, 64 | 65) {
+        let applied = ledger(conn)?;
+        if intelligence_branch(migrations, &meta, &applied).is_some() {
+            version = reconcile_intelligence_branch(conn, migrations, now_ms, app_build)?;
+        } else if let Some((systemone, keep_working)) = applied
             .iter()
             .find_map(|applied| split_migration(migrations, &meta, applied))
-    {
-        apply_in_transaction(conn, systemone, None, now_ms, app_build, Some(keep_working))?;
-        version = keep_working.version;
+        {
+            apply_in_transaction(conn, systemone, None, now_ms, app_build, Some(keep_working))?;
+            version = keep_working.version;
+        }
+    }
+    if version == 67 && watcher_branch(conn, migrations, &meta, &ledger(conn)?)? {
+        version = reconcile_watcher_branch(conn, migrations, now_ms, app_build)?;
     }
     for m in migrations.iter().filter(|m| m.version > version) {
         apply(conn, m, None, now_ms, app_build)?;

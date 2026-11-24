@@ -1,0 +1,17 @@
+[package]
+name = "devworks-semantic-helper"
+description = "Managed semantic package transport and owned processes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "=0.22.1"
+devworks-core = { path = "../devworks-core" }
+devworks-extension-protocol = { path = "../devworks-extension-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "=0.2.191"

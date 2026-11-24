@@ -61,10 +61,14 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
 /// routing source linked to its owning session. The linked input artifact follows the ordinary
 /// project artifact ownership and the operation journal follows its existing scope.
-/// Migration 67 rebuilds watchers to bind a GitHub source and preserves their existing project
+/// Migration 67 adds analysis_runs and its four indexes. Project runs follow their recorded
+/// scope key. Workspace runs and ordinary repository index views keep their independent ownership.
+/// Migration 68 adds database_sensitive_policies. Rules follow the workspace or shared schema
+/// source. Project purge removes only the project's existing access to that shared source.
+/// Migration 69 rebuilds watchers to bind a GitHub source and preserves their existing project
 /// and session owners. The source is an observation selector and adds no ownership reference.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "94098e8caa4e68f35cb73a2da330d694ea957fec79f4ffd0e36b9e785f2d1c99";
+    "e20c96c3dbe006687feea65637826ebfadeb39e4ee9d73350d1e3e0a994fc395";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
