@@ -4,15 +4,30 @@ param(
     [Parameter(Mandatory)][string]$Output,
     [Parameter(Mandatory)][string]$Source,
     [Parameter(Mandatory)][ValidateSet('76', '78')][int]$ExpectedSchema,
+    [ValidateSet('x64','arm64')][string]$Architecture = 'x64',
     [switch]$ProbeIncomingMcp
 )
 
 . (Join-Path $PSScriptRoot 'windows-test-installer.ps1')
-$msiName = 'DevWorks-Test-windows-x64.msi'
+$target = Get-TestInstallerTarget $Architecture
+$runtime = [Runtime.InteropServices.RuntimeInformation]
+if ($runtime::OSArchitecture.ToString() -ine $Architecture -or $runtime::ProcessArchitecture.ToString() -ine $Architecture) {
+    throw "Expected native $Architecture Windows and PowerShell"
+}
+$signTool = Get-TestSignTool $Architecture
+$msiName = "DevWorks-Test-windows-$Architecture.msi"
 $msi = Join-Path $Package $msiName
 $signed = Get-Content -LiteralPath (Join-Path $Package 'signed.json') -Raw | ConvertFrom-Json -AsHashtable
-if ($signed.source -cne $Source -or (Get-VerifiedTestSignature $msi).sha256 -cne $signed.installer.sha256) {
+if ($signed.source -cne $Source -or $signed.architecture -cne $Architecture -or
+    (Get-VerifiedTestSignature $msi $signTool).sha256 -cne $signed.installer.sha256) {
     throw 'Signed MSI provenance does not match the approved build'
+}
+$installerApi = New-Object -ComObject WindowsInstaller.Installer
+$database = $installerApi.OpenDatabase($msi, 0)
+try {
+    Assert-TestMsiArchitecture $database $Architecture
+} finally {
+    $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($database)
 }
 
 $layout = Get-TestInstallLayout
@@ -26,12 +41,15 @@ Invoke-TestMsi $msi '/i' (Join-Path $work 'install.log')
 $productCode = Confirm-TestInstallScope $msi $layout
 foreach ($name in $script:payloadNames) {
     $path = Join-Path $layout.installed $name
-    $hash = if ($name.EndsWith('.exe')) { (Get-VerifiedTestSignature $path).sha256 } else { Get-Sha256 $path }
+    $hash = if ($name.EndsWith('.exe')) {
+        $null = Get-TestPeSubsystem $path $target.machine
+        (Get-VerifiedTestSignature $path $signTool).sha256
+    } else { Get-Sha256 $path }
     if ($hash -cne $signed.payload[$name].sha256) { throw "Installed bytes differ for $name" }
 }
 $desktop = Join-Path $layout.installed 'devworks-desktop.exe'
 $launcher = Join-Path $layout.installed 'devworks-test-launcher.exe'
-if ((Get-X64PeSubsystem $launcher) -ne 2 -or (Get-X64PeSubsystem $desktop) -ne 3) {
+if ((Get-TestPeSubsystem $launcher $target.machine) -ne 2 -or (Get-TestPeSubsystem $desktop $target.machine) -ne 3) {
     throw 'Expected a GUI Start launcher and a console-capable desktop for diagnostics'
 }
 
@@ -69,7 +87,7 @@ if ($process.ExitCode -ne 0 -or (Get-Item -LiteralPath $png).Length -le 64 -or
 $evidenceText = & $desktop --release-evidence
 if ($LASTEXITCODE -ne 0) { throw 'Cannot read the installed runtime identity' }
 $evidence = $evidenceText | ConvertFrom-Json -AsHashtable
-if ($evidence.target -cne 'x86_64-pc-windows-msvc' -or $evidence.build -cne $Source -or
+if ($evidence.target -cne $target.rust -or $evidence.build -cne $Source -or
     $evidence.migrations.Count -ne $ExpectedSchema) { throw 'Unexpected installed build or migration catalogue' }
 $releaseJson = Join-Path $work 'release-evidence.json'
 $evidenceText | Set-Content -LiteralPath $releaseJson -Encoding utf8NoBOM
@@ -149,7 +167,8 @@ $os = Get-CimInstance Win32_OperatingSystem
 $signed.qualification = [ordered]@{
     os = $os.Caption
     osBuild = $os.BuildNumber
-    architecture = 'x64'
+    osVersion = $os.Version
+    architecture = $Architecture
     scope = 'per-user'
     schemaVersion = $ExpectedSchema
     startShortcutOpenedAndClosedCleanly = $true
@@ -164,3 +183,4 @@ if ($ProbeIncomingMcp) {
 }
 $signed | ConvertTo-Json -Depth 8 |
     Set-Content -LiteralPath (Join-Path $Output 'qualification.json') -Encoding utf8NoBOM
+Write-Host "Qualified $msiName ($($signed.installer.sha256)) from $Source on $($os.Caption) $($os.Version)"
