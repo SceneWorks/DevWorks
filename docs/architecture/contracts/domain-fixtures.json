@@ -15379,6 +15379,34 @@
     "schemaValid": false
   },
   {
+    "id": "repository-docs-Stage",
+    "entry": "domain-request.r14",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"repository_docs.generate\",\"repositoryId\":\"id-a\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedRevision\":\"1\",\"outputRootId\":\"id-a\",\"topics\":[\"fixture\"],\"analysisRunId\":\"analysis-run-a\",\"delivery\":\"Stage\"},\"schemaRevision\":14}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "repository-docs-Commit",
+    "entry": "domain-request.r14",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"repository_docs.generate\",\"repositoryId\":\"id-a\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedRevision\":\"1\",\"outputRootId\":\"id-a\",\"topics\":[\"fixture\"],\"analysisRunId\":\"analysis-run-a\",\"delivery\":\"Commit\"},\"schemaRevision\":14}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "repository-docs-CommitAndPush",
+    "entry": "domain-request.r14",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"repository_docs.generate\",\"repositoryId\":\"id-a\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedRevision\":\"1\",\"outputRootId\":\"id-a\",\"topics\":[\"fixture\"],\"analysisRunId\":\"analysis-run-a\",\"delivery\":\"CommitAndPush\"},\"schemaRevision\":14}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "repository-docs-r14-fields-before-r14",
+    "entry": "domain-request",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"repository_docs.generate\",\"repositoryId\":\"id-a\",\"views\":{\"kind\":\"Published\",\"repositoryIds\":[\"repo-a\"]},\"expectedRevision\":\"1\",\"outputRootId\":\"id-a\",\"topics\":[\"fixture\"],\"analysisRunId\":\"analysis-run-a\",\"delivery\":\"CommitAndPush\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r10-input-documents.import",
     "entry": "domain-request.r10",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.import\",\"scope\":{\"kind\":\"Workspace\"},\"source\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"title\":\"fixture\"},\"schemaRevision\":10}",

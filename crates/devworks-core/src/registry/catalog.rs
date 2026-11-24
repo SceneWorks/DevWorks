@@ -10246,7 +10246,7 @@ pub(super) static CATALOG: [OperationDescriptor; 393] = [
         result_type: "OperationRef",
         result_schema: schema_of::<OperationRef>,
         completion: true,
-        revisions: &[SchemaRevision(1)],
+        revisions: &[SchemaRevision(1), SchemaRevision(14)],
         native_execution: true,
         approval_required: false,
         human_only: false,

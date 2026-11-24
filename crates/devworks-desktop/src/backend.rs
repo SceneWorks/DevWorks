@@ -387,9 +387,11 @@ pub trait Backend: Send + Sync {
     }
     fn generate_repository_documentation(
         &self,
+        _run: &Id,
         _project: &devworks_core::protocol::ProjectId,
         _binding: &devworks_core::protocol::records::AnalysisViewBinding,
         _revision: &devworks_core::protocol::Revision,
+        _delivery: devworks_core::protocol::records::RepositoryDocsDelivery,
     ) -> Result<String, String> {
         Err("Repository documentation generation is unavailable".into())
     }

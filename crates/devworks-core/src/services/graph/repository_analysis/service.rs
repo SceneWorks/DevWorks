@@ -67,11 +67,23 @@ pub struct AnalysisService {
 }
 
 impl AnalysisService {
+    pub(crate) fn documentation_source(&self) -> Option<&dyn crate::ports::indexing::SourceTree> {
+        self.indexing.get().map(|index| &*index.source)
+    }
+
+    pub(crate) fn documentation_language(&self, path: &str) -> Option<&'static str> {
+        self.indexing
+            .get()?
+            .parser
+            .language_of(path)
+            .map(|language| language.name)
+    }
+
     pub(crate) fn prepare_documentation(
         &self,
         ctx: &InvocationContext,
         request: &crate::operations::repository_docs::GenerateInput,
-        tracked: &[String],
+        source: &super::documentation::DocumentationSourceFacts,
         run_id: Option<&Id>,
     ) -> Result<super::DocumentationDraft, Failure> {
         let (evidence, repository_name) = crate::ports::storage::read_snapshot(
@@ -89,7 +101,13 @@ impl AnalysisService {
             },
         )??;
         let reports = evidence.read(&self.phases, ctx)?;
-        evidence.render(reports, &repository_name, tracked, &request.topics.0)
+        evidence.render(
+            reports,
+            &repository_name,
+            source,
+            &request.topics.0,
+            request.delivery.clone(),
+        )
     }
 
     pub fn new(

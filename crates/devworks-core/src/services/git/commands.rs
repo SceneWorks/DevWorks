@@ -887,6 +887,7 @@ impl GitService {
         job: &Job,
         operation: &OperationId,
         observation: crate::services::git::client::RevisionObservation,
+        published_docs: Option<Value>,
     ) -> EffectOutcome {
         if observation.branch.as_deref() != Some(&job.tree.branch) {
             return EffectOutcome::Unknown("owned branch changed".into());
@@ -972,6 +973,27 @@ impl GitService {
             }
             _ => OperationResult::GitWorktree { value },
         };
+        use crate::protocol::records::RepositoryDocsDelivery;
+        let staged_message = if matches!(&job.action, Action::Documentation(draft)
+            if matches!(draft.delivery, Some(RepositoryDocsDelivery::Commit | RepositoryDocsDelivery::CommitAndPush)))
+        {
+            match self.artifacts.stage_host_bytes(
+                &*self.store,
+                b"Update repository documentation\n",
+                json!({"kind":"RepositoryDocumentationCommitMessage","operationId":operation}),
+            ) {
+                Ok(Ok(staged)) => Some(staged),
+                _ => {
+                    return EffectOutcome::Unknown(
+                        "documentation commit message could not be staged".into(),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let message = staged_message.clone();
+        let artifacts = self.artifacts.clone();
         let j = job.clone();
         let op = operation.clone();
         let checkpoint = json!({"result":result});
@@ -1021,8 +1043,27 @@ impl GitService {
                     "head": head
                 }),
             })?;
-            let documentation = if let Action::Documentation(draft) = &j.action {
+            if let Action::Documentation(draft) = &j.action {
                 let event = EventId(tx.new_id(IdKind::Event));
+                let commit_message = message
+                    .as_ref()
+                    .map(|staged| {
+                        let version = artifacts.commit_host_bytes_in_scope(
+                            tx,
+                            staged,
+                            crate::services::artifacts::host::HostArtifactPublication {
+                                title: "Repository documentation commit message",
+                                media_type: "text/plain; charset=utf-8",
+                                provenance: json!({"operationId":op}),
+                                scope: crate::ports::storage::ArtifactScope::Project(
+                                    j.project.clone(),
+                                ),
+                                owner: j.actor.clone(),
+                            },
+                        )?;
+                        Ok::<_, StorageError>(crate::services::artifacts::version_ref(&version))
+                    })
+                    .transpose()?;
                 let evidence = json!({
                     "repositoryId": updated.repository_id,
                     "workId": updated.work_id,
@@ -1033,9 +1074,15 @@ impl GitService {
                     "viewDigest": draft.evidence.view.view_digest,
                     "sourceHead": head,
                     "paths": draft.files.keys().collect::<Vec<_>>(),
-                    "missingProjects": draft.missing_projects
+                    "files": draft.files.iter().map(|(path, text)| json!({
+                        "path": path, "sha256": crate::fingerprint::sha256_hex(text.as_bytes())
+                    })).collect::<Vec<_>>(),
+                    "missingProjects": draft.missing_projects,
+                    "complete": draft.complete,
+                    "delivery": draft.delivery,
+                    "commitMessage": commit_message
                 });
-                let doc_sequence = tx.history().append(NewEvent {
+                tx.history().append(NewEvent {
                     id: event.clone(),
                     actor: j.actor.clone(),
                     project_id: Some(j.project.clone()),
@@ -1045,12 +1092,47 @@ impl GitService {
                     aggregate_id: updated.id.as_str().into(),
                     aggregate_revision: updated.revision,
                     kind: "RepositoryDocumentationGenerated".into(),
+                    payload: evidence,
+                })?;
+                if message.is_some() {
+                    documentation::request(tx, event, &j)?;
+                }
+            }
+            let mut documentation = None;
+            if let Some(evidence) = published_docs {
+                let (kind, requests_push, qualifies) = match j.action {
+                    Action::Commit { .. } => (
+                        "RepositoryDocumentationCommitted",
+                        evidence["delivery"] == "CommitAndPush" && j.reviewed_binding.is_some(),
+                        false,
+                    ),
+                    Action::Push { .. } => (
+                        "RepositoryDocumentationPublished",
+                        false,
+                        evidence["complete"] == true,
+                    ),
+                    _ => return Err(StorageError::ScopeDenied),
+                };
+                let event = EventId(tx.new_id(IdKind::Event));
+                let sequence = tx.history().append(NewEvent {
+                    id: event.clone(),
+                    actor: j.actor.clone(),
+                    project_id: Some(j.project.clone()),
+                    root_id: j.root.clone(),
+                    operation_id: Some(op.clone()),
+                    aggregate_kind: "repository_documentation".into(),
+                    aggregate_id: updated.id.as_str().into(),
+                    aggregate_revision: updated.revision,
+                    kind: kind.into(),
                     payload: evidence.clone(),
                 })?;
-                Some((event, doc_sequence, evidence))
-            } else {
-                None
-            };
+                if requests_push {
+                    documentation::request(tx, event.clone(), &j)?;
+                }
+                if qualifies {
+                    documentation = Some((event, sequence, evidence));
+                }
+            }
             let mut roots = vec![RootId(updated.work_id.clone())];
             if let Some(feature) = &j.feature_id {
                 roots.push(RootId(feature.clone()));
@@ -1073,8 +1155,7 @@ impl GitService {
                         sequence: *doc_sequence,
                         repository_id: Some(updated.repository_id.clone()),
                         revision: Some(head.hex.clone()),
-                        summary: "Generated repository documentation for the analyzed revision"
-                            .into(),
+                        summary: "Published repository documentation with verified contents".into(),
                         body: evidence.clone(),
                         created_at_ms,
                     })?;
@@ -1108,6 +1189,15 @@ impl GitService {
             }
             Ok(())
         });
+        if let Some(staged) = staged_message.as_ref() {
+            match &outcome {
+                Ok(()) => self.artifacts.settle_host_bytes(&*self.store, staged, true),
+                Err(StorageError::CommitUnknown) => {}
+                Err(_) => self
+                    .artifacts
+                    .settle_host_bytes(&*self.store, staged, false),
+            }
+        }
         match outcome {
             Ok(()) => EffectOutcome::Completed(checkpoint),
             Err(e) => storage_failure(e),
@@ -1538,7 +1628,14 @@ impl GitService {
                     if !matches!(valid, Ok(true)) {
                         return changed("documentation source authority changed before generation");
                     }
-                    match documentation::apply(&git, path, &job, &operation.id, draft) {
+                    let Some(source) = self
+                        .repository_analysis
+                        .get()
+                        .and_then(|analysis| analysis.documentation_source())
+                    else {
+                        return denied("repository documentation source intake is unavailable");
+                    };
+                    match documentation::apply(&git, source, path, &job, &operation.id, draft) {
                         Ok(()) => return self.observe_pending(&job, operation),
                         Err(GitFault::SourceChanged) => {
                             return changed("documentation source or target changed");
@@ -1692,7 +1789,17 @@ impl GitService {
                                 && o.branch.as_deref() == Some(&job.tree.branch) =>
                         {
                             if !o.dirty {
-                                return self.finish_git(&job, &operation.id, o);
+                                let docs = match documentation::matching_commit(
+                                    &*self.store,
+                                    &git,
+                                    path,
+                                    &job,
+                                    &o.head,
+                                ) {
+                                    Ok(docs) => docs,
+                                    Err(error) => return storage_failure(error.into_storage()),
+                                };
+                                return self.finish_git(&job, &operation.id, o, docs);
                             }
                         }
                         _ => return changed("worktree head or branch changed"),
@@ -1762,7 +1869,7 @@ impl GitService {
                         "committed tree or message differs from the reviewed contents".into(),
                     );
                 }
-                self.finish_git(&job, &operation.id, observation)
+                self.finish_git(&job, &operation.id, observation, None)
             }
             Err(_) => EffectOutcome::Unknown("Git result could not be observed".into()),
         }
@@ -1912,7 +2019,12 @@ impl GitService {
         };
         let verified = match &job.action {
             Action::Documentation(draft) => {
-                observed.head == job.tree.head.hex && documentation::observed(&git, path, draft)
+                observed.head == job.tree.head.hex
+                    && self
+                        .repository_analysis
+                        .get()
+                        .and_then(|analysis| analysis.documentation_source())
+                        .is_some_and(|source| documentation::observed(&git, source, path, draft))
             }
             Action::Create => {
                 let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
@@ -1989,7 +2101,16 @@ impl GitService {
             Action::PullRequest { .. } => unreachable!("handled above"),
         };
         if verified && settle {
-            self.finish_git(job, &operation.id, observed)
+            let docs = if matches!(job.action, Action::Commit { .. } | Action::Push { .. }) {
+                match documentation::matching_commit(&*self.store, &git, path, job, &observed.head)
+                {
+                    Ok(value) => value,
+                    Err(error) => return storage_failure(error.into_storage()),
+                }
+            } else {
+                None
+            };
+            self.finish_git(job, &operation.id, observed, docs)
         } else if verified {
             EffectOutcome::Completed(json!({ "kind":"VerifiedGitWorktree", "head":observed.head,
                 "branch":observed.branch }))

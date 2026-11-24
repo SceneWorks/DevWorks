@@ -234,7 +234,7 @@ impl UseCases {
     }
 
     pub fn with_repository_documentation(mut self, service: Arc<git::GitService>) -> Self {
-        self.register("repository_docs.generate", Some(service), None);
+        self.register("repository_docs.generate", None, Some(service));
         self
     }
 

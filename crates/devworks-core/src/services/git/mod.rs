@@ -63,6 +63,8 @@ pub struct GitService {
     approval_control: std::sync::RwLock<Option<Arc<crate::services::runs::ControlService>>>,
     repository_analysis:
         std::sync::OnceLock<Arc<crate::services::graph::repository_analysis::AnalysisService>>,
+    documentation_approvals:
+        std::sync::OnceLock<std::sync::Weak<crate::services::approvals::ApprovalService>>,
 }
 #[derive(Clone)]
 struct Target {
@@ -147,6 +149,7 @@ impl GitService {
             stopping: std::sync::atomic::AtomicBool::new(false),
             approval_control: std::sync::RwLock::new(None),
             repository_analysis: std::sync::OnceLock::new(),
+            documentation_approvals: std::sync::OnceLock::new(),
         }
     }
     pub fn set_approval_control(&self, control: Arc<crate::services::runs::ControlService>) {
@@ -158,6 +161,13 @@ impl GitService {
     ) -> bool {
         self.repository_analysis.set(analysis).is_ok()
     }
+    pub fn install_documentation_approvals(
+        &self,
+        approvals: &Arc<crate::services::approvals::ApprovalService>,
+    ) {
+        let _ = self.documentation_approvals.set(Arc::downgrade(approvals));
+    }
+
     pub fn stop(&self) {
         self.stopping
             .store(true, std::sync::atomic::Ordering::SeqCst);

@@ -439,6 +439,16 @@ fn build() -> Vec<SettingDescriptor> {
             NewClonesOnly
         ),
         setting!(
+            "repositories.documentationDelivery",
+            "Repository documentation delivery",
+            "What to request after successful repository synthesis in an owned worktree. Git commit and push each require their normal review.",
+            General,
+            INHERITED,
+            ValueKind::Choice(&["Stage", "Commit", "CommitAndPush"]),
+            "Stage",
+            NextAdmission
+        ),
+        setting!(
             MANAGED_AUTO_KEY,
             "DevWorks Auto for new managed sessions",
             "Classify each new managed assignment once before its first reply. Existing pins and automatic tiers are retained.",

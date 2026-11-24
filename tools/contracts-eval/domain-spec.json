@@ -1,6 +1,10 @@
 {
   "status": "Architecture candidates, not production or public SDK freeze",
   "types": {
+    "RepositoryDocsDelivery": {
+      "kind": "enum",
+      "values": ["Stage", "Commit", "CommitAndPush"]
+    },
     "PackageContent": {
       "kind": "record",
       "fields": {
@@ -12207,12 +12211,15 @@
         "views": "ViewSelection",
         "expected_revision": "Revision",
         "output_root_id": "Id",
-        "topics": "NonEmpty<Label>"
+        "topics": "NonEmpty<Label>",
+        "analysis_run_id": "?Id",
+        "delivery": "?RepositoryDocsDelivery"
       },
+      "since": {"analysis_run_id": 14, "delivery": 14},
       "result": "OperationRef",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Exact source/revision and scoped destination; retained documentation modes and source provenance, ordinary router attribution, approval and completion gates."
+      "rules": "Exact source/revision and scoped destination; explicit stage, commit approval, or commit and push approval, and source provenance, ordinary router attribution, approval and completion gates."
     },
     "mcp_server.status": {
       "operation": "mcp_server.status",
@@ -12580,6 +12587,7 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "repository_docs.generate": [1, 14],
     "documents.import": [1, 10, 13],
     "documents.list": [1, 10, 13],
     "documents.read": [1, 10, 13],

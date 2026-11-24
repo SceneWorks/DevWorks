@@ -1462,6 +1462,16 @@ for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
 # Revisions 10 and 13 change document results and retain the existing request envelopes.
+# Exact source identity and publication mode are revision-14 documentation inputs.
+docs=request('repository_docs.generate','Command')
+docs['schemaRevision']=14
+docs['body']['analysisRunId']='analysis-run-a'
+for delivery in ['Stage','Commit','CommitAndPush']:
+ frame=copy.deepcopy(docs);frame['body']['delivery']=delivery
+ case('repository-docs-'+delivery,'domain-request.r14',frame)
+early=copy.deepcopy(frame);early.pop('schemaRevision')
+case('repository-docs-r14-fields-before-r14','domain-request',early,False,False)
+
 for revision in (10,13):
  for name,mode in [('documents.import','Command'),('documents.list','Query')]:
   case(f'r{revision}-input-{name}',f'domain-request.r{revision}',{**request(name,mode),'schemaRevision':revision})

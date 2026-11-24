@@ -1590,9 +1590,11 @@ impl Backend for DesktopBackend {
     }
     fn generate_repository_documentation(
         &self,
+        run: &devworks_core::protocol::Id,
         project: &devworks_core::protocol::ProjectId,
         binding: &devworks_core::protocol::records::AnalysisViewBinding,
         revision: &devworks_core::protocol::Revision,
+        delivery: devworks_core::protocol::records::RepositoryDocsDelivery,
     ) -> Result<String, String> {
         use devworks_core::protocol::{CommandReply, results::DomainDecision};
 
@@ -1607,12 +1609,12 @@ impl Backend for DesktopBackend {
         .map_err(|error| error.to_string())?;
         let operation = "repository_docs.generate";
         let frame = serde_json::json!({
-            "mode": "Command", "protocol": "1.0-draft.1",
+            "mode": "Command", "protocol": "1.0-draft.1", "schemaRevision": 14,
             "requestKey": self.host.ids.next_id(devworks_core::ports::IdKind::Invocation),
             "body": {
                 "kind": operation, "repositoryId": binding.repository_id,
                 "views": {"kind": "Exact", "viewIds": [binding.view_id]},
-                "expectedRevision": revision, "outputRootId": root, "topics": ["all"]
+                "expectedRevision": revision, "outputRootId": root, "topics": ["all"], "analysisRunId": run, "delivery": delivery
             }
         })
         .to_string();

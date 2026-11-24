@@ -46,15 +46,25 @@ fn submit(
     mut input: Value,
 ) -> CommandReply<DomainDecision> {
     input["kind"] = json!(operation);
-    let revision = if operation.starts_with("analysis.") {
-        3
-    } else {
-        1
+    let revision = match operation {
+        "repository_docs.generate" => 14,
+        operation if operation.starts_with("analysis.") => 3,
+        _ => 1,
     };
     let raw = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":revision,
         "requestKey":key,"body":input})
     .to_string();
-    app.command(ctx, operation, raw.as_bytes()).unwrap()
+    let reply = app.command(ctx, operation, raw.as_bytes()).unwrap();
+    if operation == "repository_docs.generate"
+        && let CommandReply::Recorded { receipt, .. } = &reply
+        && let DomainDecision::Accepted { operation_id } = &receipt.decision
+    {
+        eprintln!(
+            "documentation fixture {key} uses {}",
+            operation_id.0.as_str()
+        );
+    }
+    reply
 }
 
 fn accepted(reply: CommandReply<DomainDecision>) -> OperationId {
@@ -68,7 +78,8 @@ fn accepted(reply: CommandReply<DomainDecision>) -> OperationId {
 }
 
 async fn terminal(store: &dyn ApplicationStore, operation: &OperationId) -> OperationRecord {
-    within("analysis dispatcher settles provider evidence", async {
+    let label = format!("dispatcher settles operation {}", operation.0.as_str());
+    within(&label, async {
         loop {
             let row = read(store, |s| s.operations().operation(operation)).unwrap();
             if matches!(
@@ -88,16 +99,29 @@ async fn terminal(store: &dyn ApplicationStore, operation: &OperationId) -> Oper
 
 fn prepare_repo(base: &Path) {
     let repo = base.join("analysis-native");
-    std::fs::create_dir_all(repo.join("src")).unwrap();
+    let project = repo.join("components").join("support");
+    std::fs::create_dir_all(project.join("src")).unwrap();
     std::fs::write(
-        repo.join("src/lib.rs"),
+        project.join("DocSupport.csproj"),
+        "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/lib.rs"),
         "pub fn fixture_first_party() -> u32 { 4 }\n",
     )
     .unwrap();
+    let remote = base.join("documentation-origin.git");
+    let remote_path = remote.to_str().unwrap();
     for command in [
         vec!["init", "-q"],
         vec!["add", "-A"],
         vec!["commit", "-qm", "fixture"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@example.test"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["init", "--bare", remote_path],
+        vec!["remote", "add", "origin", remote_path],
     ] {
         let output = Command::new("git")
             .current_dir(&repo)
@@ -164,6 +188,7 @@ fn repository_analysis_uses_the_router_and_records_synthesis_once() {
         std::fs::create_dir(&docs_root).unwrap();
         composition.git = Some(devworks_engine::git::GitComposition {
             config: devworks_core::services::git::GitConfig {
+                transport: Some(Arc::new(devworks_adapters::git_transport::NativeGitTransportFiles)),
                 roots: vec![devworks_core::services::git::RegisteredGitRoot {
                     id: id("documentation-worktrees"),
                     path: std::fs::canonicalize(&docs_root).unwrap(),
@@ -462,7 +487,10 @@ async fn check_repository_documentation(
             search_key: "documentation".into(),
             caller_ref: None,
             completion: None,
-            brief: json!({}),
+            brief: json!({"acceptance":[{
+                "id":"docs-delivered","text":"Publish complete repository documentation",
+                "evidenceIds":[],"state":"Unmet"
+            }]}),
         })?;
         tx.work().set_work_repositories(&task_id, &[repo_id])
     })
@@ -628,11 +656,18 @@ async fn check_repository_documentation(
         .unwrap();
     assert_eq!(
         String::from_utf8(index.stdout).unwrap().trim(),
-        "CODEGRAPH.md"
+        "CODEGRAPH.md\ncomponents/support/CODEGRAPH.md"
     );
-    let current = status();
-    let input = json!({"repositoryId":repository, "views":current.views, "expectedRevision":current.revision,
-        "outputRootId":root, "topics":["all"]});
+    assert!(
+        std::fs::read_to_string(path.join("components/support/CODEGRAPH.md"))
+            .unwrap()
+            .contains("A repository with a validated docs destination.")
+    );
+    let input = json!({
+        "repositoryId":repository, "views":{"kind":"Exact","viewIds":[evidence.payload["viewId"]]},
+        "expectedRevision":evidence.payload["analysisRevision"], "outputRootId":root,
+        "topics":["all"], "analysisRunId":evidence.payload["analysisRunId"],
+    });
     let manual = accepted(submit(
         app,
         &bound,
@@ -656,7 +691,7 @@ async fn check_repository_documentation(
             input.clone()
         ))
     );
-    let mut wrong = input;
+    let mut wrong = input.clone();
     wrong["outputRootId"] = json!("another-output-root");
     assert!(rejected(
         submit(
@@ -671,6 +706,163 @@ async fn check_repository_documentation(
     assert_eq!(
         std::fs::read_to_string(path.join("CODEGRAPH.md")).unwrap(),
         document
+    );
+
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["update-index", "--assume-unchanged", "--", "CODEGRAPH.md"]);
+    std::fs::write(
+        path.join("CODEGRAPH.md"),
+        "unrelated edit to the generated file\n",
+    )
+    .unwrap();
+    let collision = submit(
+        app,
+        &bound,
+        "repository_docs.generate",
+        "doc-edit",
+        input.clone(),
+    );
+    assert!(rejected(collision, DomainErrorCode::SourceChanged));
+    assert_eq!(
+        std::fs::read_to_string(path.join("CODEGRAPH.md")).unwrap(),
+        "unrelated edit to the generated file\n"
+    );
+    assert!(
+        read(f.store.as_ref(), |read| read.git().git_worktree(&tree.id))
+            .unwrap()
+            .pending_operation_id
+            .is_none()
+    );
+    git(&[
+        "update-index",
+        "--no-assume-unchanged",
+        "--",
+        "CODEGRAPH.md",
+    ]);
+    std::fs::write(path.join("CODEGRAPH.md"), document).unwrap();
+    std::fs::remove_file(path.join("local-user-notes.md")).unwrap();
+
+    let mut delivery = input;
+    delivery["delivery"] = json!("CommitAndPush");
+    let generated = accepted(submit(
+        app,
+        &bound,
+        "repository_docs.generate",
+        "doc-delivery",
+        delivery,
+    ));
+    assert_eq!(
+        terminal(f.store.as_ref(), &generated).await.state,
+        OperationState::ObservedComplete
+    );
+    assert_eq!(
+        git(&["rev-parse", "HEAD"]),
+        head.hex,
+        "generation itself must not commit"
+    );
+    accept_documentation_review(f, app, user, project, "git.commit").await;
+    accept_documentation_review(f, app, user, project, "git.push").await;
+    let delivered = within(
+        "the remote source receives reviewed repository docs",
+        async {
+            loop {
+                let page = read(f.store.as_ref(), |read| {
+                    read.history().page(&EventFilter::All, 0, 500)
+                });
+                if let Some(event) = page
+                    .events
+                    .into_iter()
+                    .find(|event| event.kind == "RepositoryDocumentationPublished")
+                {
+                    break event;
+                }
+                f.h.advance(200);
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        },
+    )
+    .await;
+    assert_eq!(
+        delivered.payload["deliveredHead"],
+        git(&["rev-parse", "HEAD"])
+    );
+    assert_eq!(delivered.payload["files"].as_array().unwrap().len(), 2);
+    let evidence = read(f.store.as_ref(), |read| {
+        read.sessions()
+            .links(&RootId(task.clone()), &["evidence"], None, 25)
+    })
+    .into_iter()
+    .find(|link| link.event_id == delivered.id.0 && link.target_kind == "repository_documentation")
+    .expect("only verified publication supplies documentation acceptance evidence");
+    let result = submit(
+        app,
+        user,
+        "tasks.acceptance_evidence",
+        "accept-doc-delivery",
+        json!({
+            "taskId": task, "expectedRevision":"1", "criteria":[{
+                "id":"docs-delivered","text":"Publish complete repository documentation",
+                "evidenceIds":[evidence.id],"state":"Met"
+            }]
+        }),
+    );
+    assert!(matches!(result, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })));
+}
+
+async fn accept_documentation_review(
+    f: &Fx,
+    app: &devworks_engine::Runtime,
+    user: &InvocationContext,
+    project: &devworks_core::protocol::ProjectId,
+    name: &str,
+) {
+    let query = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,
+        "queryId":"documentation-approvals","body":{"kind":"approvals.list",
+            "scope":{"kind":"Project","projectId":project},"page":{"limit":25}}});
+    let review = within(
+        "documentation delivery enters the normal review queue",
+        async {
+            loop {
+                let reply = app
+                    .query(user, "approvals.list", query.to_string().as_bytes())
+                    .unwrap();
+                let view = serde_json::to_value(reply).unwrap();
+                if let Some(found) = view["result"]["value"]["items"]
+                    .as_array()
+                    .and_then(|items| {
+                        items.iter().find(|item| {
+                            item["operationKind"] == name && item["state"] == "Pending"
+                        })
+                    })
+                {
+                    break found.clone();
+                }
+                f.h.advance(200);
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        },
+    )
+    .await;
+    let vote = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+        "requestKey":format!("accept-docs-{}", name.replace('.', "-")),"body":{"kind":"approvals.record_human_decision",
+            "proposalId":review["id"],"expectedRevision":review["revision"],"contentDigest":review["contentDigest"],
+            "decision":"Approve","rationale":"Checked exact generated documentation contents and destination"}});
+    let result = app
+        .record_human_decision(user, vote.to_string().as_bytes())
+        .unwrap();
+    assert!(
+        matches!(result, CommandReply::Recorded { receipt, .. }
+        if matches!(receipt.decision, DomainDecision::Applied { .. })),
+        "{name} human decision"
     );
 }
 

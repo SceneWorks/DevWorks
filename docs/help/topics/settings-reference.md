@@ -18,6 +18,18 @@ Repository base directory.
 
 Default destination for new repository clones. Changing it never moves existing repositories or changes their recorded paths. Separate from app data and worktree placement. Engineering default.
 
+## repositories.documentationDelivery
+
+Repository documentation delivery.
+
+- Default: `"Stage"`
+- Scope: Workspace → Project
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: General
+
+What to request after successful repository synthesis in an owned worktree. Git commit and push each require their normal review.
+
 ## routing.managedAuto
 
 DevWorks Auto for new managed sessions.

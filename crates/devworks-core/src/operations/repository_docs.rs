@@ -27,6 +27,20 @@ pub struct GenerateInput {
     pub expected_revision: Revision,
     pub output_root_id: Id,
     pub topics: NonEmpty<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 14))]
+    pub analysis_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "RepositoryDocsDelivery", extend("x-since" = 14))]
+    pub delivery: Option<RepositoryDocsDelivery>,
 }
 impl Check for GenerateInput {
     fn check(&self) -> Result<(), String> {
@@ -35,11 +49,20 @@ impl Check for GenerateInput {
         self.expected_revision.check()?;
         self.output_root_id.check()?;
         self.topics.check()?;
+        self.analysis_run_id.check()?;
+        self.delivery.check()?;
         Ok(())
     }
 }
 impl Revisioned for GenerateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 14 {
+            self.analysis_run_id = None;
+        }
+        if revision < 14 {
+            self.delivery = None;
+        }
+    }
 }
 
 /// An admitted input of the `repository_docs` family, built only for the selected operation and mode.

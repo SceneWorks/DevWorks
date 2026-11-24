@@ -1390,6 +1390,9 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         .with_catalog(ApprovalCatalog::qualified(&use_cases))
         .with_owners(Arc::new(owners)),
     );
+    if let Some(git) = &git {
+        git.install_documentation_approvals(&approvals);
+    }
     let use_cases = use_cases
         .with_approvals(approvals.clone())
         .with_notifications(Arc::new(NotificationService::new(ids.clone())));

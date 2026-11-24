@@ -758,7 +758,12 @@ impl GraphCtl<'_, '_> {
                 self.graph.selected = None;
             }
             AnalysisAction::OpenWork(id) => self.open_work(id.as_str()),
-            AnalysisAction::GenerateDocumentation { binding, revision } => {
+            AnalysisAction::GenerateDocumentation {
+                run,
+                binding,
+                revision,
+                delivery,
+            } => {
                 let Some(project) = self.graph.project.as_deref().and_then(crate::frame::id) else {
                     self.graph.analysis.error = Some(
                         "Open the repository from its project to generate its documentation."
@@ -776,7 +781,9 @@ impl GraphCtl<'_, '_> {
                         "Generating repository documentation",
                         move |backend| {
                             backend
-                                .generate_repository_documentation(&project, &binding, &revision)
+                                .generate_repository_documentation(
+                                    &run, &project, &binding, &revision,
+                                )
                                 .map(TaskOutput::RepositoryDocumentation)
                         },
                     );

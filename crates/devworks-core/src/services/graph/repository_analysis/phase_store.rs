@@ -386,6 +386,22 @@ impl SynthesisEvent {
                 || (run.owner.kind == "Human"
                     && matches!(run.intent.scope, DataScope::Project { .. })))
         {
+            let scope = match &run.intent.scope {
+                DataScope::Workspace => ConfigScope::Workspace,
+                DataScope::Project { project_id } => ConfigScope::Project(project_id.clone()),
+            };
+            let delivery_mode =
+                crate::settings::catalog::descriptor("repositories.documentationDelivery")
+                    .and_then(|descriptor| {
+                        let layers =
+                            crate::settings::model::current_chain(tx.configuration(), &scope)
+                                .ok()?;
+                        crate::settings::model::chain(descriptor, &layers)
+                            .ok()?
+                            .into_iter()
+                            .next()
+                    })
+                    .map_or(json!("Stage"), |entry| entry.value.value.0);
             let delivery = tx.new_id(IdKind::QueueEntry);
             tx.queue().enqueue(NewQueueEntry {
                 id: delivery,
@@ -396,7 +412,7 @@ impl SynthesisEvent {
                 partition: None,
                 priority: 0,
                 ready_at_ms: now,
-                payload: json!({"runId": run.id, "repositoryId": self.repository}),
+                payload: json!({"runId": run.id, "repositoryId": self.repository, "delivery": delivery_mode}),
             })?;
         }
         Ok(())

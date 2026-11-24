@@ -178,8 +178,10 @@ pub enum Action {
     OpenWork(Id),
     Evidence(ArtifactRef),
     GenerateDocumentation {
+        run: devworks_core::protocol::Id,
         binding: devworks_core::protocol::records::AnalysisViewBinding,
         revision: Revision,
+        delivery: devworks_core::protocol::records::RepositoryDocsDelivery,
     },
 }
 
@@ -295,16 +297,29 @@ impl AnalysisScreen {
                                         == devworks_core::protocol::OperationState::ObservedComplete
                             })
                         })
-                        && ui
-                            .add_enabled(
-                                enabled,
-                                egui::Button::new("Generate repository documentation"),
-                            )
-                            .clicked()
                     {
-                        actions.push(Action::GenerateDocumentation {
-                            binding: data.bindings.0[0].clone(),
-                            revision: value.revision.clone(),
+                        use devworks_core::protocol::records::RepositoryDocsDelivery;
+                        ui.add_enabled_ui(enabled, |ui| {
+                            ui.menu_button("Generate repository documentation", |ui| {
+                                for (label, delivery) in [
+                                    ("Stage files", RepositoryDocsDelivery::Stage),
+                                    ("Request commit review", RepositoryDocsDelivery::Commit),
+                                    (
+                                        "Request commit and push reviews",
+                                        RepositoryDocsDelivery::CommitAndPush,
+                                    ),
+                                ] {
+                                    if ui.button(label).clicked() {
+                                        actions.push(Action::GenerateDocumentation {
+                                            run: value.id.clone(),
+                                            binding: data.bindings.0[0].clone(),
+                                            revision: value.revision.clone(),
+                                            delivery,
+                                        });
+                                        ui.close();
+                                    }
+                                }
+                            });
                         });
                     }
                     observation(ui, data, &mut actions);
