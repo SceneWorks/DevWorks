@@ -135,12 +135,16 @@ pub(crate) fn code_review_observation(
     if review.payload["state"] == "DISMISSED" {
         return Ok(CodeReviewObservation::Failed);
     }
-    if !matches!(
-        review.payload["state"].as_str(),
-        Some("APPROVED" | "CHANGES_REQUESTED")
-    ) {
-        return Ok(CodeReviewObservation::Waiting);
-    }
+    let declared_comments = match review.payload["state"].as_str() {
+        Some("APPROVED" | "CHANGES_REQUESTED") => None,
+        Some("COMMENTED") => {
+            match explicit_comment_count(review.payload["body"].as_str().unwrap_or("")) {
+                Some(count) => Some(count),
+                None => return Ok(CodeReviewObservation::Waiting),
+            }
+        }
+        _ => return Ok(CodeReviewObservation::Waiting),
+    };
 
     let Some(run) = review.payload["resourceId"]
         .as_str()
@@ -155,6 +159,9 @@ pub(crate) fn code_review_observation(
         .filter(|row| row.payload["reviewId"].as_u64() == Some(run))
         .cloned()
         .collect::<Vec<_>>();
+    if declared_comments.is_some_and(|count| count != comments.len()) {
+        return Ok(CodeReviewObservation::Waiting);
+    }
     comments.sort_unstable_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
     Ok(CodeReviewObservation::Completed {
         review: Box::new(review.clone()),
@@ -162,6 +169,41 @@ pub(crate) fn code_review_observation(
     })
 }
 
+/// A comment-form automation review may explicitly declare the complete number of actionable
+/// inline comments. A comment with no such declaration does not qualify as completion.
+fn explicit_comment_count(body: &str) -> Option<usize> {
+    let mut counts = body.lines().filter_map(|line| {
+        line.trim()
+            .trim_matches('*')
+            .strip_prefix("Actionable comments posted:")
+            .map(str::trim)
+            .filter(|count| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|count| count.parse::<usize>().ok())
+    });
+    let count = counts.next()?;
+    counts.next().is_none().then_some(count)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn comment_reviews_need_an_explicit_unambiguous_completion_count() {
+        assert_eq!(
+            super::explicit_comment_count("**Actionable comments posted: 0**"),
+            Some(0)
+        );
+        assert_eq!(
+            super::explicit_comment_count("No actionable comments were posted"),
+            None
+        );
+        assert_eq!(
+            super::explicit_comment_count(
+                "Actionable comments posted: 0\nActionable comments posted: 2"
+            ),
+            None
+        );
+    }
+}
 /// Retain the latest server revision of each remote resource before interpreting its state.
 /// Never decide a complete review from a truncated page.
 fn latest_observations(

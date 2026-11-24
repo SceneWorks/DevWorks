@@ -186,7 +186,13 @@ impl ReviewService {
                 state
                     .final_rounds
                     .iter()
-                    .filter(|round| round.fallback_requested)
+                    .filter(|round| {
+                        round.fallback_requested
+                            && !state.value.sources.0.iter().any(|source| {
+                                source.repository_id == round.repository_id
+                                    && matches!(source.state, ReviewObservationState::Completed)
+                            })
+                    })
                     .map(|round| round.repository_id.clone())
                     .collect::<Vec<_>>(),
             ),
@@ -533,6 +539,16 @@ impl ReviewService {
                 {
                     source.state = ReviewObservationState::Failed;
                 }
+            }
+            if !state.final_rounds.is_empty()
+                && state.final_rounds.iter().all(|round| {
+                    state.value.sources.0.iter().any(|source| {
+                        source.repository_id == round.repository_id
+                            && matches!(source.state, ReviewObservationState::Completed)
+                    })
+                })
+            {
+                return super::remote::update_final_state(tx, &mut row, &mut state);
             }
             write_local(tx, &mut row, &mut state, &ctx, "CodeReviewFailed")
         })

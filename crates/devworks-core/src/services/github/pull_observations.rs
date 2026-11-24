@@ -25,6 +25,7 @@ pub(super) enum Evidence {
     Status,
     Review,
     ReviewComment,
+    PullConversationComment,
 }
 
 impl Evidence {
@@ -36,6 +37,7 @@ impl Evidence {
             Self::Status => "CommitStatus",
             Self::Review => "Review",
             Self::ReviewComment => "ReviewComment",
+            Self::PullConversationComment => "PullConversationComment",
         }
     }
 
@@ -50,6 +52,7 @@ impl Evidence {
             Self::Status => (format!("/commits/{head}/statuses?"), ""),
             Self::Review => (format!("/pulls/{number}/reviews?"), ""),
             Self::ReviewComment => (format!("/pulls/{number}/comments?"), ""),
+            Self::PullConversationComment => (format!("/issues/{number}/comments?"), ""),
         }
     }
 }
@@ -60,6 +63,32 @@ struct Pull<'a> {
 }
 
 impl GitHubService {
+    pub(crate) fn poll_review_conversation(
+        &self,
+        registration: &Id,
+        number: u64,
+        inline: bool,
+    ) -> Result<(), Failure> {
+        let target = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+            issue_poll::target(snapshot, registration)
+        })?
+        .ok_or_else(|| not_found("github_repository", registration))?;
+        let number = number.to_string();
+        if let Some(head) = self.observe_pull_head(&target, &number)? {
+            let pull = Pull {
+                number: &number,
+                head: &head,
+            };
+            let endpoint = if inline {
+                Evidence::ReviewComment
+            } else {
+                Evidence::PullConversationComment
+            };
+            self.poll_evidence_endpoint(&target, &pull, endpoint)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn poll_pull_evidence(
         &self,
         registration: &Id,
@@ -417,7 +446,7 @@ fn evidence_rows(
     for row in rows {
         let observation_head = match kind {
             Evidence::Review | Evidence::ReviewComment => row["commit_id"].as_str(),
-            Evidence::Status => Some(pull.head),
+            Evidence::Status | Evidence::PullConversationComment => Some(pull.head),
             _ => row["head_sha"].as_str(),
         };
         if observation_head != Some(pull.head) {
@@ -432,6 +461,13 @@ fn evidence_rows(
         let url = match kind {
             Evidence::Review => format!("{stem}#pullrequestreview-{id}"),
             Evidence::ReviewComment => format!("{stem}#discussion_r{id}"),
+            Evidence::PullConversationComment => {
+                let expected = format!("{stem}#issuecomment-{id}");
+                if row["html_url"].as_str() != Some(&expected) {
+                    return Err(Fault::InvalidResponse);
+                }
+                expected
+            }
             Evidence::WorkflowRun => format!("{}/actions/runs/{id}", target.repository.url),
             Evidence::CheckRun => format!("{stem}/checks?check_run_id={id}"),
             _ => format!("{}/commit/{}/checks", target.repository.url, pull.head),

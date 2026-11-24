@@ -38,6 +38,36 @@ pub(super) struct FinalRound {
     pub delivery_rules: Option<crate::services::github::code_review::DeliveryReviewRules>,
 }
 
+pub(super) fn review_lineage(
+    tx: &mut dyn WriteTransaction,
+    project: &ProjectId,
+    root: &RootId,
+    repository: &Id,
+    pull_id: &Id,
+) -> Result<Vec<ReviewStateRecord>, Failure> {
+    let mut states = Vec::new();
+    let mut after = None;
+    loop {
+        let page = tx
+            .git()
+            .code_reviews(Some(project), Some(root), after.as_ref(), 128)?;
+        for row in &page {
+            let saved: ReviewStateRecord = decode(&row.body)?;
+            if saved
+                .final_rounds
+                .iter()
+                .any(|round| &round.repository_id == repository && &round.pull_id == pull_id)
+            {
+                states.push(saved);
+            }
+        }
+        if page.len() < 128 {
+            return Ok(states);
+        }
+        after = page.last().map(|row| row.id.clone());
+    }
+}
+
 fn qualified_pull(
     tx: &mut dyn WriteTransaction,
     project: &ProjectId,

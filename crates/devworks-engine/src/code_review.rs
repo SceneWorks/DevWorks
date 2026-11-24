@@ -1,7 +1,8 @@
 //! Native code reviewers run a fresh child turn over the saved diff and return one report.
 use crate::{store, turn_engine::TurnEngine};
-use devworks_core::context::InvocationContext;
+use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::ports::storage::{ReadOptions, StorageError, WriteOptions, read_snapshot};
+use devworks_core::protocol::Id;
 use devworks_core::protocol::provider::TranscriptBody;
 use devworks_core::providers::context::{
     ContentBlock, Message, MessageRole, ProviderContext, TextBlock,
@@ -74,16 +75,35 @@ pub(crate) fn bind_prompt(
         ),
         cache: None,
     }];
+    // The independent assignment was just validated against this exact saved input.
+    // Read the requester-owned artifact through the host, without granting the child
+    // direct access to the requester's other artifacts.
+    let host = HostIngress::new(engine.store().as_ref())
+        .context(
+            engine.store().info().host_actor,
+            PrincipalKind::Host,
+            ctx.invocation_id().clone(),
+            Id::new("code-review").expect("static ingress"),
+            ctx.restore_epoch().clone(),
+            ctx.policy_revision().clone(),
+        )
+        .with_lineage(ctx.project_id().cloned(), ctx.root_id().cloned(), None);
     for source in input.source_artifacts {
-        let (bytes, _) = engine
+        let (bytes, provenance) = engine
             .artifacts()
             .read_exact(
                 engine.store().as_ref(),
-                ctx,
+                &host,
                 &source.reference,
                 4 * 1024 * 1024,
             )
             .map_err(|_| StorageError::InvalidRecord("exact review diff is unavailable".into()))?;
+        if provenance["derived"]["kind"] != "CodeReviewDiff"
+            || provenance["derived"]["reviewId"].as_str() != Some(input.review_id.as_str())
+            || provenance["derived"]["repositoryId"].as_str() != Some(source.repository_id.as_str())
+        {
+            return Err(StorageError::ScopeDenied);
+        }
         let patch = String::from_utf8(bytes)
             .map_err(|_| StorageError::InvalidRecord("exact review diff is not UTF-8".into()))?;
         content.push(ContentBlock::Text {
@@ -193,12 +213,16 @@ impl crate::dispatch::EffectExecutor for ReviewEffects {
         let operation = operation.clone();
         let mut changes = self.changes.clone();
         Some(Box::pin(async move {
+            let mut refresh_at = tokio::time::Instant::now();
             loop {
                 let (service, operation) = (service.clone(), operation.clone());
-                changes.borrow_and_update();
+                let refresh = tokio::time::Instant::now() >= refresh_at;
+                if refresh {
+                    refresh_at = tokio::time::Instant::now() + Duration::from_secs(15);
+                }
                 if !matches!(
                     tokio::task::spawn_blocking(move || {
-                        service.poll_final_review(&operation)?;
+                        service.poll_final_review(&operation, refresh)?;
                         service.observe_request(&operation)
                     })
                     .await,
@@ -206,6 +230,7 @@ impl crate::dispatch::EffectExecutor for ReviewEffects {
                 ) {
                     return;
                 }
+                changes.borrow_and_update();
                 if tokio::time::timeout(Duration::from_secs(1), changes.changed())
                     .await
                     .is_ok_and(|change| change.is_err())

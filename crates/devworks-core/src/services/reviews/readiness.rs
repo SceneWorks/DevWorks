@@ -7,7 +7,8 @@ use crate::ports::storage::{GithubObservationFilter, GithubScope, ReadSnapshot, 
 use crate::protocol::Id;
 use crate::protocol::provider::Digest;
 use crate::protocol::records::{
-    ReviewFinding, ReviewObservationState, ReviewReadiness, ReviewState,
+    CodeReviewResolution, LocalReviewTarget, ReviewFinding, ReviewObservationState,
+    ReviewReadiness, ReviewState,
 };
 use crate::protocol::support::BoundedList;
 use crate::services::github::code_review::{
@@ -72,16 +73,24 @@ impl ReviewService {
                                 left.repository_id == right.repository_id
                                     && left.worktree_id == right.worktree_id
                                     && left.base == right.base
-                                    && left.head == right.head
                             })
                         })
                 }
                 _ => false,
             });
             if let Some(saved) = saved {
-                out.head_digest = saved.value.head_digest.clone();
                 out.review_ids.0.push(saved.value.id.clone());
-                collect_open(snapshot, saved, None, &mut out.blocker_ids.0)?;
+                if let ReviewTarget::Local { target } = &saved.target {
+                    if target.diffs.0.iter().all(|diff| {
+                        local.diffs.0.iter().any(|candidate| {
+                            candidate.repository_id == diff.repository_id
+                                && candidate.head == diff.head
+                        })
+                    }) {
+                        out.head_digest = saved.value.head_digest.clone();
+                    }
+                    collect_local_blockers(snapshot, saved, target, local, &mut out.blocker_ids.0)?;
+                }
                 if !matches!(saved.value.state, ReviewState::Ready) && out.blocker_ids.0.is_empty()
                 {
                     out.blocker_ids.0.push(saved.value.id.clone());
@@ -196,13 +205,22 @@ impl ReviewService {
                     }
                 }
                 out.review_ids.0.push(saved.value.id.clone());
-                collect_open(
-                    snapshot,
-                    saved,
-                    Some(&entry.repository_id),
-                    &mut out.blocker_ids.0,
-                )?;
+                for earlier in states.iter().filter(|state| {
+                    state.final_rounds.iter().any(|prior| {
+                        prior.repository_id == entry.repository_id
+                            && prior.pull_number == round.pull_number
+                            && prior.cycle <= round.cycle
+                    })
+                }) {
+                    collect_open(
+                        snapshot,
+                        earlier,
+                        Some(&entry.repository_id),
+                        &mut out.blocker_ids.0,
+                    )?;
+                }
             }
+            repairs.truncate(128);
             out.candidate_repairs = (!repairs.is_empty()).then_some(BoundedList(repairs));
         }
         out.review_ids
@@ -213,9 +231,56 @@ impl ReviewService {
             .0
             .sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
         out.blocker_ids.0.dedup();
+        out.review_ids.0.truncate(128);
+        out.blocker_ids.0.truncate(128);
         out.ready = out.blocker_ids.0.is_empty() && !out.review_ids.0.is_empty();
         Ok((out, rev(root.revision).get()))
     }
+}
+
+fn collect_local_blockers(
+    snapshot: &dyn ReadSnapshot,
+    review: &ReviewStateRecord,
+    reviewed: &LocalReviewTarget,
+    requested: &LocalReviewTarget,
+    blockers: &mut Vec<Id>,
+) -> Result<(), Failure> {
+    let mut verified = std::collections::HashSet::new();
+    for id in &review.value.finding_ids.0 {
+        let row = snapshot
+            .git()
+            .code_finding(id)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let finding: ReviewFinding = decode(&row.body)?;
+        if let Some(CodeReviewResolution::FixVerified { candidate_head, .. }) = &finding.resolution
+        {
+            if let Some(repo) = row.repository_id.as_ref()
+                && requested
+                    .diffs
+                    .0
+                    .iter()
+                    .any(|diff| &diff.repository_id == repo && &diff.head == candidate_head)
+            {
+                verified.insert(repo.clone());
+            } else {
+                blockers.push(id.clone());
+            }
+        } else if super::findings::is_open(&finding) {
+            blockers.push(id.clone());
+        }
+    }
+    for original in &reviewed.diffs.0 {
+        let candidate = requested
+            .diffs
+            .0
+            .iter()
+            .find(|diff| diff.repository_id == original.repository_id)
+            .ok_or(StorageError::ScopeDenied)?;
+        if candidate.head != original.head && !verified.contains(&candidate.repository_id) {
+            blockers.push(candidate.repository_id.clone());
+        }
+    }
+    Ok(())
 }
 
 fn collect_open(

@@ -11,14 +11,28 @@ use crate::protocol::records::{
 };
 use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{EventId, Id};
-use crate::services::github::code_review::{CodeReviewObservation, CodeReviewQuery};
+use crate::services::github::code_review::{
+    CodeReviewObservation, CodeReviewQuery, code_review_observation,
+};
 use crate::services::kernel::{Failure, content, counter, rev};
 use serde_json::json;
 
 impl ReviewService {
     /// One pass in the shared effect worker. Replays append neither a second finding nor
     /// another fallback authorization for the same exact final-PR round.
-    pub fn poll_final_review(&self, operation: &OperationRecord) -> Result<(), StorageError> {
+    pub fn poll_final_review(
+        &self,
+        operation: &OperationRecord,
+        refresh: bool,
+    ) -> Result<(), StorageError> {
+        self.observe_final(operation, refresh)
+    }
+
+    fn observe_final(
+        &self,
+        operation: &OperationRecord,
+        refresh: bool,
+    ) -> Result<(), StorageError> {
         if operation.capability != "reviews.request" || operation.schema_version != 1 {
             return Err(StorageError::ScopeDenied);
         }
@@ -49,7 +63,7 @@ impl ReviewService {
                 .iter()
                 .find(|repo| repo.repository_id == round.repository_id)
                 .ok_or(StorageError::ScopeDenied)?;
-            let rules = if round.delivery_rules.is_none() {
+            let rules = if refresh && round.delivery_rules.is_none() {
                 self.github.as_ref().and_then(|github| {
                     github
                         .delivery_review_rules(&row.project_id, &round.repository_id)
@@ -73,7 +87,11 @@ impl ReviewService {
                 bot_id,
                 requested_at_ms: round.requested_at_ms,
             };
-            let observed = if let Some(github) = &self.github {
+            let observed = if !refresh {
+                read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+                    code_review_observation(snapshot, &query)
+                })?
+            } else if let Some(github) = &self.github {
                 match github.poll_code_review(query) {
                     Ok(observed) => observed,
                     Err(Failure::Storage(StorageError::Cancelled)) => {
@@ -158,8 +176,12 @@ impl ReviewService {
                                 added.push(id);
                             }
                         }
-                        if review.payload["state"] == "CHANGES_REQUESTED"
-                            && comments.is_empty()
+                        let needs_summary = review.payload["state"] == "CHANGES_REQUESTED"
+                            && (comments.is_empty()
+                                || review.payload["body"]
+                                    .as_str()
+                                    .is_some_and(|text| !text.trim().is_empty()));
+                        if needs_summary
                             && !round.observed_ids.contains(&review.id)
                             && let Some(id) =
                                 publish_finding(tx, &current, &repository, &review, true)?
@@ -175,9 +197,7 @@ impl ReviewService {
                         source.run_id = Some(review.id);
                         source.state = ReviewObservationState::Completed;
                         source.completed_at = Some(counter(now));
-                        let count = comments
-                            .len()
-                            .max(usize::from(review.payload["state"] == "CHANGES_REQUESTED"));
+                        let count = comments.len() + usize::from(needs_summary);
                         source.finding_count = counter(count as i64);
                         source.zero_findings_confirmed = count == 0;
                         source.findings_coverage.state =
@@ -210,6 +230,42 @@ impl ReviewService {
             }
             Ok(())
         })
+    }
+    /// Reconcile late observations after an independent fallback completes. The GitHub worker
+    /// already watches open PRs, so this pass reads its saved results without extra HTTP calls.
+    pub fn reconcile_late_page(&self, after: Option<&Id>) -> Result<Option<Id>, StorageError> {
+        let (operations, next) =
+            read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+                let page = snapshot.git().code_reviews(None, None, after, 32)?;
+                let next =
+                    (page.len() == 32).then(|| page.last().expect("nonempty page").id.clone());
+                let mut operations = Vec::new();
+                for row in page {
+                    if !matches!(row.state.as_str(), "Ready" | "ChangesRequired") {
+                        continue;
+                    }
+                    let saved: ReviewStateRecord =
+                        decode(&row.body).map_err(Failure::into_storage)?;
+                    if saved
+                        .final_rounds
+                        .iter()
+                        .any(|round| round.bot_id.is_some())
+                        && snapshot
+                            .work()
+                            .work(&row.root_id.0)?
+                            .is_some_and(|root| root.completion.is_none())
+                        && let Some(operation) =
+                            snapshot.operations().operation(&saved.operation)?
+                    {
+                        operations.push(operation);
+                    }
+                }
+                Ok((operations, next))
+            })?;
+        for operation in operations {
+            self.observe_final(&operation, false)?;
+        }
+        Ok(next)
     }
 }
 

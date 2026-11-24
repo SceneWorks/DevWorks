@@ -2195,12 +2195,19 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     if let Some(service) = &github {
         let stop = service.clone();
         let clock = clock.clone();
+        let reviews = turn.code_reviews.clone();
         workers.start(
             StopAt::Work,
             None,
             Arc::new(
                 Loop::new("github", |stopped| {
-                    crate::github::run(service.clone(), clock.clone(), stopped, commits("github"))
+                    crate::github::run(
+                        service.clone(),
+                        reviews.clone(),
+                        clock.clone(),
+                        stopped,
+                        commits("github"),
+                    )
                 })
                 .on_stop(move || stop.stop()),
             ),

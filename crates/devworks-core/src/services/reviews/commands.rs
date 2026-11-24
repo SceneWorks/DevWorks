@@ -357,6 +357,10 @@ impl CommandHandler for ReviewService {
         command: &AdmittedCommand,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, StorageError> {
+        if let OperationInput::Reviews(ops::Input::Adjudicate(input)) = command.input() {
+            self.refresh_followup(ctx, input, env)?;
+            return Ok(Some(Prepared::new(self.prepare_local_fix(ctx, input, env))));
+        }
         let OperationInput::Reviews(ops::Input::Request(input)) = command.input() else {
             return Ok(None);
         };
@@ -413,7 +417,7 @@ impl CommandHandler for ReviewService {
             }
             OperationInput::Reviews(ops::Input::Respond(input)) => self.respond(tx, ctx, input),
             OperationInput::Reviews(ops::Input::Adjudicate(input)) => {
-                self.adjudicate(tx, ctx, input)
+                self.adjudicate(tx, ctx, command, input)
             }
             _ => Err(not_implemented()),
         };

@@ -270,6 +270,23 @@ impl ReviewService {
             return Err(invalid());
         }
 
+        let lineage = super::final_review::review_lineage(
+            tx,
+            &row.project_id,
+            &row.root_id,
+            &proof.repository_id,
+            &round.pull_id,
+        )?;
+        if lineage.iter().any(|state| {
+            state.final_rounds.iter().any(|prior| {
+                prior.repository_id == proof.repository_id
+                    && prior.pull_id == round.pull_id
+                    && prior.cycle > round.cycle
+            })
+        }) {
+            return Err(invalid());
+        }
+
         let report = &prepared.report;
         if report.repository_id != proof.repository_id
             || report.original_review_id != proof.original_review_id
@@ -338,7 +355,10 @@ impl ReviewService {
             }
         }
         let mut findings = HashMap::new();
-        for id in &saved.value.finding_ids.0 {
+        for id in lineage
+            .iter()
+            .flat_map(|review| &review.value.finding_ids.0)
+        {
             let finding = tx.git().code_finding(id)?.ok_or_else(invalid)?;
             if finding.repository_id.as_ref() != Some(&proof.repository_id) {
                 continue;
@@ -457,7 +477,7 @@ fn failing_required_check(
         })
 }
 
-fn passed_check(observation: &StoredGithubObservation) -> bool {
+pub(super) fn passed_check(observation: &StoredGithubObservation) -> bool {
     match observation.kind.as_str() {
         "CheckRun" => {
             observation.payload["state"] == "completed"

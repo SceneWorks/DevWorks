@@ -20,6 +20,7 @@ pub struct ReviewPane {
     findings_after: Option<devworks_core::protocol::support::Cursor>,
 }
 
+#[derive(Clone, Debug)]
 pub(crate) enum ReviewAction {
     List(String, bool),
     Findings(String, Id, bool),
@@ -193,7 +194,7 @@ impl WorkCtl<'_, '_> {
                                 root_id: Some(RootId(frame::id(&query_root)?)),
                                 page: PageRequest {
                                     cursor,
-                                    limit: Limit(25),
+                                    limit: Limit::new(25).expect("bounded page size"),
                                 },
                             })))
                         })
@@ -218,7 +219,7 @@ impl WorkCtl<'_, '_> {
                                     review_id: review,
                                     page: PageRequest {
                                         cursor,
-                                        limit: Limit(25),
+                                        limit: Limit::new(25).expect("bounded page size"),
                                     },
                                 },
                             )))

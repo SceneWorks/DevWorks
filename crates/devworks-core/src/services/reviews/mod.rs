@@ -5,6 +5,7 @@ mod effect;
 mod final_review;
 mod findings;
 mod local;
+mod local_fix;
 pub use local::{CodeReviewReport, LocalReviewInput};
 pub mod policy;
 mod queries;

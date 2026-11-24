@@ -3,10 +3,10 @@ use super::commands::refused;
 use super::{ReviewService, ReviewStateRecord, ReviewTarget, decode};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::reviews::{AdjudicateInput, RespondInput};
-use crate::ports::IdKind;
 use crate::ports::storage::{
     NewEvent, StorageError, StoredCodeFinding, StoredCodeReview, WriteTransaction,
 };
+use crate::ports::{IdKind, Preparation};
 use crate::protocol::records::{
     CodeReviewResolution, CodeReviewSeverity, ReviewFinding, ReviewState, WorkItemType,
 };
@@ -98,6 +98,50 @@ fn save(
 }
 
 impl ReviewService {
+    /// Refresh a scoped PR conversation before validating a link that has no GitHub inline parent.
+    pub(super) fn refresh_followup(
+        &self,
+        ctx: &InvocationContext,
+        input: &AdjudicateInput,
+        env: &Preparation<'_>,
+    ) -> Result<(), StorageError> {
+        let Some(github) = self.github.as_ref() else {
+            return Ok(());
+        };
+        let Some(CodeReviewResolution::Followup {
+            review_thread_reply,
+            ..
+        }) = &input.resolution
+        else {
+            return Ok(());
+        };
+        let inline = review_thread_reply.0.contains("#discussion_r");
+        if !inline && !review_thread_reply.0.contains("#issuecomment-") {
+            return Ok(());
+        }
+        let target = env.read(|snapshot| {
+            let row = snapshot
+                .git()
+                .code_finding(&input.finding_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            let (_, state) = super::visible_review(snapshot, ctx, &row.review_id)
+                .map_err(Failure::into_storage)?;
+            let Some(repository) = row.repository_id else {
+                return Ok(None);
+            };
+            Ok(state
+                .final_rounds
+                .iter()
+                .find(|round| round.repository_id == repository)
+                .map(|round| (repository, round.pull_number)))
+        })?;
+        if let Some((repository, number)) = target {
+            // If a cached page is already available it can still verify the exact reply.
+            let _ = github.poll_review_conversation(&repository, number, inline);
+        }
+        Ok(())
+    }
+
     pub(super) fn respond(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -117,7 +161,18 @@ impl ReviewService {
             crate::services::work::check_artifact(tx, ctx, &row.project_id, item)?;
         }
         finding.response = Some(input.response.clone());
-        finding.evidence = input.evidence.clone();
+        for evidence in &input.evidence.0 {
+            if !finding.evidence.0.contains(evidence) {
+                finding.evidence.0.push(evidence.clone());
+            }
+        }
+        if finding.evidence.0.len() > 128 {
+            return Err(refused(
+                DomainErrorCode::InvalidArgument,
+                "review_evidence",
+                &row.id,
+            ));
+        }
         let value = save(
             tx,
             ctx,
@@ -135,6 +190,7 @@ impl ReviewService {
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
+        command: &crate::gateway::AdmittedCommand,
         input: &AdjudicateInput,
     ) -> Result<DomainDecision, Failure> {
         let (row, mut finding, mut review, mut state) =
@@ -171,20 +227,17 @@ impl ReviewService {
                     candidate_head,
                     focused_check_ids,
                 } => {
-                    let proof = state
-                        .verified_candidates
-                        .iter()
-                        .find(|proof| row.repository_id.as_ref() == Some(&proof.repository_id));
-                    let exact = proof.is_some_and(|proof| {
-                        &proof.candidate_head == candidate_head
-                            && row.repository_id.as_ref() == Some(&proof.repository_id)
-                            && !focused_check_ids.0.is_empty()
-                            && focused_check_ids
-                                .0
-                                .iter()
-                                .all(|id| proof.focused_check_ids.0.contains(id))
-                    });
-                    if !exact {
+                    if !verified_final_fix(tx, &row, &state, candidate_head, &focused_check_ids.0)?
+                        && !super::local_fix::qualified(
+                            tx,
+                            ctx,
+                            command,
+                            &row,
+                            &state,
+                            candidate_head,
+                            &focused_check_ids.0,
+                        )?
+                    {
                         return Err(refused(
                             DomainErrorCode::SourceChanged,
                             "review_fix_evidence",
@@ -284,6 +337,90 @@ impl ReviewService {
     }
 }
 
+fn verified_final_fix(
+    tx: &mut dyn WriteTransaction,
+    finding: &StoredCodeFinding,
+    original: &ReviewStateRecord,
+    head: &crate::protocol::data::GitOid,
+    check_ids: &[Id],
+) -> Result<bool, Failure> {
+    use crate::ports::storage::GithubScope;
+    use crate::protocol::records::{ReviewChangeReason, ReviewObservationState};
+
+    let Some(repository) = &finding.repository_id else {
+        return Ok(false);
+    };
+    let Some(first) = original
+        .final_rounds
+        .iter()
+        .find(|round| &round.repository_id == repository)
+    else {
+        return Ok(false);
+    };
+    if check_ids.is_empty() {
+        return Ok(false);
+    }
+    let lineage = super::final_review::review_lineage(
+        tx,
+        &finding.project_id,
+        &finding.root_id,
+        repository,
+        &first.pull_id,
+    )?;
+    let last = lineage
+        .iter()
+        .flat_map(|state| state.final_rounds.iter().map(move |round| (state, round)))
+        .filter(|(_, round)| &round.repository_id == repository && round.pull_id == first.pull_id)
+        .max_by_key(|(_, round)| round.cycle);
+    let Some((last_review, last_round)) = last else {
+        return Ok(false);
+    };
+    let settings = crate::settings::service::review_settings(
+        tx.configuration(),
+        &finding.project_id,
+        repository,
+    )?;
+    if settings.digest != last_round.settings_digest {
+        return Ok(false);
+    }
+    if last_review.verified_candidates.iter().any(|proof| {
+        &proof.candidate_head == head && &proof.repository_id == repository
+            && proof.changes.0.iter().any(|change| matches!(
+                &change.reason, ReviewChangeReason::Finding { finding_id } if finding_id == &finding.id
+            ))
+            && check_ids.iter().all(|id| proof.focused_check_ids.0.contains(id))
+    }) {
+        return Ok(true);
+    }
+    // A later review and separately observed passing checks can verify an ordinary in-round fix.
+    if last_round.cycle <= first.cycle
+        || !last_review.value.sources.0.iter().any(|source| {
+            &source.repository_id == repository
+                && &source.head == head
+                && matches!(source.state, ReviewObservationState::Completed)
+        })
+    {
+        return Ok(false);
+    }
+    let scope = GithubScope {
+        repositories: vec![repository.clone()],
+        project_id: Some(finding.project_id.clone()),
+    };
+    for id in check_ids {
+        if tx
+            .github()
+            .github_observation(id, &scope)?
+            .is_none_or(|check| {
+                check.head.as_deref() != Some(head.hex.as_str())
+                    || !super::candidate::passed_check(&check)
+            })
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn verified_thread_reply(
     tx: &mut dyn WriteTransaction,
     row: &StoredCodeFinding,
@@ -295,8 +432,7 @@ fn verified_thread_reply(
     let ReviewTarget::PullRequests { barrier } = &state.target else {
         return Ok(false);
     };
-    let (Some(repository), Some(original)) = (&row.repository_id, &row.source_observation_id)
-    else {
+    let Some(repository) = &row.repository_id else {
         return Ok(false);
     };
     let Some(round) = state
@@ -314,8 +450,23 @@ fn verified_thread_reply(
             super::policy::ReviewStage::StandaloneIssue
         }
     };
-    if round.cycle < stage.round_limit(Some(settings.cap))
-        || round.settings_digest != settings.digest
+    let lineage = super::final_review::review_lineage(
+        tx,
+        &row.project_id,
+        &row.root_id,
+        repository,
+        &round.pull_id,
+    )
+    .map_err(Failure::into_storage)?;
+    if !lineage
+        .iter()
+        .flat_map(|record| &record.final_rounds)
+        .any(|latest| {
+            &latest.repository_id == repository
+                && latest.pull_id == round.pull_id
+                && latest.cycle >= stage.round_limit(Some(settings.cap))
+                && latest.settings_digest == settings.digest
+        })
     {
         return Ok(false);
     }
@@ -323,20 +474,36 @@ fn verified_thread_reply(
         repositories: vec![repository.clone()],
         project_id: Some(row.project_id.clone()),
     };
-    let Some(original) = tx.github().github_observation(original, &scope)? else {
-        return Ok(false);
-    };
-    let Some(resource) = original.payload["resourceId"]
-        .as_str()
-        .and_then(|id| id.parse::<u64>().ok())
+    let original = row
+        .source_observation_id
+        .as_ref()
+        .map(|id| tx.github().github_observation(id, &scope))
+        .transpose()?
+        .flatten();
+    let inline_parent = original
+        .as_ref()
+        .filter(|item| item.kind == "ReviewComment")
+        .and_then(|item| item.payload["resourceId"].as_str())
+        .and_then(|id| id.parse::<u64>().ok());
+    let Some(target) = barrier
+        .repositories
+        .iter()
+        .find(|entry| &entry.repository_id == repository)
     else {
         return Ok(false);
     };
     let filter = GithubObservationFilter {
         scope,
-        kinds: vec!["ReviewComment".into()],
+        kinds: vec![
+            if inline_parent.is_some() {
+                "ReviewComment"
+            } else {
+                "PullConversationComment"
+            }
+            .into(),
+        ],
         subject_id: Some(round.pull_number.to_string()),
-        head: original.head.clone(),
+        head: None,
     };
     let mut after = None;
     for _ in 0..20 {
@@ -345,11 +512,17 @@ fn verified_thread_reply(
             .github_observations(&filter, after.as_ref(), 200)?;
         if page.iter().any(|reply| {
             reply.url == url
-                && reply.payload["inReplyToId"].as_u64() == Some(resource)
-                && reply.payload["authorType"] != "Bot"
-                && reply.payload["body"]
-                    .as_str()
-                    .is_some_and(|text| text.contains(bug.as_str()))
+                && reply.payload["authorType"] == "User"
+                && reply.payload["body"].as_str().is_some_and(|text| {
+                    text.contains(bug.as_str())
+                        && match inline_parent {
+                            Some(parent) => reply.payload["inReplyToId"].as_u64() == Some(parent),
+                            None => {
+                                text.contains(row.id.as_str())
+                                    && text.contains(&target.expected_head.hex)
+                            }
+                        }
+                })
         }) {
             return Ok(true);
         }
