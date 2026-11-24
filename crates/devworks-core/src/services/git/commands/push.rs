@@ -4,6 +4,11 @@ use crate::protocol::data::PushMode;
 use crate::services::effect::EffectOutcome;
 
 pub(super) struct StagedPush(Result<Destination, Failure>);
+impl StagedPush {
+    pub(super) fn integration_diff(&self) -> Option<&crate::services::artifacts::StagedFile> {
+        Some(&self.0.as_ref().ok()?.integration.as_ref()?.diff)
+    }
+}
 struct Destination {
     tree: StoredGitWorktree,
     repository_revision: i64,
@@ -174,6 +179,7 @@ impl GitService {
             )?;
             let integration = task_integration
                 .as_ref()
+                .filter(|_| !preview)
                 .map(|proof| {
                     self.prepare_feature_publication(ctx, env, &git, &tree, expected_head, proof)
                 })
@@ -293,14 +299,7 @@ impl GitService {
         let publication = match (task_integration, &destination.integration) {
             (Some(proof), Some(prepared)) => {
                 Some(Box::new(feature_delivery::persist_task_publication(
-                    self,
-                    tx,
-                    ctx,
-                    &work,
-                    &tree,
-                    proof,
-                    prepared,
-                    expected_head,
+                    self, tx, ctx, &work, &tree, proof, prepared,
                 )?))
             }
             (None, None)
@@ -309,6 +308,18 @@ impl GitService {
                     || expected_remote
                         .as_ref()
                         .is_none_or(|remote| remote == expected_head) =>
+            {
+                None
+            }
+            (None, None)
+                if !force
+                    && let Some(predecessor) = expected_remote
+                    && feature_delivery::observed_publication(tx, &tree, predecessor)?
+                    && feature_delivery::has_final_pull_request(
+                        tx,
+                        &tree,
+                        repository.revision,
+                    )? =>
             {
                 None
             }
@@ -427,6 +438,9 @@ impl GitService {
             && git.is_ancestor(path, base, &expected.hex) != Ok(true)
         {
             return changed("normal push is not a verified fast forward");
+        }
+        if self.git_stopped(job) {
+            return denied("work or authority changed before push");
         }
         let lease = format!(
             "--force-with-lease={target}:{}",

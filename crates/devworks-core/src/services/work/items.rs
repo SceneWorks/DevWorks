@@ -399,21 +399,25 @@ pub(crate) fn completion_for(semantic: &str, acceptance: &[AcceptanceCriterion])
     })
 }
 
-fn task_completion(
+pub(crate) fn task_completion(
     tx: &mut dyn WriteTransaction,
     task: &StoredWork,
     semantic: &str,
     acceptance: &[AcceptanceCriterion],
 ) -> Result<Option<String>, StorageError> {
     let completion = completion_for(semantic, acceptance);
+    // The Git owner may already have verified a code task with no separate acceptance criteria.
     if completion.as_deref() == Some(VERIFIED)
-        && crate::services::git::waits_for_publication(tx, task)?
+        || (semantic == DONE
+            && acceptance.is_empty()
+            && task.completion.as_deref() == Some(VERIFIED))
     {
-        return Ok(Some(MANUAL.to_owned()));
-    }
-    // The Git owner verifies code-only tasks that have no separate acceptance criteria.
-    if semantic == DONE && acceptance.is_empty() && task.completion.as_deref() == Some(VERIFIED) {
-        return Ok(task.completion.clone());
+        let completion = if crate::services::git::waits_for_publication(tx, task)? {
+            MANUAL
+        } else {
+            VERIFIED
+        };
+        return Ok(Some(completion.to_owned()));
     }
     Ok(completion)
 }
@@ -2015,6 +2019,7 @@ fn record_feature_results(
     else {
         return Err(conflict("no_active_plan", &feature.id));
     };
+    let heads = crate::services::git::feature_head_digest(tx, &feature.id)?;
     for r in results {
         let in_acceptance = active.draft.acceptance.0.iter().find(|c| c.id == r.id);
         let in_tests = active
@@ -2034,6 +2039,20 @@ fn record_feature_results(
         }
         id_set(&r.evidence_ids.0, "evidence_ids")?;
         check_evidence(tx, &feature.project_id, &r.evidence_ids.0)?;
+        let prior = list.iter().find(|prior| prior.id == r.id);
+        let key = r.id.as_str();
+        if let Some(heads) = &heads
+            && matches!(r.state, CriterionState::Met)
+            && !r.evidence_ids.0.is_empty()
+            && (brief.acceptance_git_heads.get(key) == Some(heads)
+                || prior.is_none_or(|prior| prior.evidence_ids.0 != r.evidence_ids.0))
+        {
+            brief
+                .acceptance_git_heads
+                .insert(key.to_owned(), heads.clone());
+        } else {
+            brief.acceptance_git_heads.remove(key);
+        }
         list.retain(|x| x.id != r.id);
         list.push(r.clone());
     }

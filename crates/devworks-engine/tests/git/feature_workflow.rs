@@ -199,7 +199,7 @@ fn final_feature_pr_requires_integrated_acceptance_and_recovers_one_remote_creat
         )
         .unwrap()
         .0;
-    let admit = |store: &Arc<dyn ApplicationStore>, key: &str| {
+    let admit = |store: &Arc<dyn ApplicationStore>, key: &str, covered: Option<&[&str]>| {
         let authority = HostAuthority {
             store: store.as_ref(),
             clock: h.clock.as_ref(),
@@ -210,9 +210,12 @@ fn final_feature_pr_requires_integrated_acceptance_and_recovers_one_remote_creat
             authority: &authority,
             ids: h.ids.as_ref(),
         };
-        let frame = json!({"protocol":"1.0-draft.1","schemaRevision":16,"requestKey":key,"command":{
+        let mut frame = json!({"protocol":"1.0-draft.1","schemaRevision":16,"requestKey":key,"command":{
             "kind":"OpenPullRequest","repositoryId":"repo","headRef":tree.branch,"baseRef":"refs/heads/main",
-            "expectedHead":oid,"description":description,"coveredWorkIds":["task"]}});
+            "expectedHead":oid,"description":description}});
+        if let Some(covered) = covered {
+            frame["command"]["coveredWorkIds"] = json!(covered);
+        }
         match gateway
             .command(
                 &user,
@@ -227,7 +230,7 @@ fn final_feature_pr_requires_integrated_acceptance_and_recovers_one_remote_creat
         }
     };
     assert!(
-        matches!(admit(&store,"before-feature-acceptance"),DomainDecision::Refused{fault}
+        matches!(admit(&store,"before-feature-acceptance",None),DomainDecision::Refused{fault}
         if fault.code==DomainErrorCode::ApprovalRequired)
     );
     assert_eq!(wire.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -236,7 +239,39 @@ fn final_feature_pr_requires_integrated_acceptance_and_recovers_one_remote_creat
         let mut feature = tx.work().work(&id("feature"))?.unwrap();
         feature.revision = 2;
         feature.brief = json!({"acceptance":[{"id":"feature-case","text":"Integrated behavior",
-            "state":"Met","evidenceIds":["integrated-verification"]}]});
+            "state":"Met","evidenceIds":["previous-verification"]}],
+            "acceptanceGitHeads":{"feature-case":"previous-head-digest"}});
+        let event = EventId(id("verification-event"));
+        let sequence = tx.history().append(NewEvent {
+            id: event.clone(),
+            actor: approver.clone(),
+            project_id: Some(feature.project_id.clone()),
+            root_id: Some(RootId(feature.id.clone())),
+            operation_id: None,
+            aggregate_kind: "verification".into(),
+            aggregate_id: "verification".into(),
+            aggregate_revision: 1,
+            kind: "VerificationCaptured".into(),
+            payload: json!({}),
+        })?;
+        tx.sessions().insert_link(&StoredLink {
+            id: id("integrated-verification"),
+            project_id: feature.project_id.clone(),
+            root_id: RootId(feature.id.clone()),
+            kind: "evidence".into(),
+            target_kind: "artifact_version".into(),
+            target_id: plan_content.version_id.as_str().into(),
+            parent_id: None,
+            supersedes_id: None,
+            actor: approver.clone(),
+            event_id: event.0,
+            sequence,
+            repository_id: Some(id("repo")),
+            revision: None,
+            summary: "Verified integrated commit".into(),
+            body: json!({"artifact":plan_content}),
+            created_at_ms: T0,
+        })?;
         tx.work().put_feature_plan(
             &StoredFeaturePlan {
                 feature_id: feature.id.clone(),
@@ -255,24 +290,69 @@ fn final_feature_pr_requires_integrated_acceptance_and_recovers_one_remote_creat
         tx.work().update_work(&feature, 1)
     })
     .unwrap();
-    let operation = match admit(&store, "open-qualified-feature") {
+    assert!(
+        matches!(admit(&store, "stale-feature-acceptance", None), DomainDecision::Refused { fault }
+        if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "integrated_feature_acceptance"))
+    );
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: store.as_ref(),
+        authority: &authority,
+        ids: h.ids.as_ref(),
+    };
+    let work = Arc::new(devworks_core::services::work::WorkService::new(
+        h.ids.clone(),
+        Arc::new(devworks_core::services::runs::ControlService::new(
+            h.ids.clone(),
+        )),
+    ));
+    let results = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
+        "requestKey":"record-final-feature-acceptance","body":{"kind":"features.edit","workId":"feature",
+        "expectedRevision":"2","changes":{"acceptanceEvidence":[{"id":"feature-case",
+        "text":"Integrated behavior","state":"Met","evidenceIds":["integrated-verification"]}]}}});
+    let reply = gateway
+        .command(&user, "features.edit", results.to_string().as_bytes(), work)
+        .unwrap();
+    assert!(
+        matches!(&reply,CommandReply::Recorded{receipt,..} if matches!(receipt.decision,DomainDecision::Applied{..})),
+        "{reply:?}"
+    );
+    assert!(
+        matches!(admit(&store,"incomplete-feature-coverage",Some(&["omitted-task"])),DomainDecision::Refused{fault}
+        if fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "feature_pr_scope"))
+    );
+    let operation = match admit(&store, "open-qualified-feature", None) {
         DomainDecision::Accepted { operation_id } => operation_id,
         rejected => panic!("{rejected:?}"),
     };
-    let repo =
-        devworks_core::services::git::github::Repository::from_remote(actual_remote).unwrap();
-    assert!(
-        client
-            .create(
-                store.as_ref(),
-                &repo,
-                "feature/fixture",
-                "main",
-                "feature",
-                "Carry task"
+    let record = write(store.as_ref(), {
+        let operation = operation.clone();
+        move |tx| {
+            let record = tx.operations().operation(&operation)?.unwrap();
+            let attempt = tx.operations().begin_attempt(
+                &operation,
+                record.revision,
+                AttemptBinding::default(),
+            )?;
+            let record = tx.operations().operation(&operation)?.unwrap();
+            tx.operations().transition(
+                &operation,
+                record.revision,
+                Some(&attempt.fence()),
+                OperationState::Dispatching,
+                None,
             )
-            .is_err()
-    );
+        }
+    })
+    .unwrap();
+    wire.hide_created_once
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let outcome = make(&store).execute(&record);
+    assert!(matches!(outcome, EffectOutcome::Unknown(_)), "{outcome:?}");
     assert_eq!(wire.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
     drop(store);
     let recovered = h.open();

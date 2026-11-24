@@ -33,6 +33,9 @@ pub struct WorkBrief {
     pub acceptance: Vec<AcceptanceCriterion>,
     /// A feature's recorded results of its active plan's acceptance tests.
     pub acceptance_tests: Vec<AcceptanceCriterion>,
+    /// Published feature revisions witnessed when each acceptance result was recorded.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub acceptance_git_heads: std::collections::BTreeMap<String, String>,
     pub inherits: Vec<Id>,
     pub previous_inheritance: Option<crate::protocol::records::WorkInheritanceOrigin>,
     pub touches: Vec<TouchRef>,

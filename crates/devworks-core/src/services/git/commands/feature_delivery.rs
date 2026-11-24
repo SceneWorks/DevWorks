@@ -42,7 +42,7 @@ pub(super) fn observed_published_head(
     observed_publication(tx, tree, &tree.head)
 }
 
-fn observed_publication(
+pub(super) fn observed_publication(
     tx: &mut dyn WriteTransaction,
     tree: &StoredGitWorktree,
     head: &GitOid,
@@ -97,6 +97,44 @@ fn observed_publication(
     }
 }
 
+/// Once the final feature PR exists, its exact-head review service owns fixes to that PR.
+/// Before it exists, every changed feature-branch push must come from task integration.
+pub(super) fn has_final_pull_request(
+    tx: &mut dyn WriteTransaction,
+    tree: &StoredGitWorktree,
+    repository_revision: i64,
+) -> Result<bool, StorageError> {
+    let filter = EventFilter::Aggregate {
+        kind: "git_worktree".into(),
+        id: tree.id.as_str().to_owned(),
+    };
+    let mut after = 0;
+    loop {
+        let page = tx.history().page(&filter, after, MAX_PAGE)?;
+        for event in &page.events {
+            if event.kind != "GitPullRequestObserved" || event.payload["branch"] != tree.branch {
+                continue;
+            }
+            let Some(id) = &event.operation_id else {
+                continue;
+            };
+            if tx.operations().operation(id)?.is_some_and(|operation| {
+                operation.capability == "git.pull_request"
+                    && operation.state == OperationState::ObservedComplete
+                    && operation.payload["repository_revision"].as_i64()
+                        == Some(repository_revision)
+                    && operation.payload["action"]["PullRequest"]["final_feature"] == true
+            }) {
+                return Ok(true);
+            }
+        }
+        if !page.has_more {
+            return Ok(false);
+        }
+        after = page.next_after;
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct TaskPublication {
     pub proof: crate::protocol::data::FeatureTaskIntegration,
@@ -106,9 +144,10 @@ pub(super) struct TaskPublication {
 }
 
 pub(super) struct PreparedPublication {
+    candidate: GitOid,
     review_revision: i64,
     task_worktree: StoredGitWorktree,
-    diff: crate::services::artifacts::StagedFile,
+    pub(super) diff: crate::services::artifacts::StagedFile,
 }
 
 #[derive(serde::Deserialize)]
@@ -219,6 +258,7 @@ impl GitService {
             )?
             .map_err(|_| invalid())?;
         Ok(PreparedPublication {
+            candidate: candidate.clone(),
             review_revision,
             task_worktree,
             diff,
@@ -234,7 +274,6 @@ pub(super) fn persist_task_publication(
     tree: &StoredGitWorktree,
     proof: &crate::protocol::data::FeatureTaskIntegration,
     prepared: &PreparedPublication,
-    candidate: &GitOid,
 ) -> Result<TaskPublication, Failure> {
     let invalid = || {
         refuse(
@@ -293,7 +332,7 @@ pub(super) fn persist_task_publication(
                     evidence["result"]["value"]["exitCode"] == 0
                         && checked["worktreeId"].as_str() == Some(tree.id.as_str())
                         && checked["repositoryId"].as_str() == Some(tree.repository_id.as_str())
-                        && checked["head"] == json!(candidate)
+                        && checked["head"] == json!(prepared.candidate)
                         && checked["worktreeRevision"].as_i64() == Some(tree.revision)
                 })
             })
@@ -305,7 +344,7 @@ pub(super) fn persist_task_publication(
         tx,&prepared.diff,crate::services::artifacts::host::HostArtifactPublication {
             title:"Feature task integration diff",
             media_type:"application/json",
-            provenance:json!({"kind":"FeatureIntegrationDiff","taskId":task.id,"candidate":candidate}),
+            provenance:json!({"kind":"FeatureIntegrationDiff","taskId":task.id,"candidate":prepared.candidate}),
             scope:ArtifactScope::Project(feature.project_id.clone()),owner:ctx.principal().clone(),
         }
     )?;
@@ -352,6 +391,39 @@ pub(crate) fn requires_local_integration(
     Ok(false)
 }
 
+impl TaskPublication {
+    fn task_matches(&self, task: &StoredWork, feature: &Id, project: &ProjectId) -> bool {
+        task.parent_feature_id.as_ref() == Some(feature)
+            && &task.project_id == project
+            && task.revision == self.proof.expected_task_revision.get()
+    }
+
+    fn source_matches(&self, git: &dyn GitRead) -> Result<bool, StorageError> {
+        Ok(
+            git.git_worktree(&self.proof.task_worktree_id)?.as_ref() == Some(&self.task_worktree)
+                && git
+                    .code_review(&self.proof.review_id)?
+                    .is_some_and(|row| row.revision == self.review_revision),
+        )
+    }
+
+    pub(super) fn current_in(
+        &self,
+        snapshot: &dyn ReadSnapshot,
+        job: &Job,
+    ) -> Result<bool, StorageError> {
+        Ok(snapshot
+            .work()
+            .work(&self.proof.task_id)?
+            .is_some_and(|task| self.task_matches(&task, &job.tree.work_id, &job.project))
+            && snapshot
+                .work()
+                .work_repositories(&self.proof.task_id)?
+                .contains(&job.tree.repository_id)
+            && self.source_matches(snapshot.git())?)
+    }
+}
+
 /// Keep the immutable task source and current review bound through dispatch.
 pub(super) fn publication_current(
     tx: &mut dyn WriteTransaction,
@@ -360,20 +432,15 @@ pub(super) fn publication_current(
     publication: &TaskPublication,
 ) -> Result<(), StorageError> {
     let proof = &publication.proof;
-    if tx.work().work(&proof.task_id)?.is_none_or(|task| {
-        task.parent_feature_id.as_ref() != Some(&feature.id)
-            || task.project_id != feature.project_id
-            || task.revision != proof.expected_task_revision.get()
-    }) || !tx
+    if !tx
         .work()
-        .work_repositories(&proof.task_id)?
-        .contains(&tree.repository_id)
-        || tx.git().git_worktree(&proof.task_worktree_id)?.as_ref()
-            != Some(&publication.task_worktree)
-        || tx
-            .git()
-            .code_review(&proof.review_id)?
-            .is_none_or(|row| row.revision != publication.review_revision)
+        .work(&proof.task_id)?
+        .is_some_and(|task| publication.task_matches(&task, &feature.id, &feature.project_id))
+        || !tx
+            .work()
+            .work_repositories(&proof.task_id)?
+            .contains(&tree.repository_id)
+        || !publication.source_matches(tx.git())?
     {
         return Err(StorageError::ScopeDenied);
     }
@@ -413,6 +480,23 @@ pub(super) fn published_task(
     }
 }
 
+fn registered_publication(
+    tx: &mut dyn WriteTransaction,
+    task: &Id,
+    repository: &Id,
+) -> Result<Option<EventRecord>, StorageError> {
+    let Some(registration) = tx
+        .projects()
+        .repository(repository)?
+        .filter(|registration| registration.lifecycle == ACTIVE)
+    else {
+        return Ok(None);
+    };
+    Ok(published_task(tx, task, repository)?.filter(|publication| {
+        publication.payload["repositoryRevision"].as_i64() == Some(registration.revision)
+    }))
+}
+
 pub(super) fn settle_task_publication(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -444,7 +528,7 @@ pub(super) fn settle_task_publication(
         "featureId":tree.work_id,"taskId":task.id,"taskRevision":proof.expected_task_revision,
         "repositoryId":tree.repository_id,"worktreeId":tree.id,"branch":tree.branch,"repositoryRevision":repository_revision,
         "reviewId":proof.review_id,"reviewedBase":proof.reviewed_base,"reviewedHead":proof.reviewed_head,
-        "taskHead":proof.task_head,"predecessor":proof.predecessor,"candidate":tree.head,"head":tree.head,
+        "taskWorktreeId":proof.task_worktree_id,"taskHead":proof.task_head,"predecessor":proof.predecessor,"candidate":tree.head,"head":tree.head,
         "resolutionDiff":publication.delta,"verification":proof.verification,"focusedChecks":proof.focused_checks,
     });
     let event = EventId(tx.new_id(IdKind::Event));
@@ -468,7 +552,7 @@ pub(super) fn settle_task_publication(
         tx.sessions().insert_link(&StoredLink {
             id: link,
             project_id: task.project_id.clone(),
-            root_id: root,
+            root_id: root.clone(),
             kind: "git".into(),
             target_kind: "git_worktree".into(),
             target_id: tree.id.as_str().into(),
@@ -483,6 +567,30 @@ pub(super) fn settle_task_publication(
             body: payload.clone(),
             created_at_ms: now,
         })?;
+        for (artifact, summary) in [
+            (&publication.delta, "Feature task integration diff"),
+            (&proof.verification, "Feature task verification"),
+        ] {
+            let id = tx.new_id(IdKind::Link);
+            tx.sessions().insert_link(&StoredLink {
+                id,
+                project_id: task.project_id.clone(),
+                root_id: root.clone(),
+                kind: "evidence".into(),
+                target_kind: "artifact_version".into(),
+                target_id: artifact.version_id.as_str().into(),
+                parent_id: None,
+                supersedes_id: None,
+                actor: owner.clone(),
+                event_id: event.0.clone(),
+                sequence,
+                repository_id: Some(tree.repository_id.clone()),
+                revision: Some(tree.head.hex.clone()),
+                summary: summary.into(),
+                body: json!({"artifact":artifact}),
+                created_at_ms: now,
+            })?;
+        }
     }
     if task.revision != proof.expected_task_revision.get()
         || task.parent_feature_id.as_ref() != Some(&tree.work_id)
@@ -490,7 +598,7 @@ pub(super) fn settle_task_publication(
         return Ok(());
     }
     for repo in tx.work().work_repositories(&task.id)? {
-        let Some(observed) = published_task(tx, &task.id, &repo)? else {
+        let Some(observed) = registered_publication(tx, &task.id, &repo)? else {
             if crate::services::reviews::recorded_no_changes(
                 tx,
                 &RootId(tree.work_id.clone()),
@@ -502,9 +610,17 @@ pub(super) fn settle_task_publication(
             }
             return Ok(());
         };
+        let source = serde_json::from_value::<Id>(observed.payload["taskWorktreeId"].clone())
+            .map_err(|_| StorageError::ScopeDenied)?;
         if observed.payload["featureId"] != json!(tree.work_id)
             || observed.payload["reviewId"] != json!(proof.review_id)
-            || observed.payload["taskRevision"] != json!(proof.expected_task_revision)
+            || tx.git().git_worktree(&source)?.is_none_or(|source| {
+                source.removed
+                    || source.work_id != task.id
+                    || source.repository_id != repo
+                    || source.pending_operation_id.is_some()
+                    || observed.payload["taskHead"] != json!(source.head)
+            })
         {
             return Ok(());
         }
@@ -528,13 +644,8 @@ pub(crate) fn waits_for_publication(
         if !uses_local_integration(tx, feature, repo)? {
             continue;
         }
-        let registration = tx.projects().repository(repo)?;
-        if let Some(publication) = published_task(tx, &task.id, repo)?
+        if let Some(publication) = registered_publication(tx, &task.id, repo)?
             && publication.payload["featureId"] == json!(feature)
-            && registration.is_some_and(|repo| {
-                repo.lifecycle == ACTIVE
-                    && publication.payload["repositoryRevision"].as_i64() == Some(repo.revision)
-            })
         {
             let review = serde_json::from_value::<Id>(publication.payload["reviewId"].clone())
                 .map_err(|_| StorageError::ScopeDenied)?;
@@ -566,20 +677,69 @@ pub(crate) fn waits_for_publication(
     Ok(false)
 }
 
+pub(crate) fn feature_head_digest(
+    tx: &mut dyn WriteTransaction,
+    feature: &Id,
+) -> Result<Option<String>, StorageError> {
+    let repositories = tx.work().work_repositories(feature)?;
+    let mut heads = std::collections::BTreeMap::new();
+    let mut after = None;
+    loop {
+        let page = tx.git().git_worktrees(feature, after.as_ref(), MAX_PAGE)?;
+        for tree in &page {
+            if tree.removed
+                || !repositories.contains(&tree.repository_id)
+                || !tree.branch.starts_with("refs/heads/feature/")
+            {
+                continue;
+            }
+            if !observed_published_head(tx, tree)? {
+                return Ok(None);
+            }
+            let registration = tx
+                .projects()
+                .repository(&tree.repository_id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if heads.insert(tree.repository_id.as_str().to_owned(),
+                json!({"branch":tree.branch,"head":tree.head,"registration":registration.revision})).is_some() {
+                return Ok(None);
+            }
+        }
+        if page.len() < usize::from(MAX_PAGE) {
+            break;
+        }
+        after = page.last().map(|tree| tree.id.clone());
+    }
+    if heads.is_empty() {
+        return Ok(None);
+    }
+    crate::fingerprint::canonical_digest(&json!({"repositories":repositories,"heads":heads}))
+        .map(Some)
+        .map_err(|_| StorageError::InvalidRecord("feature acceptance Git heads".into()))
+}
+
 pub(super) fn final_pr_coverage(
     tx: &mut dyn WriteTransaction,
     feature: &StoredWork,
     tree: &StoredGitWorktree,
 ) -> Result<Vec<(Id, i64, GitOid)>, Failure> {
     use crate::services::work::{
-        items::feature_completion,
-        model::WorkBrief,
-        workflow::{CLOSED, DONE, semantic_of},
+        model::{WorkBrief, active_of, feature_criteria, verified},
+        workflow::{CLOSED, semantic_of},
     };
 
-    if !observed_published_head(tx, tree)?
-        || feature_completion(tx, &feature.id, DONE, &WorkBrief::of(feature)?)?.as_deref()
-            != Some(VERIFIED)
+    let brief = WorkBrief::of(feature)?;
+    let plan = tx.work().feature_plan(&feature.id)?;
+    let active = active_of(plan.as_ref().and_then(|plan| plan.approved.as_ref()));
+    let (criteria, tests) = feature_criteria(active.as_ref(), &brief);
+    let acceptance: Vec<_> = criteria.into_iter().chain(tests).collect();
+    let heads = feature_head_digest(tx, &feature.id)?;
+    if !verified(&acceptance)
+        || heads.as_ref().is_none_or(|heads| {
+            acceptance.iter().any(|criterion| {
+                brief.acceptance_git_heads.get(criterion.id.as_str()) != Some(heads)
+            })
+        })
     {
         return Err(refuse(
             DomainErrorCode::ApprovalRequired,
@@ -587,11 +747,6 @@ pub(super) fn final_pr_coverage(
             &feature.id,
         ));
     }
-    let repository_revision = tx
-        .projects()
-        .repository(&tree.repository_id)?
-        .ok_or(StorageError::ScopeDenied)?
-        .revision;
     let statuses = tx.work().statuses(&feature.project_id)?;
     let filter = WorkFilter {
         project: feature.project_id.clone(),
@@ -624,11 +779,9 @@ pub(super) fn final_pr_coverage(
             if !repositories.contains(&tree.repository_id) {
                 continue;
             }
-            if let Some(publication) = published_task(tx, &task.id, &tree.repository_id)? {
+            if let Some(publication) = registered_publication(tx, &task.id, &tree.repository_id)? {
                 if publication.payload["featureId"] != json!(feature.id)
                     || publication.payload["branch"] != json!(tree.branch)
-                    || publication.payload["repositoryRevision"].as_i64()
-                        != Some(repository_revision)
                 {
                     return Err(refuse(
                         DomainErrorCode::ApprovalRequired,
@@ -650,7 +803,7 @@ pub(super) fn final_pr_coverage(
                 .iter()
                 .filter(|repo| *repo != &tree.repository_id)
             {
-                let Some(publication) = published_task(tx, &task.id, other)? else {
+                let Some(publication) = registered_publication(tx, &task.id, other)? else {
                     continue;
                 };
                 let review = serde_json::from_value::<Id>(publication.payload["reviewId"].clone())

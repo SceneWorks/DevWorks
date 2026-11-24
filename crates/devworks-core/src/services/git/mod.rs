@@ -3,7 +3,7 @@
 mod approval;
 pub mod client;
 mod commands;
-pub(crate) use commands::{requires_local_integration, waits_for_publication};
+pub(crate) use commands::{feature_head_digest, requires_local_integration, waits_for_publication};
 pub mod context;
 pub mod github;
 pub mod helper;

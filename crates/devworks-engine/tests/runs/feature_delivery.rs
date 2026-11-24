@@ -1,7 +1,7 @@
 //! A real Git conflict and remote ref, with one recovery of the previously admitted publication.
 use super::*;
 use crate::code_review_tests::git;
-use devworks_core::protocol::provider::ArtifactRef;
+use devworks_core::protocol::{EventId, provider::ArtifactRef};
 use devworks_core::services::artifacts::evidence::Evidence;
 use devworks_core::services::git::{
     GitConfig, GitService, RegisteredGitRoot, helper::SupervisedHelpers,
@@ -77,9 +77,29 @@ fn head(path: &Path) -> String {
     git(path, &["rev-parse", "HEAD"])
 }
 
-#[cfg(unix)]
 #[test]
 fn feature_task_conflict_verification_and_push_recovery_keep_the_review_and_complete_once() {
+    feature_task_publication(Recovery::Accepted);
+}
+
+#[test]
+fn feature_task_recovery_holds_the_dependent_when_another_repository_registration_changed() {
+    feature_task_publication(Recovery::ReboundRepository);
+}
+
+#[test]
+fn feature_task_recovery_holds_the_dependent_without_authoritative_publication() {
+    feature_task_publication(Recovery::Unobserved);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Recovery {
+    Accepted,
+    ReboundRepository,
+    Unobserved,
+}
+
+fn feature_task_publication(recovery: Recovery) {
     let _case = native_runtime_case();
     let fx = Fx::new();
     runtime().block_on(async {
@@ -126,6 +146,7 @@ fn feature_task_conflict_verification_and_push_recovery_keep_the_review_and_comp
                 Arc::new(FeatureAuthority{store:fx.store.clone(),clock:fx.h.clock()}),
                 Arc::new(devworks_adapters::process::NativeProcessHost));
             composed.git=Some(devworks_engine::git::GitComposition {config:git_config(),github_http:None});
+            composed.application.history = true;
             composed.config.process_tools=Some(devworks_engine::runtime::ProcessToolComposition {
                 bindings:ToolBindings::new([RegisteredExecutable{id:id("check"),path:"/bin/sh".into()}],
                     Vec::<RegisteredWorkingRoot>::new()).unwrap(),
@@ -270,16 +291,63 @@ fn feature_task_conflict_verification_and_push_recovery_keep_the_review_and_comp
                 Ok(())
             }
         });
+        if recovery == Recovery::ReboundRepository {
+            let other=fx.h.root.join("other-repository");
+            std::fs::create_dir(&other).unwrap();
+            fx.tx({
+                let (project,repository,task_head)=(project.clone(),repository.clone(),task_head.clone());
+                let actor=owner.principal().clone();
+                move |_,tx| {
+                    let other_id=id("other-delivery-repo");
+                    tx.projects().insert_repository(&StoredRepository {
+                        id: other_id.clone(), location:other.to_string_lossy().into_owned(),
+                        name:"Other repository".into(),remote_url:Some("https://github.com/fixture/other.git".into()),
+                        primary:false,lifecycle:ACTIVE.into(),languages:vec![],revision:1,registered_at_ms:T0,
+                    })?;
+                    tx.projects().set_members(&project,&[repository.clone(),other_id.clone()])?;
+                    tx.work().set_work_repositories(&id("task-f1"),&[repository,other_id.clone()])?;
+                    tx.history().append(NewEvent {
+                        id:EventId(id("previous-repository-publication")),actor,project_id:Some(project),
+                        root_id:Some(rid("root-f")),operation_id:None,aggregate_kind:"feature_task_publication".into(),
+                        aggregate_id:devworks_core::fingerprint::sha256_hex(b"task-f1/other-delivery-repo"),
+                        aggregate_revision:1,kind:"FeatureTaskPublished".into(),
+                        payload:json!({"featureId":"root-f","repositoryId":other_id,"repositoryRevision":1,
+                            "reviewId":"fixture-independent-review","taskRevision":"1","taskHead":{"format":"Sha1","hex":task_head}}),
+                    })?;
+                    assert_eq!(tx.projects().touch_repository(&other_id,1)?,2);
+                    Ok(())
+                }
+            });
+        }
         // The server accepts the already-journaled candidate before the process can store it.
-        git(&feature_path,&["push","-q","origin",&format!("HEAD:{}",feature.branch)]);
+        if recovery != Recovery::Unobserved {
+            git(&feature_path,&["push","-q","origin",&format!("HEAD:{}",feature.branch)]);
+        }
         assert!(read(&*fx.store,|s|s.work().work(&id("task-f1"))).unwrap().completion.is_none());
         let (h,old)=fx.into_parts(); drop(old);
         let store=h.open();
         let fx=Fx::over(h,store);
         let app=boot(build(&fx)).await.unwrap();
+        if recovery == Recovery::Unobserved {
+            app.dispatcher().observe_unknown().await.unwrap();
+            let held = read(&*fx.store, |s|s.operations().operation(&operation)).unwrap();
+            assert_eq!(held.state, OperationState::OutcomeUnknown);
+            assert_eq!(held.attempts.len(), 1);
+            assert_eq!(git(&remote,&["rev-parse",&feature.branch]),predecessor);
+            assert!(read(&*fx.store,|s|s.work().work(&id("task-f1"))).unwrap().completion.is_none());
+            assert_eq!(read(&*fx.store,|s|s.work().open_prerequisites(&id("task-f2"))),vec![id("task-f1")]);
+            app.shutdown().await;
+            return;
+        }
         settled(&fx,&operation).await;
         assert_eq!(git(&remote,&["rev-parse",&feature.branch]),candidate);
         assert_eq!(read(&*fx.store,|s|s.operations().operation(&operation)).unwrap().attempts.len(),1);
+        if recovery == Recovery::ReboundRepository {
+            assert!(read(&*fx.store,|s|s.work().work(&id("task-f1"))).unwrap().completion.is_none());
+            assert_eq!(read(&*fx.store,|s|s.work().open_prerequisites(&id("task-f2"))),vec![id("task-f1")]);
+            app.shutdown().await;
+            return;
+        }
         assert_eq!(read(&*fx.store,|s|s.work().work(&id("task-f1"))).unwrap().completion.as_deref(),Some(VERIFIED));
         assert!(read(&*fx.store,|s|s.work().open_prerequisites(&id("task-f2"))).is_empty());
         let pending = read(&*fx.store, |s|s.operations().operation(&operation)).unwrap();
@@ -306,6 +374,12 @@ fn feature_task_conflict_verification_and_push_recovery_keep_the_review_and_comp
         assert!(links["items"].as_array().unwrap().iter().any(|link| {
             link["worktreeId"] == json!(feature.id) && link["head"] == oid(&candidate) && link["branch"] == feature.branch
         }),"{links}");
+        let evidence = result(&app.query(&scoped,"history.evidence_links",json!({"mode":"Query","protocol":PROTOCOL,
+            "queryId":"integration-evidence","body":{"kind":"history.evidence_links","rootId":"task-f1","page":{"limit":100}}}
+        ).to_string().as_bytes()).unwrap());
+        let evidence=evidence["items"].as_array().unwrap();
+        assert!(evidence.iter().any(|item| item["artifact"]==recorded[0].payload["resolutionDiff"]));
+        assert!(evidence.iter().any(|item| item["artifact"]==recorded[0].payload["verification"]));
         let scoped = fx.user.clone().with_lineage(Some(project),Some(rid("task-f2")),None);
         let next=staged(app.command(&scoped,"git.worktree",json!({"mode":"Command","protocol":PROTOCOL,
             "requestKey":"next-eligible-task","body":{"kind":"git.worktree","repositoryId":repository,"workId":"task-f2",

@@ -245,14 +245,15 @@ impl GitService {
                 ));
             }
             let covered = feature_delivery::final_pr_coverage(tx, &work, &tree)?;
-            let mut requested = covered_work_ids.as_ref().cloned().unwrap_or_default();
-            requested.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
-            if requested.iter().ne(covered.iter().map(|(task, _, _)| task)) {
-                return Err(refuse(
-                    DomainErrorCode::SourceChanged,
-                    "feature_pr_scope",
-                    &work.id,
-                ));
+            if let Some(mut requested) = covered_work_ids.clone() {
+                requested.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+                if requested.iter().ne(covered.iter().map(|(task, _, _)| task)) {
+                    return Err(refuse(
+                        DomainErrorCode::SourceChanged,
+                        "feature_pr_scope",
+                        &work.id,
+                    ));
+                }
             }
             let (covered, integrated_heads) = covered
                 .into_iter()

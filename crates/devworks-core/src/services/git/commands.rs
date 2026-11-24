@@ -2,7 +2,9 @@
 //! result keeps the reservation until observation proves the requested postcondition.
 mod attach;
 mod feature_delivery;
-pub(crate) use feature_delivery::{requires_local_integration, waits_for_publication};
+pub(crate) use feature_delivery::{
+    feature_head_digest, requires_local_integration, waits_for_publication,
+};
 mod pull_request;
 mod push;
 use super::*;
@@ -639,6 +641,16 @@ impl GitService {
         {
             if !affected.contains(&root) {
                 affected.push(root);
+            }
+        }
+        if let Action::Push {
+            task_publication: Some(publication),
+            ..
+        } = &action
+        {
+            let task = RootId(publication.proof.task_id.clone());
+            if !affected.contains(&task) {
+                affected.push(task);
             }
         }
         let root_epochs = affected
@@ -1318,6 +1330,14 @@ impl GitService {
             {
                 return Ok(true);
             }
+            if let Action::Push {
+                task_publication: Some(publication),
+                ..
+            } = &job.action
+                && !publication.current_in(snapshot, job)?
+            {
+                return Ok(true);
+            }
             if let Action::PullRequest { covered, .. } = &job.action {
                 for (id, revision) in covered {
                     if snapshot.work().work(id)?.is_none_or(|work| {
@@ -1947,6 +1967,24 @@ impl CommandHandler for GitService {
         };
         Ok(Some(Prepared::new(StagedMessage(text, manifest))))
     }
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        prepared: Option<&Prepared>,
+        reply: Option<&crate::protocol::results::DomainCommandReply>,
+        _env: &Preparation<'_>,
+    ) {
+        let Some(staged) = prepared
+            .and_then(|p| p.get::<push::StagedPush>())
+            .and_then(push::StagedPush::integration_diff)
+        else {
+            return;
+        };
+        let committed = matches!(reply, Some(crate::protocol::CommandReply::Recorded { receipt, replayed: false, .. })
+            if matches!(receipt.decision, DomainDecision::Accepted {..}));
+        self.artifacts
+            .settle_host_bytes(self.store.as_ref(), staged, committed);
+    }
     fn decide(
         &self,
         ctx: &InvocationContext,
@@ -1963,17 +2001,10 @@ impl CommandHandler for GitService {
 
 impl JournaledEffect for GitService {
     fn resumes_after_observation(&self, operation: &OperationRecord) -> bool {
-        self.job(operation).is_ok_and(|job| {
-            matches!(
-                job.action,
-                Action::Push {
-                    task_publication: Some(_),
-                    ..
-                } | Action::PullRequest {
-                    final_feature: true,
-                    ..
-                }
-            )
+        self.job(operation).is_ok_and(|job| match job.action {
+            Action::Push { .. } => job.tree.branch.starts_with("refs/heads/feature/"),
+            Action::PullRequest { final_feature, .. } => final_feature,
+            _ => false,
         })
     }
 

@@ -1522,6 +1522,7 @@ struct GitHubHttp {
     sha: std::sync::Mutex<String>,
     pr: std::sync::Mutex<Option<serde_json::Value>>,
     writes: std::sync::atomic::AtomicUsize,
+    hide_created_once: std::sync::atomic::AtomicBool,
 }
 struct GitHubSecrets;
 impl devworks_core::ports::secrets::SecretResolver for GitHubSecrets {
@@ -1563,12 +1564,17 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
                 let branch = request.url.split_once("/git/ref/heads/").unwrap().1;
                 json!({"ref":format!("refs/heads/{branch}"),"object":{"type":"commit","sha":self.sha.lock().unwrap().clone()}})
             }
-            Method::Get => self
-                .pr
-                .lock()
-                .unwrap()
-                .clone()
-                .map_or(json!([]), |pr| json!([pr])),
+            Method::Get => {
+                let pr = self.pr.lock().unwrap().clone();
+                if pr.is_some()
+                    && self
+                        .hide_created_once
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Err(HttpError::Timeout);
+                }
+                pr.map_or(json!([]), |pr| json!([pr]))
+            }
             Method::Post | Method::Patch => {
                 let body: serde_json::Value =
                     serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
