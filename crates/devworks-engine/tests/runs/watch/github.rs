@@ -4,6 +4,7 @@ use devworks_core::ports::http::{HttpError, HttpExchange, HttpResponse, HttpTran
 use devworks_core::ports::secrets::{Secret, SecretResolver, SecretUnavailable};
 use devworks_core::services::git::github::GitHubClient;
 use devworks_core::services::github::GitHubService;
+use std::sync::atomic::AtomicBool;
 
 struct Credentials;
 
@@ -437,6 +438,7 @@ struct RecordedCodeReviews {
     base: String,
     head: String,
     requests: Mutex<Vec<String>>,
+    reported: AtomicBool,
 }
 
 impl HttpTransport for RecordedCodeReviews {
@@ -455,6 +457,11 @@ impl HttpTransport for RecordedCodeReviews {
                 "state":"open", "base":{"repo":{"id":12},"ref":"main","sha":self.base},
                 "head":{"sha":self.head}
             }),
+            path if path.contains("/pulls/42/reviews?")
+                && !self.reported.load(Ordering::SeqCst) =>
+            {
+                json!([])
+            }
             path if path.contains("/pulls/42/reviews?") => json!([{
                 "id":15, "commit_id":self.head, "state":"COMMENTED",
                 "user":{"id":42,"type":"Bot","login":"test-review[bot]"},
@@ -476,6 +483,59 @@ impl HttpTransport for RecordedCodeReviews {
 
 #[test]
 fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair() {
+    final_review_case(false);
+}
+
+#[test]
+fn native_final_review_recovers_one_fallback_and_holds_while_its_late_bot_result_arrives() {
+    final_review_case(true);
+}
+
+#[derive(Default)]
+struct ReviewFallback {
+    count: AtomicUsize,
+    release: AtomicBool,
+}
+
+impl StreamingHttp for ReviewFallback {
+    fn open(
+        &self,
+        request: &HttpRequest,
+        _: &StreamLimits,
+        cancel: &Cancellation,
+    ) -> Result<Box<dyn HttpStream>, TransportError> {
+        let payload: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+        let text = payload.to_string();
+        let reviewing = text.contains("+fn candidate() {}");
+        if reviewing {
+            assert!(text.contains("Independently review these exact Git diffs"));
+            self.count.fetch_add(1, Ordering::SeqCst);
+            let until = std::time::Instant::now() + Duration::from_secs(25);
+            while !self.release.load(Ordering::SeqCst)
+                && !cancel.is_cancelled()
+                && std::time::Instant::now() < until
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        let content = if reviewing {
+            r#"{"findings":[]}"#
+        } else {
+            "done"
+        };
+        let frame =
+            json!({"choices":[{"index":0,"delta":{"content":content},"finish_reason":"stop"}]});
+        Ok(Box::new(AgentStream {
+            head: ResponseHead {
+                status: 200,
+                headers: vec![("content-type".into(), "text/event-stream".into())],
+            },
+            body: Some(format!("data: {frame}\n\ndata: [DONE]\n\n").into_bytes()),
+        }))
+    }
+}
+
+fn final_review_case(recover: bool) {
     use crate::code_review_tests::git;
     use devworks_core::authority::destructive::FilesystemResolver;
     use devworks_core::ports::storage::{
@@ -505,22 +565,39 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
         let oid = |hex: &str| GitOid { format:ObjectFormat::Sha1, hex:hex.into() };
         let wire = Arc::new(RecordedCodeReviews {
             base:base.clone(), head:head.clone(), requests:Mutex::default(),
+            reported:AtomicBool::new(!recover),
         });
         let client = Arc::new(GitHubClient { http:wire.clone(), secrets:Arc::new(Credentials) });
         qualify(&fx, client.clone(), "Acme/watch");
-        let (mut composed, _) = watch_composition(&fx, &fx.h.root);
-        composed.git = Some(devworks_engine::git::GitComposition {
-            github_http: None,
-            config:devworks_core::services::git::GitConfig {
-                github:Some(client),
-                roots:vec![devworks_core::services::git::RegisteredGitRoot {
-                    id:id("final-review-root"), path:std::fs::canonicalize(&trees).unwrap(),
-                }],
-                filesystem:Some(Arc::new(NativeFilesystem::new())),
-                ..Default::default()
-            },
-        });
-        let app = boot(composed).await.unwrap();
+        let fallback = Arc::new(ReviewFallback::default());
+        let build = |fx: &Fx| {
+            let (mut composed, _) = watch_composition(fx, &fx.h.root);
+            composed.git = Some(devworks_engine::git::GitComposition {
+                github_http: None,
+                config:devworks_core::services::git::GitConfig {
+                    github:Some(client.clone()),
+                    roots:vec![devworks_core::services::git::RegisteredGitRoot {
+                        id:id("final-review-root"), path:std::fs::canonicalize(&trees).unwrap(),
+                    }],
+                    filesystem:Some(Arc::new(NativeFilesystem::new())),
+                    ..Default::default()
+                },
+            });
+            if recover {
+                composed.indexing = Some(devworks_engine::IndexComposition {
+                    parser:Arc::new(devworks_adapters::index::treesitter::TreeSitterParser::new()),
+                    source:Arc::new(devworks_adapters::index::NativeSourceTree::new()),
+                    fs:Arc::new(NativeFilesystem::new()),
+                    settings:Default::default(), enrichers:vec![],
+                    config:devworks_engine::IndexingConfig {discover_at_boot:false,..Default::default()},
+                });
+                composed.config.providers = Some(
+                    devworks_engine::providers::driver::ProviderComposition::new(fallback.clone())
+                );
+            }
+            composed
+        };
+        let app = boot(build(&fx)).await.unwrap();
         let project = ProjectId(id("project-a"));
         let repository = id("watch-github-repo");
         let root = rid("root-i");
@@ -554,7 +631,8 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
                 let schema = |key| devworks_core::settings::catalog::descriptor(key).unwrap().schema_ref();
                 tx.configuration().append_revision(&scope, "settings", 1, 1,
                     json!({"values":{"reviews.githubBotId":{"schema":schema(bot),"value":42},
-                        "delivery.maxReviewFixCycles":{"schema":schema("delivery.maxReviewFixCycles"),"value":1}
+                        "delivery.maxReviewFixCycles":{"schema":schema("delivery.maxReviewFixCycles"),"value":1},
+                        "reviews.automationWaitSeconds":{"schema":schema("reviews.automationWaitSeconds"),"value":1}
                     }}))?;
                 tx.work().set_work_repositories(&root.0, std::slice::from_ref(&repository))?;
                 tx.git().insert_git_worktree(&worktree)?;
@@ -609,6 +687,97 @@ fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair(
             },
             other => panic!("review receipt {other:?}"),
         };
+        if recover {
+            let status = |fx: &Fx| read(&*fx.store, |s| {
+                Ok(s.git().code_reviews(Some(&project),Some(&root),None,3)?.remove(0))
+            });
+            within("first boot observes an active final review", async {
+                while status(&fx).state != "Running" {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await;
+            app.shutdown().await;
+            drop(app);
+            let (h, original_store) = fx.into_parts();
+            drop(original_store);
+            h.advance(2_000);
+            let store = h.open();
+            let fx = Fx::over(h, store);
+            let app = Arc::new(boot(build(&fx)).await.unwrap());
+            app.runs().install_launcher(Arc::new(AgentLauncher::new(
+                fx.store.clone(),fx.h.ids.clone(),app.agents().clone(),
+                Arc::new(NativeAgentTurnExecutor::new(&app)),
+            ))).unwrap();
+            seed_local_route(&fx);
+            applied(&app.command(&fx.user,"router.configure",json!({
+                "mode":"Command","protocol":PROTOCOL,"schemaRevision":3,"requestKey":"configure-fallback-route",
+                "body":{"kind":"router.configure","action":{"kind":"Tier","tier":"High","expectedRevision":"2","memberIds":["watch-model"]}}
+            }).to_string().as_bytes()).unwrap());
+            applied(&app.command(&fx.user,"runs.start",json!({
+                "protocol":PROTOCOL,"requestKey":"start-final-review-coordinator",
+                "command":{"kind":"runs.start","rootId":root,"expectedWorkRevision":"1","expectedControlRevision":"1"}
+            }).to_string().as_bytes()).unwrap());
+            tokio::time::timeout(Duration::from_secs(15), async {
+                while fallback.count.load(Ordering::SeqCst) == 0 {
+                    assert_ne!(status(&fx).state,"Blocked","{:?}",status(&fx));
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await.unwrap_or_else(|_| {
+                let observed = read(&*fx.store, |s| s.operations().operation(&operation));
+                let events = read(&*fx.store, |s| Ok(s.history().page(&EventFilter::Root(root.clone()),0,120)?.events.into_iter()
+                    .map(|event| (event.kind, event.payload)).collect::<Vec<_>>()));
+                panic!("resumed fallback did not reach its provider: {:?}; {observed:?}; {events:?}",status(&fx));
+            });
+            let bot = |source: &Value| source["sourceKind"] == "GitHubAutomation" && source["state"] == "Completed";
+            wire.reported.store(true, Ordering::SeqCst);
+            fx.tx({
+                let (remote,head) = (remote.clone(),head.clone());
+                move |_,tx| {
+                    let now = tx.now_ms();
+                    for kind in ["Review","ReviewComment"] {
+                        let key = format!("pull:42:{head}:{kind}");
+                        let mut cursor = tx.github().github_poll_cursor(&remote,&key)?.unwrap();
+                        let revision = cursor.revision;
+                        cursor.revision += 1;
+                        cursor.next_poll_at_ms = now;
+                        tx.github().put_github_poll_cursor(&cursor,Some(revision))?;
+                    }
+                    Ok(())
+                }
+            });
+            let observations = app.query(&fx.user,"github.reviews", json!({
+                "mode":"Query","protocol":PROTOCOL,"schemaRevision":1,"queryId":"late-configured-review",
+                "body":{"kind":"github.reviews","repositoryId":repository,"pullRequestNumber":"42","head":oid(&head),"page":{"limit":10}}
+            }).to_string().as_bytes()).unwrap();
+            assert!(matches!(observations,DomainQueryReply::Result{..}),"{observations:?}");
+            within("the late bot result is recorded while fallback is running", async {
+                while !status(&fx).body["value"]["sources"].as_array().unwrap().iter().any(bot) {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await;
+            let readiness = |key: &str| app.query(&fx.user,"reviews.readiness",json!({
+                "mode":"Query","protocol":PROTOCOL,"schemaRevision":15,"queryId":key,
+                "body":{"kind":"reviews.readiness","rootId":root,"policyRevision":"1","barrier":barrier}
+            }).to_string().as_bytes()).unwrap();
+            assert!(matches!(readiness("fallback-running"),DomainQueryReply::Result {
+                result:OperationResult::ReviewsReadiness {value},..
+            } if !value.ready));
+            fallback.release.store(true, Ordering::SeqCst);
+            within("the same durable operation settles its one fallback", async {
+                while read(&*fx.store, |s| s.operations().operation(&operation)).unwrap().state != OperationState::ObservedComplete {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await;
+            assert!(matches!(readiness("fallback-complete"),DomainQueryReply::Result {
+                result:OperationResult::ReviewsReadiness {value},..
+            } if value.ready));
+            let result = status(&fx);
+            assert_eq!(result.body["value"]["sources"].as_array().unwrap().len(),2);
+            assert_eq!(result.body["final_rounds"][0]["cycle"],1);
+            assert_eq!(fallback.count.load(Ordering::SeqCst),1);
+            app.shutdown().await;
+            return;
+        }
         tokio::time::timeout(Duration::from_secs(12), async {
             loop {
                 let current = read(&*fx.store, |snapshot| snapshot.operations().operation(&operation)).unwrap();
