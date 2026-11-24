@@ -26,6 +26,18 @@ pub(super) fn record_cleanup_request(
     Ok(())
 }
 
+pub(super) fn stop_verified(
+    operations: &dyn OperationRead,
+    control: &StoredRootControl,
+) -> Result<bool, StorageError> {
+    Ok(match &control.stop_operation_id {
+        Some(op) => operations
+            .operation(op)?
+            .is_some_and(|row| row.state == OperationState::ObservedComplete),
+        None => false,
+    })
+}
+
 #[derive(Default)]
 pub(in crate::services::git) struct CleanupSchedule {
     after: i64,
@@ -36,16 +48,21 @@ impl GitService {
     pub fn schedule_completed_cleanup(self: &Arc<Self>) -> Result<bool, StorageError> {
         let mut schedule = self.cleanup_schedule.locked();
         let page = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
-            snapshot
-                .history()
-                .page(&EventFilter::All, schedule.after, MAX_PAGE)
+            snapshot.history().page(
+                &EventFilter::Aggregate {
+                    kind: CLEANUP_REQUESTS.into(),
+                    id: "workspace".into(),
+                },
+                schedule.after,
+                32,
+            )
         })?;
         schedule.after = page.next_after;
         for event in page.events {
-            if let Some(root) = event.root_id {
-                if !schedule.roots.contains(&root) {
-                    schedule.roots.push_back(root);
-                }
+            if let Some(root) = event.root_id
+                && !schedule.roots.contains(&root)
+            {
+                schedule.roots.push_front(root);
             }
         }
         for _ in 0..schedule.roots.len().min(32) {
@@ -113,7 +130,12 @@ impl GitService {
                 delivery::write_delivery(tx, &actor, &op, "FinalCleanupStopRequested", &mut state)?;
             }
             let current = crate::services::runs::control_of(tx.runs(), &root)?;
-            if current.stop_operation_id.is_some() || tx.runs().live_activation(&root)?.is_some() {
+            if current.desired != DesiredExecution::Paused {
+                return Ok(Some(Vec::new()));
+            }
+            if !stop_verified(tx.operations(), &current)?
+                || tx.runs().live_activation(&root)?.is_some()
+            {
                 return Ok(None);
             }
             let mut work_ids = vec![root.0.clone()];
@@ -203,16 +225,26 @@ impl GitService {
             .with_lineage(Some(project), Some(root), None);
             let frame = json!({"protocol":"1.0-draft.1","requestKey":key,"command":{"kind":"Cleanup",
                 "worktreeId":tree.id,"expectedOwnershipRevision":tree.ownership_revision.to_string(),"expectedHead":tree.head}});
-            if gateway
-                .command(
-                    &ctx,
-                    "git.cleanup",
-                    frame.to_string().as_bytes(),
-                    self.clone(),
-                )
-                .is_err()
-            {
-                return Ok(false);
+            match gateway.command(
+                &ctx,
+                "git.cleanup",
+                frame.to_string().as_bytes(),
+                self.clone(),
+            ) {
+                Ok(crate::protocol::CommandReply::Recorded { receipt, .. }) => {
+                    match receipt.decision {
+                        DomainDecision::Accepted { .. } => {}
+                        DomainDecision::Refused { fault }
+                            if matches!(
+                                fault.code,
+                                DomainErrorCode::ApprovalRequired
+                                    | DomainErrorCode::PermissionDenied
+                                    | DomainErrorCode::NotFound
+                            ) => {}
+                        _ => return Ok(false),
+                    }
+                }
+                _ => return Ok(false),
             }
         }
         Ok(true)

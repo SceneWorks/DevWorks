@@ -4,7 +4,7 @@ use crate::protocol::data::{
     DeliveryBarrier, DeliveryKind, DeliverySnapshot, MergeObservation, RepositoryDelivery,
     RepositoryMerge,
 };
-use crate::services::git::github::Repository;
+use crate::services::git::github::{Repository, delivery::QueueAnchor};
 
 const DELIVERY_AGGREGATE: &str = "git_delivery";
 
@@ -31,9 +31,13 @@ pub(super) struct DeliveryRepository {
     pub intent: Option<OperationId>,
     pub started: bool,
     pub method_witness: bool,
+    #[serde(default)]
+    pub confirmed_method_commit: Option<String>,
     pub merge_queue: Option<bool>,
     #[serde(default)]
-    pub rules_digest: Option<String>,
+    pub queue_anchor: Option<QueueAnchor>,
+    #[serde(default)]
+    pub queue_removal: Option<String>,
     pub ticket: Option<Id>,
     pub observation: MergeObservation,
     pub merge_commit: Option<GitOid>,
@@ -296,8 +300,10 @@ fn bind_repository(
         intent: None,
         started: false,
         method_witness: false,
+        confirmed_method_commit: None,
         merge_queue: None,
-        rules_digest: None,
+        queue_anchor: None,
+        queue_removal: None,
         ticket: None,
         observation: MergeObservation::NotMerged,
         merge_commit: None,
@@ -444,8 +450,10 @@ pub(super) fn reserve_delivery(
     row.intent = Some(operation.clone());
     row.started = false;
     row.method_witness = false;
+    row.confirmed_method_commit = None;
     row.merge_queue = None;
-    row.rules_digest = None;
+    row.queue_anchor = None;
+    row.queue_removal = None;
     row.ticket = None;
     row.observation = MergeObservation::NotMerged;
     Ok((proposed, work))
@@ -642,12 +650,36 @@ impl GitService {
         Ok(())
     }
 
+    fn verified_merges_reach_main(&self, delivery: &Delivery) -> Result<(), Failure> {
+        for row in &delivery.repositories {
+            let Some(commit) = &row.merge_commit else {
+                continue;
+            };
+            let observed = self.config.github.as_ref().and_then(|client| {
+                let main = client
+                    .branch_head(self.store.as_ref(), &row.target, "main")
+                    .ok()?;
+                client
+                    .commit_reaches_main(self.store.as_ref(), &row.target, &commit.hex, &main)
+                    .ok()
+            });
+            if observed != Some(true) {
+                return Err(refuse(
+                    DomainErrorCode::SourceChanged,
+                    "verified_merge_on_main",
+                    &row.repo,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn prove_delivery_gates(
         &self,
         ctx: &InvocationContext,
         delivery: &Delivery,
         selected: &Id,
-    ) -> Result<(bool, String), Failure> {
+    ) -> Result<bool, Failure> {
         use crate::services::git::github::delivery::method_name;
         let unavailable = |id: &Id| refuse(DomainErrorCode::ExternalFailure, "github_delivery", id);
         let client = self
@@ -661,6 +693,7 @@ impl GitService {
             .ok_or_else(|| unavailable(selected))?;
         let mut merge_policy = None;
         self.delivery_authority(ctx, delivery)?;
+        self.verified_merges_reach_main(delivery)?;
         for row in delivery
             .repositories
             .iter()
@@ -700,6 +733,19 @@ impl GitService {
                     &row.repo,
                 ));
             }
+            if client.single_final_pull(
+                self.store.as_ref(),
+                &row.target,
+                row.number,
+                &entry.expected_head.hex,
+            ) != Ok(true)
+            {
+                return Err(refuse(
+                    DomainErrorCode::Conflict,
+                    "github_single_final_pull",
+                    &row.repo,
+                ));
+            }
             if !client
                 .can_merge(self.store.as_ref(), &row.target, &entry.merge_method)
                 .map_err(|_| {
@@ -723,6 +769,22 @@ impl GitService {
                 return Err(refuse(
                     DomainErrorCode::ApprovalRequired,
                     "github_required_review",
+                    &row.repo,
+                ));
+            }
+            if !matches!(
+                pull.mergeable_state.as_deref(),
+                Some("clean" | "has_hooks" | "unstable")
+            ) || (rules.requires_clean && pull.mergeable_state.as_deref() != Some("clean"))
+                || (rules.requires_linear_history
+                    && matches!(
+                        entry.merge_method,
+                        crate::protocol::data::MergeMethod::MergeCommit
+                    ))
+            {
+                return Err(refuse(
+                    DomainErrorCode::Conflict,
+                    "github_branch_protection",
                     &row.repo,
                 ));
             }
@@ -759,7 +821,7 @@ impl GitService {
                 ));
             }
             if selected == &row.repo {
-                merge_policy = Some((rules.merge_queue_method.is_some(), rules.digest));
+                merge_policy = Some(rules.merge_queue_method.is_some());
             }
         }
         self.delivery_authority(ctx, delivery)?;
@@ -809,7 +871,7 @@ impl GitService {
         if row.started {
             return self.observe_integrate(job, operation);
         }
-        let (use_queue, rules_digest) = match self.prove_delivery_gates(ctx, &delivery, &row.repo) {
+        let use_queue = match self.prove_delivery_gates(ctx, &delivery, &row.repo) {
             Ok(queue) => queue,
             Err(Failure::Refused(fault)) => return failed(fault.code, fault.target_kind),
             Err(Failure::Storage(_)) => {
@@ -825,6 +887,19 @@ impl GitService {
         let Ok(entry) = delivery.entry(&row.repo) else {
             return denied("delivery candidate changed");
         };
+        let queue_anchor = if use_queue {
+            match client.merge_queue_anchor(
+                self.store.as_ref(),
+                &row.target,
+                row.number,
+                &entry.expected_head.hex,
+            ) {
+                Ok(anchor) => Some(anchor),
+                Err(_) => return denied("could not bind the exact merge queue before submission"),
+            }
+        } else {
+            None
+        };
         let target = MergeTarget {
             expected_head: &entry.expected_head.hex,
             method: &entry.merge_method,
@@ -837,7 +912,7 @@ impl GitService {
                 }
                 row.started = true;
                 row.merge_queue = Some(use_queue);
-                row.rules_digest = Some(rules_digest);
+                row.queue_anchor = queue_anchor;
                 row.observation = MergeObservation::OutcomeUnknown;
                 Ok(())
             })
@@ -892,7 +967,8 @@ impl GitService {
                 }
                 return denied("GitHub refused the exact merge request");
             }
-            // A merge response acknowledges a possible effect. Verify through the PR and main.
+            // GitHub's async 200 can report a competing merge already in place. Its SHA
+            // alone does not attribute a direct squash or rebase to this request.
             _ => {}
         }
         self.observe_integrate(job, operation)
@@ -927,8 +1003,7 @@ impl GitService {
         let Ok(pull) = current else {
             return unknown();
         };
-        if pull.head != entry.expected_head.hex
-            || pull.base_ref != "main"
+        if pull.base_ref != "main"
             || row.branch.strip_prefix("refs/heads/") != Some(pull.head_ref.as_str())
         {
             return unknown();
@@ -959,18 +1034,68 @@ impl GitService {
             }
             return denied("GitHub observed that the exact merge request failed");
         }
-        let Some(merge) = pull.merged else {
-            if matches!(ticket_outcome, Some(Ok(MergeRequest::Enqueued)))
-                && !matches!(row.observation, MergeObservation::Queued)
+        let mut confirmed_method_commit = row.confirmed_method_commit.clone();
+        if row.method_witness
+            && !target.use_queue
+            && let Some(Ok(MergeRequest::Merged(commit))) = &ticket_outcome
+            && Some(commit) != confirmed_method_commit.as_ref()
+        {
+            if confirmed_method_commit.is_some() {
+                return unknown();
+            }
+            confirmed_method_commit = Some(commit.clone());
+            let evidence = confirmed_method_commit.clone();
+            if let Err(error) =
+                self.update_delivery(job, &operation.id, "FinalMergeMethodObserved", |row| {
+                    row.confirmed_method_commit = evidence;
+                    Ok(())
+                })
             {
-                if let Err(error) =
+                return storage_failure(error);
+            }
+        }
+        let queue = row.queue_anchor.as_ref().and_then(|anchor| {
+            client
+                .observe_merge_queue(
+                    self.store.as_ref(),
+                    &row.target,
+                    row.number,
+                    &entry.expected_head.hex,
+                    anchor,
+                )
+                .ok()
+        });
+        if pull.merged.is_none()
+            && let Some(removal) = queue.as_ref().and_then(|queue| queue.removal.as_ref())
+            && (row.ticket.is_none() || matches!(ticket_outcome, Some(Ok(MergeRequest::Enqueued))))
+        {
+            let removal = removal.clone();
+            if let Err(error) =
+                self.update_delivery(job, &operation.id, "FinalMergeDequeued", |row| {
+                    row.started = false;
+                    row.observation = MergeObservation::NotMerged;
+                    row.queue_removal = Some(removal);
+                    Ok(())
+                })
+            {
+                return storage_failure(error);
+            }
+            return denied("GitHub removed the exact request from the merge queue");
+        }
+        if pull.head != entry.expected_head.hex {
+            return unknown();
+        }
+        let Some(merge) = pull.merged else {
+            if (matches!(ticket_outcome, Some(Ok(MergeRequest::Enqueued)))
+                || queue.as_ref().is_some_and(|queue| queue.active))
+                && !matches!(row.observation, MergeObservation::Queued)
+                && let Err(error) =
                     self.update_delivery(job, &operation.id, "FinalMergeQueued", |row| {
                         row.observation = MergeObservation::Queued;
                         Ok(())
                     })
-                {
-                    return storage_failure(error);
-                }
+            {
+                return storage_failure(error);
             }
             return unknown();
         };
@@ -994,26 +1119,16 @@ impl GitService {
                         ) == Ok(true)
                 }),
             MergeMethod::Squash | MergeMethod::Rebase => {
-                row.method_witness
-                    && (matches!(ticket_outcome, Some(Ok(MergeRequest::Merged(ref reported))) if reported == &merge)
-                        || (target.use_queue
-                            && matches!(ticket_outcome, Some(Ok(MergeRequest::Enqueued)))
-                            && self.delivery_github.as_ref().is_some_and(|service| {
-                                service
-                                    .delivery_review_rules(&delivery.project, &row.repo)
-                                    .is_ok_and(|rules| {
-                                        Some(&rules.digest) == row.rules_digest.as_ref()
-                                        && rules.merge_queue_method.as_deref()
-                                            == Some(
-                                                crate::services::git::github::delivery::method_name(
-                                                    &entry.merge_method,
-                                                ),
-                                            )
-                                    })
-                            })))
+                confirmed_method_commit.as_deref() == Some(merge.as_str())
+                    || queue.as_ref().is_some_and(|queue| {
+                        queue.merged_method.as_deref()
+                            == Some(crate::services::git::github::delivery::method_name(
+                                &entry.merge_method,
+                            ))
+                    })
             }
         };
-        if !method_matches {
+        if !method_matches || self.verified_merges_reach_main(&delivery).is_err() {
             return unknown();
         }
         self.finish_integrate(job, &operation.id, oid(merge))

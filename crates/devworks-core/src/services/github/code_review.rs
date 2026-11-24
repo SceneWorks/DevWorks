@@ -253,6 +253,10 @@ pub(crate) struct DeliveryReviewRules {
     pub merge_queue_method: Option<String>,
     #[serde(default)]
     pub required_approvals: bool,
+    #[serde(default)]
+    pub requires_clean: bool,
+    #[serde(default)]
+    pub requires_linear_history: bool,
 }
 
 impl GitHubService {
@@ -303,13 +307,45 @@ impl GitHubService {
                 .ok_or_else(invalid)?,
             404 => {
                 let branch = read("/branches/main")?;
-                if branch.status != 200
-                    || branch
-                        .value
-                        .as_ref()
-                        .is_none_or(|v| v["name"] != "main" || v["protected"] != false)
+                if branch.status != 200 {
+                    return Err(invalid());
+                }
+                let branch = branch
+                    .value
+                    .filter(|branch| branch["name"] == "main" && branch["protected"].is_boolean());
+                if branch.is_none() {
+                    return Err(invalid());
+                }
+                if branch
+                    .as_ref()
+                    .is_some_and(|branch| branch["protected"] == true)
                 {
-                    return Err(super::repositories::api_fault(Fault::Unavailable));
+                    // Classic protection can be unreadable even when rulesets are visible.
+                    // Confirm the exact ref has no classic protection before relying on rulesets.
+                    let token = self
+                        .client
+                        .token_for_account(&*self.store, &target.account)
+                        .map_err(super::repositories::api_fault)?;
+                    let data = self.client.graphql_query(
+                        token,
+                        "query DeliveryClassicProtection($owner:String!, $name:String!) { repository(owner:$owner, name:$name) { nameWithOwner ref(qualifiedName:\"refs/heads/main\") { name prefix branchProtectionRule { id } } } }",
+                        json!({"owner":target.repository.owner,"name":target.repository.name}),
+                    ).map_err(super::repositories::api_fault)?;
+                    let repo = &data["repository"];
+                    let exact = repo["nameWithOwner"].as_str().is_some_and(|name| {
+                        name.eq_ignore_ascii_case(&format!(
+                            "{}/{}",
+                            target.repository.owner, target.repository.name
+                        ))
+                    });
+                    let branch_ref = &repo["ref"];
+                    if !exact
+                        || branch_ref["name"] != "main"
+                        || branch_ref["prefix"] != "refs/heads/"
+                        || branch_ref.get("branchProtectionRule") != Some(&Value::Null)
+                    {
+                        return Err(super::repositories::api_fault(Fault::Unavailable));
+                    }
                 }
                 Value::Null
             }
@@ -332,6 +368,8 @@ impl GitHubService {
         let mut merge_queue_method = None;
         let mut fresh_review = approvals["dismiss_stale_reviews"] == true
             || approvals["require_last_push_approval"] == true;
+        let mut requires_linear_history = legacy["required_linear_history"]["enabled"] == true;
+        let mut requires_clean = legacy["required_conversation_resolution"]["enabled"] == true;
         let mut required_checks = Vec::new();
         if let Some(checks) = legacy["required_status_checks"]["checks"].as_array() {
             for check in checks {
@@ -367,6 +405,17 @@ impl GitHubService {
                     fresh_review |= parameters["dismiss_stale_reviews_on_push"] == true
                         || parameters["require_last_push_approval"] == true;
                 }
+                Some("required_linear_history") => requires_linear_history = true,
+                Some(
+                    "workflows"
+                    | "required_workflow_status_checks"
+                    | "required_deployments"
+                    | "required_review_thread_resolution"
+                    | "code_scanning"
+                    | "code_quality",
+                ) => {
+                    requires_clean = true;
+                }
                 Some("required_status_checks") => {
                     for check in parameters["required_status_checks"]
                         .as_array()
@@ -394,6 +443,8 @@ impl GitHubService {
             required_checks,
             merge_queue_method,
             required_approvals,
+            requires_clean,
+            requires_linear_history,
         })
     }
 }

@@ -1202,6 +1202,16 @@ impl GitService {
         if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
             return changed(reason);
         }
+        if self.git_stopped(job)
+            || job
+                .cleanup_proof
+                .as_ref()
+                .is_some_and(|proof| !self.cleanup_writers_quiesced(job, operation, proof))
+        {
+            return EffectOutcome::NotApplied(
+                "cleanup authority or writers changed before staging".into(),
+            );
+        }
         let move_effect = git.mutation(
             repo,
             &["worktree", "move", "--", &original, &staging],
@@ -1274,33 +1284,51 @@ impl GitService {
         proof: &delivery::CleanupProof,
     ) -> Result<(), EffectOutcome> {
         if !self.cleanup_writers_quiesced(job, operation, proof) {
-            return Err(denied("an owned writer can still change the checkout"));
+            return Err(EffectOutcome::NotApplied(
+                "owned writers are still quiescing".into(),
+            ));
         }
         let repo = Path::new(&repository.location);
-        let valid = git.is_ancestor(repo, &proof.integrated_candidate.hex, &proof.final_head.hex)
-            == Ok(true)
-            && self.config.github.as_ref().is_some_and(|client| {
-                repository
-                    .remote_url
-                    .as_deref()
-                    .and_then(super::github::Repository::from_remote)
-                    .is_some_and(|target| {
-                        client
-                            .branch_head(self.store.as_ref(), &target, "main")
-                            .is_ok_and(|main| {
-                                client.commit_reaches_main(
-                                    self.store.as_ref(),
-                                    &target,
-                                    &proof.merge_commit.hex,
-                                    &main,
-                                ) == Ok(true)
-                            })
-                    })
-            });
-        if !valid || !self.cleanup_repository_matches(job, git, repository) {
+        if git.is_ancestor(repo, &proof.integrated_candidate.hex, &proof.final_head.hex) != Ok(true)
+            || !self.cleanup_repository_matches(job, git, repository)
+        {
             return Err(denied(
-                "integrated source and main could not be verified for cleanup",
+                "integrated worktree identity cannot be verified for cleanup",
             ));
+        }
+        use super::github::{Fault, Repository};
+        let client = self
+            .config
+            .github
+            .as_ref()
+            .ok_or_else(|| denied("GitHub is unavailable for cleanup"))?;
+        let target = repository
+            .remote_url
+            .as_deref()
+            .and_then(Repository::from_remote)
+            .ok_or_else(|| denied("GitHub repository changed before cleanup"))?;
+        let main = client
+            .branch_head(self.store.as_ref(), &target, "main")
+            .and_then(|main| {
+                client.commit_reaches_main(
+                    self.store.as_ref(),
+                    &target,
+                    &proof.merge_commit.hex,
+                    &main,
+                )
+            });
+        match main {
+            Ok(true) => {}
+            Err(Fault::Unavailable) => {
+                return Err(EffectOutcome::NotApplied(
+                    "GitHub could not be reached for cleanup verification".into(),
+                ));
+            }
+            _ => {
+                return Err(denied(
+                    "current main does not prove the verified merge for cleanup",
+                ));
+            }
         }
         Ok(())
     }
@@ -1365,25 +1393,33 @@ impl GitService {
         proof: &delivery::CleanupProof,
     ) -> bool {
         read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
-            if let Some(owner) = &job.tree.owner_assignment_id
-                && Some(owner) != job.assignment.as_ref()
-                && let Some(assignment) = snapshot.runs().assignment(owner)?
-                && assignment.state.is_live()
-                && (snapshot
-                    .runs()
-                    .live_activation(&assignment.root_id)?
-                    .is_some()
-                    || snapshot
-                        .runs()
-                        .root_control(&assignment.root_id)?
-                        .is_none_or(|control| {
-                            control.desired != DesiredExecution::Paused
-                                || control.stop_operation_id.is_some()
-                        }))
+            let Some(control) = snapshot.runs().root_control(&proof.root)? else {
+                return Ok(false);
+            };
+            if control.desired != DesiredExecution::Paused
+                || !auto_cleanup::stop_verified(snapshot.operations(), &control)?
             {
                 return Ok(false);
             }
-            for root in [&proof.root, &RootId(job.tree.work_id.clone())] {
+            let mut roots = vec![proof.root.clone(), RootId(job.tree.work_id.clone())];
+            if let Some(owner) = &job.tree.owner_assignment_id
+                && let Some(assignment) = snapshot.runs().assignment(owner)?
+                && assignment.state.is_live()
+                && !roots.contains(&assignment.root_id)
+            {
+                roots.push(assignment.root_id);
+            }
+            for root in &roots {
+                if snapshot.runs().live_activation(root)?.is_some() {
+                    return Ok(false);
+                }
+                if root != &proof.root
+                    && let Some(control) = snapshot.runs().root_control(root)?
+                    && control.stop_operation_id.is_some()
+                    && !auto_cleanup::stop_verified(snapshot.operations(), &control)?
+                {
+                    return Ok(false);
+                }
                 let processes = snapshot.resources().processes(
                     &ProcessFilter::UnsettledRoot(root.clone()),
                     None,
@@ -1414,6 +1450,7 @@ impl GitService {
                             .as_deref()
                             .is_none_or(|branch| branch == job.tree.branch.as_str())
                 })
+            && git.has_status_hidden_entries(staged) == Ok(false)
             && git.has_ignored_files(staged) == Ok(false)
     }
 
@@ -1432,9 +1469,16 @@ impl GitService {
                 "staged checkout or branch changed; local data was retained".into(),
             )
         };
+        let stopped = || {
+            self.git_stopped(job)
+                || job
+                    .cleanup_proof
+                    .as_ref()
+                    .is_none_or(|proof| !self.cleanup_writers_quiesced(job, operation, proof))
+        };
         if !self.cleanup_path_missing(original)
             || !self.delivery_staged_clean(job, git, staged)
-            || self.git_stopped(job)
+            || stopped()
         {
             return unknown();
         }
@@ -1464,7 +1508,7 @@ impl GitService {
                     .iter()
                     .any(|tree| tree.branch.as_deref() == Some(&job.tree.branch))
             })
-            || self.git_stopped(job)
+            || stopped()
         {
             return unknown();
         }
@@ -1503,7 +1547,7 @@ impl GitService {
         if !self.cleanup_path_missing(original)
             || !self.delivery_staged_clean(job, git, staged)
             || git.resolve(staged, &job.tree.branch) != Ok(None)
-            || self.git_stopped(job)
+            || stopped()
         {
             return unknown();
         }
@@ -1540,12 +1584,11 @@ impl GitService {
             && self.cleanup_path_missing(path)
             && self.cleanup_repository_matches(job, git, repository)
             && let Some(staged) = cleanup_stage(path, &operation.id)
+            && self.delivery_staged_clean(job, git, &staged)
         {
-            if self.delivery_staged_clean(job, git, &staged) {
-                return EffectOutcome::NotApplied(
-                    "exact unchanged checkout is staged for removal".into(),
-                );
-            }
+            return EffectOutcome::NotApplied(
+                "exact unchanged checkout is staged for removal".into(),
+            );
         }
         let absence = (|| {
             let fs = self.config.filesystem.as_ref()?;
@@ -1687,7 +1730,9 @@ impl GitService {
                 if let Some(control) = snapshot.runs().root_control(root)?
                     && ((control.desired == DesiredExecution::Paused
                         && job.cleanup_proof.is_none())
-                        || control.stop_operation_id.is_some()
+                        || (control.stop_operation_id.is_some()
+                            && (job.cleanup_proof.is_none()
+                                || !auto_cleanup::stop_verified(snapshot.operations(), &control)?))
                         || control.stop_epoch != *epoch)
                 {
                     return Ok(true);
@@ -2247,10 +2292,10 @@ impl GitService {
         if current.pending_operation_id.as_ref() == Some(&operation.id) && current == job.tree {
             if matches!(job.action, Action::Integrate) {
                 let outcome = self.observe_integrate(&job, operation);
-                if let EffectOutcome::Failed(reason) = &outcome {
-                    if let Err(error) = self.settle_denial(&job, &operation.id, reason) {
-                        return storage_failure(error);
-                    }
+                if let EffectOutcome::Failed(reason) = &outcome
+                    && let Err(error) = self.settle_denial(&job, &operation.id, reason)
+                {
+                    return storage_failure(error);
                 }
                 return outcome;
             }

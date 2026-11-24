@@ -22,7 +22,14 @@ struct RemoteRepo {
     green: bool,
     merged: bool,
     accepted: bool,
+    workflow_pending: bool,
+    displaced_main: bool,
+    use_queue: bool,
+    queue_removed: bool,
+    squash: bool,
+    ticket_expired: bool,
 }
+const MERGE_TICKET: &str = "630b9d5e-3f2a-4f7e-8b0c-2d5f9a8c1e42";
 struct Remote {
     repos: Mutex<Vec<RemoteRepo>>,
     submissions: Mutex<Vec<String>>,
@@ -35,6 +42,38 @@ impl HttpTransport for Remote {
         let endpoint = request.url.strip_prefix("https://api.github.com/").unwrap();
         let path = endpoint.split('?').next().unwrap();
         let segments: Vec<_> = path.split('/').collect();
+        if request.method == Method::Post && path == "graphql" {
+            let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
+            let name = body["variables"]["name"].as_str().unwrap();
+            let repos = self.repos.lock().unwrap();
+            let repo = repos.iter().find(|repo| repo.name == name).unwrap();
+            let query = body["query"].as_str().unwrap();
+            let mut pull = json!({"number":1,"baseRefName":"main","headRefOid":repo.head});
+            if query.contains("DeliverySinglePull") {
+                pull["stack"] = Value::Null;
+            } else {
+                assert!(query.contains("DeliveryMergeQueue"));
+                let queue = json!({"id":"queue-second"});
+                let added =
+                    json!({"__typename":"AddedToMergeQueueEvent","id":"add-1","mergeQueue":queue});
+                let removed = json!({"__typename":"RemovedFromMergeQueueEvent","id":"remove-1",
+                    "beforeCommit":{"oid":repo.head},"mergeQueue":queue,"reason":"checks failed"});
+                pull["merged"] = json!(repo.merged);
+                pull["mergeQueue"] = queue.clone();
+                pull["mergeQueueEntry"] = if repo.accepted && !repo.queue_removed {
+                    json!({"headCommit":{"oid":repo.head},"mergeQueue":queue})
+                } else {
+                    Value::Null
+                };
+                pull["timelineItems"] = json!({"pageInfo":{"hasPreviousPage":false},
+                    "nodes":if repo.queue_removed {vec![added,removed]} else if repo.accepted {vec![added]} else {vec![]}});
+            }
+            let value = json!({"data":{"repository":{"nameWithOwner":format!("o/{name}"),"pullRequest":pull}}});
+            return Ok(HttpResponse {
+                status: 200,
+                body: value.to_string().into_bytes(),
+            });
+        }
         let mut repos = self.repos.lock().unwrap();
         let repo = repos
             .iter_mut()
@@ -52,9 +91,24 @@ impl HttpTransport for Remote {
                     Some("2026-03-10")
                 );
                 let args: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
+                if repo.use_queue {
+                    assert_eq!(
+                        args,
+                        json!({"sha":repo.head,"merge_action":"merge_queue","bypass_rules":false})
+                    );
+                    assert!(!repo.accepted, "an enqueue is never repeated");
+                    repo.accepted = true;
+                    self.submissions.lock().unwrap().push("second-queue".into());
+                    let pending = json!({"status":"pending","details":{"uuid":MERGE_TICKET,
+                        "expected_head_sha":repo.head,"merge_action":"merge_queue","bypass_rules":false}});
+                    return Ok(HttpResponse {
+                        status: 202,
+                        body: pending.to_string().into_bytes(),
+                    });
+                }
                 assert_eq!(
                     args,
-                    json!({"sha":repo.head,"merge_action":"direct_merge","merge_method":"merge","bypass_rules":false})
+                    json!({"sha":repo.head,"merge_action":"direct_merge","merge_method":if repo.squash {"squash"} else {"merge"},"bypass_rules":false})
                 );
                 assert!(!repo.accepted, "a merge is never repeated");
                 repo.accepted = true;
@@ -63,19 +117,42 @@ impl HttpTransport for Remote {
                     return Err(HttpError::Timeout);
                 }
                 repo.merged = true;
+                if repo.squash {
+                    repo.displaced_main = true;
+                    let pending = json!({"status":"pending","details":{"uuid":MERGE_TICKET,
+                        "expected_head_sha":repo.head,"merge_method":"squash","merge_action":"direct_merge",
+                        "bypass_rules":false}});
+                    return Ok(HttpResponse {
+                        status: 202,
+                        body: pending.to_string().into_bytes(),
+                    });
+                }
                 json!({"status":"merged","details":{"sha":repo.merge}})
             }
+            (Method::Get, ["pulls", "1", "merge-async", ticket]) if *ticket == MERGE_TICKET => {
+                if repo.ticket_expired {
+                    return Ok(HttpResponse {
+                        status: 404,
+                        body: vec![],
+                    });
+                }
+                if repo.squash {
+                    json!({"status":"merged","details":{"sha":repo.merge}})
+                } else {
+                    json!({"status":"enqueued","details":{}})
+                }
+            }
             (Method::Get, []) => json!({"full_name":scope,"permissions":{"push":true},
-                "allow_merge_commit":true,"archived":false,"disabled":false}),
+                "allow_merge_commit":true,"allow_squash_merge":true,"archived":false,"disabled":false}),
             (Method::Get, ["pulls", "1"]) => {
                 json!({"number":1,"html_url":format!("https://github.com/{scope}/pull/1"),
-                "state":if repo.merged {"closed"} else {"open"},"draft":false,"mergeable":true,"mergeable_state":"clean",
+                "state":if repo.merged {"closed"} else {"open"},"draft":false,"mergeable":true,"mergeable_state":if repo.workflow_pending {"blocked"} else {"clean"},
                 "merged":repo.merged,"merge_commit_sha":repo.merge,"base":{"repo":{"full_name":scope},"ref":"main","sha":repo.base},
                 "head":{"repo":{"full_name":scope},"ref":"feature/owned","sha":repo.head}})
             }
             (Method::Get, ["git", "ref", "heads", "main"]) => {
                 json!({"ref":"refs/heads/main","object":{
-                "type":"commit","sha":if repo.merged {&repo.merge} else {&repo.base}}})
+                "type":"commit","sha":if repo.merged && !repo.displaced_main {&repo.merge} else {&repo.base}}})
             }
             (Method::Get, ["git", "commits", sha]) if *sha == repo.merge => {
                 json!({"sha":repo.merge,"parents":[{"sha":repo.base},{"sha":repo.head}]})
@@ -83,7 +160,20 @@ impl HttpTransport for Remote {
             (Method::Get, ["branches", "main", "protection"]) => {
                 json!({"required_status_checks":{"checks":[{"context":"native","app_id":7}]}})
             }
-            (Method::Get, ["rules", "branches", "main"]) => json!([]),
+            (Method::Get, ["rules", "branches", "main"]) => {
+                if repo.use_queue {
+                    json!([{"type":"merge_queue","parameters":{"merge_method":"MERGE"}}])
+                } else if repo.workflow_pending {
+                    json!([{"type":"workflows","parameters":{"workflows":[{"path":"checks.yml"}]}}])
+                } else {
+                    json!([])
+                }
+            }
+            (Method::Get, ["compare", compare])
+                if *compare == format!("{}...{}", repo.merge, repo.base) =>
+            {
+                json!({"status":"behind","base_commit":{"sha":repo.merge},"merge_base_commit":{"sha":repo.base}})
+            }
             (Method::Get, ["commits", sha, "check-runs"]) if *sha == repo.head => {
                 json!({"check_runs":[{
                 "head_sha":repo.head,"name":"native","app":{"id":7},"status":"completed",
@@ -122,22 +212,25 @@ fn begin(store: &dyn ApplicationStore, op: &OperationId) -> OperationRecord {
     .unwrap()
 }
 
-fn mark_complete(store: &dyn ApplicationStore, id: &OperationId, effect: EffectOutcome) {
-    let EffectOutcome::Completed(value) = effect else {
-        panic!("{effect:?}");
+fn mark_settled(store: &dyn ApplicationStore, id: &OperationId, effect: EffectOutcome) {
+    let (state, note) = match effect {
+        EffectOutcome::Completed(value) => (
+            OperationState::ObservedComplete,
+            json!({"effect":{"outcome":"completed","evidence":value}}),
+        ),
+        EffectOutcome::Failed(reason) => (
+            OperationState::Failed,
+            json!({"effect":{"outcome":"failed","reason":reason}}),
+        ),
+        other => panic!("{other:?}"),
     };
     write(store, {
         let id = id.clone();
         move |tx| {
             let row = tx.operations().operation(&id)?.unwrap();
             let fence = row.latest_attempt().map(|attempt| attempt.fence());
-            tx.operations().transition(
-                &id,
-                row.revision,
-                fence.as_ref(),
-                OperationState::ObservedComplete,
-                Some(json!({"effect":{"outcome":"completed","evidence":value}})),
-            )?;
+            tx.operations()
+                .transition(&id, row.revision, fence.as_ref(), state, Some(note))?;
             Ok(())
         }
     })
@@ -188,19 +281,12 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         git(&location, &["commit", "-qam", "Reviewed feature"]);
         let head = git(&location, &["rev-parse", "HEAD"]);
         let contents = git(&source, &["rev-parse", &format!("{head}^{{tree}}")]);
-        let merge = git(
-            &source,
-            &[
-                "commit-tree",
-                &contents,
-                "-p",
-                &base,
-                "-p",
-                &head,
-                "-m",
-                "Final integration",
-            ],
-        );
+        let mut args = vec!["commit-tree", &contents, "-p", &base];
+        if name == "first" {
+            args.extend(["-p", &head]);
+        }
+        args.extend(["-m", "Final integration"]);
+        let merge = git(&source, &args);
         let path = std::fs::canonicalize(&location)
             .unwrap()
             .to_string_lossy()
@@ -243,6 +329,12 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             green: *name == "first",
             merged: false,
             accepted: false,
+            workflow_pending: false,
+            displaced_main: false,
+            use_queue: false,
+            queue_removed: false,
+            squash: false,
+            ticket_expired: false,
         })
         .collect();
     let wire = Arc::new(Remote {
@@ -438,6 +530,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         matches!(&outcome,EffectOutcome::Failed(reason) if reason.contains("delivery_pull_request")),
         "{outcome:?}"
     );
+    mark_settled(store.as_ref(), &stale, outcome);
     wire.repos.lock().unwrap()[0].head = stale_head;
     let set_auto_merge = |expected: i64, enabled: bool| {
         let scope = ConfigScope::Repository {
@@ -468,6 +561,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         matches!(&outcome,EffectOutcome::Failed(reason) if reason.contains("auto_merge_disabled")),
         "{outcome:?}"
     );
+    mark_settled(store.as_ref(), &disabled, outcome);
     set_auto_merge(2, true);
     let gated = accepted(submit(
         &store,
@@ -481,8 +575,19 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         "{outcome:?} {:?}",
         wire.requests.lock().unwrap()
     );
+    mark_settled(store.as_ref(), &gated, outcome);
     assert!(wire.submissions.lock().unwrap().is_empty());
     wire.repos.lock().unwrap()[1].green = true;
+    wire.repos.lock().unwrap()[1].workflow_pending = true;
+    let workflow = accepted(submit(&store, "required-workflow-running", 0, None));
+    let outcome = service(&store).execute(&begin(store.as_ref(), &workflow));
+    assert!(
+        matches!(&outcome,EffectOutcome::Failed(reason) if reason.contains("github_branch_protection")),
+        "{outcome:?}"
+    );
+    mark_settled(store.as_ref(), &workflow, outcome);
+    assert!(wire.submissions.lock().unwrap().is_empty());
+    wire.repos.lock().unwrap()[1].workflow_pending = false;
     let first = accepted(submit(&store, "ready-first-merge", 0, None));
     let first_record = begin(store.as_ref(), &first);
     assert!(matches!(
@@ -511,7 +616,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         EffectOutcome::Completed(_)
     ));
     assert_eq!(wire.submissions.lock().unwrap().as_slice(), ["first"]);
-    mark_complete(store.as_ref(), &first, observed);
+    mark_settled(store.as_ref(), &first, observed);
     let mut changed_order = barrier.clone();
     changed_order["revision"] = json!("2");
     changed_order["dependencies"] = json!([{"before":"second","after":"first"}]);
@@ -524,15 +629,69 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         ),
         DomainDecision::Refused { .. }
     ));
-    let second = accepted(submit(&store, "ordered-second-merge", 1, None));
-    let observed = service(&store).execute(&begin(store.as_ref(), &second));
+    wire.repos.lock().unwrap()[0].displaced_main = true;
+    let displaced = accepted(submit(&store, "previous-merge-missing-from-main", 1, None));
+    let outcome = service(&store).execute(&begin(store.as_ref(), &displaced));
+    assert!(
+        matches!(&outcome,EffectOutcome::Failed(reason) if reason.contains("verified_merge_on_main")),
+        "{outcome:?}"
+    );
+    mark_settled(store.as_ref(), &displaced, outcome);
+    assert_eq!(wire.submissions.lock().unwrap().as_slice(), ["first"]);
+    wire.repos.lock().unwrap()[0].displaced_main = false;
+
+    wire.repos.lock().unwrap()[1].use_queue = true;
+    let queued = accepted(submit(&store, "second-repository-enqueued", 1, None));
+    let queued_record = begin(store.as_ref(), &queued);
+    assert!(matches!(
+        service(&store).execute(&queued_record),
+        EffectOutcome::Unknown(_)
+    ));
+    assert!(matches!(
+        service(&store).observe(&queued_record),
+        EffectOutcome::Unknown(_)
+    ));
+    assert!(matches!(
+        submit(&store, "second-repository-queue-replay", 1, None),
+        DomainDecision::Refused { .. }
+    ));
+    wire.repos.lock().unwrap()[1].queue_removed = true;
+    let outcome = service(&store).observe(&queued_record);
+    assert!(
+        matches!(&outcome,EffectOutcome::Failed(reason) if reason.contains("removed the exact request")),
+        "{outcome:?}"
+    );
+    mark_settled(store.as_ref(), &queued, outcome);
+    {
+        let mut repos = wire.repos.lock().unwrap();
+        repos[1].use_queue = false;
+        repos[1].accepted = false;
+        repos[1].squash = true;
+    }
+    let mut revised = barrier.clone();
+    revised["revision"] = json!("2");
+    revised["repositories"][1]["mergeMethod"] = json!("Squash");
+    let second = accepted(submit(&store, "ordered-second-merge", 1, Some(&revised)));
+    let second_record = begin(store.as_ref(), &second);
+    assert!(matches!(
+        service(&store).execute(&second_record),
+        EffectOutcome::Unknown(_)
+    ));
+    {
+        let mut repos = wire.repos.lock().unwrap();
+        repos[1].displaced_main = false;
+        repos[1].ticket_expired = true;
+    }
+    drop(store);
+    let store = h.open();
+    let observed = service(&store).observe(&second_record);
     assert!(
         matches!(&observed,EffectOutcome::Completed(value) if value["result"]["value"]["featureComplete"]==true),
         "{observed:?}"
     );
     assert_eq!(
         wire.submissions.lock().unwrap().as_slice(),
-        ["first", "second"]
+        ["first", "second-queue", "second"]
     );
     assert_eq!(
         read(store.as_ref(), |s| s.work().work(&root.0))
@@ -541,7 +700,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             .as_deref(),
         Some(VERIFIED)
     );
-    mark_complete(store.as_ref(), &second, observed);
+    mark_settled(store.as_ref(), &second, observed);
     let cleanup = |store: &Arc<dyn ApplicationStore>, key: &str, repo: usize| {
         let tree = &checkouts[repo].2;
         let authority = HostAuthority {
@@ -571,21 +730,24 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     };
     let checkout = Path::new(&checkouts[0].2.path);
     std::fs::write(checkout.join("local-draft"), "uncommitted data").unwrap();
-    let dirty = accepted(cleanup(&store, "dirty-cleanup-held", 0));
-    let outcome = service(&store).execute(&begin(store.as_ref(), &dirty));
-    assert!(
-        matches!(&outcome,EffectOutcome::Failed(reason) if reason.contains("untracked")),
-        "{outcome:?}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(checkout.join("local-draft")).unwrap(),
-        "uncommitted data"
-    );
-    std::fs::remove_file(checkout.join("local-draft")).unwrap();
     let automated = service(&store);
-    automated.set_approval_control(Arc::new(
-        devworks_core::services::runs::ControlService::new(h.ids.clone()),
+    let control = Arc::new(devworks_core::services::runs::ControlService::new(
+        h.ids.clone(),
     ));
+    automated.set_approval_control(control.clone());
+    automated.schedule_completed_cleanup().unwrap();
+    let stop = read(store.as_ref(), |s| s.runs().root_control(&root))
+        .unwrap()
+        .stop_operation_id
+        .unwrap();
+    assert_eq!(
+        write(store.as_ref(), {
+            let root = root.clone();
+            move |tx| control.settle_stop(tx, &root, &stop, &[])
+        })
+        .unwrap(),
+        OperationState::ObservedComplete
+    );
     automated.schedule_completed_cleanup().unwrap();
     let pending = |repo: usize| {
         read(store.as_ref(), |s| {
@@ -595,8 +757,20 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         .pending_operation_id
         .expect("verified delivery schedules cleanup")
     };
-    let clean = pending(0);
+    let dirty = pending(0);
     let second_cleanup = pending(1);
+    let outcome = service(&store).execute(&begin(store.as_ref(), &dirty));
+    assert!(
+        matches!(&outcome, EffectOutcome::Failed(reason) if reason.contains("untracked")),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("local-draft")).unwrap(),
+        "uncommitted data"
+    );
+    mark_settled(store.as_ref(), &dirty, outcome);
+    std::fs::remove_file(checkout.join("local-draft")).unwrap();
+    let clean = accepted(cleanup(&store, "clean-checkout-retry", 0));
     let outcome = service(&store).execute(&begin(store.as_ref(), &clean));
     assert!(
         matches!(outcome, EffectOutcome::Completed(_)),
@@ -605,7 +779,12 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     assert!(!checkout.exists());
     assert!(
         !fixture_git(&checkouts[0].1)
-            .args(["show-ref", "--verify", "refs/heads/feature/owned"])
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/heads/feature/owned"
+            ])
             .status()
             .unwrap()
             .success()
@@ -626,6 +805,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             staged.to_str().unwrap(),
         ],
     );
+    drop(automated);
     drop(store);
     let store = h.open();
     std::fs::create_dir(checkout).unwrap();
@@ -641,6 +821,19 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     assert!(staged.join("file").exists());
     std::fs::remove_file(checkout.join("replacement")).unwrap();
     std::fs::remove_dir(checkout).unwrap();
+    git(&staged, &["update-index", "--assume-unchanged", "file"]);
+    let original = std::fs::read(staged.join("file")).unwrap();
+    std::fs::write(staged.join("file"), "hidden staged edit").unwrap();
+    assert!(matches!(
+        service(&store).observe(&second_record),
+        EffectOutcome::Unknown(_)
+    ));
+    assert_eq!(
+        std::fs::read_to_string(staged.join("file")).unwrap(),
+        "hidden staged edit"
+    );
+    std::fs::write(staged.join("file"), original).unwrap();
+    git(&staged, &["update-index", "--no-assume-unchanged", "file"]);
     assert!(matches!(
         service(&store).observe(&second_record),
         EffectOutcome::NotApplied(_)
@@ -653,7 +846,12 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     assert!(!staged.exists() && !checkout.exists());
     assert!(
         !fixture_git(source)
-            .args(["show-ref", "--verify", "refs/heads/feature/owned"])
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/heads/feature/owned"
+            ])
             .status()
             .unwrap()
             .success()

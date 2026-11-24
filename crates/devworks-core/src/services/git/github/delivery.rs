@@ -33,6 +33,40 @@ pub(crate) struct MergeTarget<'a> {
     pub use_queue: bool,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct QueueAnchor {
+    queue: String,
+    last_event: Option<String>,
+}
+
+pub(crate) struct QueueObservation {
+    pub active: bool,
+    pub removal: Option<String>,
+    pub merged_method: Option<String>,
+}
+
+const QUEUE_STATE: &str = r#"
+query DeliveryMergeQueue($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    nameWithOwner
+    pullRequest(number: $number) {
+      number baseRefName headRefOid merged
+      mergeQueue { id }
+      mergeQueueEntry { headCommit { oid } mergeQueue { id } }
+      autoMergeRequest { mergeMethod }
+      timelineItems(last: 20, itemTypes: [ADDED_TO_MERGE_QUEUE_EVENT, REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+        pageInfo { hasPreviousPage }
+        nodes {
+          ... on AddedToMergeQueueEvent { id mergeQueue { id } }
+          ... on RemovedFromMergeQueueEvent { id mergeQueue { id } beforeCommit { oid } reason }
+          __typename
+        }
+      }
+    }
+  }
+}
+"#;
+
 fn string(value: &Value, pointer: &str) -> Result<String, Fault> {
     value
         .pointer(pointer)
@@ -89,6 +123,13 @@ fn decode(value: &Value, target: &MergeTarget<'_>) -> Result<MergeRequest, Fault
         Some("failed") => Ok(MergeRequest::Refused),
         _ => Err(Fault::InvalidResponse),
     }
+}
+
+fn queue_events(pull: &Value) -> Result<&[Value], Fault> {
+    pull.pointer("/timelineItems/nodes")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or(Fault::InvalidResponse)
 }
 
 impl GitHubClient {
@@ -199,6 +240,133 @@ impl GitHubClient {
             return Err(Fault::Ambiguous);
         }
         Ok(result)
+    }
+
+    pub(crate) fn single_final_pull(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        number: u64,
+        head: &str,
+    ) -> Result<bool, Fault> {
+        let data = self.graphql_query(
+            self.token(store)?,
+            "query DeliverySinglePull($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { nameWithOwner pullRequest(number:$number) { number headRefOid baseRefName stack { id } } } }",
+            json!({"owner":repository.owner,"name":repository.name,"number":number}),
+        )?;
+        let repo = &data["repository"];
+        let pull = &repo["pullRequest"];
+        if !string(repo, "/nameWithOwner")?.eq_ignore_ascii_case(&repository.full_name())
+            || pull["number"].as_u64() != Some(number)
+            || pull["headRefOid"] != head
+            || pull["baseRefName"] != "main"
+        {
+            return Err(Fault::InvalidResponse);
+        }
+        Ok(pull.get("stack") == Some(&Value::Null))
+    }
+
+    fn merge_queue_state(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        number: u64,
+    ) -> Result<Value, Fault> {
+        let data = self.graphql_query(
+            self.token(store)?,
+            QUEUE_STATE,
+            json!({"owner":repository.owner,"name":repository.name,"number":number}),
+        )?;
+        if !string(&data, "/repository/nameWithOwner")?
+            .eq_ignore_ascii_case(&repository.full_name())
+        {
+            return Err(Fault::InvalidResponse);
+        }
+        let pull = &data["repository"]["pullRequest"];
+        if pull["number"].as_u64() != Some(number) || pull["baseRefName"] != "main" {
+            return Err(Fault::InvalidResponse);
+        }
+        Ok(pull.clone())
+    }
+
+    pub(crate) fn merge_queue_anchor(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        number: u64,
+        head: &str,
+    ) -> Result<QueueAnchor, Fault> {
+        let pull = self.merge_queue_state(store, repository, number)?;
+        if pull["headRefOid"] != head
+            || pull["merged"] != false
+            || pull.get("mergeQueueEntry") != Some(&Value::Null)
+        {
+            return Err(Fault::Ambiguous);
+        }
+        let queue = string(&pull, "/mergeQueue/id")?;
+        let events = queue_events(&pull)?;
+        Ok(QueueAnchor {
+            queue,
+            last_event: events
+                .last()
+                .map(|event| string(event, "/id"))
+                .transpose()?,
+        })
+    }
+
+    pub(crate) fn observe_merge_queue(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        number: u64,
+        head: &str,
+        anchor: &QueueAnchor,
+    ) -> Result<QueueObservation, Fault> {
+        let pull = self.merge_queue_state(store, repository, number)?;
+        let queued = &pull["mergeQueueEntry"];
+        let queue_path = "/mergeQueue/id";
+        let active = !queued.is_null()
+            && queued.pointer("/headCommit/oid").and_then(Value::as_str) == Some(head)
+            && string(queued, queue_path)? == anchor.queue;
+        let events = queue_events(&pull)?;
+        let index = match &anchor.last_event {
+            Some(id) => events
+                .iter()
+                .position(|event| event["id"] == id.as_str())
+                .map(|index| index + 1)
+                .ok_or(Fault::Ambiguous)?,
+            None if pull["timelineItems"]["pageInfo"]["hasPreviousPage"] == false => 0,
+            None => return Err(Fault::Ambiguous),
+        };
+        let removal = match &events[index..] {
+            [added, removed]
+                if pull.get("mergeQueueEntry") == Some(&Value::Null)
+                    && added["__typename"] == "AddedToMergeQueueEvent"
+                    && removed["__typename"] == "RemovedFromMergeQueueEvent"
+                    && string(added, queue_path)? == anchor.queue
+                    && string(removed, queue_path)? == anchor.queue
+                    && removed.pointer("/beforeCommit/oid").and_then(Value::as_str)
+                        == Some(head) =>
+            {
+                Some(string(removed, "/id")?)
+            }
+            _ => None,
+        };
+        let merged = pull["merged"].as_bool().ok_or(Fault::InvalidResponse)?;
+        // GitHub sets the auto-merge method when the queue merges. Read it only alongside
+        // the exact completed queue lifecycle, as its pre-merge setting is not evidence.
+        let merged_method = if merged && removal.is_some() && pull["headRefOid"] == head {
+            pull.pointer("/autoMergeRequest/mergeMethod")
+                .and_then(Value::as_str)
+                .map(str::to_ascii_lowercase)
+        } else {
+            None
+        };
+        Ok(QueueObservation {
+            active,
+            removal: if merged { None } else { removal },
+            merged_method,
+        })
     }
 
     pub(crate) fn can_merge(
