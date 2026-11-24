@@ -32,6 +32,7 @@ pub enum GraphSlot {
     AnalysisCommand(String),
     /// An authorized report artifact preview.
     AnalysisEvidence(u64),
+    RepositoryDocumentation(u64),
 }
 screen_slot!(GraphSlot, Graph);
 

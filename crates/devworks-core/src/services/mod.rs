@@ -233,6 +233,11 @@ impl UseCases {
         self
     }
 
+    pub fn with_repository_documentation(mut self, service: Arc<git::GitService>) -> Self {
+        self.register("repository_docs.generate", Some(service), None);
+        self
+    }
+
     /// Registers the artifacts family (`ArtifactService`).
     pub fn with_artifacts(mut self, service: Arc<artifacts::ArtifactService>) -> Self {
         for op in artifacts::OPERATIONS {

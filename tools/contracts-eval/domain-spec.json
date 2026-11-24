@@ -12210,7 +12210,7 @@
         "topics": "NonEmpty<Label>"
       },
       "result": "OperationRef",
-      "effect": "Inference",
+      "effect": "Journaled",
       "authority": "Scoped",
       "rules": "Exact source/revision and scoped destination; retained documentation modes and source provenance, ordinary router attribution, approval and completion gates."
     },
@@ -14048,7 +14048,7 @@
     "maintenance.inspect": {"assignmentScope": "assignmentDenied", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "maintenance.cancel": {"assignmentScope": "assignmentDenied", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "maintenance.scheduled_prune": {"assignmentScope": "assignmentDenied", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "repository_docs.generate": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "repository_docs.generate": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "mcp_server.status": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "mcp_server.configure": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "mcp_server.clients": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

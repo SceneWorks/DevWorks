@@ -22,7 +22,7 @@ use crate::ports::{
 };
 use crate::protocol::records::AnalysisRecord;
 use crate::protocol::results::OperationResult;
-use crate::protocol::{DomainFault, OperationState};
+use crate::protocol::{DomainFault, Id, OperationState};
 use crate::services::{artifacts::ArtifactService, indexing::IndexEnv, kernel::Failure};
 use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -67,13 +67,42 @@ pub struct AnalysisService {
 }
 
 impl AnalysisService {
+    pub(crate) fn prepare_documentation(
+        &self,
+        ctx: &InvocationContext,
+        request: &crate::operations::repository_docs::GenerateInput,
+        tracked: &[String],
+        run_id: Option<&Id>,
+    ) -> Result<super::DocumentationDraft, Failure> {
+        let (evidence, repository_name) = crate::ports::storage::read_snapshot(
+            &*self.phases.store,
+            &crate::ports::storage::ReadOptions::default(),
+            |read| {
+                let repository = read
+                    .projects()
+                    .repository(&request.repository_id)?
+                    .ok_or(crate::ports::storage::StorageError::ScopeDenied)?;
+                Ok(
+                    super::DocumentationEvidence::prepare(read, ctx, request, run_id)
+                        .map(|evidence| (evidence, repository.name)),
+                )
+            },
+        )??;
+        let reports = evidence.read(&self.phases, ctx)?;
+        evidence.render(reports, &repository_name, tracked, &request.topics.0)
+    }
+
     pub fn new(
         store: Arc<dyn ApplicationStore>,
         artifacts: Arc<ArtifactService>,
         ids: Arc<dyn IdSource>,
         network: Option<(Arc<dyn Resolver>, Arc<dyn HopTransport>)>,
     ) -> Self {
-        let phases = Arc::new(PhaseStore { store, artifacts });
+        let phases = Arc::new(PhaseStore {
+            store,
+            artifacts,
+            repository_documentation: std::sync::atomic::AtomicBool::new(false),
+        });
         let indexing = Arc::new(OnceLock::new());
         Self {
             commands: Commands,
@@ -97,6 +126,12 @@ impl AnalysisService {
 
     pub fn install_model(&self, model: Arc<dyn AnalysisModel>) -> bool {
         self.model.set(model).is_ok()
+    }
+
+    pub fn enable_repository_documentation(&self) {
+        self.phases
+            .repository_documentation
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     pub fn execute(&self, operation: &OperationRecord, cancellation: &Cancellation) -> Execution {

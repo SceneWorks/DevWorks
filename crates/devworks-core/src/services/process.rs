@@ -452,12 +452,51 @@ impl ProcessSupervisor {
         } else {
             false
         };
+        let owned_documentation_patch = matches!(&verdict,
+            CommandVerdict::NeedsInput { held, .. } if held.as_slice() ==
+                [crate::authority::destructive::InputNeeded::UnmodeledConsequentialCommand]
+        ) && request.spec.args
+            == crate::services::git::DOCUMENTATION_PATCH_ARGS
+            && request.spec.no_child_processes
+            && request
+                .spec
+                .stdin
+                .as_ref()
+                .is_some_and(|bytes| !bytes.is_empty())
+            && if let Some(operation) = &request.operation_id {
+                read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                    let Some(record) = snapshot.operations().operation(operation)? else {
+                        return Ok(false);
+                    };
+                    if record.capability != "repository_docs.generate"
+                        || record.state != crate::protocol::OperationState::Dispatching
+                        || record.root_id.as_ref() != ctx.root_id()
+                        || record.assignment_id.as_ref() != ctx.assignment_id()
+                    {
+                        return Ok(false);
+                    }
+                    let id = serde_json::from_value::<Id>(record.payload["tree"]["id"].clone())
+                        .map_err(|_| StorageError::ScopeDenied)?;
+                    Ok(snapshot.git().git_worktree(&id)?.is_some_and(|tree| {
+                        !tree.removed
+                            && &tree.owner == ctx.principal()
+                            && tree.owner_root_id.as_ref() == ctx.root_id()
+                            && tree.owner_assignment_id.as_ref() == ctx.assignment_id()
+                            && tree.pending_operation_id.as_ref() == Some(operation)
+                            && request.spec.cwd.as_deref() == Some(std::path::Path::new(&tree.path))
+                    }))
+                })?
+            } else {
+                false
+            };
         let refusal = match &verdict {
             CommandVerdict::Blocked { .. } => Some(LaunchRefusal::Blocked(verdict.clone())),
             CommandVerdict::NeedsInput { .. } if git_owner_required && !owned_git_push => {
                 Some(LaunchRefusal::GitPushOwnerRequired)
             }
-            CommandVerdict::NeedsInput { .. } if !request.approved_hold => {
+            CommandVerdict::NeedsInput { .. }
+                if !request.approved_hold && !owned_documentation_patch =>
+            {
                 Some(LaunchRefusal::NeedsInput(verdict.clone()))
             }
             _ => None,

@@ -1187,7 +1187,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         .and_then(|provider| provider.schema_validator.clone())
         .zip(use_cases.inference_router());
     let dreaming_worker = Arc::new(crate::dreaming::DeferredSweep::default());
-    let use_cases = if dreaming.is_some() {
+    let mut use_cases = if dreaming.is_some() {
         devworks_core::services::dreaming::DreamingService::ensure_base(
             store.as_ref(),
             artifacts.clone(),
@@ -1227,6 +1227,16 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         consumers.push(crate::repository_analysis::index_consumer(service.clone()));
         service
     });
+    if let (Some(git), Some(analysis)) = (&git, &analysis)
+        && git.install_documentation_analysis(analysis.clone())
+    {
+        analysis.enable_repository_documentation();
+        use_cases = use_cases.with_repository_documentation(git.clone());
+        consumers.push(crate::repository_analysis::documentation_consumer(
+            git.clone(),
+            authority.clone(),
+        ));
+    }
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {

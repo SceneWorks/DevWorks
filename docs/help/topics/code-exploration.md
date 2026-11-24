@@ -19,4 +19,6 @@ Open **Analysis** from a repository's code view. **Health** shows saved measurem
 
 A new index can make a saved report stale while analysis runs. **Runs** shows each phase and supports refreshing measurements, resolving links, detecting clusters, and checking saved model requests. **Analyze projects with a model** and **Synthesize with a model** use the configured router when current source access, policy, and a model route allow the request. Indexing runs the deterministic stages automatically. A partial report identifies its missing coverage, and a missing report has no score.
 
+After synthesis completes, **Generate repository documentation** stages `CODEGRAPH.md` in an owned worktree at the analyzed commit. Open the repository from its project first. Successful synthesis in a matching owned worktree also queues generation automatically. Generated files record the analyzed commit, report revision and any missing coverage. Review the staged files and use the ordinary commit and delivery steps. Use the documentation evidence in work history when the approved acceptance criteria require it.
+
 Open **Fleet analysis** from **Repositories** to compare the health of the selected repositories or inspect archival candidates. An archival candidate needs a complete workspace link report. Opening the candidate list does not change any repository.

@@ -1,4 +1,5 @@
 //! Project analysis and synthesis inputs and checked provider output.
+pub(super) mod documentation;
 mod evidence;
 use super::super::{budget::Budget, dataset, modules::Modules, scan};
 use super::{

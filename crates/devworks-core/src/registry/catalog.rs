@@ -10238,7 +10238,7 @@ pub(super) static CATALOG: [OperationDescriptor; 393] = [
         modes: &[ModeBinding {
             mode: Mode::Command,
             authority: AuthorityClass::Scoped,
-            effect: EffectClass::Inference,
+            effect: EffectClass::Journaled,
             input_type: "repository_docs::GenerateInput",
             decode: decode_repository_docs_generate_command,
             input_schema: schema_of::<ops::repository_docs::GenerateInput>,
@@ -10247,7 +10247,7 @@ pub(super) static CATALOG: [OperationDescriptor; 393] = [
         result_schema: schema_of::<OperationRef>,
         completion: true,
         revisions: &[SchemaRevision(1)],
-        native_execution: false,
+        native_execution: true,
         approval_required: false,
         human_only: false,
         assignment_scope: AssignmentScope::Project,

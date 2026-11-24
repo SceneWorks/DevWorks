@@ -78,6 +78,79 @@ pub fn bind_worktree(
     )))
 }
 
+/// Resolve the exact checkout and configured output root for a native human generating
+/// docs from a visible analysis. Reuse the ordinary Git worktree scope and ownership.
+pub fn documentation_destination(
+    store: &dyn ApplicationStore,
+    ctx: &InvocationContext,
+    project: &crate::protocol::ProjectId,
+    repository: &Id,
+    source: &crate::protocol::data::GitOid,
+) -> Result<(InvocationContext, Id), StorageError> {
+    let target = read_snapshot(store, &ReadOptions::default(), |read| {
+        documentation_target(read, ctx, project, repository, source)
+    })?
+    .ok_or_else(|| {
+        StorageError::InvalidRecord("no owned worktree matches the analyzed revision".into())
+    })?;
+    let scoped = ctx.clone().with_lineage(
+        Some(project.clone()),
+        Some(crate::protocol::RootId(target.work_id)),
+        None,
+    );
+    Ok((
+        bind_worktree(store, scoped, &target.id)?,
+        target.registered_root_id,
+    ))
+}
+
+pub(crate) fn documentation_target(
+    read: &dyn crate::ports::storage::ReadSnapshot,
+    ctx: &InvocationContext,
+    project: &crate::protocol::ProjectId,
+    repository: &Id,
+    source: &crate::protocol::data::GitOid,
+) -> Result<Option<crate::ports::storage::StoredGitWorktree>, StorageError> {
+    if ctx.principal_kind() != PrincipalKind::Human
+        || read.actors().actor_kind(ctx.principal())? != Some(PrincipalKind::Human)
+        || !read
+            .projects()
+            .repository_projects(repository)?
+            .contains(project)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    let mut after = None;
+    let mut target = None;
+    loop {
+        let rows = read
+            .git()
+            .git_repository_worktrees(repository, after.as_ref(), 64)?;
+        for tree in &rows {
+            if tree.removed
+                || &tree.owner != ctx.principal()
+                || &tree.head != source
+                || !read
+                    .work()
+                    .work(&tree.work_id)?
+                    .is_some_and(|work| &work.project_id == project)
+            {
+                continue;
+            }
+            if target.is_some() {
+                return Err(StorageError::InvalidRecord(
+                    "more than one owned worktree matches the analyzed revision".into(),
+                ));
+            }
+            target = Some(tree.clone());
+        }
+        if rows.len() < 64 {
+            return Ok(target);
+        }
+        after = rows.last().map(|tree| tree.id.clone());
+    }
+}
+
 /// Trusted journal witness, never a tool input. Reconstructed only from committed host data.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SourceBinding {
