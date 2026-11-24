@@ -90,7 +90,10 @@ pub(super) fn link_target(
         .get("resolution")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if resolution == "Resolved" {
+    if resolution == "Resolved"
+        || e.payload["properties"]["compiler_unresolved"] == true
+        || e.payload["properties"]["compiler_bound_unpublished"] == true
+    {
         return Ok(None);
     }
     let Some(name) = e.payload.get("targetName").and_then(Value::as_str) else {

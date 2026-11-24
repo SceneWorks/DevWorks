@@ -26,6 +26,8 @@ pub(crate) struct Exec<'a> {
     /// Each group member's share of the repository-level group extraction of the layer being
     /// staged (see [`group_members`]).
     pub shares: BTreeMap<String, FileExtract>,
+    pub semantic_packs: Vec<Arc<dyn crate::ports::indexing::SemanticEnricher>>,
+    pub repository_semantics: Vec<semantic::RepositoryResult>,
 }
 
 impl Exec<'_> {
@@ -450,10 +452,12 @@ impl Exec<'_> {
         let stopping = &self.w.stopping;
         let stop = move || stop_flag.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst);
         let git = git_for(&env, &ctx, &stop);
-        let head = git
-            .head(&dir)
-            .map_err(Stop::git)?
-            .ok_or_else(|| Stop::det("no_commit", "the repository has no commit to index"))?;
+        let observed = git.head_observation(&dir).map_err(|error| match error {
+            GitFault::Unborn => Stop::det("no_commit", "the repository has no commit to index"),
+            other => Stop::git(other),
+        })?;
+        let head = observed.head;
+        let head_ref = observed.branch;
         let format = git.object_format(&dir).map_err(Stop::git)?;
         let h = head.clone();
         self.fenced(WritePriority::Authoritative, move |_, r| {
@@ -513,6 +517,13 @@ impl Exec<'_> {
                 "an exclusion now names this repository",
             ));
         }
+        let registry_binding = read_snapshot(&*env.store, &ReadOptions::default(), |read| {
+            let projects = read.projects().repository_projects(&repo_id)?;
+            semantic::registry_binding(&env, read.packages(), &cfg, &projects)
+        })
+        .map_err(Stop::storage)?;
+        self.semantic_packs = semantic::select(&env, &cfg, &repo_id, &registry_binding)?;
+        let semantic_binding = semantic::binding(&self.semantic_packs);
         let pointer = previous.as_ref().map_or(0, |(_, r)| *r);
         let parent = previous
             .as_ref()
@@ -560,9 +571,23 @@ impl Exec<'_> {
             self.run.kind == RUN_INDEX
                 && p.manifest.get("configDigest").and_then(Value::as_str)
                     == Some(cfg.digest.as_str())
+                && p.manifest
+                    .get("semanticBinding")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    == semantic_binding
+                && p.manifest["semanticRegistryBinding"].as_str().unwrap_or("") == registry_binding
                 && p.manifest.get("extractorVersion").and_then(Value::as_i64)
                     == Some(EXTRACTOR_VERSION)
         });
+        // Identical immutable inputs reuse all rows, including any recorded coverage gap.
+        // An explicit reindex bypasses reuse after a missing runtime or cache is repaired.
+        let reuse_repository_semantics =
+            reusable.is_some_and(|parent| parent.source_digest == head);
+        let repository_semantics = self
+            .semantic_packs
+            .iter()
+            .any(|pack| pack.descriptor().repository_source);
         let total = units.len() as i64;
         let plan_digest = digest(&[
             &head,
@@ -572,19 +597,23 @@ impl Exec<'_> {
                 .map_or(String::new(), |p| p.id.as_str().to_owned()),
             &pointer.to_string(),
             &self.run.kind,
+            &semantic_binding,
+            &registry_binding,
         ]);
         // The staging generation: the checkpoint of an earlier attempt when its plan still holds.
         let existing = match &self.run.generation_id {
-            Some(g) => read_snapshot(&*env.store, &ReadOptions::default(), |s| {
-                s.indexing().generation(g)
-            })
-            .map_err(Stop::storage)?
-            .filter(|g| {
-                g.state == GEN_STAGING
-                    && g.manifest.get("planDigest").and_then(Value::as_str)
-                        == Some(plan_digest.as_str())
-            }),
-            None => None,
+            Some(g) if !repository_semantics => {
+                read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+                    s.indexing().generation(g)
+                })
+                .map_err(Stop::storage)?
+                .filter(|g| {
+                    g.state == GEN_STAGING
+                        && g.manifest.get("planDigest").and_then(Value::as_str)
+                            == Some(plan_digest.as_str())
+                })
+            }
+            _ => None,
         };
         let generation = match existing {
             Some(g) => g.id,
@@ -603,6 +632,8 @@ impl Exec<'_> {
                         "commit": head, "objectFormat": format,
                         "configDigest": cfg.digest, "configRevision": self.run.config_revision,
                         "extractorVersion": EXTRACTOR_VERSION, "planDigest": plan_digest,
+                        "semanticBinding": semantic_binding,
+                        "semanticRegistryBinding": registry_binding,
                     }),
                 };
                 let id = stored.id.clone();
@@ -660,7 +691,13 @@ impl Exec<'_> {
                         && lang.as_deref() == u.language
                         && (env.artifacts.is_none() || u.oid.is_none() || *captured)
                 });
-            if same && u.previous.is_none() && !regroup.contains(u.key.as_str()) {
+            let rebuild_repository_semantics =
+                !reuse_repository_semantics && semantic::repository_unit(&self.semantic_packs, u);
+            if same
+                && u.previous.is_none()
+                && !regroup.contains(u.key.as_str())
+                && !rebuild_repository_semantics
+            {
                 inherit.push(u.key.clone());
             } else {
                 extract.push(u);
@@ -672,6 +709,24 @@ impl Exec<'_> {
             .filter(|(_, m)| m.iter().any(|u| pending.contains(u.key.as_str())))
             .collect();
         self.group_shares(&dir, &repo.name, &needed, None, &stop)?;
+        if extract
+            .iter()
+            .any(|unit| semantic::repository_unit(&self.semantic_packs, unit))
+        {
+            semantic::prepare_repository(
+                self,
+                semantic::SemanticBatch {
+                    repository_name: &repo.name,
+                    root: &dir,
+                    commit: &head,
+                    capture: None,
+                    files: &[],
+                },
+                &units,
+                None,
+                &stop,
+            )?;
+        }
         let mut done = staged.len() as i64;
         if let Some(p) = reusable {
             for chunk in inherit.chunks(500) {
@@ -719,6 +774,7 @@ impl Exec<'_> {
                 })?;
             stored.state = GEN_SEALED.into();
             stored.watermark = count;
+            stored.manifest["packs"] = coverage["semanticPacks"].clone();
             stored.manifest["coverage"] = coverage;
             stored.manifest["indexedAtMs"] = json!(now);
             stored.manifest["units"] = json!(count);
@@ -746,7 +802,7 @@ impl Exec<'_> {
         .unwrap_or_default();
         let texts = stage_texts(&env, &repo_id, readme_bytes, summary);
         let staged_files: Vec<_> = texts.iter().map(|t| t.2.clone()).collect();
-        let published = self.publish_baseline(&generation, &head, pointer, texts);
+        let published = self.publish_baseline(&generation, &head, head_ref, pointer, texts);
         if let Some(a) = &env.artifacts {
             for f in &staged_files {
                 a.settle_host_bytes(&*env.store, f, published.is_ok());
@@ -768,6 +824,8 @@ impl Exec<'_> {
         stop: &(dyn Fn() -> bool + Sync),
     ) -> Result<(), Stop> {
         let env = self.w.env.clone();
+        let packs = self.semantic_packs.clone();
+        let commit = self.run.source_oid.clone().unwrap_or_default();
         let mut i = 0;
         while i < units.len() {
             if self.stopped() {
@@ -819,6 +877,35 @@ impl Exec<'_> {
                 sources.stage(&mut row.0, c.filter(|_| capture))?;
                 rows.push(row);
             }
+            if !packs.is_empty() {
+                let files: Vec<_> = batch
+                    .iter()
+                    .filter_map(|unit| {
+                        let language = unit.language?;
+                        let bytes = content.get(unit.oid.as_deref()?)?;
+                        matches!(unit.mode, MODE_STRUCTURAL | MODE_TEXT_FALLBACK).then_some(
+                            crate::ports::indexing::EnrichmentSource {
+                                unit: &unit.key,
+                                language,
+                                bytes,
+                            },
+                        )
+                    })
+                    .collect();
+                semantic::enrich_batch(
+                    self,
+                    &packs,
+                    semantic::SemanticBatch {
+                        repository_name: name,
+                        root: dir,
+                        commit: &commit,
+                        capture: None,
+                        files: &files,
+                    },
+                    &mut rows,
+                    stop,
+                )?;
+            }
             let n = rows.len() as i64;
             let staged = sources.records();
             let capture_env = env.clone();
@@ -854,6 +941,7 @@ impl Exec<'_> {
         &mut self,
         generation: &Id,
         head: &str,
+        head_ref: Option<String>,
         pointer: i64,
         texts: Vec<(TextKind, String, crate::services::artifacts::StagedFile)>,
     ) -> Result<(), Stop> {
@@ -871,13 +959,27 @@ impl Exec<'_> {
             if current != pointer {
                 // Another publication (or an index removal) moved the pointer since this plan:
                 // never overwrite it. The generation is abandoned and the run re-plans.
-                return Ok(Err(current));
+                return Ok(Err(Stop::transient(
+                    "pointer_moved",
+                    format!("the published view moved (revision {current}) while this generation was built"),
+                )));
             }
             let stored = tx
                 .indexing()
                 .generation(&g)?
                 .filter(|x| x.state == GEN_SEALED)
                 .ok_or(StorageError::NotFound { kind: "index_generation", id: g.as_str().to_owned() })?;
+            let config = super::super::effective_config_tx(tx, &repo)?;
+            let projects = tx.projects().repository_projects(&repo)?;
+            if stored.manifest["configDigest"].as_str() != Some(config.digest.as_str())
+                || stored.manifest["semanticRegistryBinding"].as_str().unwrap_or("")
+                    != semantic::registry_binding(&env, tx.packages(), &config, &projects)?
+            {
+                return Ok(Err(Stop::transient(
+                    "index_configuration_changed",
+                    "the index configuration or semantic package changed during the build",
+                )));
+            }
             let (state, gaps) = super::super::status::manifest_coverage(&stored.manifest);
             let coverage_name = match state {
                 crate::protocol::data::CoverageState::Complete => "Complete",
@@ -892,7 +994,7 @@ impl Exec<'_> {
                 branch_id: None,
                 worktree_id: None,
                 coverage: json!({"state": coverage_name, "gaps": gaps, "commit": head,
-                    "sourceRevision": pointer + 1,
+                    "headRef": head_ref, "sourceRevision": pointer + 1,
                     "configDigest": stored.manifest.get("configDigest")}),
             };
             tx.indexing().insert_view(&view)?;
@@ -958,7 +1060,7 @@ impl Exec<'_> {
             r.owner = None;
             r.lease_until_ms = None;
             let host = tx.store().host_actor.clone();
-            history(
+            let published_event = super::super::history_event(
                 tx,
                 &host,
                 r.project_id.as_ref(),
@@ -970,16 +1072,21 @@ impl Exec<'_> {
                     "principalKind": "Host",
                 }),
             )?;
+            if env.settings.analysis_events {
+                let delivery = tx.new_id(IdKind::QueueEntry);
+                tx.queue().enqueue(NewQueueEntry {
+                    id: delivery,
+                    consumer: crate::services::graph::repository_analysis::INDEX_CONSUMER.into(),
+                    event_id: published_event, root_id: None, operation_id: None,
+                    partition: None, priority: 0, ready_at_ms: now,
+                    payload: json!({"repositoryId": repo, "viewId": view_id}),
+                })?;
+            }
             Ok(Ok(()))
         });
         match result {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(moved)) => Err(Stop::transient(
-                "pointer_moved",
-                format!(
-                    "the published view moved (revision {moved}) while this generation was built"
-                ),
-            )),
+            Ok(Err(stop)) => Err(stop),
             // A lease renewal inside the fenced write: the run is no longer ours.
             Err(Stop::Lost) => Err(Stop::Lost),
             Err(s) => Err(s),

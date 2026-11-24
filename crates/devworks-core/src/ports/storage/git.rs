@@ -77,6 +77,8 @@ pub trait GitRead {
         limit: u16,
     ) -> Result<Vec<StoredGitWorktree>, StorageError>;
     fn git_worktree(&self, id: &Id) -> Result<Option<StoredGitWorktree>, StorageError>;
+    /// Exact durable path identity, including retained records of removed checkouts.
+    fn git_worktree_at(&self, path: &str) -> Result<Option<StoredGitWorktree>, StorageError>;
     /// The repository's recorded worktrees (removed ones included) after `after`, by ID.
     fn git_repository_worktrees(
         &self,

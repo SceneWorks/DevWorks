@@ -2276,6 +2276,28 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 }
                 c.push(DestructiveKind::RemoveTree, &paths)
             }
+            Some("move") => {
+                let operands = &rest[1..];
+                let [source, destination] =
+                    (if operands.first().is_some_and(|word| word.text == "--") {
+                        &operands[1..]
+                    } else {
+                        operands
+                    })
+                else {
+                    return false;
+                };
+                if !absolute(&source.text) || !absolute(&destination.text) {
+                    c.hold(InputNeeded::UnresolvedTarget);
+                    return false;
+                }
+                // The subcommand is a Git operand, not a second Windows move command.
+                c.claim("move");
+                let source_allowed = c.push(DestructiveKind::Move, std::slice::from_ref(source));
+                let destination_allowed =
+                    c.push(DestructiveKind::Truncate, std::slice::from_ref(destination));
+                source_allowed && destination_allowed
+            }
             Some("list" | "add" | "prune" | "lock" | "unlock") => true,
             _ => false,
         },

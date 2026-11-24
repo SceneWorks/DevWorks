@@ -144,3 +144,69 @@ impl std::fmt::Debug for SchemaComposition {
         f.debug_struct("SchemaComposition").finish_non_exhaustive()
     }
 }
+
+/// The host supplies data access separately from the schema catalog reader, whose
+/// fixed read-only behavior is preserved.
+#[derive(Clone)]
+pub struct DatabaseComposition {
+    pub adapter: Arc<dyn devworks_core::ports::database::data::DataAdapter>,
+    pub filesystem: Arc<dyn devworks_core::authority::destructive::FilesystemResolver>,
+}
+
+impl std::fmt::Debug for DatabaseComposition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DatabaseComposition")
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) struct DatabaseReadRunner(pub(crate) tokio::runtime::Handle);
+
+impl devworks_core::services::database::DatabaseReadRunner for DatabaseReadRunner {
+    fn wait(
+        &self,
+        action: devworks_core::ports::database::data::DataFuture,
+    ) -> Result<
+        devworks_core::ports::database::data::DataOutcome,
+        devworks_core::ports::database::data::DataFailure,
+    > {
+        use devworks_core::ports::database::data::{DataFailure, FailureKind};
+        use tokio::runtime::{Handle, RuntimeFlavor};
+        match Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| self.0.block_on(action))
+            }
+            Err(_) => self.0.block_on(action),
+            _ => Err(DataFailure::Refused(FailureKind::UnsupportedProfile)),
+        }
+    }
+    fn wait_for_effect(
+        &self,
+        action: devworks_core::ports::database::data::DataFuture,
+    ) -> Result<
+        devworks_core::ports::database::data::DataOutcome,
+        devworks_core::ports::database::data::DataFailure,
+    > {
+        self.0.block_on(action)
+    }
+}
+
+pub(crate) fn database_consumer(
+    service: Arc<devworks_core::services::database::DataExecutor>,
+) -> Consumer {
+    effect_consumer(
+        devworks_core::services::database::EFFECT_CONSUMER,
+        service,
+        PanicReasons {
+            execute: "Database dispatch stopped without a confirmed outcome",
+            observe: "Database observation did not finish",
+        },
+        RetryPolicy {
+            base_delay_ms: 500,
+            max_delay_ms: 3_000,
+            max_attempts: 1,
+        },
+        Some(3),
+    )
+}

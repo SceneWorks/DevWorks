@@ -611,6 +611,68 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
 }
 
 /// This build's migrations up to and including `version` (versions may have gaps).
+#[test]
+fn parallel_migrations_adopt_exact_code_intelligence_branch_stores() {
+    for previous in [64, 65] {
+        let h = Harness::new();
+        let mut legacy = through(63);
+        legacy.push(Migration {
+            version: 64,
+            minimum_reader: 57,
+            minimum_writer: 63,
+            ..MIGRATIONS[66]
+        });
+        if previous == 65 {
+            legacy.push(Migration {
+                version: 65,
+                minimum_reader: 57,
+                minimum_writer: 65,
+                ..MIGRATIONS[67]
+            });
+        }
+        drop(SqliteStore::open_with(h.config(), &legacy).unwrap());
+        let conn = h.raw();
+        conn.execute(
+            "INSERT INTO analysis_runs VALUES('prior-analysis','operation','project',?1,?1,7,1,'{}')",
+            ["a".repeat(64)],
+        )
+        .unwrap();
+        if previous == 65 {
+            conn.execute(
+                r#"INSERT INTO database_sensitive_policies VALUES('',NULL,'{"prior":true}')"#,
+                [],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let store = h.store();
+        assert!(store.integrity_check().unwrap().problems.is_empty());
+        drop(store);
+        let conn = h.raw();
+        let ledger = super::migrations::ledger(&conn).unwrap();
+        assert_eq!(ledger.len(), MIGRATIONS.len());
+        for (applied, canonical) in ledger.iter().zip(MIGRATIONS) {
+            assert_eq!(applied.version, canonical.version);
+            assert_eq!(applied.checksum, canonical.checksum());
+        }
+        assert_eq!(
+            conn.query_row("SELECT id FROM analysis_runs", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            "prior-analysis"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM database_sensitive_policies WHERE json_extract(policy_json,'$.prior')=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            i64::from(previous == 65)
+        );
+    }
+}
+
 fn through(version: i64) -> Vec<Migration> {
     MIGRATIONS
         .iter()

@@ -347,6 +347,63 @@ pub(crate) fn visible_in(
     artifact: &StoredArtifact,
     project: Option<&ProjectId>,
 ) -> Result<bool, StorageError> {
+    if database_intent(artifact) {
+        return Ok(false);
+    }
+    if database_output(artifact) {
+        let same_scope = match (&viewer.authorized, artifact.scope.project(), project) {
+            (Some(AuthorizedScope::Workspace), owner, selected) => owner == selected,
+            (Some(AuthorizedScope::Project(bound)), Some(owner), Some(selected)) => {
+                bound == owner && owner == selected
+            }
+            _ => false,
+        };
+        if artifact.owner.as_ref() != Some(viewer.ctx.principal()) || !same_scope {
+            return Ok(false);
+        }
+        let data = artifact.provenance["derived"]["access"].clone();
+        let Ok(access) =
+            serde_json::from_value::<crate::ports::storage::DatabaseArtifactAccess>(data)
+        else {
+            return Ok(false);
+        };
+        return Ok(access.restore_epoch == viewer.ctx.restore_epoch().get()
+            && access.scope_policy == viewer.ctx.policy_revision().get()
+            && read.database_artifact_available(&access, viewer.ctx.principal(), project)?);
+    }
+    if artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "repository_analysis"
+    {
+        let original = artifact.scope.project();
+        let allowed = match (&viewer.authorized, original, project) {
+            (Some(AuthorizedScope::Workspace), _, None) => true,
+            (Some(AuthorizedScope::Workspace), Some(owner), Some(selected)) => owner == selected,
+            (Some(AuthorizedScope::Project(bound)), Some(owner), selected) => {
+                bound == owner && selected.is_none_or(|selected| selected == bound)
+            }
+            _ => false,
+        };
+        let Some(run) = artifact.provenance["derived"]["runId"]
+            .as_str()
+            .and_then(|id| Id::new(id).ok())
+        else {
+            return Ok(false);
+        };
+        return if allowed {
+            read.analysis_artifact_available(
+                &artifact.id,
+                &run,
+                original,
+                viewer
+                    .ctx
+                    .worktree()
+                    .map(|tree| (tree.id(), tree.ownership_revision())),
+                viewer.ctx.restore_epoch().get(),
+            )
+        } else {
+            Ok(false)
+        };
+    }
     if artifact.retention == ArtifactRetention::Receipt {
         if !viewer.sees_owned(artifact.owner.as_ref()) {
             return Ok(false);
@@ -489,6 +546,16 @@ pub(crate) fn named_scope(
     }
 }
 
+fn database_intent(artifact: &StoredArtifact) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "database_intent"
+}
+
+fn database_output(artifact: &StoredArtifact) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "database_cell"
+}
+
 /// The live artifact `id` if this invocation may see it (otherwise `NotFound`).
 fn visible_artifact(
     read: &dyn crate::ports::storage::ArtifactRead,
@@ -556,6 +623,13 @@ fn require_explicit(
     artifact: &StoredArtifact,
     host: &crate::protocol::ActorId,
 ) -> Result<(), Refusal> {
+    if database_intent(artifact) || database_output(artifact) {
+        return Err(Refusal::new(
+            DomainErrorCode::Conflict,
+            "database_artifact",
+            Some(artifact.id.clone()),
+        ));
+    }
     if retained_convention(artifact, host) {
         return Err(Refusal::new(
             DomainErrorCode::Conflict,
@@ -1414,7 +1488,10 @@ fn usage(
     }
 }
 
-fn check_quota(tx: &mut dyn WriteTransaction, scope: &ArtifactScope) -> Result<(), Failure> {
+pub(crate) fn check_quota(
+    tx: &mut dyn WriteTransaction,
+    scope: &ArtifactScope,
+) -> Result<(), Failure> {
     let quota = setting_i64(tx.configuration(), scope.project(), ARTIFACT_QUOTA_KEY)?;
     if quota > 0 && usage(tx.artifacts(), scope)? > quota {
         return Err(Refusal::new(
@@ -2569,4 +2646,4 @@ impl CommandHandler for ArtifactService {
     }
 }
 
-pub(crate) use lifecycle::exact_reference_readable_in;
+pub use lifecycle::exact_reference_readable_in;

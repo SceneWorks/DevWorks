@@ -63,6 +63,7 @@ enum Action {
     },
     Create,
     Inspect,
+    Cleanup,
     Commit {
         message: String,
         expected: GitOid,
@@ -152,6 +153,68 @@ fn oid(head: String) -> GitOid {
         },
         hex: head,
     }
+}
+
+fn cleanup_stage(path: &Path, operation: &OperationId) -> Option<PathBuf> {
+    let digest = crate::fingerprint::sha256_hex(operation.0.as_str().as_bytes());
+    Some(
+        path.parent()?
+            .join(format!(".devworks-cleanup-{}", &digest[..24])),
+    )
+}
+
+fn definite_git_refusal(outcome: &Result<Vec<u8>, GitFault>) -> bool {
+    matches!(
+        outcome,
+        Err(GitFault::Helper(
+            HelperFault::Refused(_) | HelperFault::Spawn(_) | HelperFault::Failed { .. }
+        ))
+    )
+}
+
+fn cleanup_identity_matches(git: &Git<'_>, expected: &StoredGitWorktree, path: &Path) -> bool {
+    expected
+        .location
+        .as_ref()
+        .zip(path.to_str())
+        .is_some_and(|(location, path)| {
+            super::location::require_worktree_location(git, path, location).is_ok()
+        })
+}
+
+fn require_clean_checkout(
+    git: &Git<'_>,
+    expected: &StoredGitWorktree,
+    path: &Path,
+) -> Result<(), &'static str> {
+    if !cleanup_identity_matches(git, expected, path) {
+        return Err("could not verify the physical worktree and Git metadata");
+    }
+    let observed = git
+        .revision_observation(path)
+        .map_err(|_| "could not verify the worktree revision and status")?;
+    if observed.head != expected.head.hex {
+        return Err("the worktree head changed");
+    }
+    if observed.branch.as_deref() != Some(expected.branch.as_str()) {
+        return Err("the worktree is no longer on its registered branch");
+    }
+    if observed.dirty {
+        return Err("the worktree has tracked or untracked changes");
+    }
+    if git
+        .has_status_hidden_entries(path)
+        .map_err(|_| "could not verify the worktree index flags")?
+    {
+        return Err("the worktree index has entries that Git status can hide");
+    }
+    if git
+        .has_ignored_files(path)
+        .map_err(|_| "could not verify whether the worktree has ignored files")?
+    {
+        return Err("the worktree has ignored local files");
+    }
+    Ok(())
 }
 
 impl GitService {
@@ -493,6 +556,37 @@ impl GitService {
                     },
                 )
             }
+            OperationInput::Git(ops::Input::Cleanup(input)) => {
+                let GitCommand::Cleanup {
+                    worktree_id,
+                    expected_ownership_revision,
+                    expected_head,
+                } = &input.command
+                else {
+                    unreachable!("selected cleanup binding")
+                };
+                let (tree, repository, work) = self.owned_command(tx, ctx, worktree_id)?;
+                if expected_ownership_revision.get() != tree.ownership_revision
+                    || expected_head != &tree.head
+                {
+                    return Err(refuse(
+                        DomainErrorCode::Conflict,
+                        "git_ownership",
+                        worktree_id,
+                    ));
+                }
+                if ctx.assignment_id().is_some()
+                    && crate::services::indexing::assigned::owned(tx.git(), ctx)?
+                        .is_none_or(|bound| bound.id != tree.id)
+                {
+                    return Err(refuse(
+                        DomainErrorCode::PermissionDenied,
+                        "git_ownership",
+                        worktree_id,
+                    ));
+                }
+                (tree, repository, work, Action::Cleanup)
+            }
             OperationInput::Git(ops::Input::PullRequest(input)) => {
                 self.decide_pull_request(ctx, command, tx, &input.command)?
             }
@@ -573,6 +667,10 @@ impl GitService {
             tree: tree.clone(),
             action,
         };
+        // Cleanup's exact worktree reservation already serializes its native effect and
+        // persists after unknown outcomes. A definite refusal releases it, so a fresh cleanup
+        // must not wait behind the failed delivery's generic partition hold.
+        let partition = (!matches!(job.action, Action::Cleanup)).then(|| tree.id.as_str().into());
         tx.operations().record_intent(NewOperation {
             id: op.clone(),
             root_id: job.root.clone(),
@@ -634,7 +732,7 @@ impl GitService {
             event_id: event,
             root_id: ctx.root_id().cloned(),
             operation_id: Some(op.clone()),
-            partition: Some(tree.id.as_str().into()),
+            partition,
             priority: 0,
             ready_at_ms: now,
             payload: json!({"worktreeId":tree.id}),
@@ -816,6 +914,7 @@ impl GitService {
         let result = match &job.action {
             Action::Commit { .. } => OperationResult::GitCommit { value },
             Action::Push { .. } => OperationResult::GitPush { value },
+            Action::Cleanup => unreachable!("cleanup settles without a live checkout"),
             Action::PullRequest { .. } => {
                 return EffectOutcome::Unknown(
                     "PR completion requires a remote observation".into(),
@@ -849,6 +948,9 @@ impl GitService {
             updated.last_result = Some(durable.clone());
             updated.revision += 1;
             tx.git().update_git_worktree(&updated, current.revision)?;
+            if matches!(j.action, Action::Create | Action::Inspect) {
+                crate::services::indexing::register_git_worktree(tx, &updated)?;
+            }
             let id = EventId(tx.new_id(IdKind::Event));
             let sequence = tx.history().append(NewEvent {
                 id: id.clone(),
@@ -906,6 +1008,221 @@ impl GitService {
         match outcome {
             Ok(()) => EffectOutcome::Completed(checkpoint),
             Err(e) => storage_failure(e),
+        }
+    }
+
+    fn execute_cleanup(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+    ) -> EffectOutcome {
+        let path = Path::new(&job.tree.path);
+        let repo = Path::new(&repository.location);
+        if !repository.primary
+            || self.root_path(&job.tree.registered_root_id).ok().as_deref() != path.parent()
+            || self.same_worktree_path(repo, path)
+        {
+            return denied("cleanup target is not a registered isolated worktree");
+        }
+        if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
+            return changed(reason);
+        }
+        let default = match git.default_branch(repo) {
+            Ok(Some(branch)) => branch
+                .strip_prefix("refs/heads/")
+                .map(|name| format!("refs/remotes/origin/{name}")),
+            Ok(None) if matches!(git.origin(repo), Ok(None)) => git
+                .branch(repo)
+                .ok()
+                .flatten()
+                .filter(|name| matches!(name.as_str(), "refs/heads/main" | "refs/heads/master")),
+            _ => None,
+        };
+        let base = default
+            .as_deref()
+            .and_then(|name| git.resolve(repo, name).ok().flatten())
+            .map(|(head, _)| head);
+        if !base
+            .as_deref()
+            .is_some_and(|head| matches!(git.is_ancestor(repo, &job.tree.head.hex, head), Ok(true)))
+        {
+            return denied("cleanup requires the exact worktree head to be integrated");
+        }
+        let Some(staged) = cleanup_stage(path, &operation.id) else {
+            return denied("cleanup worktree path is unsupported");
+        };
+        let (Ok(original), Ok(staging)) = (
+            crate::services::git::client::path_argument(path),
+            crate::services::git::client::path_argument(&staged),
+        ) else {
+            return denied("cleanup worktree path is unsupported");
+        };
+        if !self.cleanup_path_missing(&staged) {
+            return changed("the cleanup staging path changed");
+        }
+        if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
+            return changed(reason);
+        }
+        let move_effect = git.mutation(
+            repo,
+            &["worktree", "move", "--", &original, &staging],
+            None,
+            &operation.id,
+            false,
+        );
+        if move_effect.is_err() {
+            if definite_git_refusal(&move_effect)
+                && self.cleanup_path_missing(&staged)
+                && require_clean_checkout(git, &job.tree, path).is_ok()
+            {
+                return changed("Git refused to move the intact checkout");
+            }
+            return EffectOutcome::Unknown(
+                "the checkout could not be safely staged; no removal was attempted".into(),
+            );
+        }
+        let restore = || {
+            if !self.cleanup_path_missing(path)
+                || !cleanup_identity_matches(git, &job.tree, &staged)
+            {
+                return false;
+            }
+            let _ = git.mutation(
+                repo,
+                &["worktree", "move", "--", &staging, &original],
+                None,
+                &operation.id,
+                false,
+            );
+            self.cleanup_path_missing(&staged) && cleanup_identity_matches(git, &job.tree, path)
+        };
+        // Moving the physical checkout first fences path-based writers from the deletion target.
+        // Recheck the exact native witness, ref and all local data at the staged path.
+        if require_clean_checkout(git, &job.tree, &staged).is_err()
+            || !self.cleanup_path_missing(path)
+        {
+            return if restore() {
+                changed("the staged checkout had changed and was restored with its data")
+            } else {
+                EffectOutcome::Unknown("staged checkout retained for recovery".into())
+            };
+        }
+        let removal = git.mutation(
+            repo,
+            &["worktree", "remove", "--", &staging],
+            None,
+            &operation.id,
+            false,
+        );
+        if definite_git_refusal(&removal)
+            && require_clean_checkout(git, &job.tree, &staged).is_ok()
+            && restore()
+        {
+            return changed("Git refused to remove the intact checkout");
+        }
+        self.observe_cleanup(job, operation, git, repository)
+    }
+
+    fn cleanup_path_missing(&self, path: &Path) -> bool {
+        self.config.filesystem.as_ref().is_some_and(|fs| {
+            path.to_str()
+                .and_then(|path| fs.resolve(path, None).ok())
+                .is_some_and(|entry| {
+                    entry.entry_kind == EntryKind::Missing && entry.linked_ancestors.is_empty()
+                })
+        })
+    }
+
+    fn observe_cleanup(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+    ) -> EffectOutcome {
+        let path = Path::new(&job.tree.path);
+        let repo = Path::new(&repository.location);
+        let absence = (|| {
+            let fs = self.config.filesystem.as_ref()?;
+            let (_, common) = git.metadata_dirs(repo).ok()?;
+            let identity = fs.resolve(&common, None).ok()?.target?.identity?;
+            if identity != job.tree.location.as_ref()?.common_dir
+                || self.root_path(&job.tree.registered_root_id).ok().as_deref() != path.parent()
+            {
+                return None;
+            }
+            let staged = cleanup_stage(path, &operation.id)?;
+            if !self.cleanup_path_missing(path)
+                || !self.cleanup_path_missing(&staged)
+                || git.worktrees(repo).ok()?.iter().any(|tree| {
+                    let registered = Path::new(&tree.path);
+                    self.same_worktree_path(registered, path)
+                        || self.same_worktree_path(registered, &staged)
+                })
+                || git
+                    .resolve(repo, &job.tree.branch)
+                    .ok()?
+                    .as_ref()
+                    .map(|(oid, _)| oid)
+                    != Some(&job.tree.head.hex)
+            {
+                return None;
+            }
+            Some(())
+        })();
+        if absence.is_none() {
+            return EffectOutcome::Unknown(
+                "worktree removal could not be established; no write was repeated".into(),
+            );
+        }
+        let job = job.clone();
+        let operation = operation.id.clone();
+        let outcome = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            let mut tree = tx
+                .git()
+                .git_worktree(&job.tree.id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if tree.removed && tree.last_operation_id.as_ref() == Some(&operation) {
+                return tree.last_result.ok_or(StorageError::CommitUnknown);
+            }
+            if tree != job.tree || tree.pending_operation_id.as_ref() != Some(&operation) {
+                return Err(StorageError::ScopeDenied);
+            }
+            let prior = tree.revision;
+            tree.revision = prior
+                .checked_add(1)
+                .ok_or_else(|| StorageError::InvalidRecord("Git revision exhausted".into()))?;
+            tree.removed = true;
+            tree.pending_operation_id = None;
+            tree.last_operation_id = Some(operation.clone());
+            let result = json!({"result": OperationResult::GitCleanup {
+                value: crate::protocol::records::MutationSummary {
+                    id: tree.id.clone(), revision: crate::services::kernel::rev(tree.revision), changed: true
+                },
+            }});
+            tree.last_result = Some(result.clone());
+            crate::services::indexing::retire_git_worktree(tx, &tree, &job.actor, &job.project)?;
+            tx.git().update_git_worktree(&tree, prior)?;
+            let id = EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {
+                id,
+                actor: job.actor,
+                project_id: Some(job.project),
+                root_id: job.root,
+                operation_id: Some(operation),
+                aggregate_kind: "git_worktree".into(),
+                aggregate_id: tree.id.as_str().to_owned(),
+                aggregate_revision: tree.revision,
+                kind: "GitWorktreeRemoved".into(),
+                payload: json!({"repositoryId": tree.repository_id, "workId": tree.work_id}),
+            })?;
+            Ok(result)
+        });
+        match outcome {
+            Ok(result) => EffectOutcome::Completed(result),
+            Err(error) => storage_failure(error),
         }
     }
 
@@ -1216,6 +1533,7 @@ impl GitService {
                 }
             }
             Action::Inspect => Ok(vec![]),
+            Action::Cleanup => return self.execute_cleanup(&job, operation, &git, &repository),
             Action::PullRequest { .. } => {
                 return self.execute_pull_request(&job, operation, &git, path);
             }
@@ -1334,6 +1652,15 @@ impl GitService {
             stop: &stop,
         };
         let path = Path::new(&job.tree.path);
+        if matches!(job.action, Action::Cleanup) {
+            let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+                s.projects().repository(&job.tree.repository_id)
+            });
+            return match repository {
+                Ok(Some(repository)) => self.observe_cleanup(job, operation, &git, &repository),
+                _ => EffectOutcome::Unknown("cleanup repository is unavailable".into()),
+            };
+        }
         if !matches!(job.action, Action::Create) {
             let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
                 s.projects().repository(&job.tree.repository_id)
@@ -1398,6 +1725,7 @@ impl GitService {
                     )
             }
             Action::Inspect => true,
+            Action::Cleanup => unreachable!("handled above"),
             Action::Commit { message, expected } => {
                 if observed.head == expected.hex {
                     !observed.dirty && job.reviewed_binding.is_none()

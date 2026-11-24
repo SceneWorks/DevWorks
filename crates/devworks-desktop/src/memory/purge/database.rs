@@ -17,6 +17,10 @@ struct Pending {
     submitted: usize,
     failures: usize,
     tab: usize,
+    #[serde(default, rename = "dataOperation")]
+    data_operation: Option<devworks_core::protocol::OperationId>,
+    #[serde(default, rename = "dataOperationProject")]
+    data_operation_project: Option<String>,
 }
 pub(super) fn partition(
     memory: &mut Memory,
@@ -35,6 +39,10 @@ pub(super) fn partition(
         pending.scope = None;
         pending.submitted = 0;
         pending.failures = 0;
+    }
+    if pending.data_operation_project.as_deref() == Some(p) {
+        pending.data_operation = None;
+        pending.data_operation_project = None;
     }
     if let Some(draft) = &mut pending.draft {
         if draft.scope.as_deref() == Some(p) {

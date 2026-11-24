@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-13",
-  "catalogSha256": "190bcb28c0f8f226fd0088cdc52a88e2087d69c58757faf8d0674efcc1e17ec0",
+  "date": "2026-11-19",
+  "catalogSha256": "65cbae4c70d2f2b698dd23eccd6e2c63bf473691cb6abfdefc1063d49e51139f",
   "familyCount": 50,
-  "operationCount": 380,
-  "concreteInputCandidates": 380,
+  "operationCount": 385,
+  "concreteInputCandidates": 385,
   "domainInputsPending": 0,
   "families": [
     {
@@ -5930,6 +5930,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -5964,7 +5972,7 @@
             "pointer": "/kind",
             "equals": "analysis.cross_repo_links"
           },
-          "resultValueType": "Page<MetricRecord>",
+          "resultValueType": "AnalysisMetricPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -5974,6 +5982,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6022,6 +6038,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6068,6 +6092,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -6102,7 +6134,7 @@
             "pointer": "/kind",
             "equals": "analysis.clusters"
           },
-          "resultValueType": "Page<ClusterRecord>",
+          "resultValueType": "AnalysisClusterPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -6112,6 +6144,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6160,6 +6200,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -6206,6 +6254,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6252,6 +6308,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6298,6 +6362,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -6332,7 +6404,7 @@
             "pointer": "/kind",
             "equals": "analysis.metrics"
           },
-          "resultValueType": "Page<MetricRecord>",
+          "resultValueType": "AnalysisMetricPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -6342,6 +6414,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6378,7 +6458,7 @@
             "pointer": "/kind",
             "equals": "analysis.hotspots"
           },
-          "resultValueType": "Page<MetricRecord>",
+          "resultValueType": "AnalysisMetricPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -6388,6 +6468,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6436,6 +6524,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6482,6 +6578,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -6516,7 +6620,7 @@
             "pointer": "/kind",
             "equals": "analysis.fleet_health"
           },
-          "resultValueType": "Page<MetricRecord>",
+          "resultValueType": "AnalysisMetricPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -6526,6 +6630,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6562,7 +6674,7 @@
             "pointer": "/kind",
             "equals": "analysis.archival_candidates"
           },
-          "resultValueType": "Page<MetricRecord>",
+          "resultValueType": "AnalysisMetricPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -6572,6 +6684,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -6608,7 +6728,7 @@
             "pointer": "/kind",
             "equals": "analysis.file_hotspot"
           },
-          "resultValueType": "Page<MetricRecord>",
+          "resultValueType": "AnalysisMetricPageResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -6618,6 +6738,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -7105,6 +7233,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -7151,6 +7287,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7197,6 +7341,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7243,6 +7395,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -7302,6 +7462,155 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
+          "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "database.mysql_readonly_query",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "database.mysql_readonly_query",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "database.mysql_readonly_query"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "database.mysql_readonly_query"
+          },
+          "resultValueType": "DatabaseLegacyRows",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 10,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r10.schema.json",
+              "queryReplySchema": "domain-query-reply.r10.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "ExternalRead",
+          "semanticRules": "Explicitly exposed read-only MySQL source selected by ID, display name, or unique logical endpoint identity. One bounded statement, 100 rows by default, a 500-row ceiling, and the shared data policy and native read boundary.",
+          "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "database.sensitive_columns",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "database.sensitive_columns",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "database.sensitive_columns"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "database.sensitive_columns"
+          },
+          "resultValueType": "DatabaseSensitiveRuleSet",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The workspace administrator lists default or source-owned sensitivity definitions.",
+          "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "database.edit_sensitive_column_rules",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "database.edit_sensitive_column_rules",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "database.edit_sensitive_column_rules"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "database.edit_sensitive_column_rules"
+          },
+          "resultValueType": "DatabaseSensitiveRuleSet",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The workspace administrator makes a compare-and-set rule upsert or delete within the selected scope.",
           "familyRules": "Separate connection/role write authority; known read-only adapters, bounded sensitive results and observation-first uncertain commit handling.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -17896,6 +18205,100 @@
           "authority": "Scoped",
           "effect": "Journaled",
           "semanticRules": "Human only. Starts one invocation of an installed, enabled package's tool contribution as the calling person: the package's brokered application and inference calls run as that person under their current authority, narrowed by the version's approved manifest grants. Records one durable package.invoke operation and returns it with its state; the invocation runs once, a result that cannot be established is held for reconciliation and never re-run. expected_digest, when given, must be the active manifest digest. Refused for an agent, for a contribution that is not a tool of the active version, and for a package that is not ready.",
+          "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "addons.run_workflow",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "addons.run_workflow",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "addons.run_workflow"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Journaled"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "addons.run_workflow"
+          },
+          "resultValueType": "PackageInvocation",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Journaled",
+          "semanticRules": "Queues an approved package workflow step and the exact ordered verification gates selected by the person or authorized agent. Each run pins the immutable scoped input, package manifests and schema contracts before dispatch. Completion requires current passing evidence from every selected gate and preserves all ordinary DevWorks controls.",
+          "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 9,
+          "operation": "addons.read_content",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "addons.read_content",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "addons.read_content"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "addons.read_content"
+          },
+          "resultValueType": "PackageContent",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Materializes the exact approved package Skill, Role or Prompt in the caller's artifact scope. Reading content does not adopt instructions or grant tools. Existing instruction-authoring and approval operations adopt any changes.",
           "familyRules": "Exact manifest/schema/version/trust and quiescent publication. Agent-authored contents always need exact approval regardless signature.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

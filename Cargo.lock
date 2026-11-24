@@ -196,6 +196,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
+name = "ar_archive_writer"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "523e5e187fff36fcb8d1d19ccf0ca4ca43ec3d158316057f66dc6f72716bc5ec"
+dependencies = [
+ "object",
+]
+
+[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1219,6 +1228,7 @@ dependencies = [
  "sha2 0.11.1",
  "sqlite-vec",
  "sqlx",
+ "sqlx-mysql",
  "tempfile",
  "tiberius",
  "tokio",
@@ -1264,12 +1274,14 @@ dependencies = [
  "jiff",
  "libc",
  "num-rational",
+ "percent-encoding",
  "regex",
  "schemars",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "sqlparser",
  "toml",
  "url",
  "windows-sys 0.61.2",
@@ -1308,6 +1320,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-dotnet-pack"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devworks-engine"
 version = "0.1.0"
 dependencies = [
@@ -1317,8 +1342,10 @@ dependencies = [
  "devworks-extension-protocol",
  "devworks-test-support",
  "ed25519-dalek",
+ "protobuf",
  "rmcp",
  "rusqlite",
+ "scip",
  "semver",
  "serde_json",
  "tokio",
@@ -1335,11 +1362,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "devworks-rust-pack"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-extension-protocol",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "protobuf",
+ "scip",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "devworks-semantic-helper"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "devworks-core",
+ "devworks-extension-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "devworks-swift-pack"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "libloading",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devworks-test-support"
 version = "0.1.0"
 dependencies = [
  "devworks-core",
  "serde_json",
+]
+
+[[package]]
+name = "devworks-typescript-pack"
+version = "0.1.0"
+dependencies = [
+ "devworks-adapters",
+ "devworks-core",
+ "devworks-semantic-helper",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3904,6 +3988,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4403,6 +4496,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "protobuf"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
+dependencies = [
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "psm"
+version = "0.1.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
+dependencies = [
+ "ar_archive_writer",
+ "cc",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4516,6 +4639,26 @@ dependencies = [
  "bytemuck",
  "font-types",
  "once_cell",
+]
+
+[[package]]
+name = "recursive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0786a43debb760f491b1bc0269fe5e84155353c67482b9e60d0cfb596054b43e"
+dependencies = [
+ "recursive-proc-macro-impl",
+ "stacker",
+]
+
+[[package]]
+name = "recursive-proc-macro-impl"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76009fbe0614077fc1a2ce255e3a1881a2e3a3527097d5dc6d8212c585e7e38b"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4934,6 +5077,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scip"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7f651fbd0f98742a47b58623a7bcfd8fad14455912689e4867a1f43ee7e02c6"
+dependencies = [
+ "protobuf",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5335,6 +5487,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlparser"
+version = "0.64.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92e0d273b4f8ddd14a35ed36862acbc9cc96cec578e36ee1881a9d42e0e0f2c8"
+dependencies = [
+ "log",
+ "recursive",
+ "sqlparser_derive",
+]
+
+[[package]]
+name = "sqlparser_derive"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fa4939c717eaef717f244768d35a5f93c62e1d440865097d2edef7d86ddb7e0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
 name = "sqlx"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5354,6 +5528,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "cfg-if",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -5425,6 +5600,7 @@ dependencies = [
  "bitflags 2.13.2",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "digest 0.11.3",
  "dotenvy",
@@ -5462,6 +5638,19 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stacker"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "707f49d46706bacf8a2b00d51dace3f9de527c13eec3778f570c411f89e69967"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "psm",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "static_assertions"

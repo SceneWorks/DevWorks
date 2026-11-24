@@ -467,6 +467,11 @@ text_rule!(PositiveCounter, "^[1-9][0-9]{0,18}$", |s: &str| s
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct Finite(f64);
+impl Finite {
+    pub fn get(&self) -> f64 {
+        self.0
+    }
+}
 impl<'de> Deserialize<'de> for Finite {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let x = f64::deserialize(d)?;

@@ -83,6 +83,51 @@ fn a_package_reads_its_input_in_chunks_and_writes_an_artifact_its_result_names()
 }
 
 #[test]
+fn an_opted_in_artifact_reader_uses_only_its_live_ordered_stream_credit() {
+    let _s = serial();
+    let a = App::new();
+    let name = format!("credit-pack-{}", std::process::id());
+    let mut spec = Spec::new(&name, "1.0.0");
+    spec.contributions = vec!["call"];
+    spec.mode = "credited-artifacts".into();
+    package(a.install(&a.user, &spec));
+    a.ready(&name);
+    let input = a.save(&a.user, b"abcdef");
+    let step = |key, offset, credit| {
+        json!({"actionKey":key, "call":read_call(json!("$input"), Some(offset)),
+            "credit":credit, "reportBytes":true})
+    };
+    let script = json!({"calls":[
+        step("no-credit", 0, Value::Null),
+        step("out-of-order", 0, json!({"sequence":"2","bytes":3})),
+        step("bad-token", 0, json!({"sequence":"1","bytes":3,"token":"foreign"})),
+        step("bad-session", 0, json!({"sequence":"1","bytes":3,"processSessionId":"other"})),
+        step("other-stream", 0, json!({"sequence":"1","bytes":3,"streamId":"other"})),
+        step("first", 0, json!({"sequence":"1","bytes":3})),
+        step("duplicate", 3, json!({"sequence":"1","bytes":3})),
+        step("overflow", 3, json!({"sequence":"2","bytes":65_537})),
+        step("second", 3, json!({"sequence":"2","bytes":3})),
+        step("eof", 6, Value::Null),
+    ]});
+    let (progress, _) = run_calls(&a, &name, script, &input, Some(a.agent.clone()), vec![]);
+    assert_eq!(
+        progress,
+        [
+            "call:no-credit:Busy",
+            "call:out-of-order:Busy",
+            "call:bad-token:Busy",
+            "call:bad-session:Busy",
+            "call:other-stream:Busy",
+            "call:first:ArtifactChunk:3",
+            "call:duplicate:Busy",
+            "call:overflow:Busy",
+            "call:second:ArtifactChunk:3",
+            "call:eof:ArtifactChunk:0",
+        ]
+    );
+}
+
+#[test]
 fn an_artifact_outside_the_invocation_is_refused_and_every_size_is_bounded() {
     let _s = serial();
     let a = App::new();

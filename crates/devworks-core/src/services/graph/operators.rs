@@ -1,6 +1,7 @@
 //! Bounded graph neighborhood and path operators over one immutable composition.
 use super::{
-    dataset::{self, Key},
+    budget::Budget,
+    dataset::{self, Adjacency, Key},
     model,
     read::{Position, Reader},
     scan,
@@ -278,55 +279,31 @@ fn walk(reader: &mut Reader<'_>, config: Walk<'_>) -> Result<(Vec<Step>, dataset
         return Ok((steps, edges));
     }
     let edges = reader.filtered_edges(config.kinds)?;
-    let mut queue = VecDeque::new();
-    let mut visited = BTreeSet::new();
-    let mut steps = Vec::new();
-    for start in config.starts {
-        queue.push_back((dataset::identity(start), 0));
-        visited.insert((dataset::node_key(start), 0));
-    }
-    while let Some((current, depth)) = queue.pop_front() {
-        if depth >= config.depth {
-            continue;
-        }
-        expand(
-            reader,
+    let starts = super::unmapped::identities(config.starts);
+    let (adjacency, partial) = Adjacency::new(&edges.linked, &starts, &mut reader.budget);
+    reader.note_index_limits(false, partial);
+    let mut walk = BreadthFirst::new(starts);
+    while let Some((current, depth)) = walk.next(config.depth, &mut reader.budget) {
+        walk.expand(
+            &mut reader.budget,
             &config,
-            (&current, depth),
-            &edges.linked,
-            &mut steps,
-            &mut visited,
-            &mut queue,
+            &current,
+            depth,
+            adjacency.around(&current, &config.direction),
         );
-        if reader.budget.exhausted.is_some() {
-            break;
-        }
     }
-    Ok((steps, edges))
+    Ok((walk.steps, edges))
 }
-/// The walk over each reached node's own edges, read through the endpoint indexes; `None` when
-/// a node needs the scan (see [`super::incident::around`]). The same steps as the scan's walk:
-/// each node's edges are a subset of the scan's in the scan's order, and the scan's walk skips
-/// every other edge.
+
+/// The walk over each reached node's own edges, read through the endpoint indexes.
+/// If a node needs the composed scan, its result ordering matches this path.
 fn indexed_walk(reader: &mut Reader<'_>, config: &Walk<'_>) -> Result<Option<Vec<Step>>, Failure> {
     let (read, selected) = (reader.read, reader.selected);
-    let mut around = BTreeMap::<Key, Vec<scan::Edge>>::new();
-    let mut queue = VecDeque::new();
-    let mut visited = BTreeSet::new();
-    let mut steps = Vec::new();
-    for start in config.starts {
-        queue.push_back((dataset::identity(start), 0));
-        visited.insert((dataset::node_key(start), 0));
-    }
-    while let Some((current, depth)) = queue.pop_front() {
-        if depth >= config.depth {
-            continue;
-        }
-        let key = dataset::key(&current);
-        if !around.contains_key(&key) {
-            // As the scan's materialization: half the remaining visits, and a partial read is a
-            // gap, not the end of the walk.
-            let (edges, partial) = reader.budget.reserve_visits(|budget| {
+    let mut walk = BreadthFirst::new(config.starts.iter().map(dataset::identity));
+    while let Some((current, depth)) = walk.next(config.depth, &mut reader.budget) {
+        // As in the scan's materialization, preserve visits for following the edges already read.
+        let ((edges, visit_partial), memory_partial) = reader.budget.reserve_retention(|budget| {
+            budget.reserve_visits(|budget| {
                 super::incident::around(
                     read,
                     &selected.pin.scope,
@@ -336,76 +313,84 @@ fn indexed_walk(reader: &mut Reader<'_>, config: &Walk<'_>) -> Result<Option<Vec
                     config.kinds,
                     budget,
                 )
-            });
-            let Some(edges) = edges? else {
-                return Ok(None);
-            };
-            if partial && !reader.gaps.contains(&"graph_visited_limit") {
-                reader.gaps.push("graph_visited_limit");
-            }
-            around.insert(key.clone(), edges);
-        }
-        expand(
-            reader,
-            config,
-            (&current, depth),
-            &around[&key],
-            &mut steps,
-            &mut visited,
-            &mut queue,
-        );
-        if reader.budget.exhausted.is_some() {
-            break;
-        }
+            })
+        });
+        let Some(edges) = edges? else {
+            return Ok(None);
+        };
+        reader.note_index_limits(visit_partial, memory_partial);
+        walk.expand(&mut reader.budget, config, &current, depth, &edges);
     }
-    Ok(Some(steps))
+    Ok(Some(walk.steps))
 }
-/// One breadth-first step: the steps from `current` (at `depth`) along `edges`.
-fn expand(
-    reader: &mut Reader<'_>,
-    config: &Walk<'_>,
-    (current, depth): (&GraphNodeIdentity, u16),
-    edges: &[scan::Edge],
-    steps: &mut Vec<Step>,
-    visited: &mut BTreeSet<(Key, u16)>,
-    queue: &mut VecDeque<(GraphNodeIdentity, u16)>,
-) {
-    for edge in edges {
-        if !reader.budget.visit() {
-            break;
+
+/// Breadth-first discovery expands a node at its minimum distance, once. Every followed
+/// relationship still contributes a step, even when it points to an already reached node.
+struct BreadthFirst {
+    queue: VecDeque<(GraphNodeIdentity, u16)>,
+    visited: BTreeSet<Key>,
+    steps: Vec<Step>,
+}
+
+impl BreadthFirst {
+    fn new(starts: impl IntoIterator<Item = GraphNodeIdentity>) -> Self {
+        let mut walk = Self {
+            queue: VecDeque::new(),
+            visited: BTreeSet::new(),
+            steps: Vec::new(),
+        };
+        for start in starts {
+            if walk.visited.insert(dataset::key(&start)) {
+                walk.queue.push_back((start, 0));
+            }
         }
-        if !config.kinds.is_empty() && !config.kinds.contains(&edge.raw.edge.kind.as_str()) {
-            continue;
-        }
-        let mut targets = Vec::new();
-        if !matches!(config.direction, Direction::Reverse) && edge.source == *current {
-            targets.push(&edge.target);
-        }
-        if !matches!(config.direction, Direction::Forward) && edge.target == *current {
-            targets.push(&edge.source);
-        }
-        for target in targets {
-            let next = depth + 1;
-            let key = (
-                dataset::key(target),
-                next,
-                dataset::key(current),
-                edge.raw.edge.edge_id.clone(),
-            );
-            if !reader
-                .budget
-                .retain(std::mem::size_of::<Step>() + edge.raw.edge.payload.to_string().len())
+        walk
+    }
+
+    fn next(&mut self, depth: u16, budget: &mut Budget) -> Option<(GraphNodeIdentity, u16)> {
+        let next = self.queue.pop_front()?;
+        (next.1 < depth && budget.check()).then_some(next)
+    }
+
+    fn expand<'e>(
+        &mut self,
+        budget: &mut Budget,
+        config: &Walk<'_>,
+        current: &GraphNodeIdentity,
+        depth: u16,
+        edges: impl IntoIterator<Item = &'e scan::Edge>,
+    ) {
+        for edge in edges {
+            if !budget.check() {
+                break;
+            }
+            if !config.kinds.is_empty() && !config.kinds.contains(&edge.raw.edge.kind.as_str()) {
+                continue;
+            }
+            let target = if !matches!(config.direction, Direction::Reverse)
+                && edge.source == *current
+            {
+                &edge.target
+            } else if !matches!(config.direction, Direction::Forward) && edge.target == *current {
+                &edge.source
+            } else {
+                continue;
+            };
+            if !budget.visit()
+                || !budget
+                    .retain(std::mem::size_of::<Step>() + edge.raw.edge.payload.to_string().len())
             {
                 break;
             }
-            steps.push(Step {
+            let next = depth + 1;
+            self.steps.push(Step {
                 identity: target.clone(),
                 depth: next,
                 parent: current.clone(),
                 edge: edge.clone(),
             });
-            if visited.insert((key.0, next)) {
-                queue.push_back((target.clone(), next));
+            if self.visited.insert(dataset::key(target)) {
+                self.queue.push_back((target.clone(), next));
             }
         }
     }
@@ -921,4 +906,160 @@ pub(super) fn lineage(
     Ok(GraphResult::Lineage {
         value: model::wire(value)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(name: &str) -> GraphNodeIdentity {
+        GraphNodeIdentity {
+            repository_id: crate::protocol::Id::new("repo").unwrap(),
+            unit_key: "src/lib.rs".into(),
+            node_id: name.into(),
+        }
+    }
+
+    fn edge(id: &str, source: &str, target: &str, kind: &str) -> scan::Edge {
+        let source = identity(source);
+        let target = identity(target);
+        scan::Edge {
+            raw: GraphEdge {
+                repository_id: source.repository_id.clone(),
+                view_id: crate::protocol::Id::new("view").unwrap(),
+                generation_id: crate::protocol::Id::new("generation").unwrap(),
+                content_digest: "capture".into(),
+                edge: StoredEdge {
+                    unit_key: source.unit_key.clone(),
+                    edge_id: id.into(),
+                    source_node_id: source.node_id.clone(),
+                    target_node_id: target.node_id.clone(),
+                    kind: kind.into(),
+                    payload: json!({}),
+                },
+            },
+            source,
+            target,
+        }
+    }
+
+    #[test]
+    fn adjacency_walk_charges_only_followed_edges_and_expands_cycles_once() {
+        let edges = [
+            edge("unrelated", "x", "y", "CALLS"),
+            edge("ab", "a", "b", "CALLS"),
+            edge("bc", "b", "c", "CALLS"),
+            edge("ca", "c", "a", "CALLS"),
+            edge("self", "a", "a", "CALLS"),
+            edge("other-kind", "b", "d", "USES_TYPE"),
+        ];
+        let mut budget = Budget::new(&crate::protocol::data::QueryLimits {
+            max_results: 50,
+            max_visited: 4,
+            deadline_ms: 10_000,
+        });
+        let config = Walk {
+            starts: &[],
+            kinds: &["CALLS"],
+            direction: Direction::Forward,
+            depth: 10,
+            complete: true,
+        };
+        let (adjacency, partial) = Adjacency::new(&edges, &[identity("a")], &mut budget);
+        assert!(!partial);
+        assert_eq!(budget.visited, 0);
+        let mut walk = BreadthFirst::new([identity("a"), identity("a")]);
+        let mut expanded = Vec::new();
+        while let Some((node, depth)) = walk.next(config.depth, &mut budget) {
+            walk.expand(
+                &mut budget,
+                &config,
+                &node,
+                depth,
+                adjacency.around(&node, &config.direction),
+            );
+            expanded.push(node.node_id);
+        }
+        assert_eq!(expanded, ["a", "b", "c"]);
+        assert_eq!(
+            walk.steps
+                .iter()
+                .map(|step| step.edge.raw.edge.edge_id.as_str())
+                .collect::<Vec<_>>(),
+            ["ab", "self", "bc", "ca"]
+        );
+        assert_eq!(budget.visited, 4);
+        assert_eq!(budget.exhausted, None);
+        assert_eq!(
+            adjacency
+                .around_all(
+                    [&identity("a"), &identity("b")],
+                    &Direction::Both,
+                    &mut budget
+                )
+                .0
+                .iter()
+                .map(|edge| edge.raw.edge.edge_id.as_str())
+                .collect::<Vec<_>>(),
+            ["ab", "bc", "ca", "self", "other-kind"]
+        );
+        assert_eq!(budget.visited, 4);
+    }
+
+    #[test]
+    fn fallback_keeps_a_seed_edge_when_the_auxiliary_index_is_cut_short() {
+        // Simulate the remaining retention after an admitted scan with a large payload per edge.
+        // The single useful edge is intentionally last, after thousands of unrelated endpoints.
+        let mut budget = Budget::new(&crate::protocol::data::QueryLimits {
+            max_results: 50,
+            max_visited: 20_000,
+            deadline_ms: 10_000,
+        });
+        assert!(budget.retain(super::super::budget::MAX_RETAINED_BYTES - 200 * 1024));
+        let mut edges: Vec<_> = (0..2_000)
+            .map(|i| {
+                edge(
+                    &format!("edge-{i}"),
+                    &format!("left-{i}"),
+                    &format!("right-{i}"),
+                    "CALLS",
+                )
+            })
+            .collect();
+        edges.push(edge("short-path", "start", "target", "CALLS"));
+        let starts = [identity("start")];
+        let (adjacency, partial) = Adjacency::new(&edges, &starts, &mut budget);
+        assert!(
+            partial,
+            "the other endpoints exceed the auxiliary index's memory share"
+        );
+        assert_eq!(
+            budget.exhausted, None,
+            "the retained prefix is still usable"
+        );
+        let config = Walk {
+            starts: &[],
+            kinds: &[],
+            direction: Direction::Forward,
+            depth: 3,
+            complete: true,
+        };
+        let mut walk = BreadthFirst::new(starts.clone());
+        while let Some((node, depth)) = walk.next(config.depth, &mut budget) {
+            walk.expand(
+                &mut budget,
+                &config,
+                &node,
+                depth,
+                adjacency.around(&node, &config.direction),
+            );
+        }
+        assert_eq!(walk.steps.len(), 1);
+        assert_eq!(walk.steps[0].identity, identity("target"));
+        let (incident, partial) = adjacency.around_all(&starts, &Direction::Both, &mut budget);
+        assert!(!partial);
+        assert_eq!(incident[0].raw.edge.edge_id, "short-path");
+        assert_eq!(budget.visited, 1);
+        assert_eq!(budget.exhausted, None);
+    }
 }

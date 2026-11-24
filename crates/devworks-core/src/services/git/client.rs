@@ -77,6 +77,36 @@ impl TreeEntry {
     }
 }
 
+/// Changes in one non-merge commit, parsed without quoting or path separators on stdout.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryTouch {
+    pub path: String,
+    /// Binary changes have a path for coupling and authorship, with no line count.
+    pub lines: Option<(u32, u32)>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryCommit {
+    pub oid: String,
+    pub committed_secs: i64,
+    pub author_time: jiff::Timestamp,
+    pub author_day: jiff::civil::Date,
+    pub author: String,
+    pub subject: String,
+    pub touches: Vec<HistoryTouch>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct GitHistory {
+    pub commits: Vec<HistoryCommit>,
+    pub commit_count: usize,
+    /// The retained first-date selector uses Git's reverse, single-commit query.
+    pub first_commit_time: Option<jiff::Timestamp>,
+    pub shallow: bool,
+    pub clipped: bool,
+    pub refused_paths: usize,
+}
+
 /// One changed path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
@@ -829,6 +859,32 @@ impl Git<'_> {
     pub fn revision_observation(&self, dir: &Path) -> Result<RevisionObservation, GitFault> {
         self.revision_with_policy(dir, None)
     }
+
+    pub(super) fn has_ignored_files(&self, dir: &Path) -> Result<bool, GitFault> {
+        Ok(!self
+            .run(
+                dir,
+                &[
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                MAX_LISTING_BYTES,
+            )?
+            .is_empty())
+    }
+    /// Git status and non-forced worktree removal may both ignore changes to index entries
+    /// with skip-worktree or assume-unchanged set. Cleanup can only trust ordinary entries.
+    pub(super) fn has_status_hidden_entries(&self, dir: &Path) -> Result<bool, GitFault> {
+        let listing = self.run(dir, &["ls-files", "-v", "-z"], MAX_LISTING_BYTES)?;
+        Ok(listing
+            .split(|byte| *byte == 0)
+            .filter(|row| !row.is_empty())
+            .any(|row| !matches!(row, [b'H', b' ', _, ..])))
+    }
+
     /// Reviewed preparation/status can hash tracked contents. A late new filter name must
     /// be constrained by the same kernel policy as the eventual reviewed index write.
     pub fn reviewed_revision_observation(
@@ -1192,12 +1248,74 @@ impl Git<'_> {
         )?;
         parse_tree(&out)
     }
+    /// Read exactly one ordinary file from a validated immutable commit.
+    pub fn file_at(
+        &self,
+        dir: &Path,
+        commit: &str,
+        path: &str,
+        maximum: usize,
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(commit) {
+            return Err(GitFault::Malformed("commit".into()));
+        }
+        let args = [
+            "--no-replace-objects",
+            "--literal-pathspecs",
+            "ls-tree",
+            "-z",
+            "-l",
+            "--full-tree",
+            commit,
+            "--",
+            path,
+        ];
+        let mut command = self.spec(dir, &args, None);
+        command.env.push(("GIT_NO_LAZY_FETCH".into(), "1".into()));
+        let output = self.runner.run(
+            self.ctx,
+            command,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 8192,
+            },
+            self.stop,
+        )?;
+        let (mut entries, refused) = parse_tree(&output)?;
+        if !refused.is_empty() || entries.len() != 1 {
+            return Err(GitFault::SourceChanged);
+        }
+        let entry = entries.pop().expect("one tree entry");
+        if entry.path != path
+            || !(entry.mode == "100644" || entry.mode == "100755")
+            || entry.size > maximum as u64
+        {
+            return Err(GitFault::SourceChanged);
+        }
+        let mut contents = self.read_blobs(dir, &[entry.oid], entry.size as usize, true)?;
+        let bytes = contents.pop().ok_or(GitFault::SourceChanged)?;
+        if bytes.len() != entry.size as usize {
+            return Err(GitFault::SourceChanged);
+        }
+        Ok(bytes)
+    }
+
     /// The contents of `oids`, in order (one `cat-file --batch` process).
     pub fn blobs(
         &self,
         dir: &Path,
         oids: &[String],
         expected_bytes: usize,
+    ) -> Result<Vec<Vec<u8>>, GitFault> {
+        self.read_blobs(dir, oids, expected_bytes, false)
+    }
+
+    fn read_blobs(
+        &self,
+        dir: &Path,
+        oids: &[String],
+        expected_bytes: usize,
+        exact_local: bool,
     ) -> Result<Vec<Vec<u8>>, GitFault> {
         if oids.is_empty() {
             return Ok(Vec::new());
@@ -1211,9 +1329,20 @@ impl Git<'_> {
             request.push('\n');
         }
         let max = blob_output_limit(expected_bytes, oids.len());
+        let spec = if exact_local {
+            let mut local = self.spec(
+                dir,
+                &["--no-replace-objects", "cat-file", "--batch"],
+                Some(request.into_bytes()),
+            );
+            local.env.push(("GIT_NO_LAZY_FETCH".into(), "1".into()));
+            local
+        } else {
+            self.spec(dir, &["cat-file", "--batch"], Some(request.into_bytes()))
+        };
         let out = self.runner.run(
             self.ctx,
-            self.spec(dir, &["cat-file", "--batch"], Some(request.into_bytes())),
+            spec,
             HelperLimits {
                 deadline: self.deadline,
                 max_stdout: max,
@@ -1222,6 +1351,107 @@ impl Git<'_> {
         )?;
         parse_batch(&out, oids)
     }
+    /// Read bounded history of one validated commit without changing its checkout.
+    pub fn history(
+        &self,
+        dir: &Path,
+        head: &str,
+        since_secs: i64,
+        max_commits: usize,
+    ) -> Result<GitHistory, GitFault> {
+        if !oid_ok(head) || !(1..=10_000).contains(&max_commits) {
+            return Err(GitFault::Malformed("history binding".into()));
+        }
+        let limit = format!("--max-count={}", max_commits + 1);
+        let since = format!("--since=@{since_secs}");
+        let meta = ["--no-pager", "--no-replace-objects"];
+        let run = |args: &[&str], max| {
+            let mut all = meta.to_vec();
+            all.extend(args);
+            let mut spec = self.spec(dir, &all, None);
+            spec.env.push(("GIT_NO_LAZY_FETCH".into(), "1".into()));
+            self.runner
+                .run(
+                    self.ctx,
+                    spec,
+                    HelperLimits {
+                        deadline: self.deadline,
+                        max_stdout: max,
+                    },
+                    self.stop,
+                )
+                .map_err(GitFault::from)
+        };
+        let shallow =
+            match std::str::from_utf8(&run(&["rev-parse", "--is-shallow-repository"], 128)?)
+                .ok()
+                .map(str::trim)
+            {
+                Some("true") => true,
+                Some("false") => false,
+                _ => return Err(GitFault::Malformed("shallow witness".into())),
+            };
+        let count: usize = std::str::from_utf8(&run(
+            &["rev-list", "--count", &limit, "--no-merges", head, "--"],
+            128,
+        )?)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .filter(|count| *count <= max_commits + 1)
+        .ok_or_else(|| GitFault::Malformed("history commit count".into()))?;
+        // A bounded complete history can identify its roots. Shallow boundaries and
+        // clipped samples cannot establish when the repository began.
+        let first_commit_time = if shallow || count > max_commits {
+            None
+        } else {
+            let roots = run(
+                &["log", "--max-parents=0", "--format=%aI", &limit, head, "--"],
+                (count + 1) * 64,
+            )?;
+            let roots = std::str::from_utf8(&roots)
+                .map_err(|_| GitFault::Malformed("commit date".into()))?;
+            let mut first = None;
+            for date in roots.lines() {
+                let date = date
+                    .trim()
+                    .parse::<jiff::Timestamp>()
+                    .map_err(|_| GitFault::Malformed("commit date".into()))?;
+                first = Some(first.map_or(date, |current: jiff::Timestamp| current.min(date)));
+            }
+            first
+        };
+        let raw = run(
+            &[
+                "log",
+                "--no-color",
+                "--no-merges",
+                "--no-renames",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--date-order",
+                &since,
+                &limit,
+                "--numstat",
+                "-z",
+                "--format=format:%x00%H%x00%ct%x00%aI%x00%aN%x00%s%x00",
+                head,
+                "--",
+            ],
+            32 * 1024 * 1024,
+        )?;
+        let (mut commits, refused_paths) = parse_history(&raw)?;
+        let clipped = count > max_commits || commits.len() > max_commits;
+        commits.truncate(max_commits);
+        Ok(GitHistory {
+            commits,
+            commit_count: count.min(max_commits),
+            first_commit_time,
+            shallow,
+            clipped,
+            refused_paths,
+        })
+    }
+
     /// The paths that differ between two commits (renames detected, `-M`).
     pub fn diff(
         &self,
@@ -1468,27 +1698,38 @@ impl Git<'_> {
         dir: &Path,
         base: &str,
     ) -> Result<(Vec<Change>, Vec<String>), GitFault> {
-        let out = self.run(
-            dir,
-            &[
-                "diff",
-                "--no-color",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--name-status",
-                "-z",
-                "-M",
-                base,
-                "--",
-            ],
-            MAX_LISTING_BYTES,
-        )?;
-        let (mut changes, mut refused) = parse_name_status(&out)?;
-        let untracked = self.run(
-            dir,
-            &["ls-files", "-z", "--others", "--exclude-standard"],
-            MAX_LISTING_BYTES,
-        )?;
+        self.local_changes_with_policy(dir, base, None)
+    }
+
+    /// An automatic worktree capture is a read. Restrict it to a qualified Git that cannot
+    /// start repository-configured clean/process filters or other child commands.
+    pub(crate) fn reviewed_local_changes(
+        &self,
+        dir: &Path,
+        base: &str,
+    ) -> Result<(Vec<Change>, Vec<String>), GitFault> {
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.safe_dirty(dir, 0, Some(&policy))?;
+        self.local_changes_with_policy(dir, base, Some(&policy))
+    }
+
+    fn local_changes_with_policy(
+        &self,
+        dir: &Path,
+        base: &str,
+        policy: Option<&serde_json::Value>,
+    ) -> Result<(Vec<Change>, Vec<String>), GitFault> {
+        let read = |args: &[&str]| match policy {
+            Some(policy) => self.reviewed_read(dir, args, MAX_LISTING_BYTES, policy),
+            None => self.run(dir, args, MAX_LISTING_BYTES),
+        };
+        let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
+        if policy.is_some() {
+            args.push("--ignore-submodules=dirty");
+        }
+        args.extend(["--name-status", "-z", "-M", base, "--"]);
+        let (mut changes, mut refused) = parse_name_status(&read(&args)?)?;
+        let untracked = read(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         for raw in untracked.split(|b| *b == 0).filter(|r| !r.is_empty()) {
             match path_of(raw) {
                 Some(p) => changes.push(Change::Added(p)),
@@ -1506,6 +1747,72 @@ pub fn oid_ok(s: &str) -> bool {
 fn path_of(raw: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(raw).ok()?;
     relative_ok(s).then(|| unit_key(s))
+}
+
+fn parse_history(raw: &[u8]) -> Result<(Vec<HistoryCommit>, usize), GitFault> {
+    let malformed = || GitFault::Malformed("history frame".into());
+    let utf8 = |bytes| std::str::from_utf8(bytes).map_err(|_| malformed());
+    let mut fields = raw.split(|byte| *byte == 0).peekable();
+    let mut commits = Vec::new();
+    let mut refused = 0;
+    while let Some(field) = fields.next() {
+        if field.is_empty() {
+            continue;
+        }
+        let oid = utf8(field)?;
+        if !oid_ok(oid) {
+            return Err(malformed());
+        }
+        let committed_secs = utf8(fields.next().ok_or_else(malformed)?)?
+            .parse::<i64>()
+            .map_err(|_| malformed())?;
+        let date = utf8(fields.next().ok_or_else(malformed)?)?;
+        let author_time = date.parse::<jiff::Timestamp>().map_err(|_| malformed())?;
+        let author_day = date
+            .get(..10)
+            .ok_or_else(malformed)?
+            .parse::<jiff::civil::Date>()
+            .map_err(|_| malformed())?;
+        let author = String::from_utf8_lossy(fields.next().ok_or_else(malformed)?)
+            .trim()
+            .to_owned();
+        let subject = String::from_utf8_lossy(fields.next().ok_or_else(malformed)?)
+            .trim()
+            .to_owned();
+        let mut touches = Vec::new();
+        while fields.peek().is_some_and(|field| !field.is_empty()) {
+            let row = fields.next().ok_or_else(malformed)?;
+            let row = row.strip_prefix(b"\n").unwrap_or(row);
+            let mut parts = row.splitn(3, |byte| *byte == b'\t');
+            let (Some(added), Some(removed), Some(path)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                return Err(malformed());
+            };
+            let lines = match (added, removed) {
+                (b"-", b"-") => None,
+                (added, removed) => Some((
+                    utf8(added)?.parse().map_err(|_| malformed())?,
+                    utf8(removed)?.parse().map_err(|_| malformed())?,
+                )),
+            };
+            if let Some(path) = path_of(path) {
+                touches.push(HistoryTouch { path, lines });
+            } else {
+                refused += 1;
+            }
+        }
+        commits.push(HistoryCommit {
+            oid: oid.into(),
+            committed_secs,
+            author_time,
+            author_day,
+            author,
+            subject,
+            touches,
+        });
+    }
+    Ok((commits, refused))
 }
 
 pub fn parse_worktrees(text: &str) -> Vec<WorktreeEntry> {
@@ -1897,5 +2204,30 @@ mod tests {
         assert_eq!(w[0].branch.as_deref(), Some("refs/heads/main"));
         assert_eq!(w[1].branch, None);
         assert_eq!(w[1].head.as_deref(), Some(oid.as_str()));
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn framed_history_keeps_date_offsets_binary_paths_and_an_empty_commit() {
+        let a = "a".repeat(40);
+        let b = "b".repeat(40);
+        let frames = format!(
+            "\0{a}\x001700000000\x002026-11-15T23:50:00-05:00\0Author\0\0\n4\t1\tsrc/a file.rs\0-\t-\tfixtures/b.bin\0\0\0{b}\x001699990000\x002026-11-15T00:00:00Z\0Other\0empty\0"
+        );
+        let (commits, refused) = parse_history(frames.as_bytes()).unwrap();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].oid, a);
+        assert_eq!(commits[0].author_day.to_string(), "2026-11-15");
+        assert_eq!(commits[0].author_time.to_string(), "2026-11-16T04:50:00Z");
+        assert_eq!(commits[0].touches[0].path, "src/a file.rs");
+        assert_eq!(commits[0].touches[0].lines, Some((4, 1)));
+        assert_eq!(commits[0].touches[1].lines, None);
+        assert_eq!(commits[1].oid, b);
+        assert!(commits[1].touches.is_empty());
+        assert_eq!(refused, 0);
     }
 }

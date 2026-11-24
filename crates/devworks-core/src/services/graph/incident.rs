@@ -49,8 +49,25 @@ pub(super) fn around(
     if packages && record.as_ref().is_some_and(|n| n.node.kind == "Package") {
         return Ok(None);
     }
+    let links = scope.views.len() > 1;
+    if links
+        && !matches!(direction, Direction::Forward)
+        && record
+            .as_ref()
+            .is_some_and(super::repository_analysis::links::can_target_incident)
+    {
+        return Ok(None);
+    }
     let mut probes = Vec::new();
     if !matches!(direction, Direction::Reverse) {
+        probes.push((
+            GraphEdgeEnd::Source,
+            GraphEndpointKey::NodeId,
+            node.node_id.clone(),
+        ));
+    } else if links && (kinds.is_empty() || kinds.contains(&"PUBLISHES")) {
+        // A local CONSUMES edge stores the consumer at its source, but the
+        // derived publisher-to-consumer link enters that same node.
         probes.push((
             GraphEdgeEnd::Source,
             GraphEndpointKey::NodeId,
@@ -79,11 +96,17 @@ pub(super) fn around(
     let mut found = BTreeMap::new();
     let mut seen = std::collections::BTreeSet::new();
     'probes: for (end, key, value) in probes {
+        let reverse_consumer =
+            end == GraphEdgeEnd::Source && matches!(direction, Direction::Reverse);
         let filter = GraphCandidateFilter {
             end,
             key,
             values: vec![value],
-            kinds: stored.clone(),
+            kinds: if reverse_consumer {
+                vec!["CONSUMES".into()]
+            } else {
+                stored.clone()
+            },
         };
         let mut after = None;
         loop {
@@ -117,13 +140,46 @@ pub(super) fn around(
                 // A stored view link is already composed: no edge is relinked here.
                 let edge = match scan::resolve(read, scope, layers, None, raw, budget)? {
                     Resolved::Edge(Ok(edge)) => edge,
-                    Resolved::Skip | Resolved::Edge(Err(_)) => continue,
+                    Resolved::Edge(Err(edge)) => {
+                        if links
+                            && edge.raw.repository_id == node.repository_id
+                            && edge.raw.edge.source_node_id == node.node_id
+                            && super::repository_analysis::links::can_add_incident(&edge.raw, None)
+                        {
+                            return Ok(None);
+                        }
+                        continue;
+                    }
+                    Resolved::Skip => continue,
                     Resolved::Stop => break 'probes,
                 };
                 let from = !matches!(direction, Direction::Reverse) && edge.source == *node;
                 let to = !matches!(direction, Direction::Forward) && edge.target == *node;
+                if reverse_consumer
+                    && edge.source == *node
+                    && edge.target.repository_id == node.repository_id
+                {
+                    return Ok(None);
+                }
                 if !from && !to {
                     continue;
+                }
+                if links && from {
+                    let candidate = if matches!(
+                        edge.raw.edge.kind.as_str(),
+                        "CALLS" | "USES_TYPE" | "IMPLEMENTS" | "RENDERS" | "INJECTS"
+                    ) && edge.target.repository_id == edge.source.repository_id
+                    {
+                        read.graph().graph_node(scope, &edge.target)?
+                    } else {
+                        None
+                    };
+                    if super::repository_analysis::links::can_add_incident(
+                        &edge.raw,
+                        candidate.as_ref(),
+                    ) {
+                        return Ok(None);
+                    }
                 }
                 if !budget.retain(
                     std::mem::size_of::<Edge>()
