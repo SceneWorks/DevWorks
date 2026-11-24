@@ -458,7 +458,7 @@ impl HttpTransport for RecordedCodeReviews {
             path if path.contains("/pulls/42/reviews?") => json!([{
                 "id":15, "commit_id":self.head, "state":"COMMENTED",
                 "user":{"id":42,"type":"Bot","login":"test-review[bot]"},
-                "submitted_at":"2023-11-14T22:13:20Z", "body":"Actionable comments posted: 0"
+                "submitted_at":"2023-11-14T22:13:19Z", "body":"Actionable comments posted: 0"
             }]),
             path if path.contains("/pulls/42/comments?") => json!([]),
             path if path.ends_with("/branches/main/protection") => json!({

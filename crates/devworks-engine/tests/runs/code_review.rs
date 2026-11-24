@@ -122,7 +122,7 @@ fn local_review_case(report_finding: bool) {
             work_id: id("task-f1"),
             owner: fx.user.principal().clone(),
             ownership_revision: 1,
-            owner_root_id: Some(rid("task-f1")), owner_assignment_id: None,
+            owner_root_id: Some(rid("root-f")), owner_assignment_id: None,
             registered_root_id: id("review-root"),
             path: path.clone(),
             branch: format!("refs/heads/{branch}"),

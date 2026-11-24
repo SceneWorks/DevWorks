@@ -159,8 +159,9 @@ pub(super) fn qualified(
                     || check.root_id.as_ref() == Some(&task))
                 && check.latest_attempt().is_some_and(|attempt| {
                     attempt.observations.iter().any(|entry| {
-                        let subject = &entry["verifiedWorktree"];
-                        entry["result"]["value"]["exitCode"].as_i64() == Some(0)
+                        let observed = &entry["effect"]["evidence"];
+                        let subject = &observed["verifiedWorktree"];
+                        observed["result"]["value"]["exitCode"].as_i64() == Some(0)
                             && subject["worktreeId"].as_str() == Some(prepared.git_tree.id.as_str())
                             && subject["repositoryId"].as_str()
                                 == Some(prepared.git_tree.repository_id.as_str())
