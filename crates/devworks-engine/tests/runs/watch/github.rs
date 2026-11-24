@@ -47,7 +47,7 @@ impl HttpTransport for RecordedWorkflow {
                     (429, Value::Null)
                 } else {
                     headers.push(("etag".to_owned(), "\"watch-etag\"".to_owned()));
-                    let (status, conclusion) = if requests.len() == 1 {
+                    let (status, conclusion) = if matches!(requests.len(), 1 | 5) {
                         ("in_progress", Value::Null)
                     } else {
                         ("completed", json!("failure"))
@@ -226,6 +226,116 @@ fn a_github_run_shares_conditional_polls_and_the_backup_reads_it_directly() {
                     .contains("/actions/runs/42")
             );
         }
+        let rerun = create_github_watch(&app, &ctx, "42", "watch-rerun");
+        assert_eq!(
+            supervisor.settle().unwrap(),
+            0,
+            "old terminal state is not reused"
+        );
+        assert_eq!(wire.requests.lock().unwrap().len(), 4);
+        fx.h.advance(30_000);
+        assert_eq!(supervisor.settle().unwrap(), 0);
+        assert_eq!(wire.requests.lock().unwrap().len(), 5);
+        assert!(
+            read(&*fx.store, |snapshot| {
+                snapshot.watchers().watch_event_for_watcher(&rerun)
+            })
+            .is_none()
+        );
+        app.shutdown().await;
+    });
+}
+
+#[derive(Default)]
+struct RecordedPull {
+    requests: Mutex<Vec<String>>,
+    suite_queued: std::sync::atomic::AtomicBool,
+}
+
+const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+impl HttpTransport for RecordedPull {
+    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.send_with_headers(request)
+            .map(|exchange| exchange.response)
+    }
+
+    fn send_with_headers(&self, request: &HttpRequest) -> Result<HttpExchange, HttpError> {
+        let path = request.url.as_str();
+        if path.ends_with("/user") || path.ends_with("/repos/Acme/watch") {
+            return RecordedWorkflow::default().send_with_headers(request);
+        }
+        let mut requests = self.requests.lock().unwrap();
+        requests.push(path.to_owned());
+        let mut headers = Vec::new();
+        let value = if path.ends_with("/pulls/7") {
+            if requests.len() == 1 {
+                headers.push(("x-ratelimit-remaining".into(), "0".into()));
+            }
+            json!({"number":7,"base":{"repo":{"id":12}},"head":{"sha":HEAD},
+                "html_url":"https://github.com/Acme/watch/pull/7"})
+        } else if path.contains("/check-runs?") {
+            json!({"total_count":1,"check_runs":[
+                {"id":1,"head_sha":HEAD,"status":"completed","conclusion":"success"}
+            ]})
+        } else if path.contains("/status?") {
+            json!({"total_count":0,"sha":HEAD,"state":"pending"})
+        } else if path.contains("/check-suites?") {
+            let queued = self.suite_queued.load(std::sync::atomic::Ordering::Relaxed);
+            json!({"total_count":1,"check_suites":[
+                {"id":3,"head_sha":HEAD,"status":if queued {"queued"} else {"completed"}}
+            ]})
+        } else if path.contains("/actions/runs?") {
+            json!({"total_count":0,"workflow_runs":[]})
+        } else {
+            panic!("unexpected request {path}");
+        };
+        Ok(HttpExchange {
+            response: HttpResponse {
+                status: 200,
+                body: value.to_string().into_bytes(),
+            },
+            headers,
+        })
+    }
+}
+
+#[test]
+fn pr_check_settlement_waits_for_pending_suites_and_honors_head_pacing() {
+    let _native_case = native_runtime_case();
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let wire = Arc::new(RecordedPull::default());
+        wire.suite_queued.store(true, std::sync::atomic::Ordering::Relaxed);
+        let client = Arc::new(GitHubClient {
+            http: wire.clone(),
+            secrets: Arc::new(Credentials),
+        });
+        qualify(&fx, client.clone(), "Acme/watch");
+        let app = app_with_github(&fx, client).await;
+        let (ctx, _) = agent_context(&fx);
+        let frame = json!({
+            "mode":"Command", "protocol":"1.0-draft.1", "schemaRevision":9, "requestKey":"watch-pull",
+            "body":{"kind":"watch.create","github":{"repositoryId":"watch-github-repo","pullRequestNumber":"7"}}
+        });
+        let reply = app.command(&ctx, "watch.create", frame.to_string().as_bytes()).unwrap();
+        let CommandReply::Recorded { receipt, .. } = reply else { panic!("{reply:?}") };
+        let DomainDecision::Applied { result: OperationResult::WatchCreate { value } } =
+            receipt.decision else { panic!("{:?}", receipt.decision) };
+        let event = || read(&*fx.store, |snapshot| {
+            snapshot.watchers().watch_event_for_watcher(&value.id)
+        });
+        let supervisor = app.watchers().unwrap();
+        assert_eq!(supervisor.settle().unwrap(), 0);
+        assert_eq!(wire.requests.lock().unwrap().len(), 1, "head exhausted the budget");
+        fx.h.advance(60_000);
+        assert_eq!(supervisor.settle().unwrap(), 0, "check suite is still queued");
+        assert_eq!(wire.requests.lock().unwrap().len(), 5);
+        assert!(event().is_none());
+        wire.suite_queued.store(false, std::sync::atomic::Ordering::Relaxed);
+        fx.h.advance(30_000);
+        assert_eq!(supervisor.settle().unwrap(), 1);
+        assert_eq!(event().unwrap().payload["outcome"]["kind"], "Succeeded");
         app.shutdown().await;
     });
 }

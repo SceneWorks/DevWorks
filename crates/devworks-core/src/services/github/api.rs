@@ -108,6 +108,22 @@ pub struct ApiPage {
     pub value: Option<Value>,
     pub next_page: Option<String>,
 }
+impl ApiPage {
+    pub(super) fn throttled(&self) -> bool {
+        self.status == 429
+            || self.status == 403
+                && (self.control.remaining == Some(0) || self.control.retry_after_supplied)
+    }
+
+    pub(super) fn shared_backoff(&self) -> Option<i64> {
+        if self.status == 403 && !self.throttled() {
+            None
+        } else {
+            self.control.backoff_until_ms
+        }
+    }
+}
+
 impl std::fmt::Debug for ApiPage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApiPage")

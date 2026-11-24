@@ -16,20 +16,24 @@ use crate::services::github::{
     },
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub(super) const REVISION: u32 = 9;
 
 pub(super) struct GithubWatch {
     service: Arc<GitHubService>,
-    cache: Mutex<PollCache>,
+    cache: Mutex<TargetCache>,
+    generation: AtomicU64,
 }
 
-#[derive(Default)]
-struct PollCache {
-    targets: HashMap<(String, Id, GithubWatchSubject, i64), Poll>,
-    deferred_until: i64,
+#[derive(Clone, Copy)]
+pub(super) struct PollPass {
+    generation: u64,
+    direct: bool,
 }
+
+type TargetCache = HashMap<(String, Id, GithubWatchSubject, i64), Poll>;
 
 #[derive(Default)]
 struct Poll {
@@ -38,7 +42,7 @@ struct Poll {
     conclusion: Option<WatchConclusion>,
     unavailable: bool,
     observed_at_ms: Option<i64>,
-    backup: Option<i64>,
+    generation: u64,
 }
 
 impl GithubWatch {
@@ -46,6 +50,14 @@ impl GithubWatch {
         Self {
             service,
             cache: Mutex::default(),
+            generation: AtomicU64::new(1),
+        }
+    }
+
+    pub(super) fn pass(&self, direct: bool) -> PollPass {
+        PollPass {
+            generation: self.generation.fetch_add(1, Ordering::Relaxed),
+            direct,
         }
     }
 
@@ -54,29 +66,24 @@ impl GithubWatch {
         binding: &StoredGithubWatch,
         permission: i64,
         now: i64,
-        backup: Option<i64>,
+        pass: PollPass,
     ) -> (PollResult, Option<i64>) {
         let mut cache = self.cache.locked();
-        cache
-            .targets
-            .retain(|_, poll| poll.due >= now.saturating_sub(2 * POLL_INTERVAL_MS));
-        if cache.deferred_until > now {
-            return (PollResult::Running, None);
-        }
+        cache.retain(|_, poll| poll.due >= now.saturating_sub(2 * POLL_INTERVAL_MS));
         let key = (
             binding.remote_user.clone(),
             binding.remote_repository.clone(),
             binding.subject,
             permission,
         );
-        let poll = cache.targets.entry(key).or_default();
-        if backup.is_some_and(|marker| poll.backup == Some(marker))
-            || (backup.is_none() && poll.due > now)
-        {
+        let poll = cache.entry(key).or_default();
+        if poll.generation == pass.generation {
             return (poll.result(), poll.observed_at_ms);
         }
-        poll.backup = backup;
-        let validators = if backup.is_some() {
+        if !pass.direct && poll.due > now {
+            return (PollResult::Running, poll.observed_at_ms);
+        }
+        let validators = if pass.direct {
             None
         } else {
             poll.validators.as_ref()
@@ -93,7 +100,7 @@ impl GithubWatch {
                 poll.unavailable = false;
             }
             Ok((RunObservation::Deferred, due)) => {
-                cache.deferred_until = due;
+                poll.due = due;
                 return (PollResult::Running, None);
             }
             Err(_) => {
@@ -103,6 +110,7 @@ impl GithubWatch {
                 poll.validators = None;
             }
         }
+        poll.generation = pass.generation;
         poll.observed_at_ms = Some(now);
         (poll.result(), poll.observed_at_ms)
     }
@@ -221,24 +229,16 @@ impl WatchService {
         &self,
         watcher: &StoredWatcher,
         source: &StoredGithubWatch,
-        backup: Option<i64>,
+        pass: Option<PollPass>,
     ) -> Result<(bool, Option<&'static str>), StorageError> {
         let now = self.clock.now_ms().get();
-        let (observed, permission) = if watcher
+        let expired = watcher
             .expires_at_ms
-            .is_some_and(|deadline| now >= deadline)
-        {
-            (
-                WatchConclusion {
-                    kind: "TimedOut",
-                    conclusion: "the watcher's maximum lifetime elapsed",
-                    url: String::new(),
-                    duration_ms: Some(now.saturating_sub(watcher.created_at_ms)),
-                },
-                None,
-            )
+            .is_some_and(|deadline| now >= deadline);
+        let observation = if expired {
+            None
         } else {
-            let Some(github) = &self.github else {
+            let (Some(github), Some(pass)) = (&self.github, pass) else {
                 return Ok((
                     false,
                     Some("the GitHub watcher has no available account service"),
@@ -260,7 +260,7 @@ impl WatchService {
             let Some(permission) = current else {
                 return Ok((false, Some("its GitHub repository binding is unavailable")));
             };
-            let (observed, polled_at) = github.poll(source, permission, now, backup);
+            let (observed, polled_at) = github.poll(source, permission, now, pass);
             if let Some(polled_at) = polled_at {
                 self.last_polled
                     .locked()
@@ -271,7 +271,7 @@ impl WatchService {
                 PollResult::Unavailable => {
                     return Ok((false, Some("its GitHub status cannot be established")));
                 }
-                PollResult::Finished(observed) => (observed, Some(permission)),
+                PollResult::Finished(observed) => Some((observed, permission)),
             }
         };
         let id = watcher.id.clone();
@@ -281,26 +281,37 @@ impl WatchService {
             let Some(watcher) = tx.watchers().watcher(&id)? else {
                 return Ok(false);
             };
-            let expired = observed.url.is_empty();
-            if watcher.phase != WatcherPhase::Active
-                || watcher.github.as_ref() != Some(&source)
-                || (!expired && !current_in(tx, &source, watcher.project_id.as_ref(), permission)?)
-            {
+            if watcher.phase != WatcherPhase::Active || watcher.github.as_ref() != Some(&source) {
                 return Ok(false);
             }
-            let detail = if expired {
-                observed.conclusion.to_owned()
+            let now = tx.now_ms();
+            let (kind, detail, duration) = if watcher.expires_at_ms.is_some_and(|end| now >= end) {
+                (
+                    "TimedOut",
+                    "the watcher's maximum lifetime elapsed".to_owned(),
+                    Some(now.saturating_sub(watcher.created_at_ms)),
+                )
             } else {
-                format!(
-                    "GitHub conclusion: {}\n{}",
-                    observed.conclusion, observed.url
+                let Some((observed, permission)) = observation else {
+                    return Ok(false);
+                };
+                if !current_in(tx, &source, watcher.project_id.as_ref(), Some(permission))? {
+                    return Ok(false);
+                }
+                (
+                    observed.kind,
+                    format!(
+                        "GitHub conclusion: {}\n{}",
+                        observed.conclusion, observed.url
+                    ),
+                    observed.duration_ms,
                 )
             };
             finish_in(
                 tx,
                 watcher,
-                outcome(observed.kind, None, None, Some(&detail)),
-                observed.duration_ms,
+                outcome(kind, None, None, Some(&detail)),
+                duration,
                 None,
                 false,
                 None,

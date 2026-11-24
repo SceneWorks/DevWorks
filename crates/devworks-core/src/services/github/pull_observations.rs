@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 const INTERVAL_MS: i64 = 60_000;
 
 #[derive(Clone, Copy)]
-enum Evidence {
+pub(super) enum Evidence {
     CheckRun,
     CheckSuite,
     WorkflowRun,
@@ -39,7 +39,7 @@ impl Evidence {
         }
     }
 
-    fn endpoint(self, number: &str, head: &str) -> (String, &'static str) {
+    pub(super) fn endpoint(self, number: &str, head: &str) -> (String, &'static str) {
         match self {
             Self::CheckRun => (
                 format!("/commits/{head}/check-runs?filter=all"),
@@ -115,6 +115,15 @@ impl GitHubService {
         target: &PollTarget,
         number: &str,
     ) -> Result<Option<String>, Failure> {
+        let page = self.observe_pull_head_page(target, number)?;
+        Self::decode_pull_head(&page, target, number)
+    }
+
+    pub(super) fn observe_pull_head_page(
+        &self,
+        target: &PollTarget,
+        number: &str,
+    ) -> Result<ApiPage, Failure> {
         let endpoint = Endpoint::new(
             &format!(
                 "https://api.github.com/repos/{}/{}/pulls/{number}",
@@ -131,10 +140,16 @@ impl GitHubService {
             .client
             .token_for_account(&*self.store, &target.account)
             .map_err(repositories::api_fault)?;
-        let page = self
-            .client
+        self.client
             .observe_authenticated_page(&endpoint, None, None, now, INTERVAL_MS, token)
-            .map_err(repositories::api_fault)?;
+            .map_err(repositories::api_fault)
+    }
+
+    pub(super) fn decode_pull_head(
+        page: &ApiPage,
+        target: &PollTarget,
+        number: &str,
+    ) -> Result<Option<String>, Failure> {
         if page.status != 200 {
             return Err(repositories::api_fault(Fault::Rejected(page.status)));
         }

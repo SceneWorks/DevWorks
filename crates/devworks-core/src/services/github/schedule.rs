@@ -2,9 +2,10 @@
 //! releasing each snapshot, and a process restart simply scans the same durable endpoint cursors.
 use super::issue_poll::{self, IssuePageResult};
 use super::{GitHubService, credentials};
+use crate::locks::LockExt;
 use crate::ports::storage::{
     ConfigScope, ConfigurationRead, ProjectRead, ReadOptions, RepositoryFilter, StorageError,
-    WriteTransaction, read_snapshot,
+    StoredGithubAccount, WriteTransaction, read_snapshot,
 };
 use crate::protocol::Id;
 use crate::services::git::github::Repository;
@@ -28,6 +29,23 @@ pub struct PollPass {
     pub defer_until_ms: Option<i64>,
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub(super) struct PollAccount {
+    id: Id,
+    user: Option<String>,
+    credential_revision: i64,
+}
+
+impl From<&StoredGithubAccount> for PollAccount {
+    fn from(account: &StoredGithubAccount) -> Self {
+        Self {
+            id: account.id.clone(),
+            user: account.remote_user_id.clone(),
+            credential_revision: account.credential_revision,
+        }
+    }
+}
+
 impl GitHubService {
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
@@ -37,67 +55,81 @@ impl GitHubService {
         self.stopping.load(Ordering::SeqCst)
     }
 
-    pub(super) fn poll_deferred_until(&self, now: i64) -> Option<i64> {
-        let until = self.poll_deferred_until_ms.load(Ordering::Acquire);
-        (until > now).then_some(until)
+    pub(super) fn poll_deferred_until(&self, account: &PollAccount, now: i64) -> Option<i64> {
+        self.poll_deadlines
+            .locked()
+            .get(account)
+            .copied()
+            .filter(|&until| until > now)
     }
 
-    pub(super) fn defer_polls(&self, until: i64) {
-        self.poll_deferred_until_ms
-            .fetch_max(until, Ordering::AcqRel);
+    pub(super) fn defer_polls(&self, account: PollAccount, until: i64) {
+        let now = self.clock.now_ms().get();
+        let mut deadlines = self.poll_deadlines.locked();
+        deadlines.retain(|_, deadline| *deadline > now);
+        let current = deadlines.entry(account).or_default();
+        *current = (*current).max(until);
     }
 
     /// Read at most one registration page and capture at most one endpoint page per registration.
     /// A throttle ends the pass and the runtime waits before proceeding to other registrations.
     pub fn poll_pass(&self, after: Option<Id>) -> Result<PollPass, StorageError> {
-        if let Some(until) = self.poll_deferred_until(self.clock.now_ms().get()) {
+        let (page, next, account) =
+            read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
+                let Some(account) = snapshot.github().github_account()? else {
+                    return Ok((Vec::new(), None, None));
+                };
+                if !credentials::account_is_current(snapshot.configuration(), &account)? {
+                    return Ok((Vec::new(), None, None));
+                }
+                let account = PollAccount::from(&account);
+                let cursor_page = snapshot.projects().repositories(
+                    &RepositoryFilter::default(),
+                    after.as_ref(),
+                    PAGE,
+                )?;
+                let next = if cursor_page.len() == usize::from(PAGE) {
+                    cursor_page.last().map(|row| row.id.clone())
+                } else {
+                    None
+                };
+                let mut work = Vec::new();
+                for row in cursor_page {
+                    if row.lifecycle != "Active"
+                        || row
+                            .remote_url
+                            .as_deref()
+                            .and_then(Repository::from_remote)
+                            .is_none()
+                    {
+                        continue;
+                    }
+                    let enabled = policy(snapshot.projects(), snapshot.configuration(), &row.id)?;
+                    if enabled.import || enabled.sync || enabled.changes {
+                        work.push(Registration {
+                            qualified: issue_poll::target(snapshot, &row.id)?.is_some(),
+                            local: row.id,
+                            policy: enabled,
+                        });
+                    }
+                }
+                Ok((work, next, Some(account)))
+            })?;
+        let Some(account) = account else {
             return Ok(PollPass {
-                after,
-                defer_until_ms: Some(until),
+                after: next,
+                defer_until_ms: None,
             });
-        }
-        let (page, next) = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
-            let Some(account) = snapshot.github().github_account()? else {
-                return Ok((Vec::new(), None));
-            };
-            if !credentials::account_is_current(snapshot.configuration(), &account)? {
-                return Ok((Vec::new(), None));
-            }
-            let cursor_page = snapshot.projects().repositories(
-                &RepositoryFilter::default(),
-                after.as_ref(),
-                PAGE,
-            )?;
-            let next = if cursor_page.len() == usize::from(PAGE) {
-                cursor_page.last().map(|row| row.id.clone())
-            } else {
-                None
-            };
-            let mut work = Vec::new();
-            for row in cursor_page {
-                if row.lifecycle != "Active"
-                    || row
-                        .remote_url
-                        .as_deref()
-                        .and_then(Repository::from_remote)
-                        .is_none()
-                {
-                    continue;
-                }
-                let enabled = policy(snapshot.projects(), snapshot.configuration(), &row.id)?;
-                if enabled.import || enabled.sync || enabled.changes {
-                    work.push(Registration {
-                        qualified: issue_poll::target(snapshot, &row.id)?.is_some(),
-                        local: row.id,
-                        policy: enabled,
-                    });
-                }
-            }
-            Ok((work, next))
-        })?;
+        };
         for row in page {
             if self.is_stopped() {
                 break;
+            }
+            if let Some(until) = self.poll_deferred_until(&account, self.clock.now_ms().get()) {
+                return Ok(PollPass {
+                    after,
+                    defer_until_ms: Some(until),
+                });
             }
             if !row.qualified && self.qualify_registration(&row.local).is_err() {
                 continue;
@@ -106,7 +138,7 @@ impl GitHubService {
                 && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
                     self.poll_configured_issues(&row.local, mode)
             {
-                self.defer_polls(next_due_at_ms);
+                self.defer_polls(account.clone(), next_due_at_ms);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(next_due_at_ms),
@@ -116,7 +148,7 @@ impl GitHubService {
                 && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
                     self.poll_default_ref(&row.local)
             {
-                self.defer_polls(next_due_at_ms);
+                self.defer_polls(account.clone(), next_due_at_ms);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(next_due_at_ms),
@@ -126,7 +158,7 @@ impl GitHubService {
                 && let Ok(IssuePageResult::Throttled { next_due_at_ms }) =
                     self.poll_pull_requests(&row.local)
             {
-                self.defer_polls(next_due_at_ms);
+                self.defer_polls(account.clone(), next_due_at_ms);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(next_due_at_ms),
@@ -135,7 +167,7 @@ impl GitHubService {
             if row.policy.sync
                 && let Ok(Some(until)) = self.poll_scheduled_comments(&row.local)
             {
-                self.defer_polls(until);
+                self.defer_polls(account.clone(), until);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(until),
@@ -144,7 +176,7 @@ impl GitHubService {
             if row.policy.changes
                 && let Ok(Some(until)) = self.poll_scheduled_evidence(&row.local)
             {
-                self.defer_polls(until);
+                self.defer_polls(account.clone(), until);
                 return Ok(PollPass {
                     after,
                     defer_until_ms: Some(until),

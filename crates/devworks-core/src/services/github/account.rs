@@ -25,8 +25,9 @@ use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id};
 use crate::services::git::github::{Fault, GitHubClient};
 use crate::services::kernel::{Failure, Refusal, decided, label, query_fault, rev};
 use crate::settings::model::current_layer;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 pub struct GitHubService {
     pub(super) store: Arc<dyn ApplicationStore>,
@@ -34,7 +35,7 @@ pub struct GitHubService {
     ids: Arc<dyn IdSource>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) stopping: AtomicBool,
-    pub(super) poll_deferred_until_ms: AtomicI64,
+    pub(super) poll_deadlines: Mutex<HashMap<super::schedule::PollAccount, i64>>,
 }
 
 struct CheckedAccount {
@@ -57,7 +58,7 @@ impl GitHubService {
             ids,
             clock,
             stopping: AtomicBool::new(false),
-            poll_deferred_until_ms: AtomicI64::new(0),
+            poll_deadlines: Mutex::default(),
         }
     }
 

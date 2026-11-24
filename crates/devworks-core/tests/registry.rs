@@ -467,6 +467,10 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "features.prioritize",
             "issues.prioritize",
             "tasks.prioritize",
+            "watch.create",
+            "watch.list",
+            "watch.inspect",
+            "watch.cancel",
             // GitHub account diagnostics, resumable poll status and explicit issue links (DW-40).
             "github.account",
             "github.poll_status",
