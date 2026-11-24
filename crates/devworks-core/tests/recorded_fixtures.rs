@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2177), 2177);
+    assert_eq!(run("domain-fixtures.json", 2234), 2234);
 }
 
 #[test]
@@ -464,8 +464,7 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // bindings alongside the original revision-1 document operations.
     // Document re-extraction adds one revision-12 admission, and activity adds seven at revision 13.
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
-    // The combined application operations and Documents catalogue includes the Dreaming bindings.
-    assert_eq!(admitted.len(), 713);
+    assert_eq!(admitted.len(), 739);
 }
 
 #[test]

@@ -16,10 +16,14 @@
 //!
 //! None of these is a security boundary for the package's own code: an installed native helper
 //! runs with the desktop user's rights (see `crate::services::packages`, "Trust model").
+pub mod dotnet;
+pub mod swift;
+
 use crate::locks::RwLockExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Largest bundle the host inspects (bytes).
@@ -82,6 +86,18 @@ pub struct InspectedContribution {
     pub languages: Vec<String>,
 }
 
+impl InspectedContribution {
+    /// Returns the descriptor that matches the inspected identity, kind and signed digest.
+    pub fn verified_descriptor(&self) -> Option<&Value> {
+        let descriptor = self.descriptor.as_ref()?;
+        (descriptor["meta"]["id"].as_str() == Some(self.id.as_str())
+            && descriptor["kind"].as_str() == Some(self.kind.as_str())
+            && crate::fingerprint::canonical_digest(descriptor)
+                .is_ok_and(|digest| digest == self.contract_digest))
+        .then_some(descriptor)
+    }
+}
+
 /// Requested resource limits (admission inputs, not OS containment).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +157,15 @@ pub struct Inspection {
     pub configuration_schema_document: Option<Value>,
 }
 impl Inspection {
+    /// Finds the installed file for this exact manifest schema reference.
+    pub fn schema_file(&self, reference: &Value) -> Option<&InspectedFile> {
+        let asset = self
+            .schema_assets
+            .iter()
+            .find(|a| &a.reference == reference)?;
+        self.files.iter().find(|f| f.path == asset.path)
+    }
+
     /// Languages of every semantic contribution, sorted and unique.
     pub fn languages(&self) -> Vec<String> {
         let mut v: Vec<String> = self
@@ -337,12 +362,60 @@ pub enum RuntimeObservation {
     Missing(String),
 }
 
+/// The exact runtime executable a successful version probe observed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeExecutable {
+    pub program: PathBuf,
+    pub identity: String,
+}
+
+impl RuntimeExecutable {
+    pub fn inspect(path: &Path) -> std::io::Result<Self> {
+        let program = path.canonicalize()?;
+        let metadata = std::fs::metadata(&program)?;
+        if !metadata.is_file() {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        }
+        #[cfg(unix)]
+        let fields = {
+            use std::os::unix::fs::MetadataExt;
+            format!(
+                "{}:{}:{}:{}:{}:{}:{}",
+                metadata.dev(),
+                metadata.ino(),
+                metadata.len(),
+                metadata.mtime(),
+                metadata.mtime_nsec(),
+                metadata.ctime(),
+                metadata.ctime_nsec()
+            )
+        };
+        #[cfg(not(unix))]
+        let fields = format!(
+            "{}:{:?}:{:?}",
+            metadata.len(),
+            metadata.created().ok(),
+            metadata.modified().ok()
+        );
+        let identity = crate::fingerprint::sha256_hex(fields.as_bytes());
+        Ok(Self { program, identity })
+    }
+}
+
+#[derive(Default)]
+struct RuntimeSnapshot {
+    observations: BTreeMap<String, RuntimeObservation>,
+    executables: BTreeMap<String, RuntimeExecutable>,
+    swift: Option<swift::Runtime>,
+}
+
 /// Probed runtimes, refreshed by the package host off any UI or write thread (it runs each
 /// runtime's version command as an owned process with a short timeout) and read by the
 /// availability rules.
 #[derive(Default)]
 pub struct RuntimeCache {
-    seen: std::sync::RwLock<std::collections::BTreeMap<String, RuntimeObservation>>,
+    seen: std::sync::RwLock<RuntimeSnapshot>,
     refreshed_at: std::sync::atomic::AtomicU64,
 }
 impl RuntimeCache {
@@ -351,13 +424,56 @@ impl RuntimeCache {
     }
     /// Replaces the observations of a probe pass.
     pub fn set(&self, observed: std::collections::BTreeMap<String, RuntimeObservation>) {
-        *self.seen.write_locked() = observed;
+        self.set_probed(observed, BTreeMap::new());
+    }
+    pub fn set_probed(
+        &self,
+        observations: BTreeMap<String, RuntimeObservation>,
+        executables: BTreeMap<String, RuntimeExecutable>,
+    ) {
+        self.set_probed_with_swift(observations, executables, None);
+    }
+
+    pub fn set_probed_with_swift(
+        &self,
+        observations: BTreeMap<String, RuntimeObservation>,
+        executables: BTreeMap<String, RuntimeExecutable>,
+        swift: Option<swift::Runtime>,
+    ) {
+        *self.seen.write_locked() = RuntimeSnapshot {
+            observations,
+            executables,
+            swift,
+        };
         self.refreshed_at
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     pub fn observations(&self) -> std::collections::BTreeMap<String, RuntimeObservation> {
-        self.seen.read_locked().clone()
+        self.seen.read_locked().observations.clone()
     }
+    pub fn executable(&self, runtime: &str) -> Option<(String, RuntimeExecutable)> {
+        let cache = self.seen.read_locked();
+        let RuntimeObservation::Found(version) = cache.observations.get(runtime)? else {
+            return None;
+        };
+        Some((version.clone(), cache.executables.get(runtime)?.clone()))
+    }
+    pub fn swift(&self) -> Option<swift::Runtime> {
+        self.seen.read_locked().swift.clone()
+    }
+
+    /// Invalidate the checked witness without overwriting a concurrent discovery result.
+    pub fn invalidate_swift(&self, checked: &swift::Runtime) {
+        let mut cache = self.seen.write_locked();
+        if cache.swift.as_ref() == Some(checked) {
+            cache.swift = None;
+            cache.observations.insert(
+                swift::SDK_RUNTIME.into(),
+                RuntimeObservation::Missing("swift-runtime-changed".into()),
+            );
+        }
+    }
+
     /// How many probe passes have completed.
     pub fn passes(&self) -> u64 {
         self.refreshed_at.load(std::sync::atomic::Ordering::SeqCst)
@@ -365,13 +481,13 @@ impl RuntimeCache {
 }
 impl RuntimeProbe for RuntimeCache {
     fn runtime(&self, runtime_id: &str) -> Option<String> {
-        match self.seen.read_locked().get(runtime_id) {
+        match self.seen.read_locked().observations.get(runtime_id) {
             Some(RuntimeObservation::Found(v)) => Some(v.clone()),
             _ => None,
         }
     }
     fn missing_reason(&self, runtime_id: &str) -> Option<String> {
-        match self.seen.read_locked().get(runtime_id) {
+        match self.seen.read_locked().observations.get(runtime_id) {
             Some(RuntimeObservation::Missing(why)) => Some(why.clone()),
             Some(RuntimeObservation::Found(_)) => None,
             None => Some("not probed yet".into()),

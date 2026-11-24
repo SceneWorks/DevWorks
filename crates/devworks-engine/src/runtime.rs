@@ -349,6 +349,7 @@ pub struct RuntimeConfig {
     pub work_import_sources: Option<devworks_core::services::imports::ImportSources>,
     /// The qualified native document extractor. An absent port leaves the feature unregistered.
     pub documents: Option<crate::documents::indexing::DocumentComposition>,
+    pub database: Option<crate::schemas::DatabaseComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
     pub dispatcher: DispatcherConfig,
@@ -433,6 +434,7 @@ impl RuntimeConfig {
             schemas: None,
             work_import_sources: None,
             documents: None,
+            database: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
             machine_resources: vec![desktop()],
@@ -1059,6 +1061,33 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
+    let database = config
+        .database
+        .as_ref()
+        .zip(schemas.as_ref())
+        .map(|(ports, sources)| {
+            let service = devworks_core::services::database::DataExecutor::new(
+                store.clone(),
+                clock.clone(),
+                ports.adapter.clone(),
+                Arc::new(crate::schemas::DatabaseReadRunner(
+                    tokio::runtime::Handle::current(),
+                )),
+                sources.clone(),
+                artifacts.clone(),
+                ports.filesystem.clone(),
+            );
+            Arc::new(match &git {
+                Some(git) => service.with_git(git.clone()),
+                None => service,
+            })
+        });
+    let use_cases = if let Some(service) = &database {
+        consumers.push(crate::schemas::database_consumer(service.clone()));
+        use_cases.with_database(service.clone())
+    } else {
+        use_cases
+    };
     use devworks_core::services::documents::{DocumentLibrary, indexing::DocumentIndexer};
     let document_indexer = config.documents.as_ref().map(|ports| {
         Arc::new(
@@ -1180,6 +1209,24 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(worker) = &workspace_replies {
         consumers.push(worker.consumer());
     }
+    let analysis = indexing.as_ref().map(|_| {
+        let service = Arc::new(
+            devworks_core::services::graph::repository_analysis::AnalysisService::new(
+                store.clone(),
+                artifacts.clone(),
+                ids.clone(),
+                core.web_ports
+                    .as_ref()
+                    .map(|web| (web.resolver.clone(), web.transport.clone())),
+            ),
+        );
+        consumers.push(crate::repository_analysis::consumer(
+            store.clone(),
+            service.clone(),
+        ));
+        consumers.push(crate::repository_analysis::index_consumer(service.clone()));
+        service
+    });
     // No entry path bypasses root controls: every consumer's root-scoped work passes the
     // run-control gate (and its own port, if it has one).
     for c in &mut consumers {
@@ -1204,7 +1251,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     )
     .map_err(BootError::Composition)?;
     // Indexing runs its Git helpers through this same process owner.
-    let index_supervisor = indexing.map(|ix| {
+    let index_supervisor = indexing.map(|mut ix| {
+        ix.settings.analysis_events = analysis.is_some();
         let env = Arc::new(devworks_core::services::indexing::IndexEnv {
             store: store.clone(),
             parser: ix.parser,
@@ -1218,6 +1266,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             ids: ids.clone(),
             artifacts: Some(artifacts.clone()),
             diagnostics: Some(diagnostics.clone()),
+            package_semantics: Default::default(),
+            run_queued: Default::default(),
             enrichers: std::sync::RwLock::new(ix.enrichers),
             settings: ix.settings,
         });
@@ -1250,6 +1300,16 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         )
         .with_indexing(index_supervisor.as_ref().map(|ix| ix.env().clone())),
     ));
+    let use_cases = if let (Some(service), Some(index)) = (&analysis, &index_supervisor) {
+        if !service.install_indexing(index.env().clone())
+            || !index.install_analysis(service.clone())
+        {
+            return Err(BootError::Composition(StorageError::ScopeDenied));
+        }
+        use_cases.with_repository_analysis(service.clone())
+    } else {
+        use_cases
+    };
     // Native jobs may run only the maintenance commands this composition can execute.
     let jobs = Arc::new(
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
@@ -1290,6 +1350,9 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     if let Some(git) = &git {
         git.set_approval_control(control.clone());
         owners = owners.register(git.clone());
+    }
+    if let Some(database) = &database {
+        owners = owners.register(database.clone());
     }
     if let Some(packages) = &package_service {
         packages.set_approval_control(control.clone());
@@ -1358,6 +1421,18 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         }
         None => None,
     };
+    if let (Some(service), Some(provider), Some(router)) =
+        (&analysis, &providers, use_cases.inference_router())
+        && !service.install_model(Arc::new(crate::repository_analysis::Model {
+            store: store.clone(),
+            artifacts: artifacts.clone(),
+            providers: Arc::downgrade(provider),
+            router,
+            runtime: tokio::runtime::Handle::current(),
+        }))
+    {
+        return Err(BootError::Composition(StorageError::ScopeDenied));
+    }
     if let (Some(provider), Some(service), Some(router), Some(_)) = (
         &providers,
         use_cases.mcp_service(),
@@ -1837,6 +1912,14 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             .unwrap_or_else(|_| Err(panicked("package review recovery")))
             .map_err(BootError::Packages)
             .map_err(failed)?;
+    }
+    if let (Some(host), Some(providers)) = (&package_host, &providers) {
+        let _ = providers.package_codecs.set(Arc::downgrade(host));
+    }
+    if let (Some(host), Some(indexing)) = (&package_host, &index_supervisor) {
+        let _ = indexing.env().package_semantics.set(Arc::new(
+            crate::package_host::semantic::PackageSemantics(Arc::downgrade(host)),
+        ));
     }
     // The last recovery steps that can stop boot run before any task starts, so a failure here
     // leaves nothing delivering or holding the store.

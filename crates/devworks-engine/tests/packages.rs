@@ -6,6 +6,23 @@
 //! No test runs inference or touches the network. These tests spawn processes, so they run
 //! serialized in their own binary.
 mod common;
+#[path = "packages/contributions.rs"]
+mod contributions;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "packages/dotnet_pack.rs"]
+mod dotnet_pack;
+#[path = "packages/rust_pack.rs"]
+mod rust_pack;
+#[path = "packages/semantic_fixture.rs"]
+mod semantic_fixture;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "packages/swift_pack.rs"]
+mod swift_pack;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[path = "packages/typescript_pack.rs"]
+mod typescript_pack;
+#[path = "packages/workflow.rs"]
+mod workflow;
 use common::*;
 use devworks_adapters::fs::NativeFilesystem;
 use devworks_adapters::fs::artifacts::NativeArtifactFiles;
@@ -35,7 +52,7 @@ use devworks_core::protocol::records::{PackageAvailability, PackageRecord, Propo
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
 };
-use devworks_core::protocol::{ActorId, CommandReply, DomainErrorCode, ProjectId};
+use devworks_core::protocol::{ActorId, CommandReply, DomainErrorCode, OperationState, ProjectId};
 use devworks_core::services::UseCases;
 use devworks_core::services::packages::index::AVAILABILITY_CHANGED;
 use devworks_core::services::packages::{
@@ -331,6 +348,11 @@ fn seed_model(store: &Arc<dyn ApplicationStore>) {
     .unwrap();
 }
 
+const VIEW_ROWS: &[u8] = br#"{"type":"array","items":{"type":"object","required":["result"],"properties":{"result":{"type":"string"}}}}"#;
+const VIEW_OUTPUT: &[u8] =
+    br#"{"type":"object","required":["tables"],"properties":{"tables":{"type":"object"}}}"#;
+const STATE_SCHEMA: &[u8] = br#"{"type":"object"}"#;
+
 const HELPER: &str = env!("CARGO_BIN_EXE_devworks-package-fixture");
 /// The consumer the tests register for availability announcements.
 const CODE_INTELLIGENCE: &str = "code-intelligence-test";
@@ -347,7 +369,7 @@ struct Spec {
     mode: String,
     contributions: Vec<&'static str>,
     permissions: Vec<Value>,
-    state_schema: String,
+    state_schema: &'static [u8],
     targets: Vec<String>,
     dependencies: Vec<Value>,
     runtimes: Vec<Value>,
@@ -364,6 +386,13 @@ struct Spec {
     /// Contributions (by local name) declared as event handlers of the package availability
     /// announcement instead of tools.
     handlers: Vec<&'static str>,
+    intent_commands: Vec<&'static str>,
+    workflow: bool,
+    provider_codec: bool,
+    context_hooks: bool,
+    content: bool,
+    semantic_format: Option<&'static str>,
+    native_view: Option<Value>,
 }
 impl Spec {
     fn new(package: &str, version: &str) -> Self {
@@ -378,7 +407,7 @@ impl Spec {
                 json!({"kind": "StateWrite"}),
                 json!({"kind": "WorktreeRead"}),
             ],
-            state_schema: "a".repeat(64),
+            state_schema: STATE_SCHEMA,
             targets: vec![host_target_triple()],
             dependencies: vec![],
             runtimes: vec![],
@@ -390,15 +419,29 @@ impl Spec {
             max_concurrent: 4,
             effect: "ReadCandidate",
             handlers: vec![],
+            intent_commands: vec![],
+            workflow: false,
+            provider_codec: false,
+            context_hooks: false,
+            content: false,
+            semantic_format: None,
+            native_view: None,
         }
     }
     fn ids(&self) -> Vec<String> {
         self.contributions
             .iter()
+            .copied()
+            .chain(self.native_view.as_ref().map(|_| "native-view"))
             .map(|c| format!("{}/{c}", self.package))
             .collect()
     }
 }
+const HOST_INPUT: &[u8] = br#"{"type":"object"}"#;
+const HOOK_OUTPUT: &[u8] = br#"{"type":"object","required":["text"],"additionalProperties":false,"properties":{"text":{"type":"string"}}}"#;
+const WORKFLOW_INPUT: &[u8] = br#"{"type":"object","additionalProperties":false,"required":["workflowOperation","source","sourceDocument","stepResult","stepDocument"],"properties":{"workflowOperation":{"type":"string"},"source":{"type":"object"},"sourceDocument":{"type":"object"},"stepResult":{"type":"object"},"stepDocument":{"type":"object"}}}"#;
+const WORKFLOW_RESULT: &[u8] = br#"{"type":"object","additionalProperties":false,"required":["outcome"],"properties":{"outcome":{"const":"Checked"}}}"#;
+
 fn schema(id: &str, digest: &str) -> Value {
     json!({"schemaId": id, "revision": "1", "sha256": digest})
 }
@@ -472,18 +515,109 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
     if !ids.is_empty() {
         assets.push(json!({"reference": input_ref, "path": "schemas/input.json"}));
     }
+    let state_ref = schema(
+        &format!("{}/state", spec.package),
+        &sha256_hex(spec.state_schema),
+    );
+    files.push(("schemas/state.json".into(), spec.state_schema.to_vec()));
+    assets.push(json!({"reference": state_ref, "path": "schemas/state.json"}));
+    if spec.content {
+        files.push((
+            "package-content.md".into(),
+            b"Reusable package content.\n".to_vec(),
+        ));
+    }
+    let host_input = schema(
+        &format!("{}/host-input", spec.package),
+        &sha256_hex(HOST_INPUT),
+    );
+    let hook_output = schema(
+        &format!("{}/context-result", spec.package),
+        &sha256_hex(HOOK_OUTPUT),
+    );
+    if spec.context_hooks || spec.provider_codec || spec.semantic_format.is_some() {
+        files.push(("schemas/host-input.json".into(), HOST_INPUT.to_vec()));
+        assets.push(json!({"reference":host_input,"path":"schemas/host-input.json"}));
+    }
+    if spec.context_hooks {
+        files.push(("schemas/context-result.json".into(), HOOK_OUTPUT.to_vec()));
+        assets.push(json!({"reference":hook_output,"path":"schemas/context-result.json"}));
+    }
+    let workflow_input = schema(
+        &format!("{}/gate-input", spec.package),
+        &sha256_hex(WORKFLOW_INPUT),
+    );
+    let workflow_output = schema(
+        &format!("{}/workflow-result", spec.package),
+        &sha256_hex(WORKFLOW_RESULT),
+    );
+    if spec.workflow {
+        files.push(("schemas/gate-input.json".into(), WORKFLOW_INPUT.to_vec()));
+        assets.push(json!({"reference":workflow_input,"path":"schemas/gate-input.json"}));
+        files.push((
+            "schemas/workflow-result.json".into(),
+            WORKFLOW_RESULT.to_vec(),
+        ));
+        assets.push(json!({"reference":workflow_output,"path":"schemas/workflow-result.json"}));
+    }
+    let view_output = schema(
+        &format!("{}/view-output", spec.package),
+        &sha256_hex(VIEW_OUTPUT),
+    );
+    if spec.native_view.is_some() {
+        files.push(("schemas/view-output.json".into(), VIEW_OUTPUT.to_vec()));
+        files.push(("schemas/view-rows.json".into(), VIEW_ROWS.to_vec()));
+        assets.push(json!({"reference":view_output,"path":"schemas/view-output.json"}));
+        assets.push(json!({"reference":schema(&format!("{}/view-rows", spec.package), &sha256_hex(VIEW_ROWS)),
+            "path":"schemas/view-rows.json"}));
+    }
     let contributions: Vec<Value> = spec
         .ids()
         .iter()
         .map(|id| {
-            let meta = json!({"id": id,
+            let mut meta = json!({"id": id,
                 "inputSchema": input_ref,
                 "outputSchema": schema(&format!("{}/output", spec.package), &"c".repeat(64)),
                 "helpTopic": "help", "required": false, "cancellation": "Cooperative"});
             let local = id.split('/').nth(1).unwrap_or_default();
-            if spec.handlers.contains(&local) {
+            if local == "native-view" {
+                meta["outputSchema"] = view_output.clone();
+                json!({"kind": "NativeUi", "meta": meta, "view": spec.native_view})
+            } else if spec.content && matches!(local, "skill" | "role" | "prompt") {
+                let bytes = b"Reusable package content.\n";
+                let kind = match local { "skill" => "Skill", "role" => "Role", _ => "Prompt" };
+                json!({"kind":"Content","meta":meta,"contentKind":kind,"artifact":{
+                    "artifactId":"bundle-artifact","versionId":"bundle-version","sha256":sha256_hex(bytes),
+                    "byteLength":bytes.len().to_string(),"mediaType":"text/markdown"}})
+            } else if spec.provider_codec && local == "provider-codec" {
+                meta["inputSchema"] = host_input.clone();
+                meta["outputSchema"] = host_input.clone();
+                json!({"kind":"Provider","meta":meta,"profiles":["CompatibleChat"],"endpointIds":["connection"]})
+            } else if spec.context_hooks && local.starts_with("context-") {
+                let (phase, priority) = match local {
+                    "context-compact" => ("Compact", 10),
+                    "context-decision" => ("Decision", 10),
+                    "context-stale" => ("Assemble", 20),
+                    _ => ("Assemble", 10),
+                };
+                meta["inputSchema"] = host_input.clone();
+                meta["outputSchema"] = hook_output.clone();
+                json!({"kind":"ContextHook","meta":meta,"phase":phase,"priority":priority})
+            } else if let Some(format) = spec.semantic_format {
+                meta["inputSchema"] = host_input.clone();
+                meta["outputSchema"] = host_input.clone();
+                json!({"kind":"Semantic","meta":meta,"languages":["rust"],"format":format})
+            } else if spec.workflow && matches!(local, "workflow-step" | "workflow-gate") {
+                let role = if local == "workflow-step" { "Step" } else { "VerificationGate" };
+                if role == "VerificationGate" {
+                    meta["inputSchema"] = workflow_input.clone();
+                }
+                meta["outputSchema"] = workflow_output.clone();
+                json!({"kind":"Workflow","meta":meta,"role":role,"evidenceSchema":workflow_output})
+            } else if spec.handlers.contains(&local) {
                 json!({"kind": "EventHandler", "meta": meta, "eventSchemas": [
-                    schema(devworks_engine::package_host::events::AVAILABILITY_SCHEMA, &"d".repeat(64))]})
+                    schema(devworks_engine::package_host::events::AVAILABILITY_SCHEMA, &"d".repeat(64))],
+                    "intentCommands": spec.intent_commands})
             } else {
                 json!({"kind": "Tool", "meta": meta, "requestedEffect": spec.effect})
             }
@@ -497,7 +631,7 @@ fn bundle(spec: &Spec) -> (Vec<u8>, String) {
         "requestedLimits": {"maxConcurrent": spec.max_concurrent, "queueCapacity": 16, "maxMemoryBytes": "1073741824", "streamCreditBytes": 65536},
         "targets": spec.targets.iter().map(|t| json!({"targetTriple": t, "entrypoint": entry})).collect::<Vec<_>>(),
         "files": files.iter().map(|(p, b)| json!({"path": p, "sha256": sha256_hex(b), "byteLength": b.len().to_string()})).collect::<Vec<_>>(),
-        "stateSchema": schema(&format!("{}/state", spec.package), &spec.state_schema),
+        "stateSchema": state_ref,
         "configurationSchema": config_ref,
         "helpFile": "help.md",
         "requestedPermissions": spec.permissions,
@@ -618,6 +752,7 @@ struct App {
     log_ids: Arc<Gate>,
     /// A scripted model behind the host's inference router, when a test composes inference.
     model: Option<Arc<ScriptedModel>>,
+    indexing: bool,
 }
 fn config() -> HostConfig {
     HostConfig {
@@ -734,6 +869,7 @@ impl App {
             host_ids: Arc::default(),
             log_ids,
             model: None,
+            indexing: false,
         };
         if me.probe_path.is_none() {
             me.runtimes.set(std::collections::BTreeMap::from([(
@@ -804,7 +940,17 @@ impl App {
         Composition {
             git: None,
             browser: None,
-            indexing: None,
+            indexing: self.indexing.then(|| devworks_engine::IndexComposition {
+                parser: Arc::new(devworks_adapters::index::treesitter::TreeSitterParser::new()),
+                source: Arc::new(devworks_adapters::index::NativeSourceTree::new()),
+                fs: Arc::new(NativeFilesystem::new()),
+                settings: Default::default(),
+                config: devworks_engine::IndexingConfig {
+                    discover_at_boot: false,
+                    ..Default::default()
+                },
+                enrichers: Vec::new(),
+            }),
             store: store.clone(),
             clock: h.clock(),
             // The package host allocates its invocation identifiers from these.
@@ -994,13 +1140,23 @@ impl App {
         kind: InvocationKind,
         scope: InvocationScope,
     ) -> Result<devworks_engine::package_host::InvocationHandle, InvokeRefusal> {
+        let input = if matches!(contribution, "state" | "event" | "queued-state") {
+            self.save(&self.user, b"{}")
+        } else {
+            json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64),
+                "byteLength": "4", "mediaType": "application/json"})
+        };
         self.app().packages().unwrap().invoke(InvokeRequest {
             package_id: package.into(),
             contribution_id: format!("{package}/{contribution}"),
             scope,
-            input: serde_json::from_value(json!({"artifactId": "input-a", "versionId": "v1", "sha256": "e".repeat(64), "byteLength": "4", "mediaType": "application/json"})).unwrap(),
+            input: serde_json::from_value(input).unwrap(),
             operation_id: id(&self.key("op")),
-            deadline: self.deadline.lock().unwrap().unwrap_or(Duration::from_secs(30)),
+            deadline: self
+                .deadline
+                .lock()
+                .unwrap()
+                .unwrap_or(Duration::from_secs(30)),
             allowed_operations: vec![],
             kind,
             principal: None,
@@ -1666,7 +1822,7 @@ fn state_generations_carry_state_forward_and_rollback_never_loses_later_writes()
         &a.user,
         &Spec {
             version: "2.0.0".into(),
-            state_schema: "9".repeat(64),
+            state_schema: br#"{"type":"object","additionalProperties":false}"#,
             ..spec.clone()
         },
     ));
@@ -1965,10 +2121,9 @@ fn event_handlers_commit_only_through_commit_event() {
     let generation = read(&*a.store, |s| s.packages().package_state("event-pack")).unwrap();
     let commit = json!({"subscriptionId": "sub-1", "eventId": claimed.event_id.0.as_str(), "expectedCheckpoint": "0",
         "stateGeneration": generation.generation.to_string(), "expectedStateRevision": generation.revision.to_string(),
-        "stateProposal": {"artifactId": "state-b", "versionId": "v1", "sha256": "b".repeat(64), "byteLength": "2", "mediaType": "application/json"},
+        "stateProposal": "$input",
         "intents": [{"actionKey": "notify", "call": {"kind": "ArtifactRead", "artifact": {"artifactId": "n", "versionId": "v1", "sha256": "c".repeat(64), "byteLength": "1", "mediaType": "text/plain"}}}]});
     let path = std::env::temp_dir().join("devworks-fixture-event-pack-commit.json");
-    std::fs::write(&path, commit.to_string()).unwrap();
     let inv = PackageInvocation {
         package_id: String::new(),
         subscription_id: id("sub-1"),
@@ -1982,6 +2137,34 @@ fn event_handlers_commit_only_through_commit_event() {
         actor: a.store.info().host_actor,
         broker_consumer: "package-broker".into(),
     };
+    let mut echo_only = commit.clone();
+    echo_only["echoOnly"] = json!(true);
+    std::fs::write(&path, echo_only.to_string()).unwrap();
+    let echo = a
+        .invoke(
+            "event-pack",
+            "event",
+            InvocationKind::Event(Box::new(inv.clone())),
+        )
+        .unwrap();
+    finished(echo.wait(Duration::from_secs(10)));
+    assert!(echo.events().0.is_empty());
+    assert_eq!(common::entry(&*a.store, &e.id).state, QueueState::Claimed);
+    assert!(
+        read(&*a.store, |s| {
+            s.packages()
+                .processing("event-pack", &id("sub-1"), &claimed.event_id)
+        })
+        .is_none()
+    );
+    assert_eq!(
+        read(&*a.store, |s| s.packages().package_state("event-pack"))
+            .unwrap()
+            .revision,
+        generation.revision,
+    );
+
+    std::fs::write(&path, commit.to_string()).unwrap();
     let h = a
         .invoke("event-pack", "event", InvocationKind::Event(Box::new(inv)))
         .unwrap();
@@ -2004,7 +2187,23 @@ fn event_handlers_commit_only_through_commit_event() {
         s.packages()
             .processing("event-pack", &id("sub-1"), &claimed.event_id)
     });
-    assert_eq!(processed.unwrap().intents.as_array().unwrap().len(), 1);
+    let processed = processed.unwrap();
+    assert_eq!(processed.intents.as_array().unwrap().len(), 1);
+    let (events, dropped) = h.events();
+    assert_eq!(dropped, 0);
+    assert!(
+        matches!(
+            events.as_slice(),
+            [devworks_extension_protocol::package::ContributionEvent::EventProcessed {
+                subscription_id,
+                event_id,
+                processing_receipt,
+            }] if subscription_id.as_str() == processed.subscription_id.as_str()
+                && event_id.0.as_str() == processed.event_id.0.as_str()
+                && processing_receipt.as_str() == processed.receipt_id.as_str()
+        ),
+        "{events:?}"
+    );
     assert_eq!(
         read(&*a.store, |s| s.queue().status("package-broker")).ready,
         1
@@ -3307,6 +3506,154 @@ fn an_event_commit_that_changes_state_needs_state_write_access() {
         accepted[2].starts_with("commit:EventCommitAccepted"),
         "{accepted:?}"
     );
+}
+
+#[test]
+fn a_state_proposal_must_be_live_and_match_the_verified_state_schema() {
+    let _s = serial();
+    let a = App::new();
+    let package_id = "schema-state-pack";
+    package(a.install(&a.user, &Spec::new(package_id, "1.0.0")));
+    a.ready(package_id);
+    let invoke = |input| {
+        let call = a
+            .app()
+            .packages()
+            .unwrap()
+            .invoke(InvokeRequest {
+                package_id: package_id.into(),
+                contribution_id: format!("{package_id}/state"),
+                scope: InvocationScope::Workspace,
+                input: serde_json::from_value(input).unwrap(),
+                operation_id: id(&a.key("state")),
+                deadline: Duration::from_secs(30),
+                allowed_operations: vec![],
+                kind: InvocationKind::Ordinary,
+                principal: Some(a.user.clone()),
+                expected_digest: None,
+            })
+            .unwrap();
+        finished(call.wait(Duration::from_secs(20)));
+        call.progress().0
+    };
+    let initial = read(&*a.store, |s| s.packages().package_state(package_id)).unwrap();
+    let wrong_shape = invoke(a.save(&a.user, b"[]"));
+    assert_eq!(wrong_shape[1], "cas:ProtocolViolation:-", "{wrong_shape:?}");
+    let missing = invoke(
+        json!({"artifactId": "missing", "versionId": "missing", "sha256": "b".repeat(64),
+        "byteLength": "2", "mediaType": "application/json"}),
+    );
+    assert_eq!(missing[1], "cas:PermissionDenied:-", "{missing:?}");
+    let unchanged = read(&*a.store, |s| s.packages().package_state(package_id)).unwrap();
+    assert_eq!(unchanged.revision, initial.revision);
+    let document = a.save(&a.user, br#"{"setting":true}"#);
+    let accepted = invoke(document.clone());
+    assert_eq!(
+        accepted[1],
+        format!("cas:StateSnapshot:{}", initial.revision + 1)
+    );
+    let changed = read(&*a.store, |s| s.packages().package_state(package_id)).unwrap();
+    assert_eq!(changed.state["artifact"], document);
+}
+
+#[test]
+fn native_view_descriptors_follow_the_current_approved_version_and_scope() {
+    let _s = serial();
+    let a = App::new();
+    let mut spec = Spec::new("view-pack", "1.0.0");
+    spec.native_view = Some(json!({"kind": "Group", "children": [
+        {"kind": "Text", "text": "Package status"},
+        {"kind": "Field", "fieldId": "text", "label": "Text", "fieldKind": "Text", "readOnly": false},
+        {"kind": "Action", "actionId": "view-pack/echo", "label": "Echo"},
+        {"kind": "Table", "columns":["result"], "dataSchema":schema("view-pack/view-rows", &sha256_hex(VIEW_ROWS))}
+    ]}));
+    let installed = package(a.install(&a.user, &spec));
+    let digest = digest_of(&installed);
+    let host = a.app().packages().unwrap();
+    assert!(
+        host.native_views(&a.user, "view-pack", &digest)
+            .unwrap()
+            .views
+            .is_empty()
+    );
+    spec.permissions.push(json!({"kind": "UiContribution"}));
+    spec.version = "1.1.0".into();
+    let installed = package(a.update(&a.user, &spec));
+    let active = digest_of(&installed);
+    let resolved = host.native_views(&a.user, "view-pack", &active).unwrap();
+    assert_eq!(resolved.digest, active);
+    assert_eq!(resolved.views.len(), 1);
+    assert_eq!(resolved.views[0].id, "view-pack/native-view");
+    let data = host
+        .load_native_view_data(
+            &a.user,
+            "view-pack",
+            &active,
+            "view-pack/native-view",
+            &json!({}),
+        )
+        .unwrap();
+    assert_eq!(data.revision, 1);
+    assert_eq!(
+        data.tables["view-pack/view-rows"],
+        vec![json!({"result":"Available"})]
+    );
+    let input = host
+        .prepare_native_view_action(
+            &a.user,
+            "view-pack",
+            &active,
+            "view-pack/native-view",
+            "view-pack/echo",
+            &json!({"text":"hello"}),
+        )
+        .unwrap();
+    let (bytes, _) = a
+        .app()
+        .artifacts()
+        .read_exact(&*a.store, &a.user, &input, 65_536)
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        json!({"text":"hello"})
+    );
+    let mut frame: Value = serde_json::from_slice(&person_and_event_dispatch::invoke_frame(
+        &a,
+        "view-pack",
+        "echo",
+        &serde_json::to_value(&input).unwrap(),
+    ))
+    .unwrap();
+    frame["body"]["expectedDigest"] = json!(active);
+    let started = person_and_event_dispatch::invocation_of(
+        a.app()
+            .command(
+                &a.user,
+                "addons.invoke",
+                &serde_json::to_vec(&frame).unwrap(),
+            )
+            .unwrap(),
+    );
+    let done = person_and_event_dispatch::finished_invocation(&a, &a.user, &started.operation_id.0);
+    assert_eq!(done.state, OperationState::ObservedComplete, "{done:?}");
+    assert_eq!(done.artifacts.0[0].version_id, input.version_id);
+
+    assert!(
+        host.prepare_native_view_action(
+            &a.user,
+            "view-pack",
+            &active,
+            "view-pack/native-view",
+            "view-pack/sleep",
+            &json!({})
+        )
+        .is_err()
+    );
+
+    assert!(host.native_views(&a.user, "view-pack", &digest).is_err());
+    assert!(host.native_views(&a.agent, "view-pack", &active).is_err());
+    package(a.simple(&a.user, "addons.disable", "Disable", "view-pack"));
+    assert!(host.native_views(&a.user, "view-pack", &active).is_err());
 }
 
 #[test]

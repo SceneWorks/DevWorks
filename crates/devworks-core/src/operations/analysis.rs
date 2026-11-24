@@ -13,7 +13,7 @@ use crate::protocol::data::{DataScope, ViewSelection};
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Id, Revision};
+use crate::protocol::{Counter, Id, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,20 @@ pub struct HealthInput {
     pub views: ViewSelection,
     pub page: PageRequest,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Limit", extend("x-since" = 3))]
+    pub top_hotspots: Option<Limit>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub run_id: Option<Id>,
 }
 impl Check for HealthInput {
     fn check(&self) -> Result<(), String> {
@@ -33,11 +47,20 @@ impl Check for HealthInput {
         self.views.check()?;
         self.page.check()?;
         self.filters.check()?;
+        self.top_hotspots.check()?;
+        self.run_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for HealthInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.top_hotspots = None;
+        }
+        if revision < 3 {
+            self.run_id = None;
+        }
+    }
 }
 
 /// `analysis.cross_repo_links` Query input.
@@ -97,6 +120,13 @@ pub struct StatusInput {
     pub views: ViewSelection,
     pub page: PageRequest,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub run_id: Option<Id>,
 }
 impl Check for StatusInput {
     fn check(&self) -> Result<(), String> {
@@ -104,11 +134,16 @@ impl Check for StatusInput {
         self.views.check()?;
         self.page.check()?;
         self.filters.check()?;
+        self.run_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for StatusInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.run_id = None;
+        }
+    }
 }
 
 /// `analysis.clusters` Query input.
@@ -119,6 +154,13 @@ pub struct ClustersInput {
     pub views: ViewSelection,
     pub page: PageRequest,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AnalysisClusterProjection", extend("x-since" = 3))]
+    pub projection: Option<AnalysisClusterProjection>,
 }
 impl Check for ClustersInput {
     fn check(&self) -> Result<(), String> {
@@ -126,11 +168,16 @@ impl Check for ClustersInput {
         self.views.check()?;
         self.page.check()?;
         self.filters.check()?;
+        self.projection.check()?;
         Ok(())
     }
 }
 impl Revisioned for ClustersInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.projection = None;
+        }
+    }
 }
 
 /// `analysis.cluster_detail` Query input.
@@ -142,6 +189,13 @@ pub struct ClusterDetailInput {
     pub page: PageRequest,
     pub cluster_id: Id,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 3))]
+    pub legacy_ordinal: Option<Counter>,
 }
 impl Check for ClusterDetailInput {
     fn check(&self) -> Result<(), String> {
@@ -150,11 +204,16 @@ impl Check for ClusterDetailInput {
         self.page.check()?;
         self.cluster_id.check()?;
         self.filters.check()?;
+        self.legacy_ordinal.check()?;
         Ok(())
     }
 }
 impl Revisioned for ClusterDetailInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.legacy_ordinal = None;
+        }
+    }
 }
 
 /// `analysis.link_and_detect` Command input.
@@ -168,6 +227,13 @@ pub struct LinkAndDetectInput {
     pub batch_limit: Limit,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AnalysisLinkMode", extend("x-since" = 3))]
+    pub link_mode: Option<AnalysisLinkMode>,
 }
 impl Check for LinkAndDetectInput {
     fn check(&self) -> Result<(), String> {
@@ -177,11 +243,16 @@ impl Check for LinkAndDetectInput {
         self.node_ids.check()?;
         self.batch_limit.check()?;
         self.resume_run_id.check()?;
+        self.link_mode.check()?;
         Ok(())
     }
 }
 impl Revisioned for LinkAndDetectInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.link_mode = None;
+        }
+    }
 }
 
 /// `analysis.process_batch` Command input.
@@ -219,6 +290,13 @@ pub struct SecurityInput {
     pub views: ViewSelection,
     pub page: PageRequest,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Id", extend("x-since" = 3))]
+    pub run_id: Option<Id>,
 }
 impl Check for SecurityInput {
     fn check(&self) -> Result<(), String> {
@@ -226,11 +304,16 @@ impl Check for SecurityInput {
         self.views.check()?;
         self.page.check()?;
         self.filters.check()?;
+        self.run_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for SecurityInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.run_id = None;
+        }
+    }
 }
 
 /// `analysis.metrics` Query input.
@@ -241,6 +324,13 @@ pub struct MetricsInput {
     pub views: ViewSelection,
     pub page: PageRequest,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub dotnet_project: Option<Label>,
 }
 impl Check for MetricsInput {
     fn check(&self) -> Result<(), String> {
@@ -248,11 +338,16 @@ impl Check for MetricsInput {
         self.views.check()?;
         self.page.check()?;
         self.filters.check()?;
+        self.dotnet_project.check()?;
         Ok(())
     }
 }
 impl Revisioned for MetricsInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.dotnet_project = None;
+        }
+    }
 }
 
 /// `analysis.hotspots` Query input.
@@ -288,6 +383,20 @@ pub struct ReanalyzeInput {
     pub batch_limit: Limit,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_run_id: Option<Id>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AnalysisRefreshMode", extend("x-since" = 3))]
+    pub refresh_mode: Option<AnalysisRefreshMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 3))]
+    pub include_all_source: Option<bool>,
 }
 impl Check for ReanalyzeInput {
     fn check(&self) -> Result<(), String> {
@@ -297,11 +406,20 @@ impl Check for ReanalyzeInput {
         self.node_ids.check()?;
         self.batch_limit.check()?;
         self.resume_run_id.check()?;
+        self.refresh_mode.check()?;
+        self.include_all_source.check()?;
         Ok(())
     }
 }
 impl Revisioned for ReanalyzeInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.refresh_mode = None;
+        }
+        if revision < 3 {
+            self.include_all_source = None;
+        }
+    }
 }
 
 /// `analysis.synthesize` Command input.
@@ -339,6 +457,13 @@ pub struct FleetHealthInput {
     pub views: ViewSelection,
     pub page: PageRequest,
     pub filters: Items<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Finite", extend("x-since" = 3))]
+    pub max_health: Option<Finite>,
 }
 impl Check for FleetHealthInput {
     fn check(&self) -> Result<(), String> {
@@ -346,11 +471,16 @@ impl Check for FleetHealthInput {
         self.views.check()?;
         self.page.check()?;
         self.filters.check()?;
+        self.max_health.check()?;
         Ok(())
     }
 }
 impl Revisioned for FleetHealthInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.max_health = None;
+        }
+    }
 }
 
 /// `analysis.archival_candidates` Query input.

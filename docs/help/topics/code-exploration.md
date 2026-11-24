@@ -10,4 +10,13 @@ Every drill-down stays on one captured repository view until you choose **Refres
 
 Partial coverage, missing indexes, unavailable source and absent analysis are shown explicitly. Internal module summaries, provenance and program totals appear only when analysis has actually been recorded. Indexed node counts remain separate observations. **Mark untrusted** lowers ranking; it does not grant permissions or erase the entry. If a trust change cannot be confirmed, use **Confirm outcomes** to check the same request before making another change.
 
-For missing or stale data, inspect [Indexing](help:indexing) runs and the [repository registration](help:repositories). Re-observe repository discovery after a branch or head change, then request indexing through its own controls. Health measurements and review history are unavailable where their producers have not supplied them.
+For missing or stale data, inspect [Indexing](help:indexing) runs and the [repository registration](help:repositories). Re-observe repository discovery after a branch or head change, then request indexing through its own controls. Review history is unavailable where its producer has not supplied it.
+
+
+## Read repository analysis
+
+Open **Analysis** from a repository's code view. **Health** shows saved measurements, the recorded commit and computation time, and older measurements from the same ref. An adjusted score requires complete security evidence for the measured view. **Security** shows severity counts and links to redacted report evidence. **Hotspots** ranks files by concern. Open a file to read the captured source used for that measurement, or open **File hotspot** from an indexed node. **Links** and **Cluster graph** show cross-repository relationships and their captured endpoints. Use **Clusters** to inspect membership, connections, and bridge repositories.
+
+A new index can make a saved report stale while analysis runs. **Runs** shows each phase and supports refreshing measurements, resolving links, detecting clusters, and checking saved model requests. **Analyze projects with a model** and **Synthesize with a model** use the configured router when current source access, policy, and a model route allow the request. Indexing runs the deterministic stages automatically. A partial report identifies its missing coverage, and a missing report has no score.
+
+Open **Fleet analysis** from **Repositories** to compare the health of the selected repositories or inspect archival candidates. An archival candidate needs a complete workspace link report. Opening the candidate list does not change any repository.

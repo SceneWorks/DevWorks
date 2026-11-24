@@ -254,13 +254,13 @@ pub enum OperationResult {
     #[serde(rename = "analysis.health")]
     AnalysisHealth { value: AnalysisRecord },
     #[serde(rename = "analysis.cross_repo_links")]
-    AnalysisCrossRepoLinks { value: Page<MetricRecord> },
+    AnalysisCrossRepoLinks { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.community_analysis")]
     AnalysisCommunityAnalysis { value: AnalysisRecord },
     #[serde(rename = "analysis.status")]
     AnalysisStatus { value: AnalysisRecord },
     #[serde(rename = "analysis.clusters")]
-    AnalysisClusters { value: Page<ClusterRecord> },
+    AnalysisClusters { value: AnalysisClusterPageResult },
     #[serde(rename = "analysis.cluster_detail")]
     AnalysisClusterDetail { value: ClusterRecord },
     #[serde(rename = "analysis.link_and_detect")]
@@ -270,19 +270,19 @@ pub enum OperationResult {
     #[serde(rename = "analysis.security")]
     AnalysisSecurity { value: AnalysisRecord },
     #[serde(rename = "analysis.metrics")]
-    AnalysisMetrics { value: Page<MetricRecord> },
+    AnalysisMetrics { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.hotspots")]
-    AnalysisHotspots { value: Page<MetricRecord> },
+    AnalysisHotspots { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.reanalyze")]
     AnalysisReanalyze { value: AnalysisRecord },
     #[serde(rename = "analysis.synthesize")]
     AnalysisSynthesize { value: AnalysisRecord },
     #[serde(rename = "analysis.fleet_health")]
-    AnalysisFleetHealth { value: Page<MetricRecord> },
+    AnalysisFleetHealth { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.archival_candidates")]
-    AnalysisArchivalCandidates { value: Page<MetricRecord> },
+    AnalysisArchivalCandidates { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.file_hotspot")]
-    AnalysisFileHotspot { value: Page<MetricRecord> },
+    AnalysisFileHotspot { value: AnalysisMetricPageResult },
     #[serde(rename = "schemas.connections")]
     SchemasConnections { value: Page<SchemaConnection> },
     #[serde(rename = "schemas.objects")]
@@ -310,6 +310,15 @@ pub enum OperationResult {
     DatabaseDirectSchemaChange { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch { value: Page<KnowledgeClaim> },
     #[serde(rename = "knowledge.read")]
@@ -711,6 +720,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invoke")]
     AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent { value: PackageContent },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invocation")]
     AddonsInvocation { value: PackageInvocation },
@@ -967,6 +982,9 @@ impl OperationResult {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeRecord { .. } => "knowledge.record",
@@ -1165,6 +1183,8 @@ impl OperationResult {
             Self::AddonsRollback { .. } => "addons.rollback",
             Self::AddonsUninstall { .. } => "addons.uninstall",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
+            Self::AddonsReadContent { .. } => "addons.read_content",
             Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
@@ -1363,6 +1383,9 @@ impl Check for OperationResult {
             Self::DatabaseApplyMigration { value } => value.check()?,
             Self::DatabaseDirectSchemaChange { value } => value.check()?,
             Self::DatabaseConfigureSensitiveColumns { value } => value.check()?,
+            Self::DatabaseMysqlReadonlyQuery { value } => value.check()?,
+            Self::DatabaseSensitiveColumns { value } => value.check()?,
+            Self::DatabaseEditSensitiveColumnRules { value } => value.check()?,
             Self::KnowledgeSearch { value } => value.check()?,
             Self::KnowledgeRead { value } => value.check()?,
             Self::KnowledgeRecord { value } => value.check()?,
@@ -1559,6 +1582,8 @@ impl Check for OperationResult {
             Self::AddonsRollback { value } => value.check()?,
             Self::AddonsUninstall { value } => value.check()?,
             Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsRunWorkflow { value } => value.check()?,
+            Self::AddonsReadContent { value } => value.check()?,
             Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
@@ -1682,10 +1707,28 @@ impl Revisioned for OperationResult {
             Self::CodeSnippet { value } => value.retain_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.retain_revision(revision),
             Self::IndexingStatus { value } => value.retain_revision(revision),
+            Self::AnalysisHealth { value } => value.retain_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.retain_revision(revision),
+            Self::AnalysisCommunityAnalysis { value } => value.retain_revision(revision),
+            Self::AnalysisStatus { value } => value.retain_revision(revision),
+            Self::AnalysisClusters { value } => value.retain_revision(revision),
+            Self::AnalysisClusterDetail { value } => value.retain_revision(revision),
+            Self::AnalysisLinkAndDetect { value } => value.retain_revision(revision),
+            Self::AnalysisProcessBatch { value } => value.retain_revision(revision),
+            Self::AnalysisSecurity { value } => value.retain_revision(revision),
+            Self::AnalysisMetrics { value } => value.retain_revision(revision),
+            Self::AnalysisHotspots { value } => value.retain_revision(revision),
+            Self::AnalysisReanalyze { value } => value.retain_revision(revision),
+            Self::AnalysisSynthesize { value } => value.retain_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.retain_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.retain_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.retain_revision(revision),
             Self::SchemasConnections { value } => value.retain_revision(revision),
             Self::SchemasObjects { value } => value.retain_revision(revision),
             Self::SchemasConfigure { value } => value.retain_revision(revision),
+            Self::DatabaseRead { value } => value.retain_revision(revision),
             Self::DatabaseConfigureSensitiveColumns { value } => value.retain_revision(revision),
+            Self::DatabaseMysqlReadonlyQuery { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
             Self::KnowledgeRecord { value } => value.retain_revision(revision),
@@ -1864,6 +1907,15 @@ impl Revisioned for OperationResult {
             Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::DocumentsResolveCitation { .. } if revision < 11 => {
                 Err("operation result predates its introduction".into())
             }
@@ -1889,6 +1941,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsReadContent { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
@@ -1926,6 +1984,13 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.check_revision(revision),
+            Self::AnalysisClusters { value } => value.check_revision(revision),
+            Self::AnalysisMetrics { value } => value.check_revision(revision),
+            Self::AnalysisHotspots { value } => value.check_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.check_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.check_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.check_revision(revision),
             Self::DreamingRevert { value } => value.check_revision(revision),
             Self::DocumentsImport { value } => value.check_revision(revision),
             Self::DocumentsList { value } => value.check_revision(revision),

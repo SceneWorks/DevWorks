@@ -81,6 +81,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 
 mod agents;
+mod analysis;
 mod artifacts;
 mod authority;
 mod browser;
@@ -115,6 +116,7 @@ mod work;
 mod work_imports;
 mod workspace_archive;
 pub use agents::*;
+pub use analysis::*;
 pub use artifacts::*;
 pub use authority::*;
 pub use browser::*;
@@ -840,6 +842,7 @@ pub trait WriteTransaction {
     fn projects(&mut self) -> &mut dyn ProjectRepository;
     fn indexing(&mut self) -> &mut dyn IndexRepository;
     fn graph(&mut self) -> &mut dyn GraphRepository;
+    fn analysis(&mut self) -> &mut dyn AnalysisRepository;
     fn knowledge(&mut self) -> &mut dyn KnowledgeRepository;
     fn jobs(&mut self) -> &mut dyn JobRepository;
     fn work(&mut self) -> &mut dyn WorkRepository;
@@ -919,6 +922,7 @@ pub trait ReadSnapshot {
     fn projects(&self) -> &dyn ProjectRead;
     fn indexing(&self) -> &dyn IndexRead;
     fn graph(&self) -> &dyn GraphRead;
+    fn analysis(&self) -> &dyn AnalysisRead;
     fn knowledge(&self) -> &dyn KnowledgeRead;
     fn jobs(&self) -> &dyn JobRead;
     fn work(&self) -> &dyn WorkRead;

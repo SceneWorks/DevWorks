@@ -75,6 +75,7 @@
 //! renames are reconciled (CodeGraph left stale nodes), progress is reported, overlays include
 //! uncommitted worktree changes, and inferred or unresolved relationships are marked instead of
 //! dropped.
+pub(crate) mod assigned;
 pub mod config;
 pub mod discover;
 pub(crate) mod linking;
@@ -88,9 +89,10 @@ pub mod worker;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::sha256_hex;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+pub use crate::kernel::index_config::{section_config, section_key};
 use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, indexing as iops};
-use crate::ports::indexing::{SemanticEnricher, SourceTree, StructuralParser};
+use crate::ports::indexing::{SemanticCatalog, SemanticEnricher, SourceTree, StructuralParser};
 use crate::ports::storage::*;
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -171,6 +173,8 @@ pub struct IndexSettings {
     pub discovery_max_dirs: usize,
     /// Largest README published as a repository text.
     pub readme_max_bytes: usize,
+    /// This composition has the repository analysis consumer.
+    pub analysis_events: bool,
 }
 impl Default for IndexSettings {
     fn default() -> Self {
@@ -189,6 +193,7 @@ impl Default for IndexSettings {
             discovery_depth: 6,
             discovery_max_dirs: 20_000,
             readme_max_bytes: 1024 * 1024,
+            analysis_events: false,
         }
     }
 }
@@ -207,6 +212,9 @@ pub struct IndexEnv {
     pub diagnostics: Option<Arc<DiagnosticService>>,
     /// Installed semantic language packs (items 24–27 register here).
     pub enrichers: RwLock<Vec<Arc<dyn SemanticEnricher>>>,
+    pub package_semantics: std::sync::OnceLock<Arc<dyn SemanticCatalog>>,
+    /// The runtime's existing supervision wakeup after a derived index run commits.
+    pub run_queued: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>,
     pub settings: IndexSettings,
 }
 impl IndexEnv {
@@ -218,7 +226,11 @@ impl IndexEnv {
         self.enrichers.write_locked().push(enricher);
     }
     pub fn enrichers(&self) -> Vec<Arc<dyn SemanticEnricher>> {
-        self.enrichers.read_locked().clone()
+        let mut installed = self.enrichers.read_locked().clone();
+        if let Some(packages) = self.package_semantics.get() {
+            installed.extend(packages.enrichers());
+        }
+        installed
     }
     /// The host invocation helper processes of `project`'s work are launched under (the process
     /// owner fences it by the project's archival).
@@ -242,21 +254,6 @@ impl IndexEnv {
 
 fn refuse(code: DomainErrorCode, kind: &'static str, id: Option<&Id>) -> Failure {
     Refusal::new(code, kind, id.cloned()).into()
-}
-
-/// The section key of a scope.
-pub fn section_key(scope: Option<&ProjectId>) -> String {
-    scope.map_or_else(
-        || WORKSPACE_SCOPE_KEY.to_owned(),
-        |p| p.0.as_str().to_owned(),
-    )
-}
-
-/// A section's stored configuration or its defaults.
-pub fn section_config(read: &dyn IndexRead, key: &str) -> Result<StoredSourceConfig, StorageError> {
-    Ok(read
-        .source_config(key)?
-        .unwrap_or_else(|| default_config(key)))
 }
 
 /// The effective configuration of a repository (workspace plus every project it belongs to).
@@ -338,9 +335,20 @@ fn history(
     kind: &str,
     payload: Value,
 ) -> Result<(), StorageError> {
+    history_event(tx, actor, project, aggregate, kind, payload).map(|_| ())
+}
+
+fn history_event(
+    tx: &mut dyn WriteTransaction,
+    actor: &ActorId,
+    project: Option<&ProjectId>,
+    aggregate: (&str, &Id, i64),
+    kind: &str,
+    payload: Value,
+) -> Result<EventId, StorageError> {
     let id = EventId(tx.new_id(IdKind::Event));
     tx.history().append(NewEvent {
-        id,
+        id: id.clone(),
         actor: actor.clone(),
         project_id: project.cloned(),
         root_id: None,
@@ -351,7 +359,7 @@ fn history(
         kind: kind.into(),
         payload,
     })?;
-    Ok(())
+    Ok(id)
 }
 
 /// A new queued run.
@@ -1109,12 +1117,39 @@ impl QueryHandler for IndexCoordinator {
             OperationInput::Indexing(iops::Input::Discover(i)) => self.discover(snapshot, ctx, i),
             OperationInput::Indexing(iops::Input::Runs(i)) => self.runs(snapshot, ctx, i),
             OperationInput::Indexing(iops::Input::Status(i)) => {
-                match (&i.repository_id, &i.overlay_id) {
-                    (_, Some(o)) => status::overlay_status(&self.env, snapshot, ctx, o, revision),
-                    (Some(r), None) => status::status(&self.env, snapshot, ctx, r, revision, None),
-                    (None, None) => Err(refuse(DomainErrorCode::InvalidArgument, "status", None)),
-                }
-                .and_then(|value| Ok((OperationResult::IndexingStatus { value }, own_scope()?)))
+                let status = if assigned::applies(ctx) {
+                    assigned::status_target(
+                        snapshot,
+                        ctx,
+                        i.repository_id.as_ref(),
+                        i.overlay_id.as_ref(),
+                    )
+                    .map_err(Failure::from)
+                    .and_then(|(repository, overlay)| {
+                        status::assigned_status(
+                            &self.env,
+                            snapshot,
+                            ctx,
+                            &repository,
+                            overlay.as_ref(),
+                            revision,
+                        )
+                    })
+                } else {
+                    match (&i.repository_id, &i.overlay_id) {
+                        (_, Some(o)) => {
+                            status::overlay_status(&self.env, snapshot, ctx, o, revision)
+                        }
+                        (Some(r), None) => {
+                            status::status(&self.env, snapshot, ctx, r, revision, None)
+                        }
+                        (None, None) => {
+                            Err(refuse(DomainErrorCode::InvalidArgument, "status", None))
+                        }
+                    }
+                };
+                status
+                    .and_then(|value| Ok((OperationResult::IndexingStatus { value }, own_scope()?)))
             }
             _ => Err(refuse(
                 DomainErrorCode::UnsupportedCapability,
@@ -1153,6 +1188,26 @@ impl CommandHandler for IndexCoordinator {
             } = &r.command
         {
             let stop = || env.stopped(self.env.now());
+            if assigned::applies(ctx) {
+                let worktree = env
+                    .read(|read| {
+                        assigned::refresh_target(
+                            read.git(),
+                            ctx,
+                            repository_id,
+                            worktree_id.as_ref(),
+                            git_ref.is_some(),
+                        )
+                    })?
+                    .ok_or(StorageError::ScopeDenied)?;
+                return Ok(Some(Prepared::new(overlay::observe(
+                    &self.env,
+                    ctx,
+                    repository_id,
+                    &worktree,
+                    &stop,
+                ))));
+            }
             return Ok(match (worktree_id, git_ref) {
                 (Some(w), _) => Some(Prepared::new(overlay::observe(
                     &self.env,
@@ -1212,17 +1267,45 @@ impl CommandHandler for IndexCoordinator {
                     worktree_id,
                     git_ref,
                     expected_source_revision,
-                } => {
-                    let requested = match (worktree_id, git_ref) {
-                        (Some(id), _) => Some(overlay::Requested::Worktree {
-                            id,
-                            observed: command.prepared::<overlay::Observed>(),
-                        }),
-                        (None, Some(_)) => Some(overlay::Requested::Ref {
-                            resolved: command.prepared::<overlay::Resolved>(),
-                        }),
-                        (None, None) => None,
+                } => (|| {
+                    let bound_worktree = if assigned::applies(ctx) {
+                        let checkout = assigned::worktree_for_write(tx, ctx)?.ok_or_else(|| {
+                            refuse(DomainErrorCode::PermissionDenied, "worktree_custody", None)
+                        })?;
+                        if !command
+                            .prepared::<overlay::Observed>()
+                            .is_some_and(|observed| assigned::capture_matches(observed, &checkout))
+                        {
+                            return Err(refuse(
+                                DomainErrorCode::ViewUnavailable,
+                                "worktree_view",
+                                Some(&checkout.id),
+                            ));
+                        }
+                        Some(
+                            assigned::refresh_target(
+                                tx.git(),
+                                ctx,
+                                repository_id,
+                                worktree_id.as_ref(),
+                                git_ref.is_some(),
+                            )?
+                            .ok_or(StorageError::ScopeDenied)?,
+                        )
+                    } else {
+                        None
                     };
+                    let requested =
+                        match (bound_worktree.as_ref().or(worktree_id.as_ref()), git_ref) {
+                            (Some(id), _) => Some(overlay::Requested::Worktree {
+                                id,
+                                observed: command.prepared::<overlay::Observed>(),
+                            }),
+                            (None, Some(_)) => Some(overlay::Requested::Ref {
+                                resolved: command.prepared::<overlay::Resolved>(),
+                            }),
+                            (None, None) => None,
+                        };
                     match requested {
                         Some(requested) => overlay::refresh(
                             &self.env,
@@ -1234,7 +1317,7 @@ impl CommandHandler for IndexCoordinator {
                         ),
                         None => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
                     }
-                }
+                })(),
                 _ => Err(refuse(DomainErrorCode::InvalidArgument, "command", None)),
             },
             _ => Err(refuse(
@@ -1245,6 +1328,60 @@ impl CommandHandler for IndexCoordinator {
         };
         decided(tx, outcome)
     }
+}
+
+/// A verified owned Git checkout is immediately addressable, even before discovery rescans it.
+pub(crate) fn register_git_worktree(
+    tx: &mut dyn WriteTransaction,
+    tree: &StoredGitWorktree,
+) -> Result<(), StorageError> {
+    let indexed = assigned::indexed_id(tree);
+    let mut rows = tx.indexing().worktrees(&tree.repository_id)?;
+    if rows.iter().any(|existing| existing.worktree_id == indexed) || rows.len() >= 256 {
+        return Ok(());
+    }
+    rows.push(StoredWorktree {
+        repository_id: tree.repository_id.clone(),
+        worktree_id: indexed,
+        path: paths::native_location(&tree.path, cfg!(windows)),
+        head_oid: Some(tree.head.hex.clone()),
+        head_ref: Some(tree.branch.clone()),
+        main: false,
+        observed_at_ms: tx.now_ms(),
+    });
+    tx.indexing().put_worktrees(&tree.repository_id, &rows)
+}
+
+/// Retire only the index entry and overlay for the checkout whose removal Git has observed.
+pub(crate) fn retire_git_worktree(
+    tx: &mut dyn WriteTransaction,
+    tree: &StoredGitWorktree,
+    actor: &ActorId,
+    project: &ProjectId,
+) -> Result<(), StorageError> {
+    let indexed = assigned::indexed_id(tree);
+    if let Some(overlay) = tx.indexing().overlay_for(&tree.repository_id, &indexed)? {
+        if overlay.state == OVERLAY_UNAVAILABLE {
+            tx.graph().invalidate_graph_pins_for_overlay(&overlay.id)?;
+        } else {
+            let revision = overlay::retire_overlay(tx, &overlay, "the worktree was removed")?;
+            history(
+                tx,
+                actor,
+                Some(project),
+                (OVERLAY_AGGREGATE, &overlay.id, revision),
+                "IndexOverlayRetired",
+                json!({"worktreeId": indexed, "gitWorktreeId": tree.id}),
+            )?;
+        }
+    }
+    let mut rows = tx.indexing().worktrees(&tree.repository_id)?;
+    let before = rows.len();
+    rows.retain(|row| row.worktree_id != indexed);
+    if rows.len() != before {
+        tx.indexing().put_worktrees(&tree.repository_id, &rows)?;
+    }
+    Ok(())
 }
 
 /// `repositories.remove_index` of a repository (inside its unit of work): every active run of

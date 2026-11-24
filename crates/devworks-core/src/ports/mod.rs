@@ -164,6 +164,10 @@ pub struct GrantUse {
 /// or re-bound principal, a narrowed access policy) fences the request.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AuthorityFence {
+    /// A saved analysis subject whose owning operation must still be in dispatch.
+    AnalysisRequest { operation: OperationId, request: Id },
+    /// The selected database's exact registration that granted this operation.
+    DatabaseSource { id: Id, revision: i64 },
     /// Current durable task-branch ownership and repository membership.
     GitWorktree { id: Id, digest: String },
     /// The principal binding revision authority resolved.

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repositoryId",
+    "commit",
+    "captureDigest",
+    "sourceMode",
+    "files",
+    "runtime"
+  ],
+  "properties": {
+    "repositoryId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^([a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "captureDigest": {
+      "type": [
+        "null",
+        "string"
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "sourceMode": {
+      "const": "Repository"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "unit",
+          "language",
+          "sha256",
+          "text"
+        ],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "language": {
+            "enum": [
+              "typescript",
+              "tsx",
+              "javascript",
+              "typescript-context"
+            ]
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "executable"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^24\\.[0-9]+\\.[0-9]+$"
+        },
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "program",
+            "identity"
+          ],
+          "properties": {
+            "program": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "identity": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

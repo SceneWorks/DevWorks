@@ -556,6 +556,12 @@ async fn compose(
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
         secrets: secrets.clone(),
     });
+    runtime_config.database = Some(devworks_engine::schemas::DatabaseComposition {
+        adapter: Arc::new(devworks_adapters::database::NativeDataAdapter::new(vec![
+            config.data_root.clone(),
+        ])),
+        filesystem: Arc::new(devworks_adapters::fs::NativeFilesystem::new()),
+    });
     // The configured executable names (`tools.processExecutables`), each resolved on PATH
     // when a tool first selects it: nothing scans PATH before the first frame.
     let executables = Arc::new(
@@ -1793,6 +1799,44 @@ impl Backend for DesktopBackend {
             .packages()
             .ok_or("packages are not composed")?;
         host.fetch_bundle(package, digest, &self.scratch_dir().join("packages"))
+    }
+    fn package_views(
+        &self,
+        package: &str,
+        digest: &str,
+    ) -> Result<devworks_engine::package_host::native_ui::NativeViews, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .native_views(&self.host.ctx, package, digest)
+    }
+    fn load_package_view_data(
+        &self,
+        package: &str,
+        digest: &str,
+        view: &str,
+        form: &serde_json::Value,
+    ) -> Result<devworks_engine::package_host::native_ui::ViewData, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .load_native_view_data(&self.host.ctx, package, digest, view, form)
+    }
+    fn prepare_package_view_action(
+        &self,
+        package: &str,
+        digest: &str,
+        view: &str,
+        action: &str,
+        form: &serde_json::Value,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .prepare_native_view_action(&self.host.ctx, package, digest, view, action, form)
     }
     fn index_sources(
         &self,

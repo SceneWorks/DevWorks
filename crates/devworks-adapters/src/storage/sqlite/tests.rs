@@ -613,6 +613,68 @@ fn every_shipped_table_is_strict_and_its_foreign_keys_resolve() {
 }
 
 /// This build's migrations up to and including `version` (versions may have gaps).
+#[test]
+fn parallel_migrations_adopt_exact_code_intelligence_branch_stores() {
+    for previous in [64, 65] {
+        let h = Harness::new();
+        let mut legacy = through(63);
+        legacy.push(Migration {
+            version: 64,
+            minimum_reader: 57,
+            minimum_writer: 63,
+            ..MIGRATIONS[66]
+        });
+        if previous == 65 {
+            legacy.push(Migration {
+                version: 65,
+                minimum_reader: 57,
+                minimum_writer: 65,
+                ..MIGRATIONS[67]
+            });
+        }
+        drop(SqliteStore::open_with(h.config(), &legacy).unwrap());
+        let conn = h.raw();
+        conn.execute(
+            "INSERT INTO analysis_runs VALUES('prior-analysis','operation','project',?1,?1,7,1,'{}')",
+            ["a".repeat(64)],
+        )
+        .unwrap();
+        if previous == 65 {
+            conn.execute(
+                r#"INSERT INTO database_sensitive_policies VALUES('',NULL,'{"prior":true}')"#,
+                [],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        let store = h.store();
+        assert!(store.integrity_check().unwrap().problems.is_empty());
+        drop(store);
+        let conn = h.raw();
+        let ledger = super::migrations::ledger(&conn).unwrap();
+        assert_eq!(ledger.len(), MIGRATIONS.len());
+        for (applied, canonical) in ledger.iter().zip(MIGRATIONS) {
+            assert_eq!(applied.version, canonical.version);
+            assert_eq!(applied.checksum, canonical.checksum());
+        }
+        assert_eq!(
+            conn.query_row("SELECT id FROM analysis_runs", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            "prior-analysis"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM database_sensitive_policies WHERE json_extract(policy_json,'$.prior')=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            i64::from(previous == 65)
+        );
+    }
+}
+
 fn through(version: i64) -> Vec<Migration> {
     MIGRATIONS
         .iter()
@@ -1222,7 +1284,7 @@ fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
 pub(super) fn feature_document_migrations(prefix: usize, count: usize) -> Vec<Migration> {
     let mut migrations = MIGRATIONS[..prefix].to_vec();
     migrations.extend(
-        MIGRATIONS[70..70 + count]
+        MIGRATIONS[72..72 + count]
             .iter()
             .enumerate()
             .map(|(offset, migration)| {
@@ -1327,13 +1389,13 @@ fn published_feature_document_prefixes_converge_without_rewriting_evidence() {
         assert_eq!(after.len(), MIGRATIONS.len());
         assert_eq!(&after[..prefix], &before[..prefix]);
         for (offset, old) in before[prefix..].iter().enumerate() {
-            let canonical = &after[70 + offset];
-            assert_eq!(canonical.version, (71 + offset) as i64);
+            let canonical = &after[72 + offset];
+            assert_eq!(canonical.version, (73 + offset) as i64);
             assert_eq!(canonical.checksum, old.checksum);
             assert_eq!(canonical.app_build, "document-feature");
             assert_eq!(canonical.applied_at_ms, old.applied_at_ms);
         }
-        for main in &MIGRATIONS[prefix..70] {
+        for main in &MIGRATIONS[prefix..72] {
             assert_eq!(after[(main.version - 1) as usize].checksum, main.checksum());
         }
         let conn = h.raw();
@@ -1475,13 +1537,33 @@ fn feature_document_reconciliation_rolls_back_if_the_missing_suffix_fails() {
     );
 }
 
+pub(super) fn application_test_migrations(count: usize) -> Vec<Migration> {
+    let mut migrations = MIGRATIONS[..66].to_vec();
+    migrations.extend(
+        MIGRATIONS[68..68 + count]
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let version = item.version - 2;
+                Migration {
+                    version,
+                    minimum_reader: if i == 0 { 66 } else { 68 },
+                    minimum_writer: version,
+                    ..*item
+                }
+            }),
+    );
+    migrations
+}
+
 #[test]
 fn app_operations_prefix_preserves_rows_and_exact_migration_evidence() {
     let fresh = Harness::new();
     drop(fresh.store());
     let fresh_schema = super::workspace_archive::schema_digest(&fresh.raw()).unwrap();
     let old = Harness::new();
-    drop(SqliteStore::open_with(old.config(), &through(70)).unwrap());
+    let legacy = application_test_migrations(4);
+    drop(SqliteStore::open_with(old.config(), &legacy).unwrap());
     let conn = old.raw();
     conn.execute_batch(
         r#"INSERT INTO work_import_configs
@@ -1498,8 +1580,14 @@ fn app_operations_prefix_preserves_rows_and_exact_migration_evidence() {
     drop(conn);
     let combined = old.store();
     let after = combined.compatibility().unwrap().migrations;
-    assert_eq!(&after[..70], &before);
-    assert_eq!(after.len(), 76);
+    assert_eq!(&after[..66], &before[..66]);
+    assert_eq!(after.len(), MIGRATIONS.len());
+    for (now, then) in after[68..72].iter().zip(&before[66..70]) {
+        assert_eq!(now.version, then.version + 2);
+        assert_eq!(now.checksum, then.checksum);
+        assert_eq!(now.app_build, then.app_build);
+        assert_eq!(now.applied_at_ms, then.applied_at_ms);
+    }
     let conn = old.raw();
     assert_eq!(
         super::workspace_archive::schema_digest(&conn).unwrap(),
@@ -1528,8 +1616,11 @@ fn app_operations_prefix_preserves_rows_and_exact_migration_evidence() {
 #[test]
 fn colliding_lineages_reject_inconsistent_witnesses_before_writes() {
     for (history, corrupt) in [
-        (through(70), "PRAGMA user_version=69"),
-        (through(70), "UPDATE store_meta SET minimum_reader=66"),
+        (application_test_migrations(4), "PRAGMA user_version=69"),
+        (
+            application_test_migrations(4),
+            "UPDATE store_meta SET minimum_reader=66",
+        ),
         (
             feature_document_migrations(66, 6),
             "DELETE FROM schema_migrations WHERE version=68",
@@ -1569,7 +1660,7 @@ fn reconciled_documents_roll_back_app_operations_on_a_late_collision() {
     conn.execute_batch("DROP TABLE app_update_state").unwrap();
     drop(conn);
     let combined = h.store();
-    assert_eq!(combined.compatibility().unwrap().store_schema_version, 76);
+    assert_eq!(combined.compatibility().unwrap().store_schema_version, 78);
 }
 
 #[test]

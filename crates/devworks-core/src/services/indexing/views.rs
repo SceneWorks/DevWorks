@@ -8,51 +8,14 @@
 //! visible; its target must also resolve in the same view, otherwise the reader reports it
 //! unresolved instead of following it into a masked unit.
 use crate::context::InvocationContext;
+use crate::kernel::graph_view::unavailable_index;
+pub use crate::kernel::graph_view::{ViewLayers, layers};
 use crate::ports::storage::*;
 use crate::protocol::DomainErrorCode;
 use crate::protocol::Id;
 use crate::protocol::data::ViewSelection;
 use crate::services::kernel::{Failure, Refusal};
 use crate::services::projects::visible_repository;
-
-/// The layers of one view, highest first.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ViewLayers {
-    pub view: StoredView,
-    /// Generation IDs, highest layer first (worktree, branch, baseline).
-    pub layers: Vec<Id>,
-}
-
-fn unavailable(id: &Id) -> Failure {
-    Refusal::new(
-        DomainErrorCode::ViewUnavailable,
-        "index_view",
-        Some(id.clone()),
-    )
-    .into()
-}
-
-/// The layers of `view` (it must exist and every layer must still be sealed).
-pub fn layers(read: &dyn IndexRead, view: &Id) -> Result<ViewLayers, Failure> {
-    let Some(v) = read.view(view)? else {
-        return Err(unavailable(view));
-    };
-    let mut layers = Vec::new();
-    for g in [
-        v.worktree_id.as_ref(),
-        v.branch_id.as_ref(),
-        Some(&v.baseline_id),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        match read.generation(g)? {
-            Some(stored) if stored.state == GEN_SEALED => layers.push(stored.id),
-            _ => return Err(unavailable(view)),
-        }
-    }
-    Ok(ViewLayers { view: v, layers })
-}
 
 /// The views a selection names for `ctx`: the published baseline of each named repository, or
 /// exact views (each visible to the invocation). An agent's own worktree view is selected with
@@ -94,7 +57,7 @@ pub fn select(
                                 && matches!(o.state.as_str(), OVERLAY_READY | OVERLAY_STALE)
                         });
                     if !current {
-                        return Err(unavailable(v));
+                        return Err(unavailable_index(v));
                     }
                 }
                 out.push(l);

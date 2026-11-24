@@ -114,7 +114,8 @@ pub struct LanguageInfo {
 }
 
 /// A source span: 1-based lines and columns (columns count UTF-8 bytes), plus byte offsets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Span {
     pub start_line: u32,
     pub start_column: u32,
@@ -125,7 +126,8 @@ pub struct Span {
 }
 
 /// How a relationship's target was established.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum Resolution {
     /// The target is a definition in the same unit, established syntactically.
     Resolved,
@@ -145,7 +147,8 @@ impl Resolution {
 }
 
 /// A definition (or the file itself, index 0) found in one file.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtractedNode {
     /// CodeGraph node label (`File`, `Class`, `Interface`, `Struct`, `Enum`, `Function`,
     /// `Method`, `Property`, `Module`, `Namespace`, `TerraformResource`, ...).
@@ -161,7 +164,8 @@ pub struct ExtractedNode {
 }
 
 /// Where an extracted relationship points.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum EdgeTarget {
     /// A node of the same file.
     Local(usize),
@@ -188,7 +192,8 @@ pub enum EdgeTarget {
 }
 
 /// A relationship found in one file.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExtractedEdge {
     /// CodeGraph edge type (`DEFINES`, `DEFINES_METHOD`, `IMPORTS`, `CALLS`, `INHERITS`,
     /// `IMPLEMENTS`, `REFERENCES_PACKAGE`, ...).
@@ -278,12 +283,17 @@ pub struct PackDescriptor {
     /// Structural language IDs it enriches.
     pub languages: Vec<String>,
     pub version: String,
+    /// Exact approved manifest for a managed package.
+    pub manifest_digest: Option<String>,
+    /// Needs context from the whole source capture, rather than independent file batches.
+    pub repository_source: bool,
     /// Toolchain prerequisites it found missing (empty: ready).
     pub missing: Vec<String>,
 }
 
 /// One semantic contribution for a unit, built against the exact source snapshot.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Enrichment {
     pub unit_key: String,
     pub nodes: Vec<ExtractedNode>,
@@ -294,6 +304,8 @@ pub struct Enrichment {
 #[derive(Clone, Debug)]
 pub struct EnrichmentRequest<'a> {
     pub repository_id: &'a str,
+    /// The captured name that qualifies repository-level manifest definitions.
+    pub repository_name: &'a str,
     /// The checkout the pack may read (never written).
     pub root: &'a Path,
     /// The exact commit, and the capture digest for a worktree layer.
@@ -301,6 +313,30 @@ pub struct EnrichmentRequest<'a> {
     pub capture_digest: Option<&'a str>,
     /// The units of this generation the pack may contribute to.
     pub units: &'a [String],
+    /// Exact bytes already read for this generation. A compiler must never reinterpret a
+    /// mutable checkout as the captured commit.
+    pub files: &'a [EnrichmentSource<'a>],
+    pub principal: &'a crate::context::InvocationContext,
+}
+
+#[derive(Clone, Debug)]
+pub struct EnrichmentSource<'a> {
+    pub unit: &'a str,
+    pub language: &'a str,
+    pub bytes: &'a [u8],
+}
+
+/// Current package contributions are resolved at snapshot selection, not cached at app boot.
+pub trait SemanticCatalog: Send + Sync {
+    fn enrichers(&self) -> Vec<std::sync::Arc<dyn SemanticEnricher>>;
+    /// A stable cached runtime observation included with a package's registry binding.
+    fn runtime_binding(&self, _package: &str) -> Option<String> {
+        None
+    }
+    fn descriptors(
+        &self,
+        snapshot: &dyn crate::ports::storage::ReadSnapshot,
+    ) -> Result<Vec<PackDescriptor>, crate::ports::storage::StorageError>;
 }
 
 /// A semantic language pack (SCIP or a native compiler index adapted into the shared graph).

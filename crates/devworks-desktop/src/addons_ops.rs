@@ -20,5 +20,15 @@ pub enum AddonsSlot {
     },
     /// The runtime probe and index refresh behind the Add-ons screen.
     AddonsDiscovery,
+    PackageViews(String),
+    PackageViewData {
+        package: String,
+        digest: String,
+        view: String,
+        request: u64,
+    },
+    PrepareViewAction,
+    InvokeViewAction,
+    ReadContent,
 }
 screen_slot!(AddonsSlot, AddOns);

@@ -87,6 +87,7 @@ use crate::authority::AccessProfile;
 use crate::authority::policy::{ACCESS_PROFILE_KEY, resolve_policy};
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+pub use crate::kernel::project_visibility::{visible_project, visible_repository};
 use crate::operations::{OperationInput, projects as pops, repositories as rops};
 use crate::ports::storage::{
     ACTIVE, ARCHIVED, ConfigScope, ConfigurationRead, DELETED, NewEvent, ProcessFilter,
@@ -166,35 +167,6 @@ fn conflict(kind: &'static str, id: &Id) -> Failure {
 
 // ---------------------------------------------------------------------------------------------
 // Shared helpers
-
-/// The project `id` if this invocation may see it (any lifecycle; otherwise `NotFound`).
-pub fn visible_project(
-    read: &dyn ProjectRead,
-    ctx: &InvocationContext,
-    id: &ProjectId,
-) -> Result<StoredProject, Failure> {
-    match read.project(id)? {
-        Some(p) if project_visible(ctx, Some(&p.id)) => Ok(p),
-        _ => Err(not_found("project", &id.0).into()),
-    }
-}
-
-/// The registered, not deleted repository `id` if this invocation may see it: a workspace
-/// invocation sees every registration, a project invocation only its project's members.
-pub fn visible_repository(
-    read: &dyn ProjectRead,
-    ctx: &InvocationContext,
-    id: &Id,
-) -> Result<StoredRepository, Failure> {
-    let found = match read.repository(id)? {
-        Some(r) if r.lifecycle != DELETED => match ctx.project_id() {
-            None => Some(r),
-            Some(p) => read.members(p)?.contains(&r.id).then_some(r),
-        },
-        _ => None,
-    };
-    found.ok_or_else(|| not_found("repository", id).into())
-}
 
 /// The access mode a project's effective `safety.accessProfile` grants (an unsupported stored
 /// profile fails closed for authority, so it is never reported as Full).

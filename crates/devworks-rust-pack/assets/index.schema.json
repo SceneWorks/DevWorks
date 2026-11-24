@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "index", "sourceSnapshot"],
+  "properties": {
+    "format": {"const": "Scip"},
+    "index": {"$ref": "#/$defs/artifact"},
+    "sourceSnapshot": {"$ref": "#/$defs/artifact"}
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "versionId", "sha256", "byteLength", "mediaType"],
+      "properties": {
+        "artifactId": {"type": "string"},
+        "versionId": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "byteLength": {"type": "string", "pattern": "^[0-9]+$"},
+        "mediaType": {"type": "string"}
+      }
+    }
+  }
+}

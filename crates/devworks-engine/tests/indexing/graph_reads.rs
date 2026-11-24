@@ -1237,7 +1237,14 @@ fn native_fallback_confidence_survives_publication_and_counts_distinct_answer_no
     let GraphResult::CallTrace { value } = calls.result else {
         panic!("calls")
     };
-    assert!(value.entries.0.len() > 2);
+    let mut callers: Vec<_> = value
+        .entries
+        .0
+        .iter()
+        .map(|entry| entry.node.name.0.as_str())
+        .collect();
+    callers.sort_unstable();
+    assert_eq!(callers, ["caller", "fallback"], "follow the self-call once");
     assert_eq!(
         value.low_confidence_count.get(),
         1,

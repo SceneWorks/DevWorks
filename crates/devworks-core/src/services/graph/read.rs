@@ -203,7 +203,16 @@ impl<'a> Reader<'a> {
                     .ok_or_else(|| super::scope::unavailable(Some(id.clone())))?;
                 let (state, _) =
                     crate::services::indexing::status::manifest_coverage(&generation.manifest);
-                if !matches!(state, crate::protocol::data::CoverageState::Complete) {
+                if !matches!(state, crate::protocol::data::CoverageState::Complete)
+                    || crate::services::indexing::status::semantic_stale(
+                        self.read.packages(),
+                        &generation.manifest,
+                        &self
+                            .read
+                            .projects()
+                            .repository_projects(&generation.repository_id)?,
+                    )?
+                {
                     return Ok(false);
                 }
             }
@@ -306,6 +315,21 @@ impl<'a> Reader<'a> {
             .into());
         }
         Ok(GraphScope { views })
+    }
+
+    pub fn note_index_limits(&mut self, visits: bool, memory: bool) {
+        for (limited, gap) in [
+            (visits, "graph_visited_limit"),
+            (memory, "graph_memory_limit"),
+        ] {
+            if limited && !self.gaps.contains(&gap) {
+                self.gaps.push(gap);
+            }
+        }
+    }
+
+    pub fn index_limited(&self) -> bool {
+        self.gaps.contains(&"graph_visited_limit") || self.gaps.contains(&"graph_memory_limit")
     }
 
     pub fn raw_nodes(

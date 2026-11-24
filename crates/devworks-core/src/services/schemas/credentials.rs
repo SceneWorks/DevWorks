@@ -67,6 +67,19 @@ impl Credentials {
     }
 }
 impl SchemaService {
+    pub(in crate::services) fn target_password(
+        &self,
+        handle: Option<&Id>,
+    ) -> Result<Option<Secret>, StorageError> {
+        let Some(handle) = handle else {
+            return Ok(None);
+        };
+        let owner = self.credentials.as_ref().ok_or(StorageError::ScopeDenied)?;
+        owner
+            .password(handle)
+            .map_err(|_| StorageError::ScopeDenied)
+    }
+
     pub fn with_credentials(
         mut self,
         store: Arc<dyn ApplicationStore>,

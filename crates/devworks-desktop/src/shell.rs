@@ -629,6 +629,7 @@ impl Shell {
                 }
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
+                Effect::OpenFleetAnalysis => self.open_fleet_analysis(),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
                 Effect::OpenGraphNode { repository, node } => {
                     self.open_graph_node(&repository, &node)

@@ -58,29 +58,36 @@ use rusqlite::Connection;
 /// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
 /// routing source linked to its owning session. The linked input artifact follows the ordinary
 /// project artifact ownership and the operation journal follows its existing scope.
-/// Migration 68 adds workspace-owned retention receipts containing opaque record witnesses,
+/// Migration 67 adds analysis_runs and its four indexes. Project runs follow their recorded
+/// scope key. Workspace runs and ordinary repository index views keep their independent ownership.
+/// Migration 68 adds database_sensitive_policies. Rules follow the workspace or shared schema
+/// source. Project purge removes only the project's existing access to that shared source.
+/// Migration 69 adds source-import settings and history owned by the workspace and mapping and
+/// retry rows owned by the mapped project. Earlier DW-F12 installers used migration numbers
+/// 67–76 for the same SQL now at versions 69–78; policy filenames retain the original numbers.
+/// Migration 70 adds workspace-owned retention receipts containing opaque record witnesses,
 /// a diagnostics retention generation, and lookup indexes. Only workspace operations can own
 /// the new records. Retention adds no project ownership edge.
-/// Migration 69 records workspace archive grants, proposals and distinct restore histories.
+/// Migration 71 records workspace archive grants, proposals and distinct restore histories.
 /// Effect provenance is historical evidence with no foreign key to active project rows.
-/// Migration 70 records workspace-wide update discovery and approval with no project ownership edge.
-/// Migration 71 adds retrieval preferences and three per-version document index tables. The
+/// Migration 72 records workspace-wide update discovery and approval with no project ownership edge.
+/// Migration 73 adds retrieval preferences and three per-version document index tables. The
 /// document lineage propagates from the managed artifact version to its extraction and text.
 /// Explicit version tombstones remove derived rows, and project purge classifies each row.
-/// Migration 72 adds a published lexical row per extracted block. It is classified through
+/// Migration 74 adds a published lexical row per extracted block. It is classified through
 /// that block's retained version. FTS5 segments follow the projection and are maintained
 /// by the virtual table when a canonical lexical row changes.
-/// Migrations 73 and 74 add derivative embedding runs, vectors, and vision units and keys.
+/// Migrations 75 and 76 add derivative embedding runs, vectors, and vision units and keys.
 /// Each follows its exact extraction or version and has a separate ownership entry.
-/// Migration 75 indexes existing embedding preparation rows and keeps the publication time on
+/// Migration 77 indexes existing embedding preparation rows and keeps the publication time on
 /// the exact document index version. Both tables retain their existing purge policies, so a
 /// retained document keeps its publication time after its previous owner's events are purged.
-/// Migration 76 adds scoped Dreaming settings, immutable instruction revisions and run and
+/// Migration 78 adds scoped Dreaming settings, immutable instruction revisions and run and
 /// action records, plus scoped source observations. A project's settings and runs belong to
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "da24b249a8b836f3123705560cf3ab04b9b255e6203bc39a14b913aba59809a0";
+    "854be39290acdaa87e4632b8207980ed7a9945ea13fa73b5867c2eea846d0f06";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

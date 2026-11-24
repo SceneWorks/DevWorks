@@ -3,18 +3,16 @@
 //! began in the sessions service and live here so no service depends on another to use them.
 use crate::context::{InvocationContext, PrincipalKind};
 pub use crate::kernel::failure::{Failure, Refusal};
+pub(crate) use crate::kernel::failure::{not_found, rev};
+pub(crate) use crate::kernel::project_visibility::project_visible;
 use crate::ports::IdKind;
 use crate::ports::storage::{SessionRead, StoredSession, WorkRoot, WriteTransaction};
 use crate::ports::{Decided, HandlerFailure};
 use crate::protocol::results::DomainDecision;
 use crate::protocol::support::BoundedText;
 use crate::protocol::{
-    CorrelationId, Counter, DomainErrorCode, DomainFault, Id, ProjectId, Revision, RootId,
+    CorrelationId, Counter, DomainErrorCode, DomainFault, Id, ProjectId, RootId,
 };
-
-pub(crate) fn not_found(kind: &'static str, id: &Id) -> Refusal {
-    Refusal::new(DomainErrorCode::NotFound, kind, Some(id.clone()))
-}
 
 /// The query fault of a failure; a storage error maps through the shared storage fault.
 pub(crate) fn query_fault(
@@ -45,9 +43,6 @@ pub(crate) fn decided(
     }
 }
 
-pub(crate) fn rev(n: i64) -> Revision {
-    Revision::new(n.max(1)).expect("positive revision")
-}
 pub(crate) fn counter(n: i64) -> Counter {
     Counter::new(n.max(0)).expect("non-negative counter")
 }
@@ -67,13 +62,6 @@ pub(crate) fn require_project(ctx: &InvocationContext, project: &ProjectId) -> R
             Some(project.0.clone()),
         )),
         _ => Ok(()),
-    }
-}
-/// Whether the invocation may see a session of `project` (`None`: a workspace session).
-pub(crate) fn project_visible(ctx: &InvocationContext, project: Option<&ProjectId>) -> bool {
-    match ctx.project_id() {
-        None => true,
-        Some(p) => project == Some(p),
     }
 }
 /// The work root `id` if this invocation may see it (otherwise `NotFound`).

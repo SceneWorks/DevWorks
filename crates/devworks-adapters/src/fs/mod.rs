@@ -104,6 +104,13 @@ pub(crate) fn identity_of(_: &Metadata) -> Option<FileIdentity> {
     None
 }
 
+#[cfg(windows)]
+pub(crate) fn single_link_handle_identity(
+    handle: std::os::windows::io::RawHandle,
+) -> Option<FileIdentity> {
+    windows::single_link_identity(handle)
+}
+
 pub(crate) fn identity_for_file(file: &std::fs::File) -> Option<FileIdentity> {
     #[cfg(windows)]
     {

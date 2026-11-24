@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
-    "devworks-capability-catalog.json": "e8a19a18e0316eeed673dd512b56fc674836f30c7bad39b4f06aab320f5ccf2f",
+    "devworks-capability-catalog.json": "bc40b60c7aa42c6c983bee986ebc50f890326f8ba904f293060a1b5978a6660a",
     "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
-    "codegraph-capability-inventory.json": "54da948de48de4a7d00353ae14d7464feac80cca9bdab6d2a6bb2679caae2c09",
+    "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "816bb8bcba0cfd24cfbc3350d9523eb4bf00734c8e07ceb9c07dfb085b456a97",
+    "contracts/family-coverage.json": "273ecea161b0e843138f5e140c16eb1542d18fb5dde55ba069540c882d239f8e",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
   "counts": {
     "slices": 80,
     "operationFamilies": 50,
-    "operations": 388,
+    "operations": 393,
     "requirements": 390,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 147
     },
-    "inputSchemaCandidates": 388,
+    "inputSchemaCandidates": 393,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -3209,7 +3209,10 @@
         "database.execute_write",
         "database.apply_migration",
         "database.direct_schema_change",
-        "database.configure_sensitive_columns"
+        "database.configure_sensitive_columns",
+        "database.mysql_readonly_query",
+        "database.sensitive_columns",
+        "database.edit_sensitive_column_rules"
       ],
       "primaryRequirements": [],
       "supportingRequirements": [
@@ -3634,6 +3637,8 @@
         "addons.rollback",
         "addons.uninstall",
         "addons.invoke",
+        "addons.run_workflow",
+        "addons.read_content",
         "addons.invocation"
       ],
       "primaryRequirements": [
@@ -14383,7 +14388,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<MetricRecord>",
+      "resultValueType": "AnalysisMetricPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14425,7 +14430,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<ClusterRecord>",
+      "resultValueType": "AnalysisClusterPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14495,7 +14500,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<MetricRecord>",
+      "resultValueType": "AnalysisMetricPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14509,7 +14514,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<MetricRecord>",
+      "resultValueType": "AnalysisMetricPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14551,7 +14556,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<MetricRecord>",
+      "resultValueType": "AnalysisMetricPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14565,7 +14570,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<MetricRecord>",
+      "resultValueType": "AnalysisMetricPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14579,7 +14584,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<MetricRecord>",
+      "resultValueType": "AnalysisMetricPageResult",
       "requestModes": [
         "Query"
       ],
@@ -14762,6 +14767,48 @@
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
       "resultValueType": "SchemaConnection",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "database.mysql_readonly_query",
+      "family": "database",
+      "serviceOwner": "DataExecutor",
+      "primarySlice": "database_tools",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DatabaseLegacyRows",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "database.sensitive_columns",
+      "family": "database",
+      "serviceOwner": "DataExecutor",
+      "primarySlice": "database_tools",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DatabaseSensitiveRuleSet",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "database.edit_sensitive_column_rules",
+      "family": "database",
+      "serviceOwner": "DataExecutor",
+      "primarySlice": "database_tools",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DatabaseSensitiveRuleSet",
       "requestModes": [
         "Command"
       ],
@@ -17511,6 +17558,34 @@
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
       "resultValueType": "PackageInvocation",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "addons.run_workflow",
+      "family": "addons",
+      "serviceOwner": "PackageHost",
+      "primarySlice": "packages",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "PackageInvocation",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "addons.read_content",
+      "family": "addons",
+      "serviceOwner": "PackageHost",
+      "primarySlice": "packages",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "PackageContent",
       "requestModes": [
         "Command"
       ],
@@ -20647,13 +20722,13 @@
       "attribute": "HttpPost(\"link\")",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "native",
-      "reason": "Retain behavior through the shared native operation boundary",
+      "reason": "Use the LinksOnly command mode for the selected graph composition",
       "acceptanceCase": "CAP-LINKING",
       "resolvedOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "implementationSlices": [
         "analysis"
@@ -22972,13 +23047,13 @@
       "attribute": "HttpPost(\"link\")",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "native",
-      "reason": "Retain behavior through the shared native operation boundary",
+      "reason": "Use the LinksOnly command mode for the selected graph composition",
       "acceptanceCase": "CAP-LINKING",
       "resolvedOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "implementationSlices": [
         "analysis"
@@ -27033,13 +27108,13 @@
       "bases": ": IConsumer<RepositoryIndexingCompleted>",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "adapt",
-      "reason": "Atomic local events/queue entries and native consumers replace MassTransit/RabbitMQ delivery",
+      "reason": "The native publication consumer queues deterministic links, communities, vitals and security for the exact graph view",
       "acceptanceCase": "CAP-LINKING",
       "resolvedOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "implementationSlices": [
         "analysis"
@@ -27395,13 +27470,13 @@
       "attribute": "HttpPost(\"link\")",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "native",
-      "reason": "Retain behavior through the shared native operation boundary",
+      "reason": "Use the LinksOnly command mode for the selected graph composition",
       "acceptanceCase": "CAP-LINKING",
       "resolvedOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "implementationSlices": [
         "analysis"

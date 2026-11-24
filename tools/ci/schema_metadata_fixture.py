@@ -156,8 +156,53 @@ def fixtures():
         source('mysql-functional-index-fixture.sql', 'metadata_fixture')
         # MySQL captures are Complete: the reader may read routine definitions.
         sql("GRANT SHOW_ROUTINE ON *.* TO 'metadata_reader'@'%';")
+        # The desktop suite includes the retained read endpoint alongside metadata.
+        sql("""
+            CREATE DATABASE dw37_fixture;
+            GRANT SELECT, SHOW VIEW ON dw37_fixture.* TO 'metadata_reader'@'%';
+            USE dw37_fixture;
+            CREATE TABLE dw_public(id INT NOT NULL PRIMARY KEY, secret VARCHAR(40) NOT NULL);
+            INSERT INTO dw_public VALUES (1,'public'), (2,'next');
+            CREATE TABLE dw_private(id INT NOT NULL PRIMARY KEY, secret VARCHAR(40) NOT NULL);
+            INSERT INTO dw_private VALUES (1,'private');
+            CREATE VIEW dw_view AS SELECT secret FROM dw_private;
+        """)
     else:
         source('mariadb-check-name-fixture.sql', 'metadata_fixture')
+
+
+def check_digest_fixture(endpoint, env):
+    # Keep the existing retained read fixture and its metadata_reader grants independent.
+    sql("""
+        CREATE DATABASE dw37_check_fixture;
+        CREATE USER 'check_writer'@'%' IDENTIFIED BY 'devworks_check_writer';
+        GRANT SELECT, ALTER, CREATE, INSERT, LOCK TABLES ON dw37_check_fixture.* TO 'check_writer'@'%';
+        USE dw37_check_fixture;
+        CREATE TABLE dw_checks(id INT NOT NULL PRIMARY KEY, CONSTRAINT ck_id CHECK (id > 0)) ENGINE=InnoDB;
+        INSERT INTO dw_checks VALUES (2);
+    """)
+    check_env = dict(env, DW37_CHECK_TARGET=f'{a.engine}://{endpoint}/dw37_check_fixture',
+                     DW37_CHECK_USER='check_writer', DW37_CHECK_PASSWORD='devworks_check_writer')
+    subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
+                    'database_data', f'{a.engine}_check_digest', '--', '--exact', '--ignored'],
+                   cwd=ROOT, env=check_env, check=True)
+
+
+def postgres_index_digest_fixture(endpoint, env):
+    sql("""
+        CREATE ROLE index_writer LOGIN PASSWORD 'devworks_index_writer';
+        CREATE DATABASE dw37_index_fixture OWNER index_writer;
+    """)
+    sql("""
+        SET ROLE index_writer;
+        CREATE TABLE dw_index_target(id INTEGER PRIMARY KEY, note TEXT NOT NULL);
+        INSERT INTO dw_index_target VALUES (1, 'fixture');
+    """, 'dw37_index_fixture')
+    index_env = dict(env, DW37_INDEX_TARGET=f'postgres://{endpoint}/dw37_index_fixture',
+                     DW37_INDEX_USER='index_writer', DW37_INDEX_PASSWORD='devworks_index_writer')
+    subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
+                    'database_data', 'postgres_index_digest', '--', '--exact', '--ignored'],
+                   cwd=ROOT, env=index_env, check=True)
 
 
 with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folder:
@@ -179,6 +224,11 @@ with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folde
         env['DEVWORKS_METADATA_UNUSED_CA'] = str(tls/'unused-ca.pem')
         if a.engine == 'postgres':
             env['DEVWORKS_METADATA_POSTGRES_LIMITS'] = f'postgres://{endpoint}/metadata_limits'
+        if a.engine == 'mysql':
+            env.update(DW37_TARGET=f'mysql://{endpoint}/dw37_fixture',
+                       DW37_USER='metadata_reader', DW37_PASSWORD='devworks_metadata_reader')
+            if a.version == '9.7':
+                env['DW37_EXPECT_UNSUPPORTED_RELEASE'] = '1'
         # Ordinary tests ignore network fixture cases; this explicit job runs every case for
         # this engine (extraction, bounds, TLS/CA/hostname refusal) without inference.
         subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-adapters', '--test',
@@ -187,6 +237,10 @@ with tempfile.TemporaryDirectory(prefix=f'devworks-schema-{a.engine}-') as folde
         subprocess.run(['cargo', 'test', '--locked', '-p', 'devworks-desktop', '--test',
                         'database_network', a.engine, '--', '--ignored', '--nocapture'],
                        cwd=ROOT, env=env, check=True)
+        if (a.engine, a.version) in {('mysql', '8.4'), ('mariadb', '11.4')}:
+            check_digest_fixture(endpoint, env)
+        if (a.engine, a.version) == ('postgres', '17'):
+            postgres_index_digest_fixture(endpoint, env)
         print(json.dumps({'engine': a.engine, 'version': a.version, 'image': IMAGE,
                           'osTrustChanges': False, 'inference': False}))
     finally:

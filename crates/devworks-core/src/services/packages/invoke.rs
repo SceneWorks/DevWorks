@@ -35,7 +35,7 @@ use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{DomainErrorCode, EventId, OperationId, OperationState};
 use crate::services::artifacts::lifecycle::ExactReadRefusal;
 use crate::services::kernel::{Failure, Refusal};
-use serde_json::json;
+use serde_json::{Value, json};
 
 /// The journal capability of one package tool invocation.
 pub const CAPABILITY: &str = "package.invoke";
@@ -92,27 +92,16 @@ impl PackageService {
             }
         }
         // The tool is a contribution whose verified descriptor is the approved one.
-        let Some((contribution, descriptor)) = inspection
+        let Some(descriptor) = inspection
             .contributions
             .iter()
             .find(|c| c.id == i.contribution_id.0.as_str() && c.kind == "Tool")
-            .and_then(|c| Some((c, c.descriptor.as_ref()?)))
+            .and_then(|c| c.verified_descriptor())
         else {
             return Ok(Err(unavailable));
         };
-        if crate::fingerprint::canonical_digest(descriptor)
-            .ok()
-            .as_deref()
-            != Some(contribution.contract_digest.as_str())
-        {
-            return Ok(Err(unavailable));
-        }
         // Its input schema is a document the package ships, whose bytes are the installed ones.
-        let schema_file = inspection
-            .schema_assets
-            .iter()
-            .find(|a| a.reference == descriptor["meta"]["inputSchema"])
-            .and_then(|a| inspection.files.iter().find(|f| f.path == a.path));
+        let schema_file = inspection.schema_file(&descriptor["meta"]["inputSchema"]);
         let Some(schema) =
             schema_file.and_then(|file| self.read_schema(&inspection.package_id, &digest, file))
         else {
@@ -139,7 +128,7 @@ impl PackageService {
         Ok(Ok(digest))
     }
 
-    fn read_schema(
+    pub(super) fn read_schema(
         &self,
         package: &str,
         digest: &str,
@@ -221,7 +210,6 @@ impl PackageService {
             project_id: ctx.project_id().cloned(),
             digest: policy_digest,
         }];
-        let operation = OperationId(tx.new_id(IdKind::Operation));
         let payload = json!({
             "packageId": i.package_id, "contributionId": i.contribution_id,
             "digest": active, "input": i.input, "principal": ctx.principal(),
@@ -240,44 +228,7 @@ impl PackageService {
             )
             .as_bytes(),
         );
-        tx.operations().record_intent(NewOperation {
-            id: operation.clone(),
-            root_id: None,
-            assignment_id: None,
-            capability: CAPABILITY.into(),
-            schema_version: 1,
-            args_digest,
-            payload,
-        })?;
-        let event = EventId(tx.new_id(IdKind::Event));
-        tx.history().append(NewEvent {
-            id: event.clone(),
-            actor: ctx.principal().clone(),
-            project_id: ctx.project_id().cloned(),
-            root_id: None,
-            operation_id: Some(operation.clone()),
-            aggregate_kind: super::AGGREGATE.into(),
-            aggregate_id: i.package_id.as_str().to_owned(),
-            aggregate_revision: 1,
-            kind: "PackageToolRequested".into(),
-            payload: json!({"contributionId": i.contribution_id, "digest": active}),
-        })?;
-        let entry = tx.new_id(IdKind::QueueEntry);
-        let ready_at_ms = tx.now_ms();
-        tx.queue().enqueue(NewQueueEntry {
-            id: entry,
-            consumer: CONSUMER.into(),
-            event_id: event,
-            root_id: None,
-            operation_id: Some(operation.clone()),
-            partition: None,
-            priority: 0,
-            ready_at_ms,
-            payload: json!({"packageId": i.package_id, "operationId": operation}),
-        })?;
-        let recorded = tx.operations().operation(&operation)?.ok_or_else(|| {
-            StorageError::InvalidRecord("the recorded invocation is missing".into())
-        })?;
+        let recorded = queue_invocation(tx, ctx, payload, args_digest)?;
         Ok(DomainDecision::Applied {
             result: OperationResult::AddonsInvoke {
                 value: invocation(&recorded),
@@ -306,9 +257,87 @@ impl PackageService {
     }
 }
 
+/// Records and queues a package invocation in the caller's write transaction.
+pub(super) fn queue_invocation(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    mut payload: Value,
+    args_digest: String,
+) -> Result<OperationRecord, StorageError> {
+    let operation = OperationId(tx.new_id(IdKind::Operation));
+    let package = payload["packageId"]
+        .as_str()
+        .ok_or_else(|| {
+            StorageError::InvalidRecord("the package invocation names no package".into())
+        })?
+        .to_owned();
+    let workflow_key = payload["workflowKey"].as_str().map(str::to_owned);
+    let workflow = workflow_key.is_some();
+    let entry = tx.new_id(IdKind::QueueEntry);
+    if workflow {
+        payload["deliveryId"] = json!(entry);
+    }
+    let root = workflow.then(|| ctx.root_id().cloned()).flatten();
+    let assignment = workflow.then(|| ctx.assignment_id().cloned()).flatten();
+    let request = json!({
+        "contributionId": payload["contributionId"],
+        "digest": payload["digest"],
+        "workflow": payload["workflow"],
+        "workflowVersions": payload["workflowVersions"],
+    });
+    tx.operations().record_intent(NewOperation {
+        id: operation.clone(),
+        root_id: root.clone(),
+        assignment_id: assignment,
+        capability: CAPABILITY.into(),
+        schema_version: 1,
+        args_digest,
+        payload,
+    })?;
+    let event = EventId(tx.new_id(IdKind::Event));
+    tx.history().append(NewEvent {
+        id: event.clone(),
+        actor: ctx.principal().clone(),
+        project_id: ctx.project_id().cloned(),
+        root_id: root.clone(),
+        operation_id: Some(operation.clone()),
+        aggregate_kind: if workflow {
+            "package_workflow"
+        } else {
+            super::AGGREGATE
+        }
+        .into(),
+        aggregate_id: workflow_key.clone().unwrap_or_else(|| package.clone()),
+        aggregate_revision: 1,
+        kind: if workflow {
+            "PackageWorkflowRequested"
+        } else {
+            "PackageToolRequested"
+        }
+        .into(),
+        payload: request,
+    })?;
+    let ready_at_ms = tx.now_ms();
+    tx.queue().enqueue(NewQueueEntry {
+        id: entry,
+        consumer: CONSUMER.into(),
+        event_id: event,
+        root_id: root,
+        operation_id: Some(operation.clone()),
+        // A known check failure must not strand a later source or an authorized rerun.
+        partition: None,
+        priority: 0,
+        ready_at_ms,
+        payload: json!({"packageId": package, "operationId": operation, "workflowKey": workflow_key}),
+    })?;
+    tx.operations()
+        .operation(&operation)?
+        .ok_or_else(|| StorageError::InvalidRecord("the recorded invocation is missing".into()))
+}
+
 /// What `operation` shows a person: its state and, from the observation that settled it, the
 /// artifacts its package returned or why it failed.
-fn invocation(operation: &OperationRecord) -> PackageInvocation {
+pub(super) fn invocation(operation: &OperationRecord) -> PackageInvocation {
     let settled = operation
         .attempts
         .iter()

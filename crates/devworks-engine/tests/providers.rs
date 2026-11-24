@@ -1,6 +1,8 @@
 //! The actual owned producer, SQLite accounting, current connection owner, artifacts and
 //! SessionWriter. Controlled transport bytes exercise native protocols without model execution.
 mod common;
+#[path = "providers/repository_analysis.rs"]
+mod repository_analysis;
 #[path = "providers/systemone.rs"]
 mod systemone;
 use common::*;

@@ -68,6 +68,21 @@ macro_rules! reads {
             fn git_worktree(&self, id: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
                 one(self.conn, id)
             }
+            fn git_worktree_at(
+                &self,
+                path: &str,
+            ) -> Result<Option<StoredGitWorktree>, StorageError> {
+                self.conn
+                    .query_row(
+                        "SELECT payload FROM git_owned_worktrees WHERE path=?1",
+                        [path],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(db)?
+                    .map(decode)
+                    .transpose()
+            }
             fn git_repository_worktrees(
                 &self,
                 repository: &Id,

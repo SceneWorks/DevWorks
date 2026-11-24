@@ -1,0 +1,294 @@
+{
+  "commit": "afe73560215bbe7593fc59451de5cc3237e3eeca",
+  "path": "src/CodeGraph.Tests/Services/VitalsLanguageComplexityTests.cs",
+  "cases": [
+    {
+      "line": 25,
+      "extension": "c",
+      "source": "#include <stdio.h>\n#define BLOCK { {\n/* { not code */\nstatic int\nmax_of(int a, int b)\n{\n    if (a > b && a != 0) {\n        return a;\n    }\n    return b;\n}\n\nint classify(const char *s) {\n    const char *open = \"{{{\";\n    char brace = '{';\n    for (int i = 0; s[i]; i++) {\n        switch (s[i]) {\n        case 'a':\n            while (i > 0) {\n                i--;\n            }\n            break;\n        case '}':\n            return 1;\n        }\n    }\n    return 0; // }}}\n}\n\nint prototype(int x);",
+      "nesting": 4,
+      "functions": 2,
+      "span": 16,
+      "branches": 7
+    },
+    {
+      "line": 57,
+      "extension": "hpp",
+      "source": "namespace app {\nclass Counter : public Base {\npublic:\n    int next() const {\n        return count_ > 0 ? count_ : 0;\n    }\n    Counter() : count_(0) {}\n    void reset();\nprivate:\n    int count_;\n};\n}",
+      "nesting": 3,
+      "functions": 2,
+      "span": 3,
+      "branches": 1
+    },
+    {
+      "line": 71,
+      "extension": "go",
+      "source": "package main\n\nimport \"fmt\"\n\n// Shape { is a comment\ntype Shape interface {\n    Area() float64\n}\n\nfunc (b Box) Area() float64 {\n    label := \"{{\"\n    raw := `\n    } }\n    `\n    r := '{'\n    if b.w > 0 && b.h > 0 {\n        for i := 0; i < 2; i++ {\n            switch {\n            case i == 0:\n                fmt.Println(label, raw, r)\n            }\n        }\n    }\n    return 1\n}\n\nfunc helper() int { return 0 }",
+      "nesting": 4,
+      "functions": 2,
+      "span": 16,
+      "branches": 5
+    },
+    {
+      "line": 100,
+      "extension": "php",
+      "source": "<html><body>{ {\n<?php\nnamespace App;\nuse function App\\helper;\n\n# a { comment\n#[Attribute]\nabstract class Greeter {\n    public function greet(array $names): string {\n        $out = \"Hi {$names[0]} }\";\n        $tpl = <<<EOT\n        { {\n        EOT;\n        foreach ($names as $n) {\n            if ($n === '}' || $n === null) {\n                $out .= $n ?? '';\n            }\n        }\n        return $this->match($out); // }\n    }\n\n    abstract function size(): int;\n}\n?>\n<p>{</p>",
+      "nesting": 4,
+      "functions": 2,
+      "span": 12,
+      "branches": 4
+    },
+    {
+      "line": 127,
+      "extension": "rb",
+      "source": "# frozen_string_literal: true\n=begin\ndef not_code\n  if x\n=end\nmodule Shapes\n  class Box < Base\n    def name = \"box\"\n\n    def area(items)\n      label = \"#{items.size} {\"\n      pattern = /\\d{2}/\n      words = %w[if end {]\n      total = 0 if items.empty?\n      items.each do |item|\n        if item.ok? && item.size > 0\n          total += 1 unless item.skip?\n        end\n      end\n      text = <<~EOS\n        def fake\n        end\n      EOS\n      total\n    end\n  end\nend",
+      "nesting": 5,
+      "functions": 2,
+      "span": 16,
+      "branches": 4
+    },
+    {
+      "line": 156,
+      "extension": "sh",
+      "source": "#!/usr/bin/env bash\n# deploy { script\nset -euo pipefail\n\nusage() {\n  echo \"usage: ${0##*/} {start|stop}\"\n}\n\nfunction deploy {\n  local count=$#\n  local len=${#1}\n  for host in \"$@\"; do\n    if [[ -n \"$host\" && \"$host\" != \"{\" ]]; then\n      case \"$host\" in\n        prod-*) echo \"prod }\" ;;\n        *) echo 'other {' ;;\n      esac\n    elif [ \"$count\" -gt 0 ] || true; then\n      cat <<'EOF'\nif { then\nEOF\n    fi\n  done\n  echo {a,b} # }\n}",
+      "nesting": 4,
+      "functions": 2,
+      "span": 17,
+      "branches": 8
+    },
+    {
+      "line": 198,
+      "extension": "cpp",
+      "source": "void f() {\n    auto s = R\"x(\n{ \"{\" )\" }\n)x\";\n    if (s.empty()) {\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 8,
+      "branches": 1
+    },
+    {
+      "line": 209,
+      "extension": "c",
+      "source": "#define BEGIN \\\n    {\n// a comment \\\n{\nint f(void) {\n    const char *s = \"a {\\\nb }\";\n    if (1) {\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 7,
+      "branches": 1
+    },
+    {
+      "line": 223,
+      "extension": "cc",
+      "source": "int f() {\n    int n = 1'000; char c = '{';\n    wchar_t w = L'}'; const char *q = \"\\\"{\";\n    if (n) {\n        g('}');\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 7,
+      "branches": 1
+    },
+    {
+      "line": 233,
+      "extension": "c",
+      "source": "int f(int a, int b) {\n#ifdef _WIN32\n    if (a) {\n#else\n    if (b) {\n#endif\n        g();\n    }\n#if 0\n#ifdef A\n    { { {\n#else\n    { {\n#endif\n#elif 0\n    { { {\n#else\n    h();\n#endif\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 20,
+      "branches": 1
+    },
+    {
+      "line": 256,
+      "extension": "c",
+      "source": "int add(a, b)\nint a;\nint b;\n{\n    if (a) {\n        return a + b;\n    }\n    return b;\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 9,
+      "branches": 1
+    },
+    {
+      "line": 268,
+      "extension": "cpp",
+      "source": "Widget::Widget(int x) : a_{{{x}}}, b_{2}, c_(3) {\n    if (x) {\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 5,
+      "branches": 1
+    },
+    {
+      "line": 276,
+      "extension": "go",
+      "source": "func f() {\n    /* outer /* inner */\n    if true {\n        g()\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 6,
+      "branches": 1
+    },
+    {
+      "line": 284,
+      "extension": "go",
+      "source": "func f() {\n    q := '\\''\n    s := \"\\\"{\"\n    if q == '{' {\n        g(s)\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 7,
+      "branches": 1
+    },
+    {
+      "line": 294,
+      "extension": "php",
+      "source": "<?php\nfunction f() {\n    // x ?>\n<div>{</div>\n<? if (true) { ?><b>}</b><?php\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 7,
+      "branches": 1
+    },
+    {
+      "line": 304,
+      "extension": "php",
+      "source": "<?php\nfunction f() {\n    $s = <<<'EOT'\n  } {$x[\"}\n  EOT;\n    if ($s) {\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 8,
+      "branches": 1
+    },
+    {
+      "line": 316,
+      "extension": "php",
+      "source": "<?php\nfunction f($a) {\n    $s = \"x {$a[\"}\"]} y\";\n    if ($s) {\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 6,
+      "branches": 1
+    },
+    {
+      "line": 326,
+      "extension": "php",
+      "source": "<?php\n#[Pure] FUNCTION f() { # trailing { comment\n    IF (true) {\n        g();\n    }\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 5,
+      "branches": 1
+    },
+    {
+      "line": 335,
+      "extension": "rb",
+      "source": "def f(q)\n  while q.any? do\n    q.pop\n  end\n  q\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 6,
+      "branches": 1
+    },
+    {
+      "line": 344,
+      "extension": "rb",
+      "source": "def f(x)\n  k = x.class\n  opts = { if: 1, unless: :end }\n  return :if if x\n  k\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 6,
+      "branches": 1
+    },
+    {
+      "line": 353,
+      "extension": "rb",
+      "source": "def f(x)\n  s = %Q{a {b} #{x ? \"}\" : \"{\"} c}\n  if s\n    g\n  end\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 6,
+      "branches": 2
+    },
+    {
+      "line": 362,
+      "extension": "rb",
+      "source": "def f(x)\n  for y in x do g(y) end\n  case x\n  in Integer then 1\n  in String then 2\n  end\n  g(x) or h(x)\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 8,
+      "branches": 5
+    },
+    {
+      "line": 373,
+      "extension": "rb",
+      "source": "def f(a, b)\n  raise ArgumentError, \"x\" \\\n    unless a\n  until a ||\n      b do\n    a = g\n  end\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 8,
+      "branches": 3
+    },
+    {
+      "line": 384,
+      "extension": "rb",
+      "source": "def f(x)\n  puts \"a#{unless x; ' b'; end}\"\n  remove_method :x= if x\n  ops << :* if x\n  g(<<-'end;')\n    if y\n  end;\n  if x\n    h\n  end\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 11,
+      "branches": 4
+    },
+    {
+      "line": 398,
+      "extension": "rb",
+      "source": "def f\n  g(<<~A, <<-'B')\n    if x\n  A\n    while y\n    B\n  if h\n    k\n  end\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 10,
+      "branches": 1
+    },
+    {
+      "line": 411,
+      "extension": "rb",
+      "source": "def f\n  if x\n    y\n  end\nend\n__END__\ndef g\n  if x",
+      "nesting": 2,
+      "functions": 1,
+      "span": 5,
+      "branches": 1
+    },
+    {
+      "line": 422,
+      "extension": "rb",
+      "source": "def f(a, b)\n  r = a / b\n  m = b =~ /if|{/\n  c = ?{\n  x = $' if b\n  if r\n    g\n  end\nend",
+      "nesting": 2,
+      "functions": 1,
+      "span": 9,
+      "branches": 2
+    },
+    {
+      "line": 434,
+      "extension": "sh",
+      "source": "f() {\n\tcat <<-EOF\n\t\tif x; then\n\tEOF\n\tif true; then\n\t\tg\n\tfi\n}\n",
+      "nesting": 2,
+      "functions": 1,
+      "span": 8,
+      "branches": 1
+    },
+    {
+      "line": 436,
+      "extension": "sh",
+      "source": "f() {\n  x=\"$(echo \" ; fi ; \")\"\n  if true; then\n    g\n  fi\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 6,
+      "branches": 1
+    },
+    {
+      "line": 445,
+      "extension": "sh",
+      "source": "f() {\n  echo if then fi done\n  grep -q while file && echo for\n  grep -q x <<< \"$y\"\n  (( n = n << 1 ))\n  echo a \\\n    if then\n  if true; then g; fi\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 9,
+      "branches": 2
+    },
+    {
+      "line": 457,
+      "extension": "bash",
+      "source": "f()\n{\n  n=${#1} m=$# # {\n  y=${x/a/; fi }\n  echo {a,b} \\{ x#y; if true; then\n  echo $'it\\'s {'\n    g\n  fi\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 9,
+      "branches": 1
+    },
+    {
+      "line": 469,
+      "extension": "zsh",
+      "source": "f() {\n  case \"$1\" in\n    (if|fi) g ;;\n    done) h ;&\n    *) k\n  esac\n}",
+      "nesting": 2,
+      "functions": 1,
+      "span": 7,
+      "branches": 4
+    }
+  ]
+}

@@ -35,22 +35,7 @@ impl Cursors {
         serde_json::from_str(&self.binding.decode(body)?)
             .map_err(|_| StorageError::CursorExpired.into())
     }
-    /// The untrusted header only locates a lease. Ownership/current authority and the full
-    /// binding are checked before any result can be published; it never selects another view.
     pub fn pin(cursor: &str) -> Result<Option<Id>, Failure> {
-        if cursor.starts_with("m1.") {
-            return Ok(None);
-        }
-        let mut parts = cursor.splitn(3, '.');
-        if parts.next() != Some("g1") {
-            return Err(StorageError::CursorExpired.into());
-        }
-        let pin = parts.next().ok_or(StorageError::CursorExpired)?;
-        if parts.next().is_none() {
-            return Err(StorageError::CursorExpired.into());
-        }
-        Ok(Some(
-            Id::new(pin.to_owned()).map_err(|_| StorageError::CursorExpired)?,
-        ))
+        crate::kernel::graph_request::cursor_pin(cursor)
     }
 }

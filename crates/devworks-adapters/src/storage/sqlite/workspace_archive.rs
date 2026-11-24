@@ -551,12 +551,15 @@ mod tests {
         use crate::fs::workspace_archive::digest_private_file;
         use devworks_core::ports::storage::{ARCHIVE_FORMAT, ARCHIVE_REVISION};
 
-        use crate::storage::sqlite::tests::feature_document_migrations;
+        use crate::storage::sqlite::tests::{
+            application_test_migrations, feature_document_migrations,
+        };
 
         // DW-F8 exposed a database profile, before the archive producer shipped. Seal an
         // exact copy of that schema as a fixture alongside the application's F12 catalogue.
         for history in [
-            MIGRATIONS[..70].to_vec(),
+            MIGRATIONS[..72].to_vec(),
+            application_test_migrations(10),
             feature_document_migrations(63, 5),
             feature_document_migrations(66, 6),
         ] {

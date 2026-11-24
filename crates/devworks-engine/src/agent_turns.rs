@@ -535,11 +535,12 @@ async fn run_native_loop(
                     )
                     .await?;
                 }
-                let (engine, ctx, agent, session) = (
+                let (engine, ctx, agent, session, stopped) = (
                     engine.clone(),
                     ctx.clone(),
                     agent.clone(),
                     session_id.clone(),
+                    cancellation.clone(),
                 );
                 let (head, binding) = tokio::task::spawn_blocking(move || {
                     let tools_required = !engine
@@ -562,7 +563,13 @@ async fn run_native_loop(
                         tools_required,
                         needs_images,
                     )?;
-                    Ok::<_, TurnError>(publish_first_context(&engine, &ctx, &agent, &route)?)
+                    Ok::<_, TurnError>(publish_first_context_until(
+                        &engine,
+                        &ctx,
+                        &agent,
+                        &route,
+                        &|| stopped.is_cancelled(),
+                    )?)
                 })
                 .await
                 .map_err(|error| TurnError::Worker(format!("initial context worker: {error}")))??;
@@ -1338,12 +1345,11 @@ struct RequestSize {
     natives: usize,
 }
 
-fn measure(
+fn selected_tool_bytes(
     engine: &TurnEngine,
     ctx: &InvocationContext,
-    head: &ArtifactRef,
     window: usize,
-) -> Result<RequestSize, StorageError> {
+) -> Result<i64, StorageError> {
     use devworks_core::providers::materialize::SchemaDocuments;
     let schemas = engine
         .providers()
@@ -1362,6 +1368,16 @@ fn measure(
             .checked_add(bytes.len())
             .ok_or(StorageError::ScopeDenied)?;
     }
+    i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)
+}
+
+fn measure(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    head: &ArtifactRef,
+    window: usize,
+) -> Result<RequestSize, StorageError> {
+    let tool_bytes = selected_tool_bytes(engine, ctx, window)?;
     let (context_bytes, _) = engine
         .artifacts()
         .read_exact(engine.store().as_ref(), ctx, head, 32 * 1024 * 1024)
@@ -1391,7 +1407,6 @@ fn measure(
     let natives = blocks()
         .filter(|block| matches!(block, ContentBlock::Native { .. }))
         .count();
-    let tool_bytes = i64::try_from(tool_bytes).map_err(|_| StorageError::ScopeDenied)?;
     let bytes = head
         .byte_length
         .get()
@@ -1482,7 +1497,29 @@ async fn compact(
     })
     .await
     .map_err(|error| TurnError::Worker(format!("agent compaction worker: {error}")))??;
-    publish_compaction_result(engine, ctx, binding, source, produced.result, retry_at_ms)
+    let (engine, ctx, binding, stopped) = (
+        engine.clone(),
+        ctx.clone(),
+        binding.clone(),
+        cancellation.clone(),
+    );
+    let mut retry = *retry_at_ms;
+    let (result, retry) = tokio::task::spawn_blocking(move || {
+        let result = publish_compaction_result(
+            &engine,
+            &ctx,
+            &binding,
+            source,
+            produced.result,
+            &mut retry,
+            Some(&stopped),
+        );
+        (result, retry)
+    })
+    .await
+    .map_err(|error| TurnError::Worker(format!("agent compaction publication: {error}")))?;
+    *retry_at_ms = retry;
+    result
 }
 
 pub(crate) fn prepare_compaction(
@@ -1522,6 +1559,7 @@ pub(crate) fn publish_compaction_result(
     source: crate::context_epoch::EpochSource,
     result: crate::providers::sink::ProviderResult,
     retry_at_ms: &mut Option<i64>,
+    cancellation: Option<&Cancellation>,
 ) -> Result<ArtifactRef, TurnError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     let store = engine.store().as_ref();
@@ -1541,8 +1579,30 @@ pub(crate) fn publish_compaction_result(
         .read_exact(store, ctx, &summary, 8 * 1024 * 1024)
         .map_err(artifact_read_fault)?
         .0;
-    let summary = String::from_utf8(bytes)
+    let mut summary = String::from_utf8(bytes)
         .map_err(|_| StorageError::InvalidRecord("compaction summary is not text".into()))?;
+    if let Some(cancellation) = cancellation
+        && let Some(packages) = engine.packages()
+    {
+        let suggestions = packages.context_suggestions_until(
+            ctx,
+            devworks_extension_protocol::package::HookPhase::Compact,
+            &source.context,
+            &|| cancellation.is_cancelled(),
+        );
+        let mut room = 4096;
+        for suggestion in suggestions {
+            if suggestion.len() + 2 > room {
+                continue;
+            }
+            room -= suggestion.len() + 2;
+            summary.push_str("\n\n");
+            summary.push_str(&suggestion);
+        }
+    }
+    if cancellation.is_some_and(Cancellation::is_cancelled) {
+        return Err(StorageError::Cancelled.into());
+    }
     Ok(crate::compaction::publish_compacted(
         store,
         engine.artifacts(),
@@ -2403,6 +2463,16 @@ pub fn publish_first_context(
     agent: &AgentRecord,
     route: &RouteChoice,
 ) -> Result<(ArtifactRef, NativeBinding), StorageError> {
+    publish_first_context_until(engine, ctx, agent, route, &|| false)
+}
+
+fn publish_first_context_until(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    agent: &AgentRecord,
+    route: &RouteChoice,
+    stopped: &dyn Fn() -> bool,
+) -> Result<(ArtifactRef, NativeBinding), StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     if engine
         .recover_native_context_head(ctx, session_id)?
@@ -2410,7 +2480,7 @@ pub fn publish_first_context(
     {
         return Err(StorageError::ScopeDenied);
     }
-    let (binding, headroom) = initial_route_binding(engine, session_id, route)?;
+    let (binding, headroom, capacity) = initial_route_binding(engine, session_id, route)?;
     let mut prompt = initial_context(engine.store().as_ref(), ctx, agent)?;
     let selected_count = engine
         .providers()
@@ -2427,11 +2497,54 @@ pub fn publish_first_context(
     if binding.endpoint_profile != EndpointProfile::CodexSubscriptionResponses {
         prompt.parameters.max_output_tokens = Some(headroom as u32);
     }
-    let bound = if is_plan_reviewer(agent) {
+    let mut bound = if is_plan_reviewer(agent) {
         crate::plan_review::bind_prompt(engine, ctx, prompt)?
     } else {
         engine.bind_provider_instructions(ctx, prompt, &[])?
     };
+    if !is_plan_reviewer(agent)
+        && let Some(packages) = engine.packages()
+    {
+        use crate::package_host::context_hook::append_context_suggestions;
+        use devworks_extension_protocol::package::HookPhase;
+        let materialized = serde_json::to_vec(&bound)
+            .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
+        let used = i64::try_from(materialized.len())
+            .unwrap_or(i64::MAX)
+            .saturating_add(selected_tool_bytes(engine, ctx, 0)?);
+        let mut room = capacity.map_or(4096, |tokens| {
+            tokens
+                .saturating_sub(headroom)
+                .saturating_mul(4)
+                .saturating_sub(used)
+                .clamp(0, 4096)
+        });
+        for phase in [HookPhase::Assemble, HookPhase::Decision] {
+            if room < 128 || stopped() {
+                break;
+            }
+            let suggestions = packages.context_suggestions_until(ctx, phase, &bound, stopped);
+            let fitting = suggestions
+                .into_iter()
+                .filter(|text| {
+                    let cost = serde_json::to_vec(text)
+                        .ok()
+                        .and_then(|encoded| i64::try_from(encoded.len()).ok())
+                        .unwrap_or(room)
+                        .saturating_add(128);
+                    if cost > room {
+                        return false;
+                    }
+                    room -= cost;
+                    true
+                })
+                .collect();
+            append_context_suggestions(&mut bound, fitting);
+        }
+    }
+    if stopped() {
+        return Err(StorageError::Cancelled);
+    }
     let head = engine.publish_initial_native_context(ctx, session_id, &binding, &bound)?;
     Ok((head, binding))
 }
@@ -2441,7 +2554,7 @@ pub(crate) fn initial_route_binding(
     engine: &TurnEngine,
     session_id: &Id,
     route: &RouteChoice,
-) -> Result<(NativeBinding, i64), StorageError> {
+) -> Result<(NativeBinding, i64, Option<i64>), StorageError> {
     read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
         let pin = read
             .router()
@@ -2480,6 +2593,7 @@ pub(crate) fn initial_route_binding(
                 context_epoch: Counter::new(0).expect("zero epoch"),
             },
             output_headroom(model.context_tokens),
+            model.context_tokens,
         ))
     })
 }

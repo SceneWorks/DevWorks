@@ -14,6 +14,8 @@
 //!   contribution; a command or any other effect only to a tool whose approved manifest declares
 //!   a `Mutation` or `Opaque` effect (a `ReadCandidate` tool only reads). When the caller names
 //!   allowed operations, the call must also be one of them (a list only narrows).
+//!   Direct human interactions stay outside the broker. Event handlers may only submit their
+//!   explicitly approved application commands through the durable event intent path.
 //! * **HTTP** needs the approved `network:<endpoint>` access; **inference** the approved
 //!   `inference` access.
 //! * **Artifacts** an invocation may read (as arguments) or return are its own: its input and the
@@ -44,7 +46,9 @@ use devworks_core::ports::storage::{
 use devworks_core::protocol::provider::ArtifactRef as HostArtifact;
 use devworks_core::protocol::results::DomainQueryReply;
 use devworks_core::protocol::{ActorId, CommandReply, EventId, Id, OperationId, OperationState};
-use devworks_core::registry::{self, EffectClass, Mode, OperationDescriptor, SchemaRevision};
+use devworks_core::registry::{
+    self, AuthorityClass, EffectClass, Mode, OperationDescriptor, SchemaRevision,
+};
 use devworks_core::services::artifacts::{
     ArtifactService, host::HostArtifactPublication, version_ref,
 };
@@ -96,6 +100,8 @@ pub struct Grants {
     operations: Option<BTreeSet<String>>,
     /// The approved manifest declares this tool's effect `Mutation` or `Opaque`.
     commands: bool,
+    /// The approved EventHandler's mode-qualified command grant.
+    event_commands: BTreeSet<String>,
     network: BTreeSet<String>,
     inference: bool,
 }
@@ -109,24 +115,36 @@ impl Grants {
         principal: Option<InvocationContext>,
         allowed: &[wire::QualifiedId],
     ) -> Self {
-        let commands = inspection
+        let descriptor = inspection
             .contributions
             .iter()
             .find(|c| c.id == contribution)
-            .is_some_and(|c| {
-                c.kind == "Tool"
-                    && c.descriptor.as_ref().is_some_and(|d| {
-                        // Only the verified descriptor counts (its digest is the approved one).
-                        devworks_core::jcs::canonicalize(d)
-                            .is_ok_and(|s| sha256_hex(s.as_bytes()) == c.contract_digest)
-                            && matches!(d["requestedEffect"].as_str(), Some("Mutation" | "Opaque"))
-                    })
-            });
+            .and_then(|c| c.verified_descriptor());
+        let commands = descriptor.is_some_and(|d| {
+            d["kind"] == "Tool"
+                && matches!(d["requestedEffect"].as_str(), Some("Mutation" | "Opaque"))
+        });
+        let event_prefix = format!("event-intent:{contribution}:");
+        let event_commands = descriptor
+            .filter(|d| d["kind"] == "EventHandler")
+            .and_then(|d| d["intentCommands"].as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|command| {
+                inspection
+                    .access
+                    .iter()
+                    .any(|access| access.strip_prefix(&event_prefix) == Some(*command))
+            })
+            .map(str::to_owned)
+            .collect();
         Self {
             principal,
             operations: (!allowed.is_empty())
                 .then(|| allowed.iter().map(|o| o.as_str().to_owned()).collect()),
             commands,
+            event_commands,
             network: inspection
                 .access
                 .iter()
@@ -214,7 +232,7 @@ pub(super) fn call(
             super::inference::call(host, ctx, slot, params)
         }
         BrokerCall::ArtifactRead { artifact, offset } => {
-            super::artifact_io::read(host, ctx, artifact, offset.as_ref())
+            super::artifact_io::read(host, ctx, slot, artifact, offset.as_ref())
         }
         BrokerCall::ArtifactAppend { write_id, data } => {
             super::artifact_io::append(ctx, params.action_key.as_str(), write_id.as_str(), data)
@@ -328,8 +346,23 @@ fn select(
                 "the input schema is not the operation's registered schema",
             )
         })?;
+    if descriptor.human_only
+        || matches!(
+            binding.authority,
+            AuthorityClass::HumanConfiguration
+                | AuthorityClass::HumanDecision
+                | AuthorityClass::HumanMaintenance
+        )
+        || (descriptor.name == "runs.continue"
+            && grants
+                .principal()
+                .is_none_or(|principal| principal.principal_kind() == PrincipalKind::Human))
+    {
+        return Err(denied("this operation requires a direct human interaction"));
+    }
     let reads_only = binding.mode == Mode::Query && binding.effect == EffectClass::ReadOnly;
-    if !reads_only && !grants.commands {
+    let event_command = binding.mode == Mode::Command && grants.event_commands.contains(operation);
+    if !reads_only && !grants.commands && !event_command {
         return Err(denied(
             "the approved manifest declares this contribution read-only",
         ));
@@ -360,10 +393,7 @@ impl Grants {
                 input_schema,
                 arguments,
             } => {
-                let selected = select(self, operation.as_str(), input_schema)?;
-                if selected.descriptor.human_only {
-                    return Err(denied("a package intent never runs a human-only operation"));
-                }
+                select(self, operation.as_str(), input_schema)?;
                 if !in_scope(arguments) {
                     return Err(denied(
                         "the arguments are not an artifact of this invocation",
