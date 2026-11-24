@@ -1103,7 +1103,10 @@ impl GitService {
                 let (kind, requests_push, qualifies) = match j.action {
                     Action::Commit { .. } => (
                         "RepositoryDocumentationCommitted",
-                        evidence["delivery"] == "CommitAndPush" && j.reviewed_binding.is_some(),
+                        evidence["delivery"] == "CommitAndPush"
+                            && j.reviewed_binding.as_ref().is_some_and(|binding| {
+                                binding["artifact"]["reference"] == evidence["commitMessage"]
+                            }),
                         false,
                     ),
                     Action::Push { .. } => (
@@ -1869,7 +1872,21 @@ impl GitService {
                         "committed tree or message differs from the reviewed contents".into(),
                     );
                 }
-                self.finish_git(&job, &operation.id, observation, None)
+                let docs = if matches!(job.action, Action::Commit { .. }) {
+                    match documentation::matching_commit(
+                        &*self.store,
+                        &git,
+                        path,
+                        &job,
+                        &observation.head,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => return storage_failure(error.into_storage()),
+                    }
+                } else {
+                    None
+                };
+                self.finish_git(&job, &operation.id, observation, docs)
             }
             Err(_) => EffectOutcome::Unknown("Git result could not be observed".into()),
         }

@@ -54,17 +54,7 @@ fn submit(
     let raw = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":revision,
         "requestKey":key,"body":input})
     .to_string();
-    let reply = app.command(ctx, operation, raw.as_bytes()).unwrap();
-    if operation == "repository_docs.generate"
-        && let CommandReply::Recorded { receipt, .. } = &reply
-        && let DomainDecision::Accepted { operation_id } = &receipt.decision
-    {
-        eprintln!(
-            "documentation fixture {key} uses {}",
-            operation_id.0.as_str()
-        );
-    }
-    reply
+    app.command(ctx, operation, raw.as_bytes()).unwrap()
 }
 
 fn accepted(reply: CommandReply<DomainDecision>) -> OperationId {
@@ -750,6 +740,15 @@ async fn check_repository_documentation(
     std::fs::write(path.join("CODEGRAPH.md"), document).unwrap();
     std::fs::remove_file(path.join("local-user-notes.md")).unwrap();
 
+    assert!(
+        read(f.store.as_ref(), |read| {
+            read.sessions()
+                .links(&RootId(task.clone()), &["evidence"], None, 25)
+        })
+        .iter()
+        .all(|link| link.target_kind != "repository_documentation"),
+        "staged files do not qualify as published evidence"
+    );
     let mut delivery = input;
     delivery["delivery"] = json!("CommitAndPush");
     let generated = accepted(submit(
@@ -769,30 +768,34 @@ async fn check_repository_documentation(
         "generation itself must not commit"
     );
     accept_documentation_review(f, app, user, project, "git.commit").await;
+    let committed = check_docs_git_effect(f, &tree.id, "git.commit").await;
+    assert_eq!(
+        committed.state,
+        OperationState::ObservedComplete,
+        "{committed:?}"
+    );
     accept_documentation_review(f, app, user, project, "git.push").await;
-    let delivered = within(
-        "the remote source receives reviewed repository docs",
-        async {
-            loop {
-                let page = read(f.store.as_ref(), |read| {
-                    read.history().page(&EventFilter::All, 0, 500)
-                });
-                if let Some(event) = page
-                    .events
-                    .into_iter()
-                    .find(|event| event.kind == "RepositoryDocumentationPublished")
-                {
-                    break event;
-                }
-                f.h.advance(200);
-                tokio::time::sleep(Duration::from_millis(30)).await;
-            }
-        },
-    )
-    .await;
+    let push = check_docs_git_effect(f, &tree.id, "git.push").await;
+    assert_eq!(push.state, OperationState::ObservedComplete, "{push:?}");
+    let doc_filter = EventFilter::Aggregate {
+        kind: "repository_documentation".into(),
+        id: tree.id.as_str().into(),
+    };
+    let delivered = read(f.store.as_ref(), |read| {
+        read.history().page(&doc_filter, 0, 100)
+    })
+    .events
+    .into_iter()
+    .find(|event| event.kind == "RepositoryDocumentationPublished")
+    .expect("the verified push records publication");
     assert_eq!(
         delivered.payload["deliveredHead"],
         git(&["rev-parse", "HEAD"])
+    );
+    let remote_head = git(&["ls-remote", "--heads", "origin", &tree.branch]);
+    assert_eq!(
+        remote_head.split_whitespace().next(),
+        delivered.payload["deliveredHead"].as_str()
     );
     assert_eq!(delivered.payload["files"].as_array().unwrap().len(), 2);
     let evidence = read(f.store.as_ref(), |read| {
@@ -828,29 +831,27 @@ async fn accept_documentation_review(
     let query = json!({"mode":"Query","protocol":"1.0-draft.1","schemaRevision":3,
         "queryId":"documentation-approvals","body":{"kind":"approvals.list",
             "scope":{"kind":"Project","projectId":project},"page":{"limit":25}}});
-    let review = within(
-        "documentation delivery enters the normal review queue",
-        async {
-            loop {
-                let reply = app
-                    .query(user, "approvals.list", query.to_string().as_bytes())
-                    .unwrap();
-                let view = serde_json::to_value(reply).unwrap();
-                if let Some(found) = view["result"]["value"]["items"]
-                    .as_array()
-                    .and_then(|items| {
-                        items.iter().find(|item| {
-                            item["operationKind"] == name && item["state"] == "Pending"
-                        })
-                    })
-                {
-                    break found.clone();
-                }
-                f.h.advance(200);
-                tokio::time::sleep(Duration::from_millis(30)).await;
+    let label = format!("documentation enters {name} review");
+    let review = within(&label, async {
+        loop {
+            let reply = app
+                .query(user, "approvals.list", query.to_string().as_bytes())
+                .unwrap();
+            let view = serde_json::to_value(reply).unwrap();
+            if let Some(found) = view["result"]["value"]["items"]
+                .as_array()
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|item| item["operationKind"] == name && item["state"] == "Pending")
+                })
+            {
+                break found.clone();
             }
-        },
-    )
+            f.h.advance(30);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
     .await;
     let vote = json!({"mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,
         "requestKey":format!("accept-docs-{}", name.replace('.', "-")),"body":{"kind":"approvals.record_human_decision",
@@ -864,6 +865,42 @@ async fn accept_documentation_review(
         if matches!(receipt.decision, DomainDecision::Applied { .. })),
         "{name} human decision"
     );
+}
+
+async fn check_docs_git_effect(f: &Fx, tree: &Id, capability: &str) -> OperationRecord {
+    let filter = EventFilter::Aggregate {
+        kind: "git_worktree".into(),
+        id: tree.as_str().into(),
+    };
+    let label = format!("approved documentation {capability} enters the operation journal");
+    let id = within(&label, async {
+        loop {
+            let operation = read(f.store.as_ref(), |read| {
+                let page = read.history().page(&filter, 0, 100)?;
+                for id in page
+                    .events
+                    .iter()
+                    .filter_map(|event| event.operation_id.as_ref())
+                {
+                    if read
+                        .operations()
+                        .operation(id)?
+                        .is_some_and(|row| row.capability == capability)
+                    {
+                        return Ok(Some(id.clone()));
+                    }
+                }
+                Ok(None)
+            });
+            if let Some(id) = operation {
+                break id;
+            }
+            f.h.advance(30);
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+    })
+    .await;
+    terminal(f.store.as_ref(), &id).await
 }
 
 fn rejected(

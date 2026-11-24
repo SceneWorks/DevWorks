@@ -782,7 +782,7 @@ impl GraphCtl<'_, '_> {
                         move |backend| {
                             backend
                                 .generate_repository_documentation(
-                                    &run, &project, &binding, &revision,
+                                    &run, &project, &binding, &revision, delivery,
                                 )
                                 .map(TaskOutput::RepositoryDocumentation)
                         },
