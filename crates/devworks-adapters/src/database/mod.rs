@@ -1,10 +1,12 @@
 //! Native target database metadata adapters, separate from internal application persistence.
 pub mod network;
 pub mod sqlite;
+pub mod sqlite_data;
 
 use devworks_core::ports::database::*;
 use devworks_core::protocol::data::{Coverage, CoverageState};
 use devworks_core::protocol::records::SchemaObjectMetadata;
+use devworks_core::protocol::support::{Items, Text};
 use devworks_core::protocol::{Check, Id};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -116,6 +118,39 @@ fn bound_metadata_fields(details: &mut Value) -> Coverage {
     }
     coverage
 }
+pub(super) struct NameScope {
+    include: regex::RegexSet,
+    exclude: regex::RegexSet,
+}
+
+impl NameScope {
+    pub(super) fn new(
+        config: &devworks_core::protocol::records::ConnectionConfig,
+    ) -> Result<Self, MetadataFailure> {
+        let compile = |patterns: &Items<Text>| {
+            regex::RegexSetBuilder::new(patterns.0.iter().map(|text| {
+                format!(
+                    "^{}$",
+                    regex::escape(text.0.as_str())
+                        .replace("\\*", ".*")
+                        .replace("\\?", ".")
+                )
+            }))
+            .size_limit(8 * 1024 * 1024)
+            .build()
+            .map_err(|_| MetadataFailure::InvalidTarget)
+        };
+        Ok(Self {
+            include: compile(&config.include_patterns)?,
+            exclude: compile(&config.exclude_patterns)?,
+        })
+    }
+    pub(super) fn includes(&self, name: &str, qualified: &str) -> bool {
+        (self.include.is_empty() || self.include.is_match(name) || self.include.is_match(qualified))
+            && !(self.exclude.is_match(name) || self.exclude.is_match(qualified))
+    }
+}
+
 struct Collector {
     request: MetadataRequest,
     objects: Vec<MetadataObject>,
@@ -123,40 +158,11 @@ struct Collector {
     bytes: usize,
     exhausted: bool,
     coverage: Coverage,
-    include: regex::RegexSet,
-    exclude: regex::RegexSet,
+    scope: NameScope,
 }
 impl Collector {
     fn new(request: MetadataRequest) -> Result<Self, MetadataFailure> {
-        let compile = |patterns: Vec<String>| {
-            regex::RegexSetBuilder::new(patterns.iter().map(|p| {
-                format!(
-                    "^{}$",
-                    regex::escape(p).replace("\\*", ".*").replace("\\?", ".")
-                )
-            }))
-            .size_limit(8 * 1024 * 1024)
-            .build()
-            .map_err(|_| MetadataFailure::InvalidTarget)
-        };
-        let include = compile(
-            request
-                .config
-                .include_patterns
-                .0
-                .iter()
-                .map(|p| p.0.as_str().to_owned())
-                .collect(),
-        )?;
-        let exclude = compile(
-            request
-                .config
-                .exclude_patterns
-                .0
-                .iter()
-                .map(|p| p.0.as_str().to_owned())
-                .collect(),
-        )?;
+        let scope = NameScope::new(&request.config)?;
         Ok(Self {
             request,
             objects: Vec::new(),
@@ -164,8 +170,7 @@ impl Collector {
             bytes: 0,
             exhausted: false,
             coverage: coverage(),
-            include,
-            exclude,
+            scope,
         })
     }
     fn check(&self) -> Result<(), MetadataFailure> {
@@ -178,8 +183,7 @@ impl Collector {
         }
     }
     fn includes(&self, name: &str, qualified: &str) -> bool {
-        (self.include.is_empty() || self.include.is_match(name) || self.include.is_match(qualified))
-            && !(self.exclude.is_match(name) || self.exclude.is_match(qualified))
+        self.scope.includes(name, qualified)
     }
     fn gap(&mut self, gap: &str) {
         self.coverage.state = CoverageState::Partial;
@@ -299,5 +303,48 @@ impl MetadataReader for NativeMetadataReader {
             }
             _ => network::NetworkMetadataReader.read(request),
         }
+    }
+}
+
+/// Native data adapters stay separate from the fixed catalog reader.
+pub struct NativeDataAdapter {
+    sqlite: sqlite_data::SqliteDataAdapter,
+    network: network::data::NetworkDataAdapter,
+}
+
+impl NativeDataAdapter {
+    pub fn new(protected: Vec<std::path::PathBuf>) -> Self {
+        Self {
+            sqlite: sqlite_data::SqliteDataAdapter::new(protected),
+            network: network::data::NetworkDataAdapter,
+        }
+    }
+
+    fn target(
+        &self,
+        engine: &devworks_core::protocol::records::DbEngine,
+    ) -> &dyn data::DataAdapter {
+        if matches!(engine, devworks_core::protocol::records::DbEngine::Sqlite) {
+            &self.sqlite
+        } else {
+            &self.network
+        }
+    }
+}
+
+impl data::DataAdapter for NativeDataAdapter {
+    fn capabilities(
+        &self,
+        engine: &devworks_core::protocol::records::DbEngine,
+    ) -> data::DataCapabilities {
+        self.target(engine).capabilities(engine)
+    }
+
+    fn execute(
+        &self,
+        request: data::DataRequest,
+        guard: std::sync::Arc<dyn data::DispatchGuard>,
+    ) -> data::DataFuture {
+        self.target(&request.config.engine).execute(request, guard)
     }
 }

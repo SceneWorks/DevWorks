@@ -10,24 +10,27 @@ def tokens(value):
     return set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', value))
 
 
+def enum_variants(definition, pascal):
+    for variant in definition['values']:
+        since = definition.get('introducedVariants', {}).get(variant)
+        if since is not None:
+            yield f'    #[schemars(extend("x-since" = {since}))]'
+        if not variant[0].isupper():
+            yield f'    #[serde(rename = "{variant}")]'
+        yield f'    {pascal(variant)},'
+
+
 def containing(types):
     found = set()
     for name, definition in types.items():
         introduced = definition.get('introducedVariants', {})
         if introduced:
-            kind = definition['kind']
-            choices = definition.get('variants') if kind == 'union' else definition.get('values')
-            if kind not in ('union', 'enum'):
+            variants = definition.get('variants', definition.get('values', ()))
+            if definition['kind'] not in ('union', 'enum'):
                 raise ValueError(f'{name}: introducedVariants requires a union or enum')
             for variant, revision in introduced.items():
-                if variant not in choices or type(revision) is not int or revision < 2:
+                if variant not in variants or type(revision) is not int or revision < 2:
                     raise ValueError(f'{name}: invalid introduced variant {variant}')
-            fallbacks = definition.get('fallbackVariants', {})
-            if fallbacks and (kind != 'enum' or not all(
-                v in introduced and old in choices and old not in introduced
-                for v, old in fallbacks.items()
-            )):
-                raise ValueError(f'{name}: enum fallbacks must name variants available in earlier revisions')
             found.add(name)
     while True:
         grown = found | {name for name, d in types.items() if any(
@@ -46,9 +49,11 @@ def method(definition, found):
     if definition['kind'] == 'record':
         body = calls(definition['fields'], found)
     elif definition['kind'] == 'enum':
-        guards = [f'if matches!(self, Self::{v}) && revision < {r} {{return Err("enum variant predates its introduction: {v}".into());}}'
-                  for v, r in definition.get('introducedVariants', {}).items()]
-        body = ''.join(guards)
+        body = ''.join(
+            f'if revision < {since} && matches!(self, Self::{variant}) {{'
+            f'return Err("enum variant predates its introduction: {variant}".into());}}'
+            for variant, since in definition.get('introducedVariants', {}).items()
+        )
     else:
         arms = [f'Self::{v}{{..}} if revision<{revision}=>{{return Err("union variant predates its introduction: {v}".into());}},'
                 for v, revision in definition.get('introducedVariants', {}).items()]
@@ -71,16 +76,6 @@ def method(definition, found):
 def extend(implementation, definition, found):
     check = method(definition, found)
     return implementation[:-1] + check + '}' if check else implementation
-
-
-def enum_members(definition, pascal):
-    for value in definition['values']:
-        since = definition.get('introducedVariants', {}).get(value)
-        if since:
-            yield f'    #[schemars(extend("x-since" = {since}))]'
-        if not value[0].isupper():
-            yield f'    #[serde(rename = "{value}")]'
-        yield f'    {pascal(value)},'
 
 
 def enum_projection(name, definition, found):

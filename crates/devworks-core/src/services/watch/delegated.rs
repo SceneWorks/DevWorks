@@ -1,7 +1,7 @@
-use super::{WatchService, finish_in, outcome};
+use super::{WatchService, finish_in, max_lifetime_default, outcome};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::ports::storage::{
-    AssignmentPurpose, AssignmentState, RunRead, StorageError, StoredAssignment,
+    AssignmentPurpose, AssignmentState, ConfigurationRead, RunRead, StorageError, StoredAssignment,
     StoredWatchAssignment, StoredWatcher, WriteTransaction,
 };
 use crate::ports::storage::{ReadOptions, WriteOptions, read_snapshot, run_write};
@@ -38,15 +38,41 @@ pub(super) fn bind(
     })
 }
 
+fn expired(
+    watcher: &StoredWatcher,
+    settings: &dyn ConfigurationRead,
+    now: i64,
+) -> Result<bool, StorageError> {
+    let deadline = match watcher.expires_at_ms {
+        Some(deadline) => deadline,
+        // The first published assignment watcher did not store a deadline.
+        None => watcher
+            .created_at_ms
+            .saturating_add(max_lifetime_default(settings, watcher.project_id.as_ref())?),
+    };
+    Ok(now >= deadline)
+}
+
 impl WatchService {
+    fn assignment_observation(
+        &self,
+        watcher: &StoredWatcher,
+        source: &StoredWatchAssignment,
+    ) -> Result<(Option<StoredAssignment>, bool), StorageError> {
+        read_snapshot(&*self.store, &ReadOptions::default(), |read| {
+            Ok((
+                child_record(read.runs(), source)?,
+                expired(watcher, read.configuration(), self.clock.now_ms().get())?,
+            ))
+        })
+    }
+
     pub(super) fn advance_assignment(&self, watcher: &StoredWatcher) -> Result<bool, StorageError> {
         let Some(source) = &watcher.assignment else {
             return Ok(false);
         };
-        let child = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            child_record(read.runs(), source)
-        })?;
-        if child.is_none_or(|a| a.state.is_live()) {
+        let (child, expired) = self.assignment_observation(watcher, source)?;
+        if !expired && child.is_none_or(|a| a.state.is_live()) {
             return Ok(false);
         }
         self.settle_assignment(&watcher.id)
@@ -60,17 +86,14 @@ impl WatchService {
         let Some(source) = &watcher.assignment else {
             return Ok(None);
         };
-        let child = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            child_record(read.runs(), source)
-        })?;
-        match child {
-            Some(child) if child.state.is_live() => Ok(None),
-            Some(_) => {
-                self.settle_assignment(&watcher.id)?;
-                Ok(None)
-            }
-            None => Ok(Some("the child assignment's state cannot be established")),
+        let (child, expired) = self.assignment_observation(watcher, source)?;
+        if expired || child.as_ref().is_some_and(|child| !child.state.is_live()) {
+            self.settle_assignment(&watcher.id)?;
+            return Ok(None);
         }
+        Ok(child
+            .is_none()
+            .then_some("the child assignment's state cannot be established"))
     }
 
     fn settle_assignment(&self, id: &Id) -> Result<bool, StorageError> {
@@ -82,24 +105,24 @@ impl WatchService {
             let Some(source) = &watcher.assignment else {
                 return Ok(false);
             };
-            let Some(child) = child_record(tx.runs(), source)? else {
-                return Ok(false);
-            };
-            let kind = match child.state {
-                AssignmentState::Completed => "Succeeded",
-                AssignmentState::Failed => "Failed",
-                AssignmentState::Superseded => "Cancelled",
-                AssignmentState::Ready | AssignmentState::Active | AssignmentState::Waiting => {
-                    return Ok(false);
+            let child = child_record(tx.runs(), source)?;
+            let now = tx.now_ms();
+            let (kind, detail) = match child.filter(|child| !child.state.is_live()) {
+                Some(child) => {
+                    let kind = match child.state {
+                        AssignmentState::Completed => "Succeeded",
+                        AssignmentState::Failed => "Failed",
+                        AssignmentState::Superseded => "Cancelled",
+                        _ => return Ok(false),
+                    };
+                    (kind, format!("Child assignment {}. Evidence: agents.inspect for assignment {} at revision {}.",
+                        child.state.as_str(), child.id.0.as_str(), child.revision))
                 }
+                None if expired(&watcher, tx.configuration(), now)? => (
+                    "TimedOut", "the child assignment was unresolved when its watcher reached its maximum lifetime".to_owned()),
+                None => return Ok(false),
             };
-            let detail = format!(
-                "Child assignment {}. Evidence: agents.inspect for assignment {} at revision {}.",
-                child.state.as_str(),
-                child.id.0.as_str(),
-                child.revision,
-            );
-            let duration = Some(tx.now_ms().saturating_sub(watcher.created_at_ms).max(0));
+            let duration = Some(now.saturating_sub(watcher.created_at_ms).max(0));
             finish_in(
                 tx,
                 watcher,

@@ -4,6 +4,8 @@
 //! completes. This fixture runs `/bin/sh`; Windows compiles the service and runs its process
 //! supervisor checks in the platform CI lane.
 #![cfg(unix)]
+#[path = "watch/github.rs"]
+mod github;
 #[path = "watch_turns.rs"]
 mod turns;
 
@@ -1137,6 +1139,89 @@ fn a_paused_owner_receives_its_events_in_order_on_continue() {
             vec![first_event, second_event],
             "in the order recorded"
         );
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn abrupt_host_exit_recovers_a_watched_process_as_interrupted() {
+    const ROOT: &str = "DEVWORKS_DW104_WATCH_CRASH_ROOT";
+    const TEST: &str = "watch_tests::abrupt_host_exit_recovers_a_watched_process_as_interrupted";
+    if let Some(parent) = std::env::var_os(ROOT) {
+        let parent = std::path::PathBuf::from(parent);
+        let h = Harness::under(&parent);
+        let store = h.open();
+        seed(&h);
+        let fx = Fx::over(h, store);
+        let work = fx.h.root.join("watch-crash-work");
+        std::fs::create_dir_all(work.join("work")).unwrap();
+        runtime().block_on(async {
+            let (composed, _) = watch_composition(&fx, &work.canonicalize().unwrap());
+            let app = boot(composed).await.unwrap();
+            let (ctx, _) = agent_context(&fx);
+            let long = create(&app, &ctx, "exec /bin/sleep 45", 60_000, "abrupt-exit");
+            let process = long["process"]["processId"].as_str().unwrap();
+            until_running(&app, process).await;
+            let ready = json!({"root":fx.h.root, "watcher":long["id"], "issued":fx.h.ids.issued()});
+            std::fs::write(parent.join("ready.tmp"), ready.to_string()).unwrap();
+            std::fs::rename(parent.join("ready.tmp"), parent.join("ready.json")).unwrap();
+            std::future::pending::<()>().await;
+        });
+        return;
+    }
+
+    use std::os::unix::process::ExitStatusExt;
+    let _native_case = native_runtime_case();
+    let mut h = Harness::new();
+    let mut child = ExternalChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture"])
+            .env(ROOT, &h.root)
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(35);
+    let ready: Value = loop {
+        if let Ok(data) = std::fs::read(h.root.join("ready.json")) {
+            break serde_json::from_slice(&data).unwrap();
+        }
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "fixture host stopped early"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture host never started its process"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    child.0.kill().unwrap();
+    assert_eq!(child.0.wait().unwrap().signal(), Some(9));
+    let child_root = std::path::PathBuf::from(ready["root"].as_str().unwrap());
+    assert_eq!(child_root.parent(), Some(h.root.as_path()));
+    h.root = child_root;
+    h.ids.set(ready["issued"].as_u64().unwrap() + 10_000);
+    let store = h.open();
+    let fx = Fx::over(h, store);
+    let watcher = id(ready["watcher"].as_str().unwrap());
+    let work = fx.h.root.join("watch-crash-work").canonicalize().unwrap();
+    runtime().block_on(async {
+        let (composed, _) = watch_composition(&fx, &work);
+        let app = boot(composed).await.unwrap();
+        app.watchers().unwrap().settle().unwrap();
+        let record = read(&*fx.store, |snapshot| snapshot.watchers().watcher(&watcher)).unwrap();
+        let outcome = record.outcome.as_ref().unwrap();
+        assert_eq!(outcome.kind, "Interrupted");
+        let event = read(&*fx.store, |snapshot| {
+            snapshot.watchers().watch_event_for_watcher(&watcher)
+        })
+        .unwrap();
+        app.watchers().unwrap().settle().unwrap();
+        let repeated = read(&*fx.store, |snapshot| {
+            snapshot.watchers().watch_event_for_watcher(&watcher)
+        })
+        .unwrap();
+        assert_eq!(repeated.id, event.id);
         app.shutdown().await;
     });
 }
@@ -2557,6 +2642,7 @@ fn the_shell_guard_protects_the_bound_github_default_branch_without_origin_head(
                 credential_revision: 1,
                 permission_revision: 1,
                 granted_scopes: vec!["repo".into()],
+granted_scopes_reported: true,
                 observed_at_ms: 1,
                 last_error: None,
             },
@@ -2747,21 +2833,21 @@ fn an_attached_watcher_is_read_only_and_delivers_an_observed_external_exit() {
         let mut different = identity.birth.clone();
         let last = different.pop().unwrap();
         different.push(if last == '0' { '1' } else { '0' });
-        let refused = create(&different, "other-birth", 9);
+        let refused = create(&different, "other-birth", 18);
         assert!(matches!(refused, CommandReply::Recorded { receipt, .. }
             if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::NotFound)));
-        let malformed = create("not-a-birth-token", "malformed-birth", 9);
+        let malformed = create("not-a-birth-token", "malformed-birth", 18);
         assert!(matches!(malformed, CommandReply::Recorded { receipt, .. }
             if matches!(&receipt.decision, DomainDecision::Refused { fault } if fault.code == DomainErrorCode::InvalidArgument)));
         let old = create(&identity.birth, "old-revision", 8);
         assert!(matches!(old, CommandReply::Rejected { .. }), "{old:?}");
-        let watcher = applied(&create(&identity.birth, "attached", 9));
+        let watcher = applied(&create(&identity.birth, "attached", 18));
         let watcher_id = watcher["id"].as_str().unwrap();
         assert_eq!(watcher["sourceKind"], json!("AttachedProcess"));
         assert_eq!(watcher["attachedPid"], json!(identity.pid));
         let stop = app.command(&ctx, "watch.cancel", &frame_at("Command", "watch.cancel",
             json!({"watcherId":watcher_id,"expectedRevision":watcher["revision"],"stopProcess":true}),
-            "stop-external", 9)).unwrap();
+            "stop-external", 18)).unwrap();
         assert!(matches!(stop, CommandReply::Recorded { receipt, .. }
             if matches!(receipt.decision, DomainDecision::Refused { .. })));
         assert!(child.0.try_wait().unwrap().is_none());
@@ -2769,7 +2855,7 @@ fn an_attached_watcher_is_read_only_and_delivers_an_observed_external_exit() {
         assert_eq!(watchers.settle().unwrap(), 0);
         child.finish();
         settle_all(&app, &ctx, &[watcher_id]).await;
-        let record = inspect_at(&app, &ctx, watcher_id, 9);
+        let record = inspect_at(&app, &ctx, watcher_id, 18);
         assert_eq!(record["outcome"]["kind"], json!("Exited"), "{record}");
         assert!(record["outcome"].get("exitCode").is_none(), "{record}");
         assert_eq!(record["outcome"]["detail"], json!("exit status unknown"));
@@ -2804,7 +2890,7 @@ fn an_attached_watcher_survives_restart_and_backup_checks_the_original_pid_and_b
         let (ctx, _) = agent_context(&fx);
         let session = ctx.session_id().unwrap().clone();
         let create = |key, target: &devworks_core::ports::process::NativeIdentity| applied(&app.command(&ctx, "watch.create", &frame_at("Command", "watch.create",
-            json!({"attachedProcess":{"pid":target.pid,"birthToken":target.birth}}), key, 9)).unwrap());
+            json!({"attachedProcess":{"pid":target.pid,"birthToken":target.birth}}), key, 18)).unwrap());
         let original = create("attached-backup", &identity);
         let replaced = create("attached-reused", &identity);
         let offline = create("attached-offline", &exits_offline.identity());
@@ -2834,26 +2920,26 @@ fn an_attached_watcher_survives_restart_and_backup_checks_the_original_pid_and_b
         let (ctx, _) = bind(&fx, "coordinator-reattached");
         let watchers = app.watchers().unwrap();
         settle_all(&app, &ctx, &[offline_id]).await;
-        let offline = inspect_at(&app, &ctx, offline_id, 9);
+        let offline = inspect_at(&app, &ctx, offline_id, 18);
         assert_eq!(offline["outcome"]["kind"], json!("Exited"), "{offline}");
         assert_eq!(offline["outcome"]["detail"], json!("exit status unknown"));
         assert_eq!(watchers.deliver().unwrap(), 1);
-        assert_eq!(inspect_at(&app, &ctx, original_id, 9)["state"], json!("Active"));
-        assert_eq!(inspect_at(&app, &ctx, replaced_id.as_str(), 9)["state"], json!("Active"));
+        assert_eq!(inspect_at(&app, &ctx, original_id, 18)["state"], json!("Active"));
+        assert_eq!(inspect_at(&app, &ctx, replaced_id.as_str(), 18)["state"], json!("Active"));
         assert_eq!(watchers.backup_if_due().unwrap(), None);
         fx.h.advance(900_000);
         let pass = watchers.backup_if_due().unwrap().unwrap();
         assert_eq!(pass.reminded, 1, "an independent probe notices the replaced PID");
         assert_eq!(pass.caught, 0);
-        assert_eq!(inspect_at(&app, &ctx, replaced_id.as_str(), 9)["state"], json!("Active"));
-        let stopped = inspect_at(&app, &ctx, replaced_id.as_str(), 9);
+        assert_eq!(inspect_at(&app, &ctx, replaced_id.as_str(), 18)["state"], json!("Active"));
+        let stopped = inspect_at(&app, &ctx, replaced_id.as_str(), 18);
         applied(&app.command(&ctx, "watch.cancel", &frame_at("Command", "watch.cancel",
-            json!({"watcherId":replaced_id.as_str(),"expectedRevision":stopped["revision"],"stopProcess":false}), "cancel-reused", 9)).unwrap());
+            json!({"watcherId":replaced_id.as_str(),"expectedRevision":stopped["revision"],"stopProcess":false}), "cancel-reused", 18)).unwrap());
         child.finish();
         fx.h.advance(900_000);
         let pass = watchers.backup_if_due().unwrap().unwrap();
         assert_eq!(pass.caught, 1, "the backup path settles without a primary pass");
-        let record = inspect_at(&app, &ctx, original_id, 9);
+        let record = inspect_at(&app, &ctx, original_id, 18);
         assert_eq!(record["outcome"]["kind"], json!("Exited"), "{record}");
         assert_eq!(record["event"]["state"], json!("Delivered"));
         assert_eq!(watcher_events_of(&app, &session, original_id).len(), 1);

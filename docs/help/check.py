@@ -190,11 +190,12 @@ def main():
         'browser':'browser', 'packages':'addons', 'web':'integrations', 'projects':'projects',
         'repositories':'repositories', 'indexing':'indexing', 'work':'workflow',
         'notifications':'approvals', 'help':'help', 'usage':'usage',
-        'prices':'usage', 'graph':'code-exploration', 'instructions':'settings-Instructions',
+        'prices':'usage', 'graph':'code-exploration', 'repository_analysis':'code-exploration',
+        'instructions':'settings-Instructions',
         'watchers':'watchers', 'agents':'agents', 'conventions':'conventions',
-        'schemas':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
+        'schemas':'databases', 'database':'databases', 'embedding_spaces':'routing-context', 'mcp':'mcp-servers',
         'process_tools':'process-tools', 'containers':'containers', 'desktop':'desktop-control',
-        'systemone':'settings-connections'
+        'systemone':'settings-connections', 'github':'settings-GitHub', 'reviews':'features'
     }
     for owner in re.findall(r'pub fn with_(\w+)\(', services):
         if owner not in owners or owners[owner] not in ids:

@@ -6,7 +6,8 @@ use super::{PackageHost, child_environment};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::locks::LockExt;
 use devworks_core::ports::packages::{
-    IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeObservation,
+    IndexTransport, IndexVerifier, MAX_INDEX_BYTES, RuntimeCache, RuntimeExecutable,
+    RuntimeObservation, dotnet, swift,
 };
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::ports::storage::{ReadOptions, read_snapshot};
@@ -19,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Runtimes probed whether or not a package declares them yet.
-pub const KNOWN_RUNTIMES: [&str; 5] = ["dotnet", "node", "swift", "cargo", "rustc"];
+pub const KNOWN_RUNTIMES: [&str; 6] = ["dotnet", "node", "swift", "cargo", "rustc", "rustup"];
 
 /// The index ports.
 pub struct IndexPorts {
@@ -146,6 +147,42 @@ pub fn parse_version(output: &str) -> Option<String> {
     None
 }
 
+/// Follow a version manager to the provider's executable while its normal environment is
+/// present. The package later starts that exact binary with a cleared environment.
+fn probed_node(output: &str) -> Option<(String, RuntimeExecutable)> {
+    let report = output.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        (value.get("version").is_some() && value.get("executable").is_some()).then_some(value)
+    })?;
+    let version = parse_version(report["version"].as_str()?)?;
+    let program = Path::new(report["executable"].as_str()?);
+    if !program.is_absolute() {
+        return None;
+    }
+    let executable = RuntimeExecutable::inspect(program).ok()?;
+    Some((version, executable))
+}
+
+fn swift_xcode_probe_failure(output: &str) -> &'static str {
+    let message = output.to_ascii_lowercase();
+    if message.contains("license")
+        || message.contains("first launch")
+        || message.contains("runfirstlaunch")
+    {
+        "swift-xcode-initialization-required"
+    } else {
+        "swift-xcode-discovery-failed"
+    }
+}
+
+fn swift_xcode_frontend(frontend: &Path) -> bool {
+    frontend.is_absolute()
+        && frontend.ancestors().nth(5).is_some_and(|root| {
+            frontend == root.join("Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend")
+                && root.ends_with("Contents/Developer")
+        })
+}
+
 impl PackageHost {
     /// Every runtime to probe: the known ones and every runtime a recorded version declares.
     fn declared_runtimes(&self) -> BTreeSet<String> {
@@ -172,9 +209,14 @@ impl PackageHost {
         out
     }
 
-    /// Probes one runtime: `<runtime> --version` as an owned process, bounded by
-    /// [`super::HostConfig::runtime_timeout`].
-    fn probe(&self, runtime: &str, search_path: Option<&str>) -> RuntimeObservation {
+    /// Probes one runtime with an owned process. Node also reports its executable behind any
+    /// version-manager shim. Each probe is bounded by [`super::HostConfig::runtime_timeout`].
+    fn probe(
+        &self,
+        runtime: &str,
+        search_path: Option<&str>,
+        executable: &mut Option<RuntimeExecutable>,
+    ) -> RuntimeObservation {
         let mut env = child_environment();
         let var = |env: &[(String, String)], k: &str| {
             env.iter()
@@ -191,17 +233,81 @@ impl PackageHost {
         let Some(program) = resolve_command(runtime, &path, var(&env, "PATHEXT").as_deref()) else {
             return RuntimeObservation::Missing(format!("`{runtime}` was not found on PATH"));
         };
-        let mut spec = ProcessSpec::new(&[
-            program.to_string_lossy().into_owned(),
-            "--version".to_owned(),
-        ])
-        .expect("argv");
+        let launch_identity = RuntimeExecutable::inspect(&program).ok();
+        let mut argv = vec![program.to_string_lossy().into_owned()];
+        let list_sdks = runtime == "dotnet"
+            && launch_identity.as_ref().is_some_and(|binary| {
+                binary
+                    .program
+                    .parent()
+                    .is_some_and(|dir| dir.join("sdk").is_dir())
+            });
+        if list_sdks {
+            // Listing installed SDKs does not select or load an SDK from an ambient global.json.
+            argv.push("--list-sdks".to_owned());
+        } else if runtime == "node" {
+            argv.extend([
+                "--print".to_owned(),
+                "JSON.stringify({version:process.version,executable:process.execPath})".to_owned(),
+            ]);
+        } else {
+            argv.push("--version".to_owned());
+        }
+        let text = match self.probe_command(&argv, env, None, runtime) {
+            Ok(text) => text,
+            Err(reason) => return RuntimeObservation::Missing(reason),
+        };
+        let current = RuntimeExecutable::inspect(&program).ok();
+        if current != launch_identity {
+            return RuntimeObservation::Missing("the runtime changed during its probe".into());
+        }
+        if runtime == "node"
+            && let Some((version, binary)) = probed_node(&text)
+        {
+            *executable = Some(binary);
+            return RuntimeObservation::Found(version);
+        }
+        let version = if list_sdks {
+            text.lines()
+                .filter_map(|line| semver::Version::parse(line.split_whitespace().next()?).ok())
+                .max()
+                .map(|version| version.to_string())
+        } else if runtime == "swift" {
+            text.split_once("Swift version ")
+                .and_then(|(_, actual)| parse_version(actual))
+                .or_else(|| parse_version(&text))
+        } else {
+            parse_version(&text)
+        };
+        match version {
+            Some(version) if runtime == "node" && version.starts_with("24.") => {
+                RuntimeObservation::Missing("Node 24 did not identify its executable".into())
+            }
+            Some(version) => {
+                *executable = current;
+                RuntimeObservation::Found(version)
+            }
+            None => {
+                RuntimeObservation::Missing(format!("the `{runtime}` probe printed no version"))
+            }
+        }
+    }
+
+    fn probe_command(
+        &self,
+        argv: &[String],
+        env: Vec<(String, String)>,
+        cwd: Option<PathBuf>,
+        runtime: &str,
+    ) -> Result<String, String> {
+        let mut spec = ProcessSpec::new(argv).expect("argv");
         spec.clear_env = true;
+        spec.cwd = cwd;
         spec.env = env;
         spec.capture_output = true;
         // No probe is launched once shutdown began (its snapshot of owned trees may be taken).
         if self.is_stopping() {
-            return RuntimeObservation::Missing("the host is stopping".into());
+            return Err("the host is stopping".into());
         }
         let ctx = self.host_ctx();
         let policy = LaunchPolicy {
@@ -220,7 +326,7 @@ impl PackageHost {
             &policy,
         ) {
             Ok(o) => o,
-            Err(_) => return RuntimeObservation::Missing("not found".into()),
+            Err(_) => return Err("not found".into()),
         };
         // Launch may have been in progress when shutdown took its process snapshot.
         // Once launch returns it is registered: either that snapshot owns it, or we stop
@@ -229,7 +335,7 @@ impl PackageHost {
             let _ = self
                 .supervisor
                 .cancel(&owned, Duration::ZERO, Duration::from_millis(500));
-            return RuntimeObservation::Missing("the host is stopping".into());
+            return Err("the host is stopping".into());
         }
         let out = Arc::new(Mutex::new(Vec::new()));
         let mut readers = Vec::new();
@@ -254,24 +360,83 @@ impl PackageHost {
             let _ = r.join();
         }
         if finished.is_none() {
-            return RuntimeObservation::Missing(format!(
-                "`{runtime} --version` did not answer within {} ms",
+            return Err(format!(
+                "`{runtime}` did not answer within {} ms",
                 timeout.as_millis()
             ));
         }
         let text = String::from_utf8_lossy(&out.locked()).into_owned();
-        match finished {
+        if matches!(
+            finished,
             Some(devworks_core::services::process::StopOutcome::Reaped {
                 exit_code: Some(0),
                 ..
-            }) => match parse_version(&text) {
-                Some(v) => RuntimeObservation::Found(v),
-                None => {
-                    RuntimeObservation::Missing(format!("`{runtime} --version` printed no version"))
-                }
-            },
-            _ => RuntimeObservation::Missing(format!("`{runtime} --version` failed")),
+            })
+        ) {
+            return Ok(text);
         }
+        if runtime == swift::SDK_RUNTIME {
+            return Err(swift_xcode_probe_failure(&text).into());
+        }
+        if cfg!(target_os = "macos") && runtime == "swift" {
+            let reason = swift_xcode_probe_failure(&text);
+            if reason == "swift-xcode-initialization-required" {
+                return Err(reason.into());
+            }
+        }
+        Err(format!("`{runtime}` version probe failed"))
+    }
+
+    fn swift_sdk(&self) -> Result<swift::Runtime, String> {
+        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            return Err("unsupported-swift-pack-target".into());
+        }
+        if ["DEVELOPER_DIR", "TOOLCHAINS"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        {
+            return Err("swift-custom-toolchain-unqualified".into());
+        }
+        let probe = |parts: &[&str]| {
+            self.probe_command(
+                &parts
+                    .iter()
+                    .map(|part| (*part).to_owned())
+                    .collect::<Vec<_>>(),
+                Vec::new(),
+                Some(PathBuf::from("/")),
+                swift::SDK_RUNTIME,
+            )
+        };
+        let frontend = probe(&[
+            "/usr/bin/xcrun",
+            "--sdk",
+            "macosx",
+            "--find",
+            "swift-frontend",
+        ])?;
+        let frontend = Path::new(frontend.trim());
+        if !swift_xcode_frontend(frontend) {
+            return Err("swift-full-xcode-required".into());
+        }
+        probe(&["/usr/bin/xcodebuild", "-checkFirstLaunchStatus"]).map_err(|reason| {
+            if reason == "swift-xcode-discovery-failed" {
+                "swift-xcode-initialization-required".into()
+            } else {
+                reason
+            }
+        })?;
+        let sdk = probe(&["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"])?;
+        let identity =
+            RuntimeExecutable::inspect(frontend).map_err(|_| "swift-xcode-assets-unavailable")?;
+        let target = probe(&[
+            frontend.to_str().ok_or("swift-xcode-assets-unavailable")?,
+            "-print-target-info",
+        ])?;
+        if RuntimeExecutable::inspect(frontend).ok().as_ref() != Some(&identity) {
+            return Err("swift-runtime-changed".into());
+        }
+        swift::Runtime::detect(frontend, Path::new(sdk.trim()), &target).map_err(str::to_owned)
     }
 
     /// Probes every known and declared runtime, refreshes the cache and announces any
@@ -281,11 +446,21 @@ impl PackageHost {
             return BTreeMap::new();
         };
         let mut seen = BTreeMap::new();
-        for r in self.declared_runtimes() {
+        let mut executables = BTreeMap::new();
+        let declared = self.declared_runtimes();
+        let managed_swift = declared.contains(swift::SDK_RUNTIME);
+        for r in declared {
+            if r == dotnet::SDK_RUNTIME || r == swift::SDK_RUNTIME {
+                continue;
+            }
             if self.is_stopping() {
                 return seen;
             }
-            let o = self.probe(&r, ports.search_path.as_deref());
+            let mut executable = None;
+            let o = self.probe(&r, ports.search_path.as_deref(), &mut executable);
+            if let Some(executable) = executable {
+                executables.insert(r.clone(), executable);
+            }
             if self.is_stopping() {
                 return seen;
             }
@@ -294,7 +469,38 @@ impl PackageHost {
         if self.is_stopping() {
             return seen;
         }
-        ports.cache.set(seen.clone());
+        let sdk = match executables.get("dotnet") {
+            Some(executable) => match dotnet::Runtime::detect(executable) {
+                Ok(runtime) => RuntimeObservation::Found(runtime.sdk_version),
+                Err(reason) => RuntimeObservation::Missing(reason.into()),
+            },
+            None => RuntimeObservation::Missing(dotnet::SDK_UNAVAILABLE.into()),
+        };
+        seen.insert(dotnet::SDK_RUNTIME.into(), sdk);
+        let swift_initialization_failed = matches!(seen.get("swift"),
+            Some(RuntimeObservation::Missing(reason)) if reason == "swift-xcode-initialization-required");
+        let (sdk, swift) = match (managed_swift
+            || executables.contains_key("swift")
+            || swift_initialization_failed)
+            .then(|| self.swift_sdk())
+        {
+            Some(Ok(runtime)) => (
+                RuntimeObservation::Found(swift::VERSION.into()),
+                Some(runtime),
+            ),
+            Some(Err(reason)) => (RuntimeObservation::Missing(reason), None),
+            None => (
+                RuntimeObservation::Missing("swift-toolchain-unavailable".into()),
+                None,
+            ),
+        };
+        seen.insert(swift::SDK_RUNTIME.into(), sdk);
+        if self.is_stopping() {
+            return seen;
+        }
+        ports
+            .cache
+            .set_probed_with_swift(seen.clone(), executables, swift);
         let _ = self.service.observe_now("RuntimeProbe");
         seen
     }
@@ -373,5 +579,37 @@ impl PackageHost {
         ));
         std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
         Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swift_discovery_distinguishes_full_xcode_from_command_line_tools() {
+        let developer =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("Fixture.app/Contents/Developer");
+        assert!(swift_xcode_frontend(&developer.join(
+            "Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend"
+        )));
+        assert!(!swift_xcode_frontend(
+            &developer.join("usr/bin/swift-frontend")
+        ));
+        assert!(!swift_xcode_frontend(Path::new("swift-frontend")));
+        for output in [
+            "Agreeing to the Xcode license is required",
+            "First Launch failed",
+            "xcodebuild -runFirstLaunch",
+        ] {
+            assert_eq!(
+                swift_xcode_probe_failure(output),
+                "swift-xcode-initialization-required"
+            );
+        }
+        assert_eq!(
+            swift_xcode_probe_failure("SDK not found"),
+            "swift-xcode-discovery-failed"
+        );
     }
 }

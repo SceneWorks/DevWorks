@@ -205,6 +205,57 @@ impl ProjectsCtl<'_, '_> {
             move |b| ops::repository_settings_read(b, &p, &r, &DELIVERY_KEYS),
         );
     }
+    fn load_github(&mut self, repository: String, cursor: Option<String>) {
+        self.query(
+            ProjectsSlot::GithubStatus(repository.clone()),
+            "Reading GitHub sync status",
+            "github.poll_status",
+            move |backend| {
+                use devworks_core::operations::{OperationInput, github};
+                use devworks_core::protocol::{
+                    records::PageRequest,
+                    support::{BoundedText, Limit},
+                };
+                let input = Id::new(repository).ok().map(|repository_id| {
+                    OperationInput::Github(github::Input::PollStatus(github::PollStatusInput {
+                        repository_id,
+                        page: Some(PageRequest {
+                            limit: Limit::new(50).expect("bounded GitHub issue list"),
+                            cursor: cursor.map(BoundedText),
+                        }),
+                    }))
+                });
+                crate::frame::build(backend, crate::frame::Negotiate::Latest, input)
+            },
+        );
+    }
+    fn sync_github_issues(&mut self, repository: String) {
+        let expected_rev = self
+            .projects
+            .git
+            .get(&repository)
+            .and_then(|v| v.github_cursor_revision)
+            .unwrap_or(1);
+        self.command(
+            ProjectsSlot::GithubSync(repository.clone()),
+            "Synchronizing GitHub issues",
+            "github.issue_sync",
+            move |backend| {
+                use devworks_core::operations::{OperationInput, github};
+                use devworks_core::protocol::Revision;
+                let input = Id::new(repository).ok().and_then(|repository_id| {
+                    Some(OperationInput::Github(github::Input::IssueSync(
+                        github::IssueSyncInput {
+                            repository_id,
+                            expected_cursor_revision: Revision::new(expected_rev).ok()?,
+                            remote_issue_number: None,
+                        },
+                    )))
+                });
+                crate::frame::build(backend, crate::frame::Negotiate::Latest, input)
+            },
+        );
+    }
     fn load_git(&mut self, repository: &str) {
         let r = repository.to_owned();
         self.query(
@@ -392,6 +443,8 @@ impl ProjectsCtl<'_, '_> {
                     }
                 }
                 Action::InspectGit(r) => self.load_git(&r),
+                Action::InspectGithub(r, cursor) => self.load_github(r, cursor),
+                Action::SyncGithubIssues(r) => self.sync_github_issues(r),
                 Action::DiffGit(r) => {
                     if let Some(view) = self.projects.git.get(&r) {
                         let (base, head) =
@@ -470,6 +523,47 @@ impl ProjectsCtl<'_, '_> {
         reply: Reply,
     ) -> Option<(ProjectsSlot, Reply)> {
         match (slot, reply) {
+            (ProjectsSlot::GithubStatus(repository), Reply::Query(outcome)) => {
+                use devworks_core::protocol::{
+                    records::GithubPollStatusResult, results::OperationResult,
+                };
+                let view = self.projects.git.entry(repository).or_default();
+                match ops::query_result(outcome) {
+                    Ok((
+                        OperationResult::GithubPollStatus {
+                            value: GithubPollStatusResult::Current(status),
+                        },
+                        scope_rev,
+                    )) => {
+                        view.github = Some(status);
+                        view.github_cursor_revision = Some(scope_rev);
+                        view.github_error = None;
+                    }
+                    Err(error) => view.github_error = Some(error.describe()),
+                    _ => view.github_error = Some("Unexpected GitHub sync status".into()),
+                }
+            }
+            (ProjectsSlot::GithubSync(repository), Reply::Command(outcome)) => {
+                use devworks_core::protocol::{CommandReply, results::DomainDecision};
+                match outcome {
+                    Ok(CommandReply::Recorded { receipt, .. })
+                        if matches!(
+                            receipt.decision,
+                            DomainDecision::Accepted { .. }
+                                | DomainDecision::Applied { .. }
+                                | DomainDecision::NoChange { .. }
+                        ) =>
+                    {
+                        self.load_github(repository, None);
+                    }
+                    other => {
+                        if let Err(error) = ops::command_result(other) {
+                            let view = self.projects.git.entry(repository).or_default();
+                            view.github_error = Some(error.describe());
+                        }
+                    }
+                }
+            }
             // The lists the shell keeps for every screen: it reads them from these results.
             (ProjectsSlot::ProjectsList, Reply::Query(q)) => {
                 let result = ops::projects(q).map_err(|e| e.describe());
@@ -1140,6 +1234,15 @@ impl ProjectsCtl<'_, '_> {
             names,
             indexing: lists.indexing,
         };
+        if ui
+            .add_enabled(
+                online.is_ok() && !view.source.items.is_empty(),
+                egui::Button::new("Fleet analysis"),
+            )
+            .clicked()
+        {
+            self.effects.push(crate::screen::Effect::OpenFleetAnalysis);
+        }
         let (reload, link) =
             self.projects
                 .repositories(ui, &view, &mut mem, self.cx.scrolls, &mut actions);

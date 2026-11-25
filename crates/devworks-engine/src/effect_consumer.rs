@@ -73,6 +73,9 @@ impl<E: JournaledEffect> Effects<E> {
 }
 
 impl<E: JournaledEffect> EffectExecutor for Effects<E> {
+    fn resumes_after_observation(&self, operation: &OperationRecord) -> bool {
+        self.effect.resumes_after_observation(operation)
+    }
     fn observes_delivery_cancellation(&self) -> bool {
         self.effect.observes_delivery_cancellation()
     }

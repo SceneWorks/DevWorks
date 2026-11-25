@@ -14,6 +14,52 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageContent {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub content_kind: Label,
+    pub manifest_digest: Digest,
+    pub artifact: ArtifactRef,
+}
+impl Check for PackageContent {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.content_kind.check()?;
+        self.manifest_digest.check()?;
+        self.artifact.check()?;
+        super::domain_rules::record(
+            "PackageContent",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PackageWorkflowGate {
+    pub package_id: Id,
+    pub contribution_id: Label,
+    pub manifest_digest: Digest,
+    pub reason: Content,
+}
+impl Check for PackageWorkflowGate {
+    fn check(&self) -> Result<(), String> {
+        self.package_id.check()?;
+        self.contribution_id.check()?;
+        self.manifest_digest.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "PackageWorkflowGate",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum LifeState {
     Active,
     Archived,
@@ -1928,6 +1974,13 @@ pub struct AnalysisRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<ArtifactRef>,
     pub coverage: Coverage,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AnalysisObservation", extend("x-since" = 3))]
+    pub observation: Option<AnalysisObservation>,
 }
 impl Check for AnalysisRecord {
     fn check(&self) -> Result<(), String> {
@@ -1938,11 +1991,20 @@ impl Check for AnalysisRecord {
         self.state.check()?;
         self.report.check()?;
         self.coverage.check()?;
+        self.observation.check()?;
         super::domain_rules::record(
             "AnalysisRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for AnalysisRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.observation = None;
+        }
     }
 }
 
@@ -1954,6 +2016,13 @@ pub struct ClusterRecord {
     pub name: Label,
     pub member_node_ids: Items<Id>,
     pub score: Finite,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AnalysisClusterDetails", extend("x-since" = 3))]
+    pub details: Option<AnalysisClusterDetails>,
 }
 impl Check for ClusterRecord {
     fn check(&self) -> Result<(), String> {
@@ -1962,11 +2031,20 @@ impl Check for ClusterRecord {
         self.name.check()?;
         self.member_node_ids.check()?;
         self.score.check()?;
+        self.details.check()?;
         super::domain_rules::record(
             "ClusterRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ClusterRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.details = None;
+        }
     }
 }
 
@@ -1991,6 +2069,827 @@ impl Check for MetricRecord {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum AnalysisAvailability {
+    Available,
+    NoData,
+    Pending,
+    Stale,
+    Partial,
+    Failed,
+    Unavailable,
+}
+impl Check for AnalysisAvailability {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum AnalysisLinkMode {
+    LinksOnly,
+    LinksAndCommunities,
+}
+impl Check for AnalysisLinkMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum AnalysisRefreshMode {
+    VitalsOnly,
+    WithProjectAnalysis,
+    WithSynthesis,
+}
+impl Check for AnalysisRefreshMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum AnalysisClusterProjection {
+    Overview,
+    Graph,
+}
+impl Check for AnalysisClusterProjection {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisViewBinding {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub view_digest: Digest,
+    pub snapshot: RepositorySnapshot,
+}
+impl Check for AnalysisViewBinding {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.view_digest.check()?;
+        self.snapshot.check()?;
+        super::domain_rules::record(
+            "AnalysisViewBinding",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisPhaseStatus {
+    pub phase: Label,
+    pub state: OperationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<Counter>,
+}
+impl Check for AnalysisPhaseStatus {
+    fn check(&self) -> Result<(), String> {
+        self.phase.check()?;
+        self.state.check()?;
+        self.diagnostic.check()?;
+        self.completed_at_ms.check()?;
+        super::domain_rules::record(
+            "AnalysisPhaseStatus",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisTrendPoint {
+    pub view: AnalysisViewBinding,
+    pub computed_at_ms: Counter,
+    pub base_score: Finite,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjusted_score: Option<Finite>,
+}
+impl Check for AnalysisTrendPoint {
+    fn check(&self) -> Result<(), String> {
+        self.view.check()?;
+        self.computed_at_ms.check()?;
+        self.base_score.check()?;
+        self.adjusted_score.check()?;
+        super::domain_rules::record(
+            "AnalysisTrendPoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisFileMetrics {
+    pub health: Finite,
+    pub risk: Finite,
+    pub concern: Finite,
+    pub trust: Finite,
+    pub complexity: Counter,
+    pub max_nesting: Counter,
+    pub deep_lines: Counter,
+    pub function_count: Counter,
+    pub longest_function: Counter,
+    pub branches: Counter,
+    pub lines_added_90d: Counter,
+    pub lines_removed_90d: Counter,
+    pub changes_90d: Counter,
+    pub churn_30d: Finite,
+    pub churn_90d: Finite,
+    pub churn_365d: Finite,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_change_at_ms: Option<Counter>,
+    pub bug_fix_ratio: Finite,
+    pub recurring_churn: Finite,
+    pub coupling_strength: Finite,
+    pub coupling_partners: Counter,
+    pub truck_factor: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lint_errors: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lint_warnings: Option<Counter>,
+    pub role: Label,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotnet_project: Option<Label>,
+}
+impl Check for AnalysisFileMetrics {
+    fn check(&self) -> Result<(), String> {
+        self.health.check()?;
+        self.risk.check()?;
+        self.concern.check()?;
+        self.trust.check()?;
+        self.complexity.check()?;
+        self.max_nesting.check()?;
+        self.deep_lines.check()?;
+        self.function_count.check()?;
+        self.longest_function.check()?;
+        self.branches.check()?;
+        self.lines_added_90d.check()?;
+        self.lines_removed_90d.check()?;
+        self.changes_90d.check()?;
+        self.churn_30d.check()?;
+        self.churn_90d.check()?;
+        self.churn_365d.check()?;
+        self.last_change_at_ms.check()?;
+        self.bug_fix_ratio.check()?;
+        self.recurring_churn.check()?;
+        self.coupling_strength.check()?;
+        self.coupling_partners.check()?;
+        self.truck_factor.check()?;
+        self.lint_errors.check()?;
+        self.lint_warnings.check()?;
+        self.role.check()?;
+        self.dotnet_project.check()?;
+        super::domain_rules::record(
+            "AnalysisFileMetrics",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisHealthSummary {
+    pub repository_id: Id,
+    pub view_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dotnet_project: Option<Label>,
+    pub base_score: Finite,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjusted_score: Option<Finite>,
+    pub files: Counter,
+    pub hotspots: Counter,
+    pub alerts: Counter,
+}
+impl Check for AnalysisHealthSummary {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.dotnet_project.check()?;
+        self.base_score.check()?;
+        self.adjusted_score.check()?;
+        self.files.check()?;
+        self.hotspots.check()?;
+        self.alerts.check()?;
+        super::domain_rules::record(
+            "AnalysisHealthSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisSecuritySummary {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub score: Finite,
+    pub complete: bool,
+    pub critical: Counter,
+    pub high: Counter,
+    pub medium: Counter,
+    pub low: Counter,
+    pub scanned_files: Counter,
+}
+impl Check for AnalysisSecuritySummary {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.score.check()?;
+        self.complete.check()?;
+        self.critical.check()?;
+        self.high.check()?;
+        self.medium.check()?;
+        self.low.check()?;
+        self.scanned_files.check()?;
+        super::domain_rules::record(
+            "AnalysisSecuritySummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisNarrative {
+    pub repository_id: Id,
+    pub view_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<Label>,
+    pub summary: Content,
+    pub confidence: Label,
+    pub model: Label,
+    pub computed_at_ms: Counter,
+    pub evidence: ArtifactRef,
+}
+impl Check for AnalysisNarrative {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.project.check()?;
+        self.summary.check()?;
+        self.confidence.check()?;
+        self.model.check()?;
+        self.computed_at_ms.check()?;
+        self.evidence.check()?;
+        super::domain_rules::record(
+            "AnalysisNarrative",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisObservation {
+    pub availability: AnalysisAvailability,
+    pub bindings: Rows<AnalysisViewBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computed_at_ms: Option<Counter>,
+    pub coverage: Coverage,
+    pub diagnostics: Items<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phases: Option<Items<AnalysisPhaseStatus>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_score: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adjusted_score: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trends: Option<Items<AnalysisTrendPoint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_work_ids: Option<Items<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_hotspots: Option<Rows<AnalysisMetricItem>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<Rows<AnalysisHealthSummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<Rows<AnalysisSecuritySummary>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_repositories: Option<Rows<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_bindings: Option<Rows<AnalysisViewBinding>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narratives: Option<Rows<AnalysisNarrative>>,
+}
+impl Check for AnalysisObservation {
+    fn check(&self) -> Result<(), String> {
+        self.availability.check()?;
+        self.bindings.check()?;
+        self.computed_at_ms.check()?;
+        self.coverage.check()?;
+        self.diagnostics.check()?;
+        self.phases.check()?;
+        self.base_score.check()?;
+        self.adjusted_score.check()?;
+        self.trends.check()?;
+        self.related_work_ids.check()?;
+        self.top_hotspots.check()?;
+        self.health.check()?;
+        self.security.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.missing_repositories.check()?;
+        self.indexed_bindings.check()?;
+        self.narratives.check()?;
+        super::domain_rules::record(
+            "AnalysisObservation",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisLinkEndpoint {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub node_id: Id,
+}
+impl Check for AnalysisLinkEndpoint {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.node_id.check()?;
+        super::domain_rules::record(
+            "AnalysisLinkEndpoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisLinkEvidence {
+    pub relationship: Label,
+    pub source: AnalysisLinkEndpoint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<AnalysisLinkEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_label: Option<Label>,
+    pub resolution: Label,
+    pub confidence: Finite,
+    pub matched_by: Label,
+}
+impl Check for AnalysisLinkEvidence {
+    fn check(&self) -> Result<(), String> {
+        self.relationship.check()?;
+        self.source.check()?;
+        self.target.check()?;
+        self.target_label.check()?;
+        self.resolution.check()?;
+        self.confidence.check()?;
+        self.matched_by.check()?;
+        super::domain_rules::record(
+            "AnalysisLinkEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisMetricItem {
+    pub metric: MetricRecord,
+    pub repository_id: Id,
+    pub view_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<RelativePath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computed_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_indexed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_coverage: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<AnalysisLinkEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_metrics: Option<AnalysisFileMetrics>,
+}
+impl Check for AnalysisMetricItem {
+    fn check(&self) -> Result<(), String> {
+        self.metric.check()?;
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.path.check()?;
+        self.computed_at_ms.check()?;
+        self.namespace.check()?;
+        self.language.check()?;
+        self.language_indexed.check()?;
+        self.history_coverage.check()?;
+        self.link.check()?;
+        self.file_metrics.check()?;
+        super::domain_rules::record(
+            "AnalysisMetricItem",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisFleetTotals {
+    pub repository_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub average_health: Option<Finite>,
+    pub hotspot_count: Counter,
+    pub alert_count: Counter,
+    pub below_hotspot: Counter,
+    pub below_alert: Counter,
+}
+impl Check for AnalysisFleetTotals {
+    fn check(&self) -> Result<(), String> {
+        self.repository_count.check()?;
+        self.average_health.check()?;
+        self.hotspot_count.check()?;
+        self.alert_count.check()?;
+        self.below_hotspot.check()?;
+        self.below_alert.check()?;
+        super::domain_rules::record(
+            "AnalysisFleetTotals",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisMetricPage {
+    pub items: Rows<AnalysisMetricItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub observation: AnalysisObservation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet: Option<AnalysisFleetTotals>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub found: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_indexed: Option<bool>,
+}
+impl Check for AnalysisMetricPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.observation.check()?;
+        self.fleet.check()?;
+        self.found.check()?;
+        self.language.check()?;
+        self.language_indexed.check()?;
+        super::domain_rules::record(
+            "AnalysisMetricPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum AnalysisMetricPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<MetricRecord>),
+    #[schemars(extend("x-since" = 3))]
+    Current(AnalysisMetricPage),
+}
+impl Check for AnalysisMetricPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for AnalysisMetricPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<Page<MetricRecord>> = match self {
+                Self::Current(page) => Some(Page {
+                    items: BoundedList(
+                        page.items
+                            .0
+                            .iter()
+                            .map(|item| item.metric.clone())
+                            .collect(),
+                    ),
+                    next_cursor: page.next_cursor.clone(),
+                    has_more: page.has_more,
+                }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) if !value.items.0.is_empty() && revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterMember {
+    pub repository_id: Id,
+    pub view_id: Id,
+    pub name: Label,
+    pub centrality: Finite,
+    pub internal_edges: Counter,
+    pub external_edges: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foundational: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_group: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub framework: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster_id: Option<Id>,
+}
+impl Check for AnalysisClusterMember {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.view_id.check()?;
+        self.name.check()?;
+        self.centrality.check()?;
+        self.internal_edges.check()?;
+        self.external_edges.check()?;
+        self.foundational.check()?;
+        self.source_group.check()?;
+        self.language.check()?;
+        self.framework.check()?;
+        self.cluster_id.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterMember",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterConnection {
+    pub cluster_id: Id,
+    pub edge_count: Counter,
+    pub types: Items<Label>,
+}
+impl Check for AnalysisClusterConnection {
+    fn check(&self) -> Result<(), String> {
+        self.cluster_id.check()?;
+        self.edge_count.check()?;
+        self.types.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterConnection",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterDetails {
+    pub legacy_ordinal: Counter,
+    pub internal_edges: Counter,
+    pub external_edges: Counter,
+    pub density: Finite,
+    pub members: Rows<AnalysisClusterMember>,
+    pub bridges: Items<Id>,
+    pub connections: Rows<AnalysisClusterConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
+}
+impl Check for AnalysisClusterDetails {
+    fn check(&self) -> Result<(), String> {
+        self.legacy_ordinal.check()?;
+        self.internal_edges.check()?;
+        self.external_edges.check()?;
+        self.density.check()?;
+        self.members.check()?;
+        self.bridges.check()?;
+        self.connections.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterDetails",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterItem {
+    pub cluster: ClusterRecord,
+}
+impl Check for AnalysisClusterItem {
+    fn check(&self) -> Result<(), String> {
+        self.cluster.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterItem",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for AnalysisClusterItem {
+    fn retain_revision(&mut self, revision: u32) {
+        self.cluster.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterRelationshipCount {
+    pub relationship: Label,
+    pub count: Counter,
+}
+impl Check for AnalysisClusterRelationshipCount {
+    fn check(&self) -> Result<(), String> {
+        self.relationship.check()?;
+        self.count.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterRelationshipCount",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterGraphEdge {
+    pub source_repository_id: Id,
+    pub source_view_id: Id,
+    pub target_repository_id: Id,
+    pub target_view_id: Id,
+    pub edge_count: Counter,
+    pub relationship_counts: Items<AnalysisClusterRelationshipCount>,
+    pub cross_cluster: bool,
+}
+impl Check for AnalysisClusterGraphEdge {
+    fn check(&self) -> Result<(), String> {
+        self.source_repository_id.check()?;
+        self.source_view_id.check()?;
+        self.target_repository_id.check()?;
+        self.target_view_id.check()?;
+        self.edge_count.check()?;
+        self.relationship_counts.check()?;
+        self.cross_cluster.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterGraphEdge",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnalysisClusterPage {
+    pub items: Rows<AnalysisClusterItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub observation: AnalysisObservation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modularity: Option<Finite>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_repositories: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clustered_repositories: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repositories: Option<Rows<AnalysisClusterMember>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<Rows<AnalysisLinkEvidence>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_edges: Option<Rows<AnalysisClusterGraphEdge>>,
+}
+impl Check for AnalysisClusterPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.observation.check()?;
+        self.modularity.check()?;
+        self.total_repositories.check()?;
+        self.clustered_repositories.check()?;
+        self.repositories.check()?;
+        self.links.check()?;
+        self.graph_edges.check()?;
+        super::domain_rules::record(
+            "AnalysisClusterPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for AnalysisClusterPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum AnalysisClusterPageResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<ClusterRecord>),
+    #[schemars(extend("x-since" = 3))]
+    Current(AnalysisClusterPage),
+}
+impl Check for AnalysisClusterPageResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for AnalysisClusterPageResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            let legacy: Option<Page<ClusterRecord>> = match self {
+                Self::Current(page) => Some(Page {
+                    items: BoundedList(
+                        page.items
+                            .0
+                            .iter()
+                            .map(|item| item.cluster.clone())
+                            .collect(),
+                    ),
+                    next_cursor: page.next_cursor.clone(),
+                    has_more: page.has_more,
+                }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) if !value.items.0.is_empty() && revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -2500,6 +3399,144 @@ impl Check for DbRow {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseLegacyRows {
+    pub rows: Rows<DynamicJson>,
+    pub row_count: i32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<DbColumn>", extend("x-since" = 10))]
+    pub columns: Option<Items<DbColumn>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 10))]
+    pub truncated: Option<bool>,
+}
+impl Check for DatabaseLegacyRows {
+    fn check(&self) -> Result<(), String> {
+        self.rows.check()?;
+        self.row_count.check()?;
+        self.columns.check()?;
+        self.truncated.check()?;
+        super::domain_rules::record(
+            "DatabaseLegacyRows",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for DatabaseLegacyRows {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 10 {
+            self.columns = None;
+        }
+        if revision < 10 {
+            self.truncated = None;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSensitiveColumnRule {
+    pub id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Label>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<Label>,
+    pub column: Label,
+    pub allow: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Content>,
+}
+impl Check for DatabaseSensitiveColumnRule {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.catalog.check()?;
+        self.schema.check()?;
+        self.table.check()?;
+        self.column.check()?;
+        self.allow.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "DatabaseSensitiveColumnRule",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseSensitiveRuleSet {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Id>,
+    pub revision: Revision,
+    pub rules: Rows<DatabaseSensitiveColumnRule>,
+}
+impl Check for DatabaseSensitiveRuleSet {
+    fn check(&self) -> Result<(), String> {
+        self.connection_id.check()?;
+        self.revision.check()?;
+        self.rules.check()?;
+        super::domain_rules::record(
+            "DatabaseSensitiveRuleSet",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum DatabaseSensitiveRuleEdit {
+    Upsert { rule: DatabaseSensitiveColumnRule },
+    Delete { id: Id },
+}
+impl Check for DatabaseSensitiveRuleEdit {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Upsert { rule } => {
+                rule.check()?;
+            }
+            Self::Delete { id } => {
+                id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseMigrationSource {
+    pub repository_id: Id,
+    pub commit: GitOid,
+    pub path: RelativePath,
+}
+impl Check for DatabaseMigrationSource {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.commit.check()?;
+        self.path.check()?;
+        super::domain_rules::record(
+            "DatabaseMigrationSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DbReadResult {
     pub columns: Items<DbColumn>,
     pub rows: Rows<DbRow>,
@@ -2508,6 +3545,13 @@ pub struct DbReadResult {
     pub next_cursor: Option<Cursor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 9))]
+    pub schema_digest: Option<Digest>,
 }
 impl Check for DbReadResult {
     fn check(&self) -> Result<(), String> {
@@ -2516,11 +3560,20 @@ impl Check for DbReadResult {
         self.truncated.check()?;
         self.next_cursor.check()?;
         self.source_revision.check()?;
+        self.schema_digest.check()?;
         super::domain_rules::record(
             "DbReadResult",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for DbReadResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.schema_digest = None;
+        }
     }
 }
 
@@ -3623,6 +4676,223 @@ impl Check for NotificationConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum CodeReviewSeverity {
+    Blocker,
+    Major,
+    Minor,
+    Informational,
+}
+impl Check for CodeReviewSeverity {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum CodeReviewResolution {
+    FixVerified {
+        candidate_head: GitOid,
+        focused_check_ids: Items<Id>,
+    },
+    NotActionable {},
+    Followup {
+        bug_id: Id,
+        review_thread_reply: Url,
+    },
+    NeedsHuman {
+        decision_id: Id,
+    },
+}
+impl Check for CodeReviewResolution {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::FixVerified {
+                candidate_head,
+                focused_check_ids,
+            } => {
+                candidate_head.check()?;
+                focused_check_ids.check()?;
+            }
+            Self::NotActionable {} => {}
+            Self::Followup {
+                bug_id,
+                review_thread_reply,
+            } => {
+                bug_id.check()?;
+                review_thread_reply.check()?;
+            }
+            Self::NeedsHuman { decision_id } => {
+                decision_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalReviewDiff {
+    pub repository_id: Id,
+    pub worktree_id: Id,
+    pub base: GitOid,
+    pub head: GitOid,
+}
+impl Check for LocalReviewDiff {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.worktree_id.check()?;
+        self.base.check()?;
+        self.head.check()?;
+        super::domain_rules::record(
+            "LocalReviewDiff",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalReviewTarget {
+    pub task_id: Id,
+    pub diffs: Items<LocalReviewDiff>,
+}
+impl Check for LocalReviewTarget {
+    fn check(&self) -> Result<(), String> {
+        self.task_id.check()?;
+        self.diffs.check()?;
+        super::domain_rules::record(
+            "LocalReviewTarget",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocalReviewEvidence {
+    pub target: LocalReviewTarget,
+    pub diff_digest: Digest,
+    pub state: ReviewObservationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_actor_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<Counter>,
+    pub finding_count: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<ArtifactRef>,
+}
+impl Check for LocalReviewEvidence {
+    fn check(&self) -> Result<(), String> {
+        self.target.check()?;
+        self.diff_digest.check()?;
+        self.state.check()?;
+        self.reviewer_actor_id.check()?;
+        self.reviewer_session_id.check()?;
+        self.completed_at.check()?;
+        self.finding_count.check()?;
+        self.report.check()?;
+        super::domain_rules::record(
+            "LocalReviewEvidence",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCheckDiagnosis {
+    pub failed_check_id: Id,
+    pub diagnosis: Content,
+}
+impl Check for ReviewCheckDiagnosis {
+    fn check(&self) -> Result<(), String> {
+        self.failed_check_id.check()?;
+        self.diagnosis.check()?;
+        super::domain_rules::record(
+            "ReviewCheckDiagnosis",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all_fields = "camelCase", deny_unknown_fields)]
+pub enum ReviewChangeReason {
+    RequiredCheck { failed_check_id: Id },
+    Finding { finding_id: Id },
+}
+impl Check for ReviewChangeReason {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::RequiredCheck { failed_check_id } => {
+                failed_check_id.check()?;
+            }
+            Self::Finding { finding_id } => {
+                finding_id.check()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewClassifiedChange {
+    pub change_digest: Digest,
+    pub reason: ReviewChangeReason,
+}
+impl Check for ReviewClassifiedChange {
+    fn check(&self) -> Result<(), String> {
+        self.change_digest.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "ReviewClassifiedChange",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewCandidateRepair {
+    pub original_review_id: Id,
+    pub expected_review_revision: Revision,
+    pub repository_id: Id,
+    pub reviewed_head: GitOid,
+    pub candidate_head: GitOid,
+    pub diagnoses: Items<ReviewCheckDiagnosis>,
+    pub changes: Rows<ReviewClassifiedChange>,
+    pub focused_check_ids: Items<Id>,
+    pub verification_report: ArtifactRef,
+}
+impl Check for ReviewCandidateRepair {
+    fn check(&self) -> Result<(), String> {
+        self.original_review_id.check()?;
+        self.expected_review_revision.check()?;
+        self.repository_id.check()?;
+        self.reviewed_head.check()?;
+        self.candidate_head.check()?;
+        self.diagnoses.check()?;
+        self.changes.check()?;
+        self.focused_check_ids.check()?;
+        self.verification_report.check()?;
+        super::domain_rules::record(
+            "ReviewCandidateRepair",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewRecord {
     pub id: Id,
@@ -3634,6 +4904,20 @@ pub struct ReviewRecord {
     pub finding_ids: Items<Id>,
     pub head_digest: Digest,
     pub sources: Items<ReviewSourceEvidence>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LocalReviewEvidence", extend("x-since" = 15))]
+    pub local_review: Option<LocalReviewEvidence>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReviewCandidateRepair", extend("x-since" = 15))]
+    pub candidate_repair: Option<ReviewCandidateRepair>,
 }
 impl Check for ReviewRecord {
     fn check(&self) -> Result<(), String> {
@@ -3645,11 +4929,24 @@ impl Check for ReviewRecord {
         self.finding_ids.check()?;
         self.head_digest.check()?;
         self.sources.check()?;
+        self.local_review.check()?;
+        self.candidate_repair.check()?;
         super::domain_rules::record(
             "ReviewRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReviewRecord {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.local_review = None;
+        }
+        if revision < 15 {
+            self.candidate_repair = None;
+        }
     }
 }
 
@@ -3667,6 +4964,20 @@ pub struct ReviewFinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<Content>,
     pub evidence: Items<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeReviewSeverity", extend("x-since" = 15))]
+    pub code_severity: Option<CodeReviewSeverity>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeReviewResolution", extend("x-since" = 15))]
+    pub resolution: Option<CodeReviewResolution>,
 }
 impl Check for ReviewFinding {
     fn check(&self) -> Result<(), String> {
@@ -3679,11 +4990,24 @@ impl Check for ReviewFinding {
         self.actionable.check()?;
         self.response.check()?;
         self.evidence.check()?;
+        self.code_severity.check()?;
+        self.resolution.check()?;
         super::domain_rules::record(
             "ReviewFinding",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReviewFinding {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.code_severity = None;
+        }
+        if revision < 15 {
+            self.resolution = None;
+        }
     }
 }
 
@@ -3695,6 +5019,13 @@ pub struct ReviewReadiness {
     pub blocker_ids: Items<Id>,
     pub head_digest: Digest,
     pub policy_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<ReviewCandidateRepair>", extend("x-since" = 15))]
+    pub candidate_repairs: Option<Items<ReviewCandidateRepair>>,
 }
 impl Check for ReviewReadiness {
     fn check(&self) -> Result<(), String> {
@@ -3703,11 +5034,20 @@ impl Check for ReviewReadiness {
         self.blocker_ids.check()?;
         self.head_digest.check()?;
         self.policy_revision.check()?;
+        self.candidate_repairs.check()?;
         super::domain_rules::record(
             "ReviewReadiness",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for ReviewReadiness {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.candidate_repairs = None;
+        }
     }
 }
 
@@ -3921,6 +5261,203 @@ impl Check for GithubAccount {
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueLink {
+    pub repository_id: Id,
+    pub work_id: RootId,
+    pub remote_repository_id: Text,
+    pub remote_issue_id: Text,
+    pub remote_issue_number: PositiveCounter,
+    pub url: Url,
+    pub source_revision: Text,
+}
+impl Check for GithubIssueLink {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.work_id.check()?;
+        self.remote_repository_id.check()?;
+        self.remote_issue_id.check()?;
+        self.remote_issue_number.check()?;
+        self.url.check()?;
+        self.source_revision.check()?;
+        super::domain_rules::record(
+            "GithubIssueLink",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "GitLink", "before": 3}))]
+pub enum GithubIssueLinkResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(GitLink),
+    #[schemars(extend("x-since" = 3))]
+    Current(GithubIssueLink),
+}
+impl Check for GithubIssueLinkResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for GithubIssueLinkResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPollEndpoint {
+    pub endpoint: Label,
+    pub state: Label,
+    pub next_poll_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_polled_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<Text>,
+}
+impl Check for GithubPollEndpoint {
+    fn check(&self) -> Result<(), String> {
+        self.endpoint.check()?;
+        self.state.check()?;
+        self.next_poll_at_ms.check()?;
+        self.last_polled_at_ms.check()?;
+        self.failure.check()?;
+        super::domain_rules::record(
+            "GithubPollEndpoint",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueIntakeView {
+    pub remote_issue_number: PositiveCounter,
+    pub source_revision: Text,
+    pub state: Label,
+    pub url: Url,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_id: Option<RootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_state: Option<OperationState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_state: Option<OperationState>,
+}
+impl Check for GithubIssueIntakeView {
+    fn check(&self) -> Result<(), String> {
+        self.remote_issue_number.check()?;
+        self.source_revision.check()?;
+        self.state.check()?;
+        self.url.check()?;
+        self.work_id.check()?;
+        self.comment_state.check()?;
+        self.close_state.check()?;
+        super::domain_rules::record(
+            "GithubIssueIntakeView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubIssueIntakePage {
+    pub items: Rows<GithubIssueIntakeView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for GithubIssueIntakePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "GithubIssueIntakePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubPollStatusView {
+    pub repository_id: Id,
+    pub endpoints: Items<GithubPollEndpoint>,
+    pub intake: GithubIssueIntakePage,
+    pub interval_seconds: PositiveCounter,
+    pub next_admission_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_admitted_at_ms: Option<Counter>,
+}
+impl Check for GithubPollStatusView {
+    fn check(&self) -> Result<(), String> {
+        self.repository_id.check()?;
+        self.endpoints.check()?;
+        self.intake.check()?;
+        self.interval_seconds.check()?;
+        self.next_admission_at_ms.check()?;
+        self.last_admitted_at_ms.check()?;
+        super::domain_rules::record(
+            "GithubPollStatusView",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 3}))]
+pub enum GithubPollStatusResult {
+    #[schemars(extend("x-until" = 3))]
+    Legacy(Page<GithubObservation>),
+    #[schemars(extend("x-since" = 3))]
+    Current(GithubPollStatusView),
+}
+impl Check for GithubPollStatusResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for GithubPollStatusResult {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 3 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 3 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -8421,17 +9958,77 @@ pub struct GithubAccountState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_flow_id: Option<Id>,
     pub state: ItemState,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub api_host: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Label", extend("x-since" = 3))]
+    pub authorization_state: Option<Label>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 3))]
+    pub permission_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<Label>", extend("x-since" = 3))]
+    pub granted_scopes: Option<Items<Label>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Text", extend("x-since" = 3))]
+    pub failure: Option<Text>,
 }
 impl Check for GithubAccountState {
     fn check(&self) -> Result<(), String> {
         self.account.check()?;
         self.auth_flow_id.check()?;
         self.state.check()?;
+        self.api_host.check()?;
+        self.authorization_state.check()?;
+        self.permission_revision.check()?;
+        self.granted_scopes.check()?;
+        self.failure.check()?;
         super::domain_rules::record(
             "GithubAccountState",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for GithubAccountState {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 3 {
+            self.api_host = None;
+        }
+        if revision < 3 {
+            self.authorization_state = None;
+        }
+        if revision < 3 {
+            self.permission_revision = None;
+        }
+        if revision < 3 {
+            self.granted_scopes = None;
+        }
+        if revision < 3 {
+            self.failure = None;
+        }
     }
 }
 
@@ -18412,8 +20009,10 @@ pub enum WatchSourceKind {
     Timer,
     File,
     #[schemars(extend("x-since" = 9))]
+    GitHub,
+    #[schemars(extend("x-since" = 18))]
     AttachedProcess,
-    #[schemars(extend("x-since" = 10))]
+    #[schemars(extend("x-since" = 18))]
     Assignment,
 }
 impl Check for WatchSourceKind {
@@ -18423,16 +20022,15 @@ impl Check for WatchSourceKind {
 }
 
 impl Revisioned for WatchSourceKind {
-    fn retain_revision(&mut self, revision: u32) {
-        if matches!(self, Self::AttachedProcess) && revision < 9 {
-            *self = Self::Process;
-        }
-    }
+    fn retain_revision(&mut self, _revision: u32) {}
     fn check_revision(&self, revision: u32) -> Result<(), String> {
-        if matches!(self, Self::AttachedProcess) && revision < 9 {
+        if revision < 9 && matches!(self, Self::GitHub) {
+            return Err("enum variant predates its introduction: GitHub".into());
+        }
+        if revision < 18 && matches!(self, Self::AttachedProcess) {
             return Err("enum variant predates its introduction: AttachedProcess".into());
         }
-        if matches!(self, Self::Assignment) && revision < 10 {
+        if revision < 18 && matches!(self, Self::Assignment) {
             return Err("enum variant predates its introduction: Assignment".into());
         }
         Ok(())
@@ -18440,33 +20038,19 @@ impl Revisioned for WatchSourceKind {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-pub enum WatchOutcomeKind {
-    Succeeded,
-    Failed,
-    Cancelled,
-    TimedOut,
-    Interrupted,
-    Lost,
-    Uncertain,
-    #[schemars(extend("x-since" = 9))]
-    Exited,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAssignmentSource {
+    pub assignment_id: AssignmentId,
+    pub session_id: Id,
 }
-impl Check for WatchOutcomeKind {
+impl Check for WatchAssignmentSource {
     fn check(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-impl Revisioned for WatchOutcomeKind {
-    fn retain_revision(&mut self, revision: u32) {
-        if matches!(self, Self::Exited) && revision < 9 {
-            *self = Self::Uncertain;
-        }
-    }
-    fn check_revision(&self, revision: u32) -> Result<(), String> {
-        if matches!(self, Self::Exited) && revision < 9 {
-            return Err("enum variant predates its introduction: Exited".into());
-        }
+        self.assignment_id.check()?;
+        self.session_id.check()?;
+        super::domain_rules::record(
+            "WatchAssignmentSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -18491,18 +20075,61 @@ impl Check for WatchAttachedProcess {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WatchAssignmentSource {
-    pub assignment_id: AssignmentId,
-    pub session_id: Id,
+#[schemars(extend("oneOf" = [{"required": ["repositoryId", "workflowRunId"]}, {"required": ["repositoryId", "pullRequestNumber"]}]))]
+pub struct WatchGithubTarget {
+    pub repository_id: Id,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter")]
+    pub workflow_run_id: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter")]
+    pub pull_request_number: Option<Counter>,
 }
-impl Check for WatchAssignmentSource {
+impl Check for WatchGithubTarget {
     fn check(&self) -> Result<(), String> {
-        self.assignment_id.check()?;
-        self.session_id.check()?;
+        self.repository_id.check()?;
+        self.workflow_run_id.check()?;
+        self.pull_request_number.check()?;
         super::domain_rules::record(
-            "WatchAssignmentSource",
+            "WatchGithubTarget",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum WatchOutcomeKind {
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+    Lost,
+    Uncertain,
+    #[schemars(extend("x-since" = 18))]
+    Exited,
+}
+impl Check for WatchOutcomeKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcomeKind {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision < 18 && matches!(self, Self::Exited) {
+            return Err("enum variant predates its introduction: Exited".into());
+        }
         Ok(())
     }
 }
@@ -18801,15 +20428,8 @@ pub struct WatcherRecord {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "u32", extend("x-since" = 9))]
-    pub attached_pid: Option<u32>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "gated_member"
-    )]
-    #[schemars(with = "WatchAssignmentSource", extend("x-since" = 10))]
-    pub assignment: Option<WatchAssignmentSource>,
+    #[schemars(with = "WatchGithubTarget", extend("x-since" = 9))]
+    pub github: Option<WatchGithubTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<WatchProbeStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18839,6 +20459,20 @@ pub struct WatcherRecord {
     pub stop_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<WatchEvent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "u32", extend("x-since" = 18))]
+    pub attached_pid: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchAssignmentSource", extend("x-since" = 18))]
+    pub assignment: Option<WatchAssignmentSource>,
 }
 impl Check for WatcherRecord {
     fn check(&self) -> Result<(), String> {
@@ -18847,8 +20481,7 @@ impl Check for WatcherRecord {
         self.state.check()?;
         self.source_kind.check()?;
         self.process.check()?;
-        self.attached_pid.check()?;
-        self.assignment.check()?;
+        self.github.check()?;
         self.probe.check()?;
         self.due_at_ms.check()?;
         self.expires_at_ms.check()?;
@@ -18866,6 +20499,8 @@ impl Check for WatcherRecord {
         self.output_truncated.check()?;
         self.stop_requested.check()?;
         self.event.check()?;
+        self.attached_pid.check()?;
+        self.assignment.check()?;
         super::domain_rules::record(
             "WatcherRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -18878,12 +20513,15 @@ impl Revisioned for WatcherRecord {
     fn retain_revision(&mut self, revision: u32) {
         self.source_kind.retain_revision(revision);
         if revision < 9 {
-            self.attached_pid = None;
-        }
-        if revision < 10 {
-            self.assignment = None;
+            self.github = None;
         }
         self.outcome.retain_revision(revision);
+        if revision < 18 {
+            self.attached_pid = None;
+        }
+        if revision < 18 {
+            self.assignment = None;
+        }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         self.source_kind.check_revision(revision)?;
@@ -19127,6 +20765,20 @@ pub enum DomainQuery {
         views: ViewSelection,
         page: PageRequest,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Limit", extend("x-since" = 3))]
+        top_hotspots: Option<Limit>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        run_id: Option<Id>,
     },
     #[serde(rename = "analysis.cross_repo_links")]
     AnalysisCrossRepoLinks {
@@ -19141,6 +20793,13 @@ pub enum DomainQuery {
         views: ViewSelection,
         page: PageRequest,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        run_id: Option<Id>,
     },
     #[serde(rename = "analysis.clusters")]
     AnalysisClusters {
@@ -19148,6 +20807,13 @@ pub enum DomainQuery {
         views: ViewSelection,
         page: PageRequest,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "AnalysisClusterProjection", extend("x-since" = 3))]
+        projection: Option<AnalysisClusterProjection>,
     },
     #[serde(rename = "analysis.cluster_detail")]
     AnalysisClusterDetail {
@@ -19156,6 +20822,13 @@ pub enum DomainQuery {
         page: PageRequest,
         cluster_id: Id,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Counter", extend("x-since" = 3))]
+        legacy_ordinal: Option<Counter>,
     },
     #[serde(rename = "analysis.security")]
     AnalysisSecurity {
@@ -19163,6 +20836,13 @@ pub enum DomainQuery {
         views: ViewSelection,
         page: PageRequest,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Id", extend("x-since" = 3))]
+        run_id: Option<Id>,
     },
     #[serde(rename = "analysis.metrics")]
     AnalysisMetrics {
@@ -19170,6 +20850,13 @@ pub enum DomainQuery {
         views: ViewSelection,
         page: PageRequest,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Label", extend("x-since" = 3))]
+        dotnet_project: Option<Label>,
     },
     #[serde(rename = "analysis.hotspots")]
     AnalysisHotspots {
@@ -19184,6 +20871,13 @@ pub enum DomainQuery {
         views: ViewSelection,
         page: PageRequest,
         filters: Items<Label>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Finite", extend("x-since" = 3))]
+        max_health: Option<Finite>,
     },
     #[serde(rename = "analysis.archival_candidates")]
     AnalysisArchivalCandidates {
@@ -19231,12 +20925,49 @@ pub enum DomainQuery {
     },
     #[serde(rename = "database.read")]
     DatabaseRead {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         statement: Content,
         parameters: Items<DbParameter>,
         row_limit: Limit,
         timeout_ms: PositiveCounter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 9))]
+        include_schema_digest: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 9))]
+        schema_preview: Option<Content>,
+    },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<DataScope>,
+        source: Text,
+        sql: Content,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<i32>,
+    },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection_id: Option<Id>,
     },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch {
@@ -19647,10 +21378,24 @@ pub enum DomainQuery {
     #[serde(rename = "reviews.findings")]
     ReviewsFindings { review_id: Id, page: PageRequest },
     #[serde(rename = "reviews.readiness")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "barrier", "policyRevision"]}, {"required": ["kind", "rootId", "policyRevision", "localTarget"], "x-since": 15}]))]
     ReviewsReadiness {
         root_id: RootId,
-        barrier: DeliveryBarrier,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DeliveryBarrier")]
+        barrier: Option<DeliveryBarrier>,
         policy_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "LocalReviewTarget", extend("x-since" = 15))]
+        local_target: Option<LocalReviewTarget>,
     },
     #[serde(rename = "releases.inspect")]
     ReleasesInspect { release_id: Id },
@@ -19664,7 +21409,16 @@ pub enum DomainQuery {
         organization: Option<Label>,
     },
     #[serde(rename = "github.poll_status")]
-    GithubPollStatus { repository_id: Id },
+    GithubPollStatus {
+        repository_id: Id,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "PageRequest", extend("x-since" = 3))]
+        page: Option<PageRequest>,
+    },
     #[serde(rename = "github.checks")]
     GithubChecks {
         repository_id: Id,
@@ -20355,6 +22109,8 @@ impl DomainQuery {
             Self::SchemasObjects { .. } => "schemas.objects",
             Self::SchemasRelationships { .. } => "schemas.relationships",
             Self::DatabaseRead { .. } => "database.read",
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeDiagnostics { .. } => "knowledge.diagnostics",
@@ -20693,11 +22449,15 @@ impl Check for DomainQuery {
                 views,
                 page,
                 filters,
+                top_hotspots,
+                run_id,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 filters.check()?;
+                top_hotspots.check()?;
+                run_id.check()?;
             }
             Self::AnalysisCrossRepoLinks {
                 scope,
@@ -20715,22 +22475,26 @@ impl Check for DomainQuery {
                 views,
                 page,
                 filters,
+                run_id,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 filters.check()?;
+                run_id.check()?;
             }
             Self::AnalysisClusters {
                 scope,
                 views,
                 page,
                 filters,
+                projection,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 filters.check()?;
+                projection.check()?;
             }
             Self::AnalysisClusterDetail {
                 scope,
@@ -20738,34 +22502,40 @@ impl Check for DomainQuery {
                 page,
                 cluster_id,
                 filters,
+                legacy_ordinal,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 cluster_id.check()?;
                 filters.check()?;
+                legacy_ordinal.check()?;
             }
             Self::AnalysisSecurity {
                 scope,
                 views,
                 page,
                 filters,
+                run_id,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 filters.check()?;
+                run_id.check()?;
             }
             Self::AnalysisMetrics {
                 scope,
                 views,
                 page,
                 filters,
+                dotnet_project,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 filters.check()?;
+                dotnet_project.check()?;
             }
             Self::AnalysisHotspots {
                 scope,
@@ -20783,11 +22553,13 @@ impl Check for DomainQuery {
                 views,
                 page,
                 filters,
+                max_health,
             } => {
                 scope.check()?;
                 views.check()?;
                 page.check()?;
                 filters.check()?;
+                max_health.check()?;
             }
             Self::AnalysisArchivalCandidates {
                 scope,
@@ -20850,19 +22622,39 @@ impl Check for DomainQuery {
                 page.check()?;
             }
             Self::DatabaseRead {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 statement,
                 parameters,
                 row_limit,
                 timeout_ms,
+                include_schema_digest,
+                schema_preview,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 statement.check()?;
                 parameters.check()?;
                 row_limit.check()?;
                 timeout_ms.check()?;
+                include_schema_digest.check()?;
+                schema_preview.check()?;
+            }
+            Self::DatabaseMysqlReadonlyQuery {
+                scope,
+                source,
+                sql,
+                limit,
+            } => {
+                scope.check()?;
+                source.check()?;
+                sql.check()?;
+                limit.check()?;
+            }
+            Self::DatabaseSensitiveColumns { connection_id } => {
+                connection_id.check()?;
             }
             Self::KnowledgeSearch {
                 scope,
@@ -21168,10 +22960,12 @@ impl Check for DomainQuery {
                 root_id,
                 barrier,
                 policy_revision,
+                local_target,
             } => {
                 root_id.check()?;
                 barrier.check()?;
                 policy_revision.check()?;
+                local_target.check()?;
             }
             Self::ReleasesInspect { release_id } => {
                 release_id.check()?;
@@ -21186,8 +22980,12 @@ impl Check for DomainQuery {
                 page.check()?;
                 organization.check()?;
             }
-            Self::GithubPollStatus { repository_id } => {
+            Self::GithubPollStatus {
+                repository_id,
+                page,
+            } => {
                 repository_id.check()?;
+                page.check()?;
             }
             Self::GithubChecks {
                 repository_id,
@@ -21756,9 +23554,67 @@ impl Revisioned for DomainQuery {
                     *kinds = None;
                 }
             }
+            Self::AnalysisHealth {
+                top_hotspots,
+                run_id,
+                ..
+            } => {
+                if revision < 3 {
+                    *top_hotspots = None;
+                }
+                if revision < 3 {
+                    *run_id = None;
+                }
+            }
+            Self::AnalysisStatus { run_id, .. } => {
+                if revision < 3 {
+                    *run_id = None;
+                }
+            }
+            Self::AnalysisClusters { projection, .. } => {
+                if revision < 3 {
+                    *projection = None;
+                }
+            }
+            Self::AnalysisClusterDetail { legacy_ordinal, .. } => {
+                if revision < 3 {
+                    *legacy_ordinal = None;
+                }
+            }
+            Self::AnalysisSecurity { run_id, .. } => {
+                if revision < 3 {
+                    *run_id = None;
+                }
+            }
+            Self::AnalysisMetrics { dotnet_project, .. } => {
+                if revision < 3 {
+                    *dotnet_project = None;
+                }
+            }
+            Self::AnalysisFleetHealth { max_health, .. } => {
+                if revision < 3 {
+                    *max_health = None;
+                }
+            }
             Self::SchemasObjects { object_id, .. } => {
                 if revision < 5 {
                     *object_id = None;
+                }
+            }
+            Self::DatabaseRead {
+                scope,
+                include_schema_digest,
+                schema_preview,
+                ..
+            } => {
+                if revision < 9 {
+                    *scope = None;
+                }
+                if revision < 9 {
+                    *include_schema_digest = None;
+                }
+                if revision < 9 {
+                    *schema_preview = None;
                 }
             }
             Self::KnowledgeSearch {
@@ -21905,6 +23761,16 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 3 {
                     *completion_only = None;
+                }
+            }
+            Self::ReviewsReadiness { local_target, .. } => {
+                if revision < 15 {
+                    *local_target = None;
+                }
+            }
+            Self::GithubPollStatus { page, .. } => {
+                if revision < 3 {
+                    *page = None;
                 }
             }
             Self::JobsInspect { history, usage, .. } => {
@@ -22116,6 +23982,12 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
@@ -22674,6 +24546,13 @@ pub enum DomainCommand {
         batch_limit: Limit,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume_run_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "AnalysisLinkMode", extend("x-since" = 3))]
+        link_mode: Option<AnalysisLinkMode>,
     },
     #[serde(rename = "analysis.process_batch")]
     AnalysisProcessBatch {
@@ -22694,6 +24573,20 @@ pub enum DomainCommand {
         batch_limit: Limit,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume_run_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "AnalysisRefreshMode", extend("x-since" = 3))]
+        refresh_mode: Option<AnalysisRefreshMode>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "bool", extend("x-since" = 3))]
+        include_all_source: Option<bool>,
     },
     #[serde(rename = "analysis.synthesize")]
     AnalysisSynthesize {
@@ -22766,6 +24659,13 @@ pub enum DomainCommand {
     },
     #[serde(rename = "database.execute_write")]
     DatabaseExecuteWrite {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         statement: Content,
@@ -22776,6 +24676,13 @@ pub enum DomainCommand {
     },
     #[serde(rename = "database.direct_schema_change")]
     DatabaseDirectSchemaChange {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         statement: Content,
@@ -22783,21 +24690,57 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
         timeout_ms: PositiveCounter,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Digest", extend("x-since" = 9))]
+        expected_schema_digest: Option<Digest>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "Content", extend("x-since" = 9))]
+        fallback_reason: Option<Content>,
     },
     #[serde(rename = "database.apply_migration")]
     DatabaseApplyMigration {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DataScope", extend("x-since" = 9))]
+        scope: Option<DataScope>,
         connection_id: Id,
         expected_connection_revision: Revision,
         migration: ArtifactRef,
         expected_schema_digest: Digest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal_id: Option<Id>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DatabaseMigrationSource", extend("x-since" = 9))]
+        source: Option<DatabaseMigrationSource>,
     },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns {
         connection_id: Id,
         expected_revision: Revision,
         column_ids: Items<Id>,
+    },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        connection_id: Option<Id>,
+        expected_revision: Revision,
+        edit: DatabaseSensitiveRuleEdit,
     },
     #[serde(rename = "knowledge.record")]
     KnowledgeRecord {
@@ -23326,11 +25269,32 @@ pub enum DomainCommand {
         worktree_id: Option<Id>,
     },
     #[serde(rename = "reviews.request")]
+    #[schemars(extend("oneOf" = [{"required": ["kind", "rootId", "expectedRevision", "barrier", "policyRevision"]}, {"required": ["kind", "rootId", "expectedRevision", "policyRevision", "localTarget"], "x-since": 15}, {"required": ["kind", "rootId", "expectedRevision", "policyRevision", "candidateRepair"], "x-since": 15}]))]
     ReviewsRequest {
         root_id: RootId,
         expected_revision: Revision,
-        barrier: DeliveryBarrier,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "DeliveryBarrier")]
+        barrier: Option<DeliveryBarrier>,
         policy_revision: Revision,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "LocalReviewTarget", extend("x-since" = 15))]
+        local_target: Option<LocalReviewTarget>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ReviewCandidateRepair", extend("x-since" = 15))]
+        candidate_repair: Option<ReviewCandidateRepair>,
     },
     #[serde(rename = "reviews.respond")]
     ReviewsRespond {
@@ -23346,6 +25310,13 @@ pub enum DomainCommand {
         actionable: bool,
         rationale: Content,
         evidence: Items<ArtifactRef>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "CodeReviewResolution", extend("x-since" = 15))]
+        resolution: Option<CodeReviewResolution>,
     },
     #[serde(rename = "github.account")]
     GithubAccount {
@@ -23746,6 +25717,23 @@ pub enum DomainCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_digest: Option<Digest>,
     },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent {
+        package_id: Id,
+        contribution_id: Label,
+        manifest_digest: Digest,
+    },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow {
+        workflow_id: Id,
+        package_id: Id,
+        contribution_id: Label,
+        manifest_digest: Digest,
+        input: ArtifactRef,
+        required_gates: Items<PackageWorkflowGate>,
+    },
     #[serde(rename = "help.generate_capability_docs")]
     HelpGenerateCapabilityDocs {
         registry_revision: Revision,
@@ -24067,21 +26055,28 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "WatchAttachedProcess", extend("x-since" = 9))]
-        attached_process: Option<WatchAttachedProcess>,
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "gated_member"
-        )]
-        #[schemars(with = "AssignmentId", extend("x-since" = 10))]
-        assignment_id: Option<AssignmentId>,
+        #[schemars(with = "WatchGithubTarget", extend("x-since" = 9))]
+        github: Option<WatchGithubTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         matching: Option<WatchMatch>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tail_bytes: Option<ByteLimit>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lifetime_ms: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "WatchAttachedProcess", extend("x-since" = 18))]
+        attached_process: Option<WatchAttachedProcess>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "AssignmentId", extend("x-since" = 18))]
+        assignment_id: Option<AssignmentId>,
     },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.cancel")]
@@ -24155,6 +26150,7 @@ impl DomainCommand {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeRecord { .. } => "knowledge.record",
             Self::KnowledgeRevise { .. } => "knowledge.revise",
             Self::KnowledgeRelate { .. } => "knowledge.relate",
@@ -24247,6 +26243,8 @@ impl DomainCommand {
             Self::AddonsConfigure { .. } => "addons.configure",
             Self::AddonsPropose { .. } => "addons.propose",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsReadContent { .. } => "addons.read_content",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
             Self::HelpGenerateCapabilityDocs { .. } => "help.generate_capability_docs",
             Self::WorkspaceRecordDiagnostic { .. } => "workspace.record_diagnostic",
             Self::WorkspaceBackup { .. } => "workspace.backup",
@@ -24833,6 +26831,7 @@ impl Check for DomainCommand {
                 node_ids,
                 batch_limit,
                 resume_run_id,
+                link_mode,
             } => {
                 scope.check()?;
                 views.check()?;
@@ -24840,6 +26839,7 @@ impl Check for DomainCommand {
                 node_ids.check()?;
                 batch_limit.check()?;
                 resume_run_id.check()?;
+                link_mode.check()?;
             }
             Self::AnalysisProcessBatch {
                 scope,
@@ -24863,6 +26863,8 @@ impl Check for DomainCommand {
                 node_ids,
                 batch_limit,
                 resume_run_id,
+                refresh_mode,
+                include_all_source,
             } => {
                 scope.check()?;
                 views.check()?;
@@ -24870,6 +26872,8 @@ impl Check for DomainCommand {
                 node_ids.check()?;
                 batch_limit.check()?;
                 resume_run_id.check()?;
+                refresh_mode.check()?;
+                include_all_source.check()?;
             }
             Self::AnalysisSynthesize {
                 scope,
@@ -24929,6 +26933,7 @@ impl Check for DomainCommand {
                 action.check()?;
             }
             Self::DatabaseExecuteWrite {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 statement,
@@ -24936,6 +26941,7 @@ impl Check for DomainCommand {
                 proposal_id,
                 timeout_ms,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 statement.check()?;
@@ -24944,32 +26950,42 @@ impl Check for DomainCommand {
                 timeout_ms.check()?;
             }
             Self::DatabaseDirectSchemaChange {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 statement,
                 parameters,
                 proposal_id,
                 timeout_ms,
+                expected_schema_digest,
+                fallback_reason,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 statement.check()?;
                 parameters.check()?;
                 proposal_id.check()?;
                 timeout_ms.check()?;
+                expected_schema_digest.check()?;
+                fallback_reason.check()?;
             }
             Self::DatabaseApplyMigration {
+                scope,
                 connection_id,
                 expected_connection_revision,
                 migration,
                 expected_schema_digest,
                 proposal_id,
+                source,
             } => {
+                scope.check()?;
                 connection_id.check()?;
                 expected_connection_revision.check()?;
                 migration.check()?;
                 expected_schema_digest.check()?;
                 proposal_id.check()?;
+                source.check()?;
             }
             Self::DatabaseConfigureSensitiveColumns {
                 connection_id,
@@ -24979,6 +26995,15 @@ impl Check for DomainCommand {
                 connection_id.check()?;
                 expected_revision.check()?;
                 column_ids.check()?;
+            }
+            Self::DatabaseEditSensitiveColumnRules {
+                connection_id,
+                expected_revision,
+                edit,
+            } => {
+                connection_id.check()?;
+                expected_revision.check()?;
+                edit.check()?;
             }
             Self::KnowledgeRecord { scope, batch } => {
                 scope.check()?;
@@ -25471,11 +27496,15 @@ impl Check for DomainCommand {
                 expected_revision,
                 barrier,
                 policy_revision,
+                local_target,
+                candidate_repair,
             } => {
                 root_id.check()?;
                 expected_revision.check()?;
                 barrier.check()?;
                 policy_revision.check()?;
+                local_target.check()?;
+                candidate_repair.check()?;
             }
             Self::ReviewsRespond {
                 finding_id,
@@ -25494,12 +27523,14 @@ impl Check for DomainCommand {
                 actionable,
                 rationale,
                 evidence,
+                resolution,
             } => {
                 finding_id.check()?;
                 expected_revision.check()?;
                 actionable.check()?;
                 rationale.check()?;
                 evidence.check()?;
+                resolution.check()?;
             }
             Self::GithubAccount {
                 action,
@@ -25946,6 +27977,30 @@ impl Check for DomainCommand {
                 input.check()?;
                 expected_digest.check()?;
             }
+            Self::AddonsReadContent {
+                package_id,
+                contribution_id,
+                manifest_digest,
+            } => {
+                package_id.check()?;
+                contribution_id.check()?;
+                manifest_digest.check()?;
+            }
+            Self::AddonsRunWorkflow {
+                workflow_id,
+                package_id,
+                contribution_id,
+                manifest_digest,
+                input,
+                required_gates,
+            } => {
+                workflow_id.check()?;
+                package_id.check()?;
+                contribution_id.check()?;
+                manifest_digest.check()?;
+                input.check()?;
+                required_gates.check()?;
+            }
             Self::HelpGenerateCapabilityDocs {
                 registry_revision,
                 expected_help_revision,
@@ -26252,21 +28307,23 @@ impl Check for DomainCommand {
                 probe,
                 timer,
                 file,
-                attached_process,
-                assignment_id,
+                github,
                 matching,
                 tail_bytes,
                 max_lifetime_ms,
+                attached_process,
+                assignment_id,
             } => {
                 process.check()?;
                 probe.check()?;
                 timer.check()?;
                 file.check()?;
-                attached_process.check()?;
-                assignment_id.check()?;
+                github.check()?;
                 matching.check()?;
                 tail_bytes.check()?;
                 max_lifetime_ms.check()?;
+                attached_process.check()?;
+                assignment_id.check()?;
             }
             Self::WatchCancel {
                 watcher_id,
@@ -26402,6 +28459,23 @@ impl Revisioned for DomainCommand {
                     *idempotency_key = None;
                 }
             }
+            Self::AnalysisLinkAndDetect { link_mode, .. } => {
+                if revision < 3 {
+                    *link_mode = None;
+                }
+            }
+            Self::AnalysisReanalyze {
+                refresh_mode,
+                include_all_source,
+                ..
+            } => {
+                if revision < 3 {
+                    *refresh_mode = None;
+                }
+                if revision < 3 {
+                    *include_all_source = None;
+                }
+            }
             Self::SchemasIndex {
                 test_only, scope, ..
             } => {
@@ -26426,6 +28500,35 @@ impl Revisioned for DomainCommand {
                 config.retain_revision(revision);
                 if revision < 5 {
                     *action = None;
+                }
+            }
+            Self::DatabaseExecuteWrite { scope, .. } => {
+                if revision < 9 {
+                    *scope = None;
+                }
+            }
+            Self::DatabaseDirectSchemaChange {
+                scope,
+                expected_schema_digest,
+                fallback_reason,
+                ..
+            } => {
+                if revision < 9 {
+                    *scope = None;
+                }
+                if revision < 9 {
+                    *expected_schema_digest = None;
+                }
+                if revision < 9 {
+                    *fallback_reason = None;
+                }
+            }
+            Self::DatabaseApplyMigration { scope, source, .. } => {
+                if revision < 9 {
+                    *scope = None;
+                }
+                if revision < 9 {
+                    *source = None;
                 }
             }
             Self::KnowledgeRecord { batch, .. } => {
@@ -26593,6 +28696,23 @@ impl Revisioned for DomainCommand {
                     *payload = None;
                 }
             }
+            Self::ReviewsRequest {
+                local_target,
+                candidate_repair,
+                ..
+            } => {
+                if revision < 15 {
+                    *local_target = None;
+                }
+                if revision < 15 {
+                    *candidate_repair = None;
+                }
+            }
+            Self::ReviewsAdjudicate { resolution, .. } => {
+                if revision < 15 {
+                    *resolution = None;
+                }
+            }
             Self::ResourcesAcquire {
                 purpose,
                 priority,
@@ -26747,14 +28867,18 @@ impl Revisioned for DomainCommand {
                 }
             }
             Self::WatchCreate {
+                github,
                 attached_process,
                 assignment_id,
                 ..
             } => {
                 if revision < 9 {
+                    *github = None;
+                }
+                if revision < 18 {
                     *attached_process = None;
                 }
-                if revision < 10 {
+                if revision < 18 {
                     *assignment_id = None;
                 }
             }
@@ -26772,6 +28896,9 @@ impl Revisioned for DomainCommand {
             Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation predates its introduction".into())
             }
@@ -26785,6 +28912,12 @@ impl Revisioned for DomainCommand {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AddonsReadContent { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
                 Err("operation predates its introduction".into())
             }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
@@ -26928,9 +29061,9 @@ pub enum OperationResult {
     #[serde(rename = "features.request_plan_approval")]
     FeaturesRequestPlanApproval { value: ProposalRecord },
     #[serde(rename = "issues.publish")]
-    IssuesPublish { value: GitLink },
+    IssuesPublish { value: GithubIssueLinkResult },
     #[serde(rename = "issues.link")]
-    IssuesLink { value: GitLink },
+    IssuesLink { value: GithubIssueLinkResult },
     #[serde(rename = "tasks.move")]
     TasksMove { value: WorkRecord },
     #[serde(rename = "tasks.assign")]
@@ -27031,25 +29164,25 @@ pub enum OperationResult {
     #[serde(rename = "analysis.health")]
     AnalysisHealth { value: AnalysisRecord },
     #[serde(rename = "analysis.cross_repo_links")]
-    AnalysisCrossRepoLinks { value: Page<MetricRecord> },
+    AnalysisCrossRepoLinks { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.status")]
     AnalysisStatus { value: AnalysisRecord },
     #[serde(rename = "analysis.clusters")]
-    AnalysisClusters { value: Page<ClusterRecord> },
+    AnalysisClusters { value: AnalysisClusterPageResult },
     #[serde(rename = "analysis.cluster_detail")]
     AnalysisClusterDetail { value: ClusterRecord },
     #[serde(rename = "analysis.security")]
     AnalysisSecurity { value: AnalysisRecord },
     #[serde(rename = "analysis.metrics")]
-    AnalysisMetrics { value: Page<MetricRecord> },
+    AnalysisMetrics { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.hotspots")]
-    AnalysisHotspots { value: Page<MetricRecord> },
+    AnalysisHotspots { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.fleet_health")]
-    AnalysisFleetHealth { value: Page<MetricRecord> },
+    AnalysisFleetHealth { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.archival_candidates")]
-    AnalysisArchivalCandidates { value: Page<MetricRecord> },
+    AnalysisArchivalCandidates { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.file_hotspot")]
-    AnalysisFileHotspot { value: Page<MetricRecord> },
+    AnalysisFileHotspot { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.community_analysis")]
     AnalysisCommunityAnalysis { value: AnalysisRecord },
     #[serde(rename = "analysis.link_and_detect")]
@@ -27084,6 +29217,15 @@ pub enum OperationResult {
     DatabaseApplyMigration { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch { value: Page<KnowledgeClaim> },
     #[serde(rename = "knowledge.read")]
@@ -27252,7 +29394,7 @@ pub enum OperationResult {
     #[serde(rename = "github.repositories")]
     GithubRepositories { value: Page<RepositoryRecord> },
     #[serde(rename = "github.poll_status")]
-    GithubPollStatus { value: Page<GithubObservation> },
+    GithubPollStatus { value: GithubPollStatusResult },
     #[serde(rename = "github.issue_sync")]
     GithubIssueSync { value: OperationRef },
     #[serde(rename = "github.checks")]
@@ -27417,6 +29559,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invoke")]
     AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent { value: PackageContent },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow { value: PackageInvocation },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invocation")]
     AddonsInvocation { value: PackageInvocation },
@@ -27769,6 +29917,9 @@ impl OperationResult {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeRecord { .. } => "knowledge.record",
@@ -27935,6 +30086,8 @@ impl OperationResult {
             Self::AddonsPropose { .. } => "addons.propose",
             Self::AddonsLogs { .. } => "addons.logs",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsReadContent { .. } => "addons.read_content",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
             Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
@@ -28157,6 +30310,9 @@ impl Check for OperationResult {
             Self::DatabaseDirectSchemaChange { value } => value.check()?,
             Self::DatabaseApplyMigration { value } => value.check()?,
             Self::DatabaseConfigureSensitiveColumns { value } => value.check()?,
+            Self::DatabaseMysqlReadonlyQuery { value } => value.check()?,
+            Self::DatabaseSensitiveColumns { value } => value.check()?,
+            Self::DatabaseEditSensitiveColumnRules { value } => value.check()?,
             Self::KnowledgeSearch { value } => value.check()?,
             Self::KnowledgeRead { value } => value.check()?,
             Self::KnowledgeRecord { value } => value.check()?,
@@ -28321,6 +30477,8 @@ impl Check for OperationResult {
             Self::AddonsPropose { value } => value.check()?,
             Self::AddonsLogs { value } => value.check()?,
             Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsReadContent { value } => value.check()?,
+            Self::AddonsRunWorkflow { value } => value.check()?,
             Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
@@ -28462,6 +30620,8 @@ impl Revisioned for OperationResult {
             Self::TasksEdit { value } => value.retain_revision(revision),
             Self::FeaturesEditPlan { value } => value.retain_revision(revision),
             Self::FeaturesDependencies { value } => value.retain_revision(revision),
+            Self::IssuesPublish { value } => value.retain_revision(revision),
+            Self::IssuesLink { value } => value.retain_revision(revision),
             Self::TasksMove { value } => value.retain_revision(revision),
             Self::TasksAssign { value } => value.retain_revision(revision),
             Self::TasksDependencyLinks { value } => value.retain_revision(revision),
@@ -28484,10 +30644,28 @@ impl Revisioned for OperationResult {
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
             Self::HistoryToolUsage { value } => value.retain_revision(revision),
             Self::IndexingStatus { value } => value.retain_revision(revision),
+            Self::AnalysisHealth { value } => value.retain_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.retain_revision(revision),
+            Self::AnalysisStatus { value } => value.retain_revision(revision),
+            Self::AnalysisClusters { value } => value.retain_revision(revision),
+            Self::AnalysisClusterDetail { value } => value.retain_revision(revision),
+            Self::AnalysisSecurity { value } => value.retain_revision(revision),
+            Self::AnalysisMetrics { value } => value.retain_revision(revision),
+            Self::AnalysisHotspots { value } => value.retain_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.retain_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.retain_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.retain_revision(revision),
+            Self::AnalysisCommunityAnalysis { value } => value.retain_revision(revision),
+            Self::AnalysisLinkAndDetect { value } => value.retain_revision(revision),
+            Self::AnalysisProcessBatch { value } => value.retain_revision(revision),
+            Self::AnalysisReanalyze { value } => value.retain_revision(revision),
+            Self::AnalysisSynthesize { value } => value.retain_revision(revision),
             Self::SchemasConnections { value } => value.retain_revision(revision),
             Self::SchemasObjects { value } => value.retain_revision(revision),
             Self::SchemasConfigure { value } => value.retain_revision(revision),
+            Self::DatabaseRead { value } => value.retain_revision(revision),
             Self::DatabaseConfigureSensitiveColumns { value } => value.retain_revision(revision),
+            Self::DatabaseMysqlReadonlyQuery { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
             Self::KnowledgeRecord { value } => value.retain_revision(revision),
@@ -28541,6 +30719,15 @@ impl Revisioned for OperationResult {
             Self::NotificationsList { value } => value.retain_revision(revision),
             Self::NotificationsRead { value } => value.retain_revision(revision),
             Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
+            Self::ReviewsList { value } => value.retain_revision(revision),
+            Self::ReviewsInspect { value } => value.retain_revision(revision),
+            Self::ReviewsRequest { value } => value.retain_revision(revision),
+            Self::ReviewsFindings { value } => value.retain_revision(revision),
+            Self::ReviewsRespond { value } => value.retain_revision(revision),
+            Self::ReviewsAdjudicate { value } => value.retain_revision(revision),
+            Self::ReviewsReadiness { value } => value.retain_revision(revision),
+            Self::GithubAccount { value } => value.retain_revision(revision),
+            Self::GithubPollStatus { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -28658,6 +30845,15 @@ impl Revisioned for OperationResult {
             Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
@@ -28671,6 +30867,12 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvoke { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsReadContent { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
@@ -28715,8 +30917,17 @@ impl Revisioned for OperationResult {
             Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::IssuesPublish { value } => value.check_revision(revision),
+            Self::IssuesLink { value } => value.check_revision(revision),
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.check_revision(revision),
+            Self::AnalysisClusters { value } => value.check_revision(revision),
+            Self::AnalysisMetrics { value } => value.check_revision(revision),
+            Self::AnalysisHotspots { value } => value.check_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.check_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.check_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.check_revision(revision),
             Self::ConventionsList { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::ConventionsResources { value } => value.check_revision(revision),
@@ -28731,6 +30942,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsImport { value } => value.check_revision(revision),
             Self::ConventionsMove { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::GithubPollStatus { value } => value.check_revision(revision),
             Self::JobsList { value } => value.check_revision(revision),
             Self::JobsCreate { value } => value.check_revision(revision),
             Self::JobsEdit { value } => value.check_revision(revision),

@@ -97,6 +97,14 @@ impl NativeHttp {
                 let body: &[u8] = r.body.as_deref().unwrap_or_default();
                 b.config().timeout_global(timeout).build().send(body)
             }
+            Method::Put => {
+                let mut b = self.agent.put(&r.url);
+                for (name, value) in &r.headers {
+                    b = b.header(name.as_str(), value.as_str());
+                }
+                let body: &[u8] = r.body.as_deref().unwrap_or_default();
+                b.config().timeout_global(timeout).build().send(body)
+            }
         };
         let mut response = result.map_err(|e| classify(&e))?;
         let status = response.status().as_u16();

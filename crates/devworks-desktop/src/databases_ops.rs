@@ -31,6 +31,13 @@ pub enum DatabasesSlot {
     DatabaseCa,
     /// A source command (its operation).
     DatabaseCommand(String),
+    DatabaseData(u64, Option<String>, Option<String>),
+    /// A sensitivity policy read or command, bound to the displayed target at submission.
+    DatabaseRules {
+        generation: u64,
+        connection_id: Option<Id>,
+    },
+    DatabaseDataStatus,
 }
 screen_slot!(DatabasesSlot, Databases);
 

@@ -1278,7 +1278,7 @@ fn native_task_lifecycle_transport(
 /// A task of a feature opens its PR against the feature branch, never the default branch, and
 /// the feature's own branch waits for the separate feature delivery barrier.
 #[test]
-fn feature_task_pr_targets_the_feature_branch_and_the_feature_waits_for_its_barrier() {
+fn legacy_feature_task_pr_targets_its_recorded_feature_branch() {
     use devworks_core::protocol::data::{GitOid, ObjectFormat};
     use devworks_core::protocol::results::DomainDecision;
     use devworks_core::protocol::{CommandReply, DomainErrorCode, ProjectId, RootId};
@@ -1320,7 +1320,7 @@ fn feature_task_pr_targets_the_feature_branch_and_the_feature_waits_for_its_barr
         tx.actors()
             .register(&worker, PrincipalKind::Agent, "Worker")?;
         for (work, kind, parent, branch) in [
-            ("feature", FEATURE, None, "refs/heads/feature/login"),
+            ("feature", FEATURE, None, "refs/heads/devworks/feature-login"),
             ("task", TASK, Some(id("feature")), "refs/heads/task/login-form"),
         ] {
             tx.work().insert_work(&StoredWork {
@@ -1483,7 +1483,7 @@ fn feature_task_pr_targets_the_feature_branch_and_the_feature_waits_for_its_barr
     let operation = match open(
         "task-to-feature",
         "refs/heads/task/login-form",
-        "refs/heads/feature/login",
+        "refs/heads/devworks/feature-login",
     ) {
         DomainDecision::Accepted { operation_id } => operation_id,
         other => panic!("task PR to its feature branch: {other:?}"),
@@ -1492,7 +1492,7 @@ fn feature_task_pr_targets_the_feature_branch_and_the_feature_waits_for_its_barr
     let action = serde_json::to_value(&record.payload).unwrap();
     assert_eq!(
         action.pointer("/action/PullRequest/base"),
-        Some(&serde_json::json!("feature/login")),
+        Some(&serde_json::json!("devworks/feature-login")),
         "the GitHub write targets the feature branch: {action}"
     );
     assert_eq!(
@@ -1502,12 +1502,12 @@ fn feature_task_pr_targets_the_feature_branch_and_the_feature_waits_for_its_barr
     // The feature's own PR to the default branch belongs to the delivery barrier.
     let barrier = refusal(open(
         "feature-to-main",
-        "refs/heads/feature/login",
+        "refs/heads/devworks/feature-login",
         "refs/heads/main",
     ));
     assert_eq!(barrier.code, DomainErrorCode::PermissionDenied);
     assert!(
-        format!("{barrier:?}").contains("feature_delivery_barrier"),
+        format!("{barrier:?}").contains("feature_delivery"),
         "{barrier:?}"
     );
     assert_eq!(
@@ -1522,6 +1522,7 @@ struct GitHubHttp {
     sha: std::sync::Mutex<String>,
     pr: std::sync::Mutex<Option<serde_json::Value>>,
     writes: std::sync::atomic::AtomicUsize,
+    hide_created_once: std::sync::atomic::AtomicBool,
 }
 struct GitHubSecrets;
 impl devworks_core::ports::secrets::SecretResolver for GitHubSecrets {
@@ -1555,12 +1556,25 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
             Method::Get if request.url == "https://api.github.com/repos/o/r" => {
                 json!({"full_name":"o/r","default_branch":"main"})
             }
-            Method::Get => self
-                .pr
-                .lock()
-                .unwrap()
-                .clone()
-                .map_or(json!([]), |pr| json!([pr])),
+            Method::Get
+                if request
+                    .url
+                    .starts_with("https://api.github.com/repos/o/r/git/ref/heads/") =>
+            {
+                let branch = request.url.split_once("/git/ref/heads/").unwrap().1;
+                json!({"ref":format!("refs/heads/{branch}"),"object":{"type":"commit","sha":self.sha.lock().unwrap().clone()}})
+            }
+            Method::Get => {
+                let pr = self.pr.lock().unwrap().clone();
+                if pr.is_some()
+                    && self
+                        .hide_created_once
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return Err(HttpError::Timeout);
+                }
+                pr.map_or(json!([]), |pr| json!([pr]))
+            }
             Method::Post | Method::Patch => {
                 let body: serde_json::Value =
                     serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
@@ -1570,6 +1584,7 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 return Err(HttpError::Timeout); // write happened, response lost
             }
+            Method::Put => panic!("unexpected final merge request"),
         };
         Ok(HttpResponse {
             status: 200,
@@ -1856,3 +1871,12 @@ mod worktree_hooks;
 
 #[path = "git/push_transport.rs"]
 mod push_transport;
+
+#[path = "git/github_sync.rs"]
+mod github_sync;
+
+#[path = "git/feature_workflow.rs"]
+mod feature_workflow;
+
+#[path = "git/final_delivery.rs"]
+mod final_delivery;

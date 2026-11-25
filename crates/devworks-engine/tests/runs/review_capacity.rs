@@ -371,13 +371,10 @@ mod coordinator_wait {
                 match self.coordinator_requests.fetch_add(1, Ordering::SeqCst) {
                     0 => {
                         let name = "process_execute_command";
-                        assert!(
-                            request["tools"]
-                                .as_array()
-                                .unwrap()
-                                .iter()
-                                .any(|tool| tool["function"]["name"] == name)
-                        );
+                        let tools = request["tools"].as_array().unwrap();
+                        for name in [name, "get_repository_health"] {
+                            assert!(tools.iter().any(|tool| tool["function"]["name"] == name));
+                        }
                         let args = json!({"spec": {
                             "executableRef": "shell",
                             "args": ["-c", "exit 0"],

@@ -87,6 +87,7 @@ pub enum CommitRefusal {
     },
     /// A different commit was already processed for this event.
     ChangedReplay,
+    UnverifiedStateProposal,
 }
 
 #[derive(Clone, Debug)]
@@ -187,6 +188,18 @@ pub fn commit_event_from(
     origin: Option<&IntentOrigin>,
     commit: &EventCommit,
 ) -> Result<CommitOutcome, StorageError> {
+    commit_event_with_state_check(tx, inv, origin, commit, |_| Ok(true))
+}
+
+/// Checks the prepared proposal's fresh visibility when committing new state. The recorded
+/// response to an identical replay remains valid even if the artifact is no longer readable.
+pub(crate) fn commit_event_with_state_check(
+    tx: &mut dyn WriteTransaction,
+    inv: &PackageInvocation,
+    origin: Option<&IntentOrigin>,
+    commit: &EventCommit,
+    state_is_verified: impl FnOnce(&mut dyn WriteTransaction) -> Result<bool, StorageError>,
+) -> Result<CommitOutcome, StorageError> {
     // Structural checks shared with the wire protocol (bounds, unique keys, relative targets).
     let frame = PackageRequest::CommitEvent {
         jsonrpc: RpcVersion::V2,
@@ -198,6 +211,13 @@ pub fn commit_event_from(
     }
     let event_id = EventId(Id::new(commit.event_id.0.as_str()).map_err(invalid)?);
     if commit.subscription_id.as_str() != inv.subscription_id.as_str() {
+        return Ok(CommitOutcome::Refused(CommitRefusal::BindingMismatch));
+    }
+    // Even a receipt lookup is scoped to the event this host invocation was given.
+    let Some(delivery) = tx.queue().entry(&inv.delivery_id)? else {
+        return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
+    };
+    if delivery.event_id != event_id {
         return Ok(CommitOutcome::Refused(CommitRefusal::BindingMismatch));
     }
     let digest = payload_digest(commit)?;
@@ -214,17 +234,11 @@ pub fn commit_event_from(
         });
     }
 
-    // A new commit needs the current invocation and its claimed delivery for this event.
+    // A new commit additionally needs the current invocation and the live claim fence.
     if commit.process_session_id.as_str() != inv.process_session_id
         || commit.invocation_id.as_str() != inv.invocation_id
         || commit.invocation_token.as_str() != inv.invocation_token
     {
-        return Ok(CommitOutcome::Refused(CommitRefusal::BindingMismatch));
-    }
-    let Some(delivery) = tx.queue().entry(&inv.delivery_id)? else {
-        return Ok(CommitOutcome::Refused(CommitRefusal::StaleInvocation));
-    };
-    if delivery.event_id != event_id {
         return Ok(CommitOutcome::Refused(CommitRefusal::BindingMismatch));
     }
     let boot = tx.store().boot_id.clone();
@@ -264,6 +278,12 @@ pub fn commit_event_from(
             expected: expected_revision,
             current: current_revision,
         }));
+    }
+
+    if commit.state_proposal.is_some() && !state_is_verified(tx)? {
+        return Ok(CommitOutcome::Refused(
+            CommitRefusal::UnverifiedStateProposal,
+        ));
     }
 
     // All checks passed: everything below commits together or not at all.

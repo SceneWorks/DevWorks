@@ -194,6 +194,7 @@ impl WorkCtl<'_, '_> {
                                         }
                                     },
                                 );
+                                reviews::section(ui, work, &id, actions);
                             }
                         }
                     });

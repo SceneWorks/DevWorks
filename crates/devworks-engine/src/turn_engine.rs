@@ -30,6 +30,7 @@ use tokio::sync::watch;
 pub struct TurnEngine {
     pub(crate) store: Arc<dyn ApplicationStore>,
     pub(crate) clock: Arc<dyn devworks_core::ports::Clock>,
+    pub(crate) code_reviews: Option<Arc<devworks_core::services::reviews::ReviewService>>,
     pub(crate) artifacts: Arc<ArtifactService>,
     pub(crate) providers: Option<Arc<NativeProviders>>,
     pub(crate) inference_router: Option<Arc<devworks_core::services::router::InferenceRouter>>,

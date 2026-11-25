@@ -719,3 +719,299 @@ fn native_revision_one_traversal_and_dependency_project_representable_graphs() {
         }
     });
 }
+
+enum TraversalFixture {
+    Large,
+    MemoryPressure,
+}
+
+/// Publish a native indexed relationship graph without making parser throughput part of the tests.
+fn publish_traversal_fixture(
+    store: &dyn ApplicationStore,
+    location: &Path,
+    fixture: TraversalFixture,
+) {
+    let location = location.to_string_lossy().into_owned();
+    write(store, move |tx| {
+        let repository = id("traversal-repository");
+        let generation = id("traversal-generation");
+        let view = id("traversal-view");
+        tx.projects().insert_repository(&StoredRepository {
+            id: repository.clone(),
+            location,
+            name: "Traversal fixture".into(),
+            remote_url: None,
+            primary: true,
+            lifecycle: ACTIVE.into(),
+            languages: vec!["rust".into()],
+            revision: 1,
+            registered_at_ms: 1,
+        })?;
+        let mut captured = StoredGeneration {
+            id: generation.clone(),
+            repository_id: repository.clone(),
+            layer: LAYER_BASELINE.into(),
+            state: GEN_STAGING.into(),
+            source_digest: "a".repeat(40),
+            watermark: 0,
+            manifest: json!({"coverage":{"state":"Complete","gaps":[]}}),
+        };
+        tx.indexing().insert_generation(&captured)?;
+        let mut put = |key: &str,
+                       nodes: usize,
+                       edges: usize,
+                       ends: fn(usize) -> (usize, usize),
+                       root_kind: &str,
+                       padding: &str| {
+            let nodes = (0..nodes)
+                .map(|i| {
+                    let name = format!("{key}-{i}");
+                    StoredNode {
+                        unit_key: key.into(),
+                        node_id: name.replace('.', "-"),
+                        kind: if i == 0 { root_kind } else { "Function" }.into(),
+                        name: name.clone(),
+                        payload: json!({"qualifiedName":name}),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let edges = (0..edges)
+                .map(|i| {
+                    let (source, target) = ends(i);
+                    StoredEdge {
+                        unit_key: key.into(),
+                        edge_id: format!("edge-{i:06}"),
+                        source_node_id: nodes[source].node_id.clone(),
+                        target_node_id: nodes[target].node_id.clone(),
+                        kind: "HTTP_CALLS".into(),
+                        payload: json!({"sourceUnit":key,"targetUnit":key,"resolution":"Resolved","detail":padding}),
+                    }
+                })
+                .collect::<Vec<_>>();
+            tx.indexing().put_unit(
+                &StoredUnit {
+                    generation_id: generation.clone(),
+                    unit_key: key.into(),
+                    content_digest: format!("capture-{key}"),
+                    action: UNIT_REPLACE.into(),
+                    payload: json!({}),
+                },
+                &nodes,
+                &edges,
+            )
+        };
+        captured.state = GEN_SEALED.into();
+        captured.watermark = match fixture {
+            TraversalFixture::Large => {
+                // A reachable 1,000-node tree and one back-edge into the root.
+                put(
+                    "tree.rs",
+                    1_001,
+                    1_001,
+                    |i| if i == 1_000 { (1, 0) } else { (i / 10, i + 1) },
+                    "Function",
+                    "",
+                )?;
+                for (unit, count) in [25_000, 25_000, 25_000, 23_999].into_iter().enumerate() {
+                    put(
+                        &format!("unrelated-{unit}.rs"),
+                        160,
+                        count,
+                        |i| (i / 160, i % 160),
+                        "Function",
+                        "",
+                    )?;
+                }
+                5
+            }
+            TraversalFixture::MemoryPressure => {
+                // Unrelated edges use almost all the scan retention. The package root forces the
+                // composed fallback, and its two short edges appear last in scan order.
+                put("bulk.rs", 4_000, 2_000, |i| (i * 2, i * 2 + 1), "Function", &"x".repeat(7_760))?;
+                put("seed.rs", 3, 2, |i| if i == 0 { (0, 1) } else { (2, 0) }, "Package", "")?;
+                2
+            }
+        };
+        tx.indexing().update_generation(&captured)?;
+        tx.indexing().insert_view(&StoredView {
+            view_id: view.clone(),
+            repository_id: repository.clone(),
+            view_digest: devworks_core::fingerprint::sha256_hex(b"traversal-view"),
+            baseline_id: generation,
+            branch_id: None,
+            worktree_id: None,
+            coverage: json!({"state":"Complete","commit":"a".repeat(40),"sourceRevision":1}),
+        })?;
+        tx.indexing().publish(&repository, &view, 0)?;
+        tx.projects().publish_index_view(&StoredIndexView {
+            view_id: view,
+            repository_id: repository,
+            source_revision: "a".repeat(40),
+            coverage: "Complete".into(),
+            published_at_ms: 1,
+        })?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn native_traversal_reaches_one_thousand_nodes_in_a_hundred_thousand_edge_graph() {
+    let _case = exclusive_native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let location = sources();
+    let _source = devworks_test_support::TempRoot::adopt(location.clone());
+    publish_traversal_fixture(&*store, &location, TraversalFixture::Large);
+    let selected = scope(&*store, "traversal-repository");
+    assert_eq!(
+        read(&*store, |r| r.graph().graph_counts(&selected)).edges,
+        100_000
+    );
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+
+    let root = "tree-rs-0";
+    let node = json!({"kind":"Node","nodeId":root});
+    let queries = [
+        (
+            "code.traverse",
+            json!({"kind":"Traverse","startIds":[root],"direction":"Forward","edgeKinds":["HTTP_CALLS"],"maxDepth":4}),
+        ),
+        (
+            "code.call_path",
+            json!({"kind":"Path","selection":{"target":node,"direction":"Outbound","depth":4}}),
+        ),
+        (
+            "code.data_lineage",
+            json!({"kind":"DataLineage","selection":node}),
+        ),
+    ];
+    for (operation, query) in queries {
+        let mut frame = json!({
+            "protocol":"1.0-draft.1","schemaRevision":3,"queryId":"large-native-walk","scope":{"kind":"Workspace"},
+            "view":{"kind":"Published","repositoryIds":["traversal-repository"]},"query":query,
+            "limits":{"maxResults":250,"maxVisited":20000,"deadlineMs":10000}
+        });
+        let mut reached = std::collections::BTreeSet::new();
+        let mut followed = std::collections::BTreeSet::new();
+        let mut complete = false;
+        for page_index in 0..8 {
+            let reply = app
+                .query(&ctx, operation, frame.to_string().as_bytes())
+                .unwrap();
+            let DomainQueryReply::Result { result, .. } = reply else {
+                panic!("{operation}, page {}: {reply:?}", page_index + 1);
+            };
+            let page: GraphPage =
+                serde_json::from_value(serde_json::to_value(result).unwrap()["value"].clone())
+                    .unwrap();
+            assert!(
+                !gaps(&page).to_string().contains("graph_visited_limit")
+                    && matches!(
+                        page.completion,
+                        GraphCompletion::Complete | GraphCompletion::ResultLimit
+                    ),
+                "{operation}: {:?}, {:?}",
+                page.completion,
+                gaps(&page)
+            );
+            match &page.result {
+                GraphResult::CodeGraph { value } => {
+                    reached.extend(
+                        value
+                            .nodes
+                            .0
+                            .iter()
+                            .map(|node| node.node_id.as_str().to_owned()),
+                    );
+                    for edge in &value.edges.0 {
+                        assert!(followed.insert(edge.edge_id.as_str().to_owned()));
+                    }
+                }
+                GraphResult::CallTrace { value } => {
+                    for step in &value.entries.0 {
+                        reached.insert(step.node.node_id.as_str().to_owned());
+                        assert!(
+                            followed.insert(step.edge_id.as_ref().unwrap().as_str().to_owned())
+                        );
+                    }
+                }
+                GraphResult::Lineage { value } => {
+                    for step in &value.consumers.0 {
+                        reached.insert(step.node.node_id.as_str().to_owned());
+                        assert!(
+                            followed.insert(step.edge_id.as_ref().unwrap().as_str().to_owned())
+                        );
+                    }
+                }
+                _ => panic!("{operation}: unexpected graph result"),
+            }
+            let Some(cursor) = page.next_cursor else {
+                complete = true;
+                break;
+            };
+            frame["view"] = json!({"kind":"Pinned","pinId":page.view.unwrap().pin_id});
+            frame["cursor"] = json!(cursor);
+        }
+        assert!(complete, "{operation}: traversal never finished");
+        assert!(
+            reached.remove(root),
+            "{operation}: cycle did not reach the root"
+        );
+        assert_eq!(reached.len(), 1_000, "{operation}");
+        assert_eq!(followed.len(), 1_001, "{operation}");
+    }
+    executor.block_on(app.shutdown()).into_result().unwrap();
+}
+
+#[test]
+fn native_memory_limited_fallback_keeps_materialized_seed_relationships() {
+    let _case = native_runtime_case();
+    let h = Harness::new();
+    let executor = runtime();
+    let store = h.open();
+    let location = sources();
+    let _source = devworks_test_support::TempRoot::adopt(location.clone());
+    publish_traversal_fixture(&*store, &location, TraversalFixture::MemoryPressure);
+    let app = executor
+        .block_on(boot(composition(&h, store.clone(), "git")))
+        .unwrap();
+    let ctx = principal(&*store, "user", PrincipalKind::Human);
+    let view = json!({"kind":"Published","repositoryIds":["traversal-repository"]});
+    let traversal = graph(
+        &app,
+        &ctx,
+        "code.traverse",
+        json!({"kind":"Traverse","startIds":["seed-rs-0"],"direction":"Forward","edgeKinds":[],"maxDepth":1}),
+        None,
+        Some(view.clone()),
+    );
+    assert!(gaps(&traversal).to_string().contains("graph_memory_limit"));
+    let GraphResult::CodeGraph { value } = traversal.result else {
+        panic!("expected a one-edge traversal");
+    };
+    assert_eq!(value.edges.0.len(), 1);
+    assert_eq!(value.edges.0[0].target_id.as_str(), "seed-rs-1");
+
+    let impact = graph(
+        &app,
+        &ctx,
+        "code.impact",
+        json!({"kind":"NodeImpact","selection":{"target":{"kind":"Node","nodeId":"seed-rs-0"},"depth":1}}),
+        None,
+        Some(view),
+    );
+    let impact_gaps = gaps(&impact).to_string();
+    assert!(impact_gaps.contains("graph_memory_limit"));
+    assert!(impact_gaps.contains("impact_counts_incomplete"));
+    let GraphResult::Impact { value } = impact.result else {
+        panic!("expected package impact");
+    };
+    assert_eq!(value.affected.0.len(), 1);
+    assert_eq!(value.affected.0[0].node.node_id.as_str(), "seed-rs-2");
+    executor.block_on(app.shutdown()).into_result().unwrap();
+}

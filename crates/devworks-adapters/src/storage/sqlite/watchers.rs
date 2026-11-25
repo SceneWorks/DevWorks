@@ -14,7 +14,7 @@ const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_
     probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,\
     probe_next_run_at,due_at,expires_at,match_pattern,match_each,\
     match_min_interval_ms,match_scanned,match_pending,match_total,\
-    match_last_event_at,file_path,file_scan_json,attached_pid,attached_birth,assignment_id,child_session_id";
+    match_last_event_at,file_path,file_scan_json,attached_pid,attached_birth,assignment_id,child_session_id,github_json";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -61,6 +61,7 @@ fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
         attached_birth: row.get(39)?,
         assignment_id: row.get(40)?,
         child_session_id: row.get(41)?,
+        github_json: row.get(42)?,
     })
 }
 struct WatcherRow {
@@ -106,6 +107,7 @@ struct WatcherRow {
     attached_birth: Option<String>,
     assignment_id: Option<String>,
     child_session_id: Option<String>,
+    github_json: Option<String>,
 }
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
@@ -185,6 +187,12 @@ impl WatcherRow {
                 (None, None) => None,
                 _ => return Err(corrupt("incomplete watched assignment")),
             },
+            github: self
+                .github_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|_| corrupt("watcher GitHub source"))?,
         })
     }
 }
@@ -461,6 +469,12 @@ fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, Storag
         .map(|scan| serde_json::to_string(&scan))
         .transpose()
         .map_err(|_| invalid("watcher file scan progress cannot be serialized"))?;
+    let github_json = w
+        .github
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| invalid("watcher GitHub source cannot be serialized"))?;
     Ok(vec![
         text(w.id.as_str()),
         Value::Integer(w.revision),
@@ -504,6 +518,7 @@ fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, Storag
         opt(w.attached_process.as_ref().map(|a| a.birth.as_str())),
         opt(w.assignment.as_ref().map(|a| a.id.0.as_str())),
         opt(w.assignment.as_ref().map(|a| a.session_id.as_str())),
+        opt(github_json.as_deref()),
     ])
 }
 
@@ -522,7 +537,7 @@ impl WatcherRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO watchers({WATCHER_COLUMNS}) VALUES({})",
-                placeholders(1, 42)
+                placeholders(1, 43)
             ),
             params_from_iter(write_params(watcher)?),
         ))?;
@@ -543,8 +558,8 @@ impl WatcherRepository for Unit<'_> {
                 due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,\
                 match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,\
                 match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38,\
-                attached_pid=?39,attached_birth=?40,assignment_id=?41,child_session_id=?42 \
-                WHERE id=?1 AND revision=?43",
+                attached_pid=?39,attached_birth=?40,assignment_id=?41,child_session_id=?42,github_json=?43 \
+                WHERE id=?1 AND revision=?44",
             params_from_iter(values),
         ))?;
         if changed != 1 {

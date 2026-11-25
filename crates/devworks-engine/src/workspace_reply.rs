@@ -1,8 +1,8 @@
 //! Native workspace chat consumes one saved message at a time, shared by Home and its sidebar.
 use crate::agent_turns::ToolWindowSweep;
 use crate::dispatch::{
-    Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
-    RetryPolicy,
+    Consumer, Delivery, DeliveryHandler, EffectCapacity, EffectExecutor, EffectFuture,
+    EffectResult, Outcome, RetryPolicy, ScopedEffectFuture,
 };
 use crate::providers::sink::ProviderResult;
 use crate::turn_engine::TurnEngine;
@@ -162,18 +162,37 @@ impl DeliveryHandler for WorkspaceReplies {
 
 struct ReplyEffects(Arc<WorkspaceReplies>);
 
-impl EffectExecutor for ReplyEffects {
-    fn execute(&self, operation: OperationRecord) -> EffectFuture {
+impl ReplyEffects {
+    fn run<'a>(
+        &self,
+        operation: OperationRecord,
+        capacity: Option<EffectCapacity<'a>>,
+    ) -> ScopedEffectFuture<'a> {
         let worker = self.0.clone();
         Box::pin(async move {
             match worker.engine.get().and_then(Weak::upgrade) {
-                Some(engine) => run(&engine, operation, &worker.stopping).await,
+                Some(engine) => run(&engine, operation, &worker.stopping, capacity).await,
                 None => EffectResult::NotApplied("Workspace reply engine is opening.".into()),
             }
         })
     }
+}
 
-    fn resumes_after_observation(&self) -> bool {
+impl EffectExecutor for ReplyEffects {
+    fn execute(&self, operation: OperationRecord) -> EffectFuture {
+        self.run(operation, None)
+    }
+
+    fn execute_with_capacity<'a>(
+        &self,
+        operation: OperationRecord,
+        _: Cancellation,
+        capacity: EffectCapacity<'a>,
+    ) -> ScopedEffectFuture<'a> {
+        self.run(operation, Some(capacity))
+    }
+
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         true
     }
 
@@ -394,6 +413,18 @@ fn release_carry(
     Ok(())
 }
 
+fn settlement_outcome(watcher: bool, value: Value) -> EffectResult {
+    if watcher && value["kind"] == "WorkspaceReplyUnavailable" {
+        return EffectResult::NotApplied(
+            value["detail"]
+                .as_str()
+                .unwrap_or("The watcher reply did not finish")
+                .to_owned(),
+        );
+    }
+    EffectResult::Completed(value)
+}
+
 async fn recover_settlement(
     engine: &TurnEngine,
     id: &OperationId,
@@ -402,7 +433,8 @@ async fn recover_settlement(
 ) -> Result<EffectResult, StorageError> {
     let id = id.clone();
     let completed = value["kind"] == "WorkspaceReplyCompleted";
-    crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
+    let recovered = value.clone();
+    let watcher = crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
         let operation = tx
             .operations()
             .operation(&id)?
@@ -413,10 +445,16 @@ async fn recover_settlement(
                         .is_some_and(|attempt| attempt.attempt_no == attempt_no)
             })
             .ok_or(StorageError::ScopeDenied)?;
-        release_carry(tx, &operation, completed)
+        release_carry(tx, &operation, completed)?;
+        let watcher = operation.payload["watcherSource"].is_string();
+        if watcher && !completed {
+            tx.operations()
+                .observe(&id, attempt_no, json!({"replySettlement":recovered}))?;
+        }
+        Ok(watcher)
     })
     .await?;
-    Ok(EffectResult::Completed(value))
+    Ok(settlement_outcome(watcher, value))
 }
 
 /// A durable provider result can finish local publication during observation. A tool dispatch
@@ -434,7 +472,10 @@ async fn settle_from_evidence(
         .rev()
         .find_map(|value| value.get("replySettlement").cloned())
     {
-        return Ok(EffectResult::Completed(saved));
+        return Ok(settlement_outcome(
+            operation.payload["watcherSource"].is_string(),
+            saved,
+        ));
     }
     let Some(prepared) = prepared_reply(attempt)? else {
         return Ok(EffectResult::NotApplied(
@@ -519,6 +560,7 @@ async fn run(
     engine: &TurnEngine,
     operation: OperationRecord,
     stopping: &Cancellation,
+    mut capacity: Option<EffectCapacity<'_>>,
 ) -> EffectResult {
     let (intent, attempt_no) = match (&operation.capability[..], operation.latest_attempt()) {
         (CAPABILITY, Some(attempt)) if operation.state == OperationState::Dispatching => {
@@ -565,7 +607,7 @@ async fn run(
             Ok(sweep) => sweep,
             Err(outcome) => return outcome,
         };
-    let mut generation = match prepare(engine, &ctx, &intent, stopping).await {
+    let mut generation = match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
         Ok(value) => value,
         Err(error) => {
             if stopping.is_cancelled() {
@@ -588,12 +630,20 @@ async fn run(
         )
         .await
         {
-            Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent, stopping).await {
-                Ok(next) => generation = next,
-                Err(error) => {
-                    return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
+            Ok(CompactionStep::Published) => {
+                match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
+                    Ok(next) => generation = next,
+                    Err(_) if stopping.is_cancelled() => {
+                        return EffectResult::Unknown(
+                            "Workspace reply paused for shutdown.".into(),
+                        );
+                    }
+                    Err(error) => {
+                        return settled(engine, &operation.id, attempt_no, unavailable(error))
+                            .await;
+                    }
                 }
-            },
+            }
             Ok(CompactionStep::NotNeeded) => {}
             Ok(CompactionStep::Unavailable(detail)) => {
                 return settled(engine, &operation.id, attempt_no, unavailable(detail)).await;
@@ -687,8 +737,11 @@ async fn run(
                 .await;
             }
         }
-        match prepare(engine, &ctx, &intent, stopping).await {
+        match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
             Ok(next) => generation = next,
+            Err(_) if stopping.is_cancelled() => {
+                return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
+            }
             Err(error) => {
                 return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
             }
@@ -736,8 +789,18 @@ async fn resume_recorded_turn(
     let unknown = |error: StorageError| EffectResult::Unknown(error.to_string());
     let mut previous = None;
     for attempt in operation.attempts.iter().rev().skip(1) {
-        if let Some(prepared) = prepared_reply(attempt).map_err(unknown)? {
-            previous = Some(prepared);
+        let prepared = prepared_reply(attempt).map_err(unknown)?;
+        if intent.watcher_source.is_some()
+            && attempt.observations.iter().any(|observation| {
+                observation["replySettlement"]["kind"] == "WorkspaceReplyUnavailable"
+            })
+        {
+            // The exact failed request was reconciled and its carry released. Earlier
+            // provider contexts may have been superseded by interruption recovery.
+            return Ok(prepared.map_or_else(ToolWindowSweep::default, |reply| reply.sweep));
+        }
+        if prepared.is_some() {
+            previous = prepared;
             break;
         }
     }
@@ -751,6 +814,16 @@ async fn resume_recorded_turn(
     else {
         return Ok(sweep);
     };
+    if intent.watcher_source.is_some()
+        && matches!(
+            recorded.provider.outcome,
+            Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete)
+        )
+    {
+        // Its exact provider request has a recorded terminal failure. Start the next
+        // bounded queue attempt with a fresh request and the same durable watcher input.
+        return Ok(sweep);
+    }
     save_prepared(engine, &operation.id, attempt_no, &prepared)
         .await
         .map_err(unknown)?;
@@ -838,6 +911,7 @@ async fn save_prepared(
             "compactionSource": prepared.compaction_source, "toolWindowSweep": prepared.sweep.checkpoint()}),
     )
     .await
+    .map(|_| ())
 }
 
 enum CompactionStep {
@@ -953,6 +1027,7 @@ fn finish_compaction(
         },
         result,
         &mut None,
+        None,
     )
 }
 
@@ -1001,7 +1076,7 @@ async fn settled(
     value: Value,
 ) -> EffectResult {
     match observe(engine, operation, attempt, json!({"replySettlement":value})).await {
-        Ok(()) => EffectResult::Completed(value),
+        Ok(watcher) => settlement_outcome(watcher, value),
         Err(error) => EffectResult::Unknown(error.to_string()),
     }
 }
@@ -1011,7 +1086,7 @@ async fn observe(
     operation: &OperationId,
     attempt: i64,
     value: Value,
-) -> Result<(), StorageError> {
+) -> Result<bool, StorageError> {
     let operation = operation.clone();
     crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
         let current = tx
@@ -1035,7 +1110,8 @@ async fn observe(
                 settlement["kind"] == "WorkspaceReplyCompleted",
             )?;
         }
-        tx.operations().observe(&operation, attempt, value)
+        tx.operations().observe(&operation, attempt, value)?;
+        Ok(current.payload["watcherSource"].is_string())
     })
     .await
 }
@@ -1052,17 +1128,31 @@ async fn prepare(
     ctx: &InvocationContext,
     intent: &ReplyIntent,
     cancel: &Cancellation,
+    mut capacity: Option<&mut EffectCapacity<'_>>,
 ) -> Result<WorkspaceGeneration, String> {
     if crate::auto_routing::needs_assignment(engine, ctx).map_err(|e| e.to_string())? {
         let (origin, material) =
             first_auto_input(engine, ctx, intent).map_err(|e| e.to_string())?;
-        crate::auto_routing::assign(engine, ctx, origin, material, cancel)
-            .await
-            .map_err(|error| format!("{error:?}"))?;
-    }
-    crate::agent_turns::wait_for_running_mcp_calls(engine, ctx, &intent.session_id, cancel)
+        crate::auto_routing::assign(
+            engine,
+            ctx,
+            origin,
+            material,
+            cancel,
+            capacity.as_deref_mut(),
+        )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error:?}"))?;
+    }
+    crate::agent_turns::wait_for_running_tool_results(
+        engine,
+        ctx,
+        &intent.session_id,
+        cancel,
+        capacity,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     loop {
         let (worker, ctx, intent) = (engine.clone(), ctx.clone(), intent.clone());
         let result = tokio::task::spawn_blocking(move || prepare_prompt(&worker, &ctx, &intent))
@@ -1199,7 +1289,8 @@ fn prepare_prompt(
         tool_count > 0,
         images,
     )?;
-    let (binding, headroom) = crate::agent_turns::initial_route_binding(engine, session, &route)?;
+    let (binding, headroom, _) =
+        crate::agent_turns::initial_route_binding(engine, session, &route)?;
     let mut instructions: Vec<_> = (!role.text.is_empty())
         .then_some(TextBlock {
             text: role.text,

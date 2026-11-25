@@ -1997,6 +1997,32 @@ pub(crate) fn dispatch_step(
             Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
             Err(error) => return Err(error),
         }
+    } else if let Some(alias) =
+        crate::analysis_tools::Alias::from_capability(call.capability_id.as_str())
+    {
+        schemas
+            .selected_analysis_alias(ctx, alias, &call.input_schema)
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let raw = artifacts
+            .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
+            .map_err(artifact_read_fault)?
+            .0;
+        let args = devworks_core::framing::parse(&raw)
+            .map_err(|_| invalid("recorded analysis tool arguments are invalid"))?;
+        mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+        match alias.dispatch(
+            engine,
+            ctx,
+            &ReadOptions {
+                cancellation: cancellation.cloned(),
+                deadline_ms: None,
+            },
+            &args,
+        ) {
+            Ok(value) => completed(serde_json::to_vec(&value).map_err(invalid)?),
+            Err(StorageError::InvalidRecord(reason)) => failed(&reason),
+            Err(error) => return Err(error),
+        }
     } else if engine.packages().is_some()
         && crate::package_tools::is_package_tool(store, call.capability_id.as_str())
     {

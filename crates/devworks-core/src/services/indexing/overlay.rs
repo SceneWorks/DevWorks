@@ -61,7 +61,7 @@ use crate::settings::catalog::{OVERLAY_RECORD_RETENTION_DAYS_KEY, OVERLAY_RECORD
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
 /// Most changed paths one worktree capture reads (each bounded by the size limit).
 pub const MAX_LOCAL_CHANGES: usize = 20_000;
@@ -76,6 +76,8 @@ pub struct Observed(pub Result<Snapshot, String>);
 pub struct Snapshot {
     /// The checkout the build reads: the worktree, or the repository's for a ref overlay.
     pub worktree_path: String,
+    /// The durable Git custody observed with these source bytes, when Git owns this checkout.
+    pub owned_checkout: Option<StoredGitWorktree>,
     pub base_generation: Id,
     pub base_oid: String,
     pub head_oid: Option<String>,
@@ -145,13 +147,65 @@ pub fn observe(
 ) -> Observed {
     Observed(observe_inner(env, repository, worktree, stop))
 }
+fn registered_checkout(
+    git: &dyn GitRead,
+    path: &str,
+) -> Result<Option<StoredGitWorktree>, StorageError> {
+    let exact = git.git_worktree_at(path)?;
+    if exact.is_some() || !cfg!(windows) || path.starts_with(r"\\?\") {
+        return Ok(exact);
+    }
+    let verbatim = if let Some(unc) = path.strip_prefix(r"\\") {
+        format!(r"\\?\UNC\{unc}")
+    } else {
+        format!(r"\\?\{path}")
+    };
+    git.git_worktree_at(&verbatim)
+}
+
+fn verify_owned_checkout(
+    git: &crate::services::git::client::Git<'_>,
+    checkout: &StoredGitWorktree,
+) -> Result<(), String> {
+    let changed = || "the owned worktree changed physical identity".to_owned();
+    if checkout.removed || checkout.pending_operation_id.is_some() {
+        return Err(changed());
+    }
+    match checkout.location.as_ref() {
+        Some(witness) => {
+            crate::services::git::location::require_worktree_location(git, &checkout.path, witness)
+                .map_err(|_| changed())
+        }
+        // Retain support for older unassigned registrations with no native custody witness.
+        None if checkout.owner_assignment_id.is_none() => Ok(()),
+        None => Err(changed()),
+    }
+}
+
+fn owner_is_current(
+    checkout: &StoredGitWorktree,
+    assignment: Option<StoredAssignment>,
+    session: Option<StoredSession>,
+) -> bool {
+    assignment
+        .zip(session)
+        .is_some_and(|(assignment, session)| {
+            assignment.state.is_live()
+                && checkout.owner_assignment_id.as_ref() == Some(&assignment.id)
+                && checkout.owner_root_id.as_ref() == Some(&assignment.root_id)
+                && checkout.owner_root_id.as_ref() == session.root_id.as_ref()
+                && session.agent_id == checkout.owner
+                && !session.closed()
+        })
+}
+
 fn observe_inner(
     env: &IndexEnv,
     repository: &Id,
     worktree: &Id,
     stop: &(dyn Fn() -> bool + Sync),
 ) -> Result<Snapshot, String> {
-    let (wt, base, cfg) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+    let (wt, base, cfg, checkout) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
         let wt = s
             .indexing()
             .worktrees(repository)?
@@ -165,7 +219,25 @@ fn observe_inner(
             None => None,
         };
         let cfg = effective_config(s.indexing(), s.projects(), repository)?;
-        Ok((wt, base, cfg))
+        let checkout = wt
+            .as_ref()
+            .map(|row| registered_checkout(s.git(), &row.path))
+            .transpose()?
+            .flatten();
+        if let Some(row) = &checkout
+            && let Some(owner) = &row.owner_assignment_id
+        {
+            let assignment = s.runs().assignment(owner)?;
+            let session = assignment
+                .as_ref()
+                .map(|assignment| s.sessions().session(&assignment.session_id))
+                .transpose()?
+                .flatten();
+            if !owner_is_current(row, assignment, session) {
+                return Err(StorageError::ScopeDenied);
+            }
+        }
+        Ok((wt, base, cfg, checkout))
     })
     .map_err(|e| e.to_string())?;
     let wt = wt.ok_or("the worktree is not a recorded worktree of this repository")?;
@@ -186,6 +258,12 @@ fn observe_inner(
         Ok(None) => return Err("the worktree is no longer a checkout".into()),
         Err(e) => return Err(format!("the worktree cannot be read: {e}")),
     }
+    if let Some(checkout) = &checkout {
+        if &checkout.repository_id != repository {
+            return Err("the owned worktree belongs to another registration".into());
+        }
+        verify_owned_checkout(&git, checkout)?;
+    }
     let head = git.head(&root).map_err(|e| e.to_string())?;
     let head_ref = git.branch(&root).map_err(|e| e.to_string())?;
     let against = head.clone().unwrap_or_else(|| {
@@ -195,9 +273,15 @@ fn observe_inner(
             EMPTY_TREE_SHA1.into()
         }
     });
-    let (changes, refused) = git
-        .local_changes(&root, &against)
-        .map_err(|e| e.to_string())?;
+    let (changes, refused) = if checkout
+        .as_ref()
+        .is_some_and(|tree| tree.location.is_some())
+    {
+        git.reviewed_local_changes(&root, &against)
+    } else {
+        git.local_changes(&root, &against)
+    }
+    .map_err(|e| e.to_string())?;
     if changes.len() > MAX_LOCAL_CHANGES {
         return Err(format!(
             "the worktree has {} changed paths (more than {MAX_LOCAL_CHANGES}); exclude generated files or commit them",
@@ -261,8 +345,12 @@ fn observe_inner(
             l.previous.as_deref().unwrap_or("")
         ));
     }
+    if let Some(checkout) = &checkout {
+        verify_owned_checkout(&git, checkout)?;
+    }
     Ok(Snapshot {
         worktree_path: wt.path.clone(),
+        owned_checkout: checkout,
         base_generation: base.id.clone(),
         base_oid: base.source_digest.clone(),
         head_oid: head,
@@ -335,6 +423,7 @@ fn ref_snapshot(env: &IndexEnv, o: &StoredOverlay) -> Result<Snapshot, String> {
     let base = base.ok_or("the repository has no published baseline")?;
     Ok(Snapshot {
         worktree_path: location.ok_or("the repository is not registered")?,
+        owned_checkout: None,
         base_generation: base.id.clone(),
         base_oid: base.source_digest.clone(),
         head_oid: o.head_oid.clone(),
@@ -516,8 +605,39 @@ pub(crate) fn refresh(
         // The reuse identity is the snapshot (a ref overlay's is its commit, which `existing`
         // already matched) and the configuration it was built under.
         let moved = super::status::overlay_config_moved(tx.indexing(), o, &effective.digest)?;
+        let member_projects = tx.projects().repository_projects(&r.id)?;
+        let planned = super::worker::semantic::registry_binding(
+            env,
+            tx.packages(),
+            &effective,
+            &member_projects,
+        )?;
+        let recorded = o
+            .view_id
+            .as_ref()
+            .map(|id| tx.indexing().view(id))
+            .transpose()?
+            .flatten();
+        let mut semantic_changed = recorded
+            .as_ref()
+            .and_then(|view| view.coverage["semanticBinding"].as_str())
+            .unwrap_or("")
+            != planned;
+        for id in [&o.branch_generation_id, &o.worktree_generation_id]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(layer) = tx.indexing().generation(id)? {
+                semantic_changed |= super::status::semantic_stale(
+                    tx.packages(),
+                    &layer.manifest,
+                    &member_projects,
+                )?;
+            }
+        }
         let state = super::status::effective_overlay_state(o, base.as_ref(), now, moved);
         if state == OVERLAY_READY
+            && !semantic_changed
             && (commit.is_some() || snapshot.is_some_and(|s| same_snapshot(o, s)))
             && let Some(run) = o
                 .run_id
@@ -712,6 +832,7 @@ pub(crate) fn retire_overlay(
     o: &StoredOverlay,
     reason: &str,
 ) -> Result<i64, StorageError> {
+    tx.graph().invalidate_graph_pins_for_overlay(&o.id)?;
     end_overlay(tx, o, OVERLAY_UNAVAILABLE, reason)
 }
 
@@ -1000,13 +1121,28 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
             format!("{p:?} is not a safe relative UTF-8 path; skipped"),
         );
     }
-    let (cfg, base_view) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
-        Ok((
-            effective_config(s.indexing(), s.projects(), &repo_id)?,
-            s.indexing().published(&repo_id)?,
-        ))
-    })
-    .map_err(Stop::storage)?;
+    let (cfg, base_view, semantic_binding, base_binding) =
+        read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+            let config = effective_config(s.indexing(), s.projects(), &repo_id)?;
+            let projects = s.projects().repository_projects(&repo_id)?;
+            let binding =
+                super::worker::semantic::registry_binding(&env, s.packages(), &config, &projects)?;
+            let base = s.indexing().generation(&snap.base_generation)?;
+            let base_binding = base
+                .as_ref()
+                .and_then(|generation| generation.manifest["semanticRegistryBinding"].as_str())
+                .unwrap_or("")
+                .to_owned();
+            Ok((
+                config,
+                s.indexing().published(&repo_id)?,
+                binding,
+                base_binding,
+            ))
+        })
+        .map_err(Stop::storage)?;
+    exec.semantic_packs = super::worker::semantic::select(&env, &cfg, &repo_id, &semantic_binding)?;
+    let refresh_semantics = semantic_binding != base_binding;
     let base_pointer = base_view.map_or(0, |p| p.revision);
     let root = PathBuf::from(&snap.worktree_path);
     let head = snap.head_oid.clone();
@@ -1054,21 +1190,39 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         env.source.case_insensitive(&root),
     )
     .map_err(Stop::storage)?;
-    if let Some(h) = head
-        .as_ref()
-        .filter(|h| **h != snap.base_oid || ref_overlay || !reconciled.is_empty())
-    {
+    if let Some(h) = head.as_ref().filter(|h| {
+        **h != snap.base_oid || ref_overlay || !reconciled.is_empty() || refresh_semantics
+    }) {
         exec.stage("branch")?;
         let mut changes = diff;
         changes.extend(reconciled.iter().cloned());
-        let (units, groups) = layer_units(
+        let packs = exec.semantic_packs.clone();
+        let (units, groups, plan) = layer_units(
             &env,
             &cfg,
             &head_entries,
             &changes,
+            LayerSemantics {
+                packs: &packs,
+                refresh: refresh_semantics,
+            },
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
+        prepare_layer_semantics(
+            exec,
+            super::worker::semantic::SemanticBatch {
+                repository_name: &repo.name,
+                root: &root,
+                commit: h,
+                capture: None,
+                files: &[],
+            },
+            &units,
+            &plan,
+            None,
+            &stop,
+        )?;
         let stored = new_layer(exec, &repo_id, LAYER_BRANCH, h, &snap, &layers)?;
         exec.shares.clear();
         let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
@@ -1141,11 +1295,16 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         )
         .map_err(Stop::storage)?;
         local_changes.extend(reconciled);
-        let (units, groups) = layer_units(
+        let packs = exec.semantic_packs.clone();
+        let (units, groups, plan) = layer_units(
             &env,
             &cfg,
             &composed,
             &local_changes,
+            LayerSemantics {
+                packs: &packs,
+                refresh: false,
+            },
             &mut exec.warnings,
             env.source.case_insensitive(&root),
         );
@@ -1160,6 +1319,20 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                     .map(|c| (l.path.clone(), c.digest.clone()))
             })
             .collect();
+        prepare_layer_semantics(
+            exec,
+            super::worker::semantic::SemanticBatch {
+                repository_name: &repo.name,
+                root: &root,
+                commit: head.as_deref().unwrap_or_default(),
+                capture: Some(&capture),
+                files: &[],
+            },
+            &units,
+            &plan,
+            Some(&expected),
+            &stop,
+        )?;
         exec.shares.clear();
         let groups: BTreeMap<&'static str, Vec<&PlanUnit>> = groups
             .iter()
@@ -1197,6 +1370,13 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
         super::worker::view_links(s.indexing(), &repo_id, &composed_layers)
     })
     .map_err(Stop::storage)?;
+    if let Some(checkout) = &snap.owned_checkout {
+        verify_owned_checkout(
+            &super::worker::git_for(&env, &env.host_context(None), &stop),
+            checkout,
+        )
+        .map_err(|error| Stop::det("checkout_changed", error))?;
+    }
     let view_id = env.ids.next_id(IdKind::View);
     let (o_id, base_gen, repo2) = (
         overlay_id.clone(),
@@ -1205,7 +1385,25 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
     );
     let snap2 = snap.clone();
     let ttl = env.settings.overlay_ttl_ms;
+    let semantic_env = env.clone();
     let published = exec.fenced(WritePriority::Authoritative, move |tx, r| {
+        if let Some(checkout) = &snap2.owned_checkout {
+            if tx.git().git_worktree(&checkout.id)?.as_ref() != Some(checkout) {
+                return Ok(Err("the owned worktree custody changed during the build"));
+            }
+            if let Some(owner) = &checkout.owner_assignment_id {
+                let assignment = tx.runs().assignment(owner)?;
+                let session = assignment.as_ref().map(|assignment| tx.sessions().session(&assignment.session_id)).transpose()?.flatten();
+                if !owner_is_current(checkout, assignment, session) {
+                    return Ok(Err("the assigned checkout owner changed during the build"));
+                }
+            }
+        }
+        let config = effective_config_tx(tx, &repo2)?;
+        let projects = tx.projects().repository_projects(&repo2)?;
+        if config.digest != cfg.digest || super::worker::semantic::registry_binding(&semantic_env, tx.packages(), &config, &projects)? != semantic_binding {
+            return Ok(Err("the index configuration or semantic package changed during the build"));
+        }
         let current = tx.indexing().published(&repo2)?;
         if current.as_ref().map_or(0, |p| p.revision) != base_pointer {
             return Ok(Err(
@@ -1238,6 +1436,7 @@ pub(crate) fn execute(exec: &mut Exec<'_>) -> Result<(), Stop> {
                 "base": snap2.base_oid, "head": snap2.head_oid, "headRef": snap2.head_ref,
                 "worktreeId": o.worktree_id.as_ref().map(Id::as_str), "captureDigest": snap2.capture_digest,
                 "configDigest": cfg.digest,
+                "semanticBinding": semantic_binding,
                 "sourceRevision": o.revision + 1,
                 "overlayId": o.id,
                 "expiresAtMs": tx.now_ms().saturating_add(ttl),
@@ -1444,14 +1643,46 @@ fn composed_inventory(
 
 /// The units of one layer: changed files (replaced or deleted) and the directories they affect,
 /// planned over the layer's full tree.
+#[allow(clippy::too_many_arguments)]
+fn prepare_layer_semantics(
+    exec: &mut Exec<'_>,
+    batch: super::worker::semantic::SemanticBatch<'_>,
+    units: &[LayerUnit],
+    plan: &[PlanUnit],
+    local: Option<&BTreeMap<String, String>>,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<(), Stop> {
+    use super::worker::semantic;
+    exec.repository_semantics.clear();
+    if units.iter().any(|unit| {
+        matches!(
+            unit,
+            LayerUnit::Replace(unit) if semantic::repository_unit(&exec.semantic_packs, unit)
+        )
+    }) {
+        semantic::prepare_repository(exec, batch, plan, local, stop)?;
+    }
+    Ok(())
+}
+
+struct LayerSemantics<'a> {
+    packs: &'a [Arc<dyn crate::ports::indexing::SemanticEnricher>],
+    refresh: bool,
+}
+
 fn layer_units(
     env: &IndexEnv,
     cfg: &EffectiveConfig,
     tree: &[TreeEntry],
     changes: &[Change],
+    semantics: LayerSemantics<'_>,
     warnings: &mut Vec<RunWarning>,
     case_insensitive: bool,
-) -> (Vec<LayerUnit>, BTreeMap<&'static str, Vec<PlanUnit>>) {
+) -> (
+    Vec<LayerUnit>,
+    BTreeMap<&'static str, Vec<PlanUnit>>,
+    Vec<PlanUnit>,
+) {
     let mut renamed: BTreeMap<String, String> = BTreeMap::new();
     let mut changed: BTreeSet<String> = BTreeSet::new();
     for c in changes {
@@ -1495,15 +1726,29 @@ fn layer_units(
         .map(|u| u.key.clone())
         .filter(|k| !changed.contains(k))
         .collect();
+    let semantic: BTreeSet<String> = by_key
+        .values()
+        .filter(|unit| {
+            (semantics.refresh || !changes.is_empty())
+                && super::worker::semantic::repository_unit(semantics.packs, unit)
+        })
+        .map(|unit| unit.key.clone())
+        .filter(|key| !changed.contains(key) && !regrouped.contains(key))
+        .collect();
     let mut out = Vec::new();
-    for key in changed.iter().chain(dirs.iter()).chain(regrouped.iter()) {
+    for key in changed
+        .iter()
+        .chain(dirs.iter())
+        .chain(regrouped.iter())
+        .chain(semantic.iter())
+    {
         match by_key.get(key) {
             Some(u) => out.push(LayerUnit::Replace(u.clone())),
             // Deleted, renamed away or now excluded: masks the lower layers.
             None => out.push(LayerUnit::Delete(key.clone())),
         }
     }
-    (out, groups)
+    (out, groups, by_key.into_values().collect())
 }
 
 #[derive(Clone, Debug)]
@@ -1613,11 +1858,16 @@ fn stage_layer(
     exec.stage_units(root, name, generation, &from_commit, &mut done, total, stop)?;
     // Worktree content, in bounded batches, verified against the capture.
     let mut i = 0;
+    let packs = exec.semantic_packs.clone();
+    let commit = exec.run.source_oid.clone().unwrap_or_default();
+    let capture =
+        expected.and_then(|files| crate::fingerprint::canonical_digest(&json!(files)).ok());
     while i < from_worktree.len() {
         if exec.stopped() {
             return Err(Stop::Cancelled);
         }
         let mut rows = Vec::new();
+        let mut captured_files = Vec::new();
         let mut sources = super::source::Sources::new(env.clone(), exec.run.repository_id.clone());
         let mut bytes = 0usize;
         while i < from_worktree.len()
@@ -1663,8 +1913,40 @@ fn stage_layer(
                 &mut exec.warnings,
             )?;
             sources.stage(&mut row.0, content.as_deref())?;
+            if !packs.is_empty()
+                && matches!(
+                    u.mode,
+                    super::worker::MODE_STRUCTURAL | super::worker::MODE_TEXT_FALLBACK
+                )
+                && let (Some(language), Some(content)) = (u.language, content)
+            {
+                captured_files.push((u.key.as_str(), language, content));
+            }
             rows.push(row);
         }
+        let files: Vec<_> = captured_files
+            .iter()
+            .map(
+                |(unit, language, bytes)| crate::ports::indexing::EnrichmentSource {
+                    unit,
+                    language,
+                    bytes,
+                },
+            )
+            .collect();
+        super::worker::semantic::enrich_batch(
+            exec,
+            &packs,
+            super::worker::semantic::SemanticBatch {
+                repository_name: name,
+                root,
+                commit: &commit,
+                capture: capture.as_deref(),
+                files: &files,
+            },
+            &mut rows,
+            stop,
+        )?;
         let n = rows.len() as i64;
         let staged = sources.records();
         let capture_env = env.clone();
@@ -1706,6 +1988,7 @@ fn seal_layer(exec: &mut Exec<'_>, generation: &Id) -> Result<(), Stop> {
             })?;
         stored.state = GEN_SEALED.into();
         stored.watermark = count;
+        stored.manifest["packs"] = coverage["semanticPacks"].clone();
         stored.manifest["coverage"] = coverage;
         stored.manifest["units"] = json!(count);
         stored.manifest["indexedAtMs"] = json!(now);

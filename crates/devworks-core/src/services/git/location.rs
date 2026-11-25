@@ -1,6 +1,6 @@
 //! Resolve the physical repository and per-worktree Git directory, not just the saved path.
 use super::*;
-use crate::authority::destructive::{EntryKind, FileIdentity};
+use crate::authority::destructive::{EntryKind, FileIdentity, FilesystemResolver};
 use crate::ports::storage::GitWorktreeLocation;
 impl GitService {
     /// Git reports DOS paths on Windows while the ledger retains canonical verbatim paths.
@@ -37,38 +37,14 @@ impl GitService {
                 "physical Git identity is unavailable".into(),
             ))
         })?;
-        let identity = |path: &str, root: bool| -> Result<FileIdentity, GitFault> {
-            let resolved = fs
-                .resolve(path, None)
-                .map_err(|_| GitFault::SourceChanged)?;
-            if root
-                && (resolved.entry_kind != EntryKind::Directory
-                    || !resolved.linked_ancestors.is_empty())
-            {
-                return Err(GitFault::SourceChanged);
-            }
-            resolved
-                .target
-                .filter(|t| t.is_directory)
-                .and_then(|t| t.identity)
-                .ok_or(GitFault::SourceChanged)
-        };
         let (_, repository_common) = git.metadata_dirs(Path::new(&repository.location))?;
-        let (git_dir, common_dir) = git.metadata_dirs(Path::new(&tree.path))?;
-        let root = identity(&tree.path, true)?;
-        if identity(&git.worktree_root(Path::new(&tree.path))?, true)? != root {
+        let location = worktree_location(&**fs, git, &tree.path)?;
+        if location.common_dir != directory_identity(&**fs, &repository_common, false)? {
             return Err(GitFault::SourceChanged);
         }
-        let common = identity(&common_dir, false)?;
-        if common != identity(&repository_common, false)? {
-            return Err(GitFault::SourceChanged);
-        }
-        Ok(GitWorktreeLocation {
-            root,
-            git_dir: identity(&git_dir, false)?,
-            common_dir: common,
-        })
+        Ok(location)
     }
+
     pub(super) fn verify_target(&self, git: &Git<'_>, target: &Target) -> Result<(), GitFault> {
         if let Some(tree) = &target.worktree {
             let actual = self.resolve_location(git, &target.repository, tree)?;
@@ -78,4 +54,57 @@ impl GitService {
         }
         Ok(())
     }
+}
+
+fn directory_identity(
+    fs: &dyn FilesystemResolver,
+    path: &str,
+    root: bool,
+) -> Result<FileIdentity, GitFault> {
+    let resolved = fs
+        .resolve(path, None)
+        .map_err(|_| GitFault::SourceChanged)?;
+    if root
+        && (resolved.entry_kind != EntryKind::Directory || !resolved.linked_ancestors.is_empty())
+    {
+        return Err(GitFault::SourceChanged);
+    }
+    resolved
+        .target
+        .filter(|target| target.is_directory)
+        .and_then(|target| target.identity)
+        .ok_or(GitFault::SourceChanged)
+}
+
+fn worktree_location(
+    fs: &dyn FilesystemResolver,
+    git: &Git<'_>,
+    path: &str,
+) -> Result<GitWorktreeLocation, GitFault> {
+    let dir = Path::new(path);
+    let root = directory_identity(fs, path, true)?;
+    let (git_dir, common_dir) = git.metadata_dirs(dir)?;
+    if directory_identity(fs, &git.worktree_root(dir)?, true)? != root {
+        return Err(GitFault::SourceChanged);
+    }
+    Ok(GitWorktreeLocation {
+        root,
+        git_dir: directory_identity(fs, &git_dir, false)?,
+        common_dir: directory_identity(fs, &common_dir, false)?,
+    })
+}
+
+/// A same-path replacement is outside custody, even if it points at the original Git metadata.
+pub(crate) fn require_worktree_location(
+    git: &Git<'_>,
+    path: &str,
+    expected: &GitWorktreeLocation,
+) -> Result<(), GitFault> {
+    let fs = git.runner.filesystem().ok_or(GitFault::Unqualified)?;
+    if directory_identity(fs, path, true)? != expected.root
+        || worktree_location(fs, git, path)? != *expected
+    {
+        return Err(GitFault::SourceChanged);
+    }
+    Ok(())
 }
