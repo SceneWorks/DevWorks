@@ -5348,6 +5348,13 @@
     "schemaValid": true
   },
   {
+    "id": "input-watch.list-r18",
+    "entry": "domain-request.r18",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"watch.list\",\"page\":{\"limit\":20}},\"schemaRevision\":18}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-watch.inspect-r9",
     "entry": "domain-request.r9",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"watch.inspect\",\"watcherId\":\"id-a\"},\"schemaRevision\":9}",
@@ -5355,9 +5362,23 @@
     "schemaValid": true
   },
   {
+    "id": "input-watch.inspect-r18",
+    "entry": "domain-request.r18",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"watch.inspect\",\"watcherId\":\"id-a\"},\"schemaRevision\":18}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-watch.cancel-r9",
     "entry": "domain-request.r9",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"watch.cancel\",\"watcherId\":\"id-a\",\"expectedRevision\":\"1\",\"stopProcess\":false},\"schemaRevision\":9}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-watch.cancel-r18",
+    "entry": "domain-request.r18",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"watch.cancel\",\"watcherId\":\"id-a\",\"expectedRevision\":\"1\",\"stopProcess\":false},\"schemaRevision\":18}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -9947,42 +9968,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1421",
+    "id": "r3-preview-source-13-1424",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1421",
+    "id": "r3-delete-source-13-1424",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1423",
+    "id": "r3-preview-source-15-1426",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1423",
+    "id": "r3-delete-source-15-1426",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1425",
+    "id": "r3-preview-source-256-1428",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1425",
+    "id": "r3-delete-source-256-1428",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

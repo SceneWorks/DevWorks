@@ -190,8 +190,9 @@ _github_watcher['value']['sourceKind']='GitHub'
 _github_watcher['value']['github']=_github_run
 case('result-watch.inspect-github','operation-result.r9',_github_watcher)
 for op in ('watch.list','watch.inspect','watch.cancel'):
- frame=request(op,OPS[op]['mode']); frame['schemaRevision']=9
- case('input-'+op+'-r9','domain-request.r9',frame)
+ for revision in (9,18):
+  frame=request(op,OPS[op]['mode']); frame['schemaRevision']=revision
+  case(f'input-{op}-r{revision}',f'domain-request.r{revision}',frame)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):

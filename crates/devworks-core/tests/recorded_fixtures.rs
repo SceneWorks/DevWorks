@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2214), 2214);
+    assert_eq!(run("domain-fixtures.json", 2221), 2221);
 }
 
 #[test]
@@ -465,7 +465,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // bindings at revisions 9 and 10, and two package contributions at revision 9.
     // GitHub synchronization and native remote watchers add nine negotiated bindings.
     // DW-41 negotiates the seven review bindings at revision 15.
-    assert_eq!(admitted.len(), 718);
+    // DW-F14 negotiates watch.create, .list, .inspect and .cancel at revision 18.
+    assert_eq!(admitted.len(), 722);
 }
 
 #[test]
