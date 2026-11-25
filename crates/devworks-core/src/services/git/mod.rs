@@ -65,8 +65,10 @@ pub struct GitService {
     config: GitConfig,
     stopping: std::sync::atomic::AtomicBool,
     approval_control: std::sync::RwLock<Option<Arc<crate::services::runs::ControlService>>>,
-    repository_analysis:
-        std::sync::OnceLock<Arc<crate::services::graph::repository_analysis::AnalysisService>>,
+    // A weak reference to runtime-owned analysis lets the store close at shutdown.
+    repository_analysis: std::sync::OnceLock<
+        std::sync::Weak<crate::services::graph::repository_analysis::AnalysisService>,
+    >,
     documentation_approvals:
         std::sync::OnceLock<std::sync::Weak<crate::services::approvals::ApprovalService>>,
     delivery_github: Option<Arc<crate::services::github::GitHubService>>,
@@ -172,10 +174,21 @@ impl GitService {
     }
     pub fn install_documentation_analysis(
         &self,
-        analysis: Arc<crate::services::graph::repository_analysis::AnalysisService>,
+        analysis: &Arc<crate::services::graph::repository_analysis::AnalysisService>,
     ) -> bool {
-        self.repository_analysis.set(analysis).is_ok()
+        self.repository_analysis
+            .set(Arc::downgrade(analysis))
+            .is_ok()
     }
+
+    fn documentation_analysis(
+        &self,
+    ) -> Option<Arc<crate::services::graph::repository_analysis::AnalysisService>> {
+        self.repository_analysis
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+    }
+
     pub fn install_documentation_approvals(
         &self,
         approvals: &Arc<crate::services::approvals::ApprovalService>,

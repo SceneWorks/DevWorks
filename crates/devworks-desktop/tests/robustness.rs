@@ -601,6 +601,34 @@ fn a_new_draft_joining_a_conversation_keeps_both_texts() {
 }
 
 #[test]
+fn native_shutdown_records_a_clean_boot_after_composing_documentation() {
+    let root = Root::new("documentation-clean-shutdown");
+    for _ in 0..2 {
+        let engine = start(&root);
+        let runtime = engine.host().runtime();
+        assert!(runtime.git().is_some(), "native Git must be composed");
+        let boot = runtime.store().info().boot_id.unwrap();
+        assert!(engine.shutdown().unwrap().processes.reconciliation.is_ok());
+
+        let database = rusqlite::Connection::open_with_flags(
+            root.0
+                .join(devworks_adapters::storage::sqlite::DATABASE_FILE),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let (state, stopped_at): (String, Option<i64>) = database
+            .query_row(
+                "SELECT shutdown_state, stopped_at FROM app_boots WHERE id = ?1",
+                [boot.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "Clean");
+        assert!(stopped_at.is_some());
+    }
+}
+
+#[test]
 fn confirming_after_close_keeps_the_unresolved_frames() {
     let root = Root::new("confirm-closed");
     let engine = start(&root);

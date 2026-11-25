@@ -1278,7 +1278,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         service
     });
     if let (Some(git), Some(analysis)) = (&git, &analysis)
-        && git.install_documentation_analysis(analysis.clone())
+        && git.install_documentation_analysis(analysis)
     {
         analysis.enable_repository_documentation();
         use_cases = use_cases.with_repository_documentation(git.clone());
