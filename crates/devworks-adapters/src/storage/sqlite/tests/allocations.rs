@@ -221,7 +221,7 @@ fn published_watcher_migrations_preserve_attached_and_delegated_sources() {
     for (prefix, has_assignment) in [(63, false), (66, false), (66, true)] {
         let h = Harness::new();
         let mut branch = through(prefix);
-        let version = (prefix + 1) as i64;
+        let version = prefix + 1;
         branch.push(crate::storage::sqlite::Migration {
             version,
             minimum_reader: version,
