@@ -2069,6 +2069,82 @@ fn git_dir(dir: &Option<Word>) -> Word {
     dir.clone().unwrap_or_else(|| literal("."))
 }
 
+fn git_config_read(args: &[Word]) -> bool {
+    if args.iter().any(|arg| arg.dynamic) {
+        return false;
+    }
+    let (subcommand, args) = match args.split_first() {
+        Some((first, rest)) if matches!(first.text.as_str(), "get" | "list") => {
+            (Some(first.text.as_str()), rest)
+        }
+        _ => (None, args),
+    };
+    let mut seen = Vec::new();
+    let Parsed::Operand(index) = parse_options(
+        args,
+        0,
+        &Options {
+            value_letters: "",
+            flag_letters: "lz",
+            long_values: &["--type"],
+            long_flags: &[
+                "--get",
+                "--get-all",
+                "--get-regexp",
+                "--get-urlmatch",
+                "--list",
+                "--global",
+                "--system",
+                "--local",
+                "--worktree",
+                "--includes",
+                "--no-includes",
+                "--null",
+                "--name-only",
+                "--show-names",
+                "--show-origin",
+                "--show-scope",
+                "--all",
+                "--bool",
+                "--int",
+                "--bool-or-int",
+                "--path",
+                "--expiry-date",
+            ],
+            stop: &[],
+        },
+        &mut seen,
+    ) else {
+        return false;
+    };
+    let Some(operands) = args.get(index..) else {
+        return false;
+    };
+    if operands.iter().any(|arg| arg.text.starts_with('-')) {
+        return false;
+    }
+    let mut reads = subcommand
+        .into_iter()
+        .chain(seen.iter().filter_map(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
+            )
+            .then_some(name.as_str())
+        }));
+    let read = reads.next();
+    if reads.next().is_some() {
+        return false;
+    }
+    match read {
+        Some("list" | "--list" | "-l") => operands.is_empty(),
+        Some("--get-urlmatch") => operands.len() == 2,
+        Some("get" | "--get" | "--get-all" | "--get-regexp") => (1..=2).contains(&operands.len()),
+        None => matches!(operands, [key] if key.text.contains('.')),
+        _ => false,
+    }
+}
+
 fn git(args: &[Word], c: &mut Collector) -> bool {
     // Exact discovery forms only: --exec-path=<path> and extra arguments stay unmodeled.
     if args.len() == 1 && matches!(args[0].text.as_str(), "--version" | "--exec-path") {
@@ -2094,14 +2170,13 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 j += 2;
             }
             "-c" => {
-                let key = args.get(j + 1).map(|v| v.text.to_ascii_lowercase());
-                if key.is_none_or(|k| {
-                    k.starts_with("alias.")
-                        || k.starts_with("core.")
-                        || k.starts_with("tar.")
-                        || k.starts_with("uploadarchive.")
+                if !args.get(j + 1).is_some_and(|value| {
+                    !value.dynamic
+                        && matches!(
+                            value.text.as_str(),
+                            "protocol.file.allow=never" | "protocol.ext.allow=never"
+                        )
                 }) {
-                    // An alias, core, or tar.<fmt>.command setting can execute commands or change semantics.
                     return false;
                 }
                 j += 2;
@@ -2154,13 +2229,7 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         | "remote" | "tag" | "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am"
         | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file" | "ls-remote"
         | "merge-base" | "check-attr" => true,
-        "config" => rest.iter().all(|arg| {
-            let name = arg.text.to_ascii_lowercase();
-            !arg.dynamic
-                && name != "core.sshcommand"
-                && !name.starts_with("tar.")
-                && !name.starts_with("uploadarchive.")
-        }),
+        "config" => git_config_read(rest),
         "archive" => {
             if rest.iter().any(|a| a.dynamic) {
                 return false;
@@ -3440,12 +3509,14 @@ mod transport_operand_tests {
     }
 
     #[test]
-    fn git_config_holds_configured_archive_and_ssh_commands() {
+    fn git_config_models_reads_and_holds_writes_and_unrestricted_overrides() {
         for name in [
             "tar.example.command",
             "TAR.example.command",
             "uploadarchive.allowUnreachable",
             "core.sshCommand",
+            "credential.helper",
+            "user.name",
         ] {
             let args = ["git", "config", name, ""].map(String::from);
             assert!(matches!(
@@ -3453,10 +3524,34 @@ mod transport_operand_tests {
                 ShellAssessment::NeedsInput(_)
             ));
         }
-        let args = ["git", "config", "--get", "user.name"].map(String::from);
-        assert!(matches!(
-            assess_command(&args, None),
-            ShellAssessment::NoRecognizedDestruction { .. }
-        ));
+        for args in [
+            &["git", "config", "--get", "user.name"][..],
+            &["git", "config", "get", "user.name"][..],
+            &["git", "config", "--null", "--show-scope", "--list"][..],
+            &["git", "-c", "protocol.file.allow=never", "fetch"][..],
+        ] {
+            let args = args
+                .iter()
+                .map(|arg| String::from(*arg))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                assess_command(&args, None),
+                ShellAssessment::NoRecognizedDestruction { .. }
+            ));
+        }
+        for args in [
+            &["git", "config", "set", "user.name", "Test"][..],
+            &["git", "config", "--get", "user.name", "--edit"][..],
+            &["git", "-c", "credential.helper=", "status"][..],
+        ] {
+            let args = args
+                .iter()
+                .map(|arg| String::from(*arg))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                assess_command(&args, None),
+                ShellAssessment::NeedsInput(_)
+            ));
+        }
     }
 }
