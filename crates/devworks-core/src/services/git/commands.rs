@@ -588,7 +588,8 @@ impl GitService {
                 };
                 let (reservation, work) = delivery::reserve_delivery(tx, ctx, &op, &input.command)?;
                 let selected = reservation.repository(repository_id)?;
-                let (tree, repository, source) = self.pr_command(tx, ctx, &selected.worktree)?;
+                let (tree, repository, source) =
+                    self.pr_command(tx, ctx, &selected.worktree, true)?;
                 if source != work || repository.revision != selected.registration_revision {
                     return Err(StorageError::ScopeDenied.into());
                 }
@@ -612,8 +613,8 @@ impl GitService {
                     .work()
                     .work(&recorded.work_id)?
                     .ok_or(StorageError::ScopeDenied)?;
-                let (tree, repository, work) = if Self::pr_manager(tx, ctx, &scoped)? {
-                    self.pr_command(tx, ctx, worktree_id)?
+                let (tree, repository, work) = if Self::pr_manager(tx, ctx, &scoped, false)? {
+                    self.pr_command(tx, ctx, worktree_id, false)?
                 } else {
                     self.owned_command(tx, ctx, worktree_id)?
                 };
@@ -897,9 +898,11 @@ impl GitService {
                 return Err(StorageError::ScopeDenied);
             }
             let brief = crate::services::work::model::WorkBrief::of(&work)?;
-            let managing = (matches!(j.action, Action::PullRequest { .. } | Action::Integrate)
+            let final_delivery = matches!(j.action, Action::Integrate);
+            let managing = (final_delivery
+                || matches!(j.action, Action::PullRequest { .. })
                 || (matches!(j.action, Action::Cleanup) && j.cleanup_proof.is_some()))
-                && Self::pr_manager(tx, &c, &work)?;
+                && Self::pr_manager(tx, &c, &work, final_delivery)?;
             if let Action::PullRequest {
                 covered,
                 final_feature,

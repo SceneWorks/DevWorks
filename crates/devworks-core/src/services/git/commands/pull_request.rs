@@ -25,6 +25,7 @@ impl GitService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         work: &StoredWork,
+        final_delivery: bool,
     ) -> Result<bool, StorageError> {
         use crate::settings::catalog::AgentRole;
         if matches!(
@@ -41,6 +42,12 @@ impl GitService {
                         work.parent_feature_id.as_ref() == Some(&root.0)
                             || (work.kind == FEATURE && work.id == root.0)
                     }))
+                || (final_delivery
+                    && p.role == Some(AgentRole::IssueCoordinator)
+                    && ctx.project_id() == Some(&work.project_id)
+                    && ctx.root_id().is_some_and(|root| root.0 == work.id)
+                    && work.parent_feature_id.is_none()
+                    && matches!(work.kind.as_str(), TASK | "issue"))
         }))
     }
     pub(super) fn pr_command(
@@ -48,6 +55,7 @@ impl GitService {
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         id: &Id,
+        final_delivery: bool,
     ) -> Result<(StoredGitWorktree, StoredRepository, StoredWork), Failure> {
         let tree = tx
             .git()
@@ -57,9 +65,9 @@ impl GitService {
             .work()
             .work(&tree.work_id)?
             .ok_or_else(|| refuse(DomainErrorCode::NotFound, "work", &tree.work_id))?;
+        let managing = Self::pr_manager(tx, ctx, &work, final_delivery)?;
         if tree.owner == *ctx.principal()
-            && (ctx.root_id().is_some_and(|root| root.0 == work.id)
-                || !Self::pr_manager(tx, ctx, &work)?)
+            && (ctx.root_id().is_some_and(|root| root.0 == work.id) || !managing)
         {
             return self.owned_command(tx, ctx, id);
         }
@@ -67,8 +75,7 @@ impl GitService {
             .projects()
             .repository(&tree.repository_id)?
             .ok_or_else(|| refuse(DomainErrorCode::NotFound, "repository", &tree.repository_id))?;
-        if tree.removed || tree.pending_operation_id.is_some() || !Self::pr_manager(tx, ctx, &work)?
-        {
+        if tree.removed || tree.pending_operation_id.is_some() || !managing {
             return Err(refuse(
                 DomainErrorCode::PermissionDenied,
                 "github_pr_management",
@@ -192,7 +199,7 @@ impl GitService {
                 ));
             }
         };
-        let (tree, repository, work) = self.pr_command(tx, ctx, &staged.tree.id)?;
+        let (tree, repository, work) = self.pr_command(tx, ctx, &staged.tree.id, false)?;
         if tree != staged.tree
             || repository.revision != staged.repository.revision
             || &tree.head != expected_head
@@ -239,7 +246,8 @@ impl GitService {
             ));
         }
         if final_feature {
-            if !Self::pr_manager(tx, ctx, &work)? || !tree.branch.starts_with("refs/heads/feature/")
+            if !Self::pr_manager(tx, ctx, &work, false)?
+                || !tree.branch.starts_with("refs/heads/feature/")
             {
                 return Err(refuse(
                     DomainErrorCode::PermissionDenied,
@@ -282,7 +290,7 @@ impl GitService {
         let ids = covered_work_ids
             .clone()
             .unwrap_or_else(|| vec![work.id.clone()]);
-        if !ids.contains(&work.id) || (ids.len() > 1 && !Self::pr_manager(tx, ctx, &work)?) {
+        if !ids.contains(&work.id) || (ids.len() > 1 && !Self::pr_manager(tx, ctx, &work, false)?) {
             return Err(refuse(
                 DomainErrorCode::PermissionDenied,
                 "github_pr_coverage",

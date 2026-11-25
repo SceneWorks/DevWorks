@@ -2152,8 +2152,12 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         "status" | "log" | "show" | "diff" | "fetch" | "add" | "commit" | "init" | "describe"
         | "blame" | "ls-files" | "ls-tree" | "rev-parse" | "rev-list" | "shortlog" | "grep"
         | "remote" | "tag" | "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am"
-        | "config" | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file"
-        | "ls-remote" | "merge-base" | "check-attr" => true,
+        | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file" | "ls-remote"
+        | "merge-base" | "check-attr" => true,
+        "config" => rest.iter().all(|arg| {
+            let name = arg.text.to_ascii_lowercase();
+            !arg.dynamic && !name.starts_with("tar.") && !name.starts_with("uploadarchive.")
+        }),
         "archive" => {
             if rest.iter().any(|a| a.dynamic) {
                 return false;
@@ -2171,14 +2175,13 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 },
                 &mut seen,
             ) {
+                // Git registers the plain tar writer ahead of configured formats.
                 Parsed::Operand(k) => {
-                    let after_double_dash = k > 0 && rest[k - 1].text == "--";
-                    after_double_dash
-                        || !rest
-                            .get(k..)
-                            .unwrap_or(&[])
-                            .iter()
-                            .any(|a| a.text.starts_with('-'))
+                    seen.iter()
+                        .all(|(name, value)| name != "--format" || value.as_deref() == Some("tar"))
+                        && rest.get(k..).is_some_and(|operands| {
+                            operands.iter().all(|arg| !arg.text.starts_with('-'))
+                        })
                 }
                 Parsed::NoExecution => true,
                 Parsed::Unknown => false,
@@ -3380,17 +3383,27 @@ mod transport_operand_tests {
     }
 
     #[test]
-    fn git_archive_models_only_stdout_reads_and_holds_output_remote_or_tar_commands() {
+    fn git_archive_models_only_plain_tar_stdout_reads() {
         let argv = |args: &[&str]| {
             args.iter()
                 .map(|arg| (*arg).into())
                 .collect::<Vec<String>>()
         };
-        assert!(matches!(
-            assess_command(&argv(&["git", "archive", "--format=tar", "HEAD"]), None),
-            ShellAssessment::NoRecognizedDestruction { .. }
-        ));
+        for args in [
+            &["git", "archive", "HEAD"][..],
+            &["git", "archive", "--format=tar", "HEAD"][..],
+            &["git", "archive", "--format", "tar", "HEAD"][..],
+        ] {
+            assert!(matches!(
+                assess_command(&argv(args), None),
+                ShellAssessment::NoRecognizedDestruction { .. }
+            ));
+        }
         for unsafe_args in [
+            &["git", "archive", "--format=zip", "HEAD"][..],
+            &["git", "archive", "--format", "tar.gz", "HEAD"][..],
+            &["git", "archive", "--format=custom", "HEAD"][..],
+            &["git", "archive", "--format"][..],
             &["git", "archive", "-vo", "out.tar", "HEAD"][..],
             &["git", "archive", "-9o", "out.tar", "HEAD"][..],
             &["git", "archive", "--out=out.tar", "HEAD"][..],
@@ -3421,5 +3434,25 @@ mod transport_operand_tests {
                 "expected NeedsInput for {unsafe_args:?}"
             );
         }
+    }
+
+    #[test]
+    fn git_config_holds_archive_configuration() {
+        for name in [
+            "tar.example.command",
+            "TAR.example.command",
+            "uploadarchive.allowUnreachable",
+        ] {
+            let args = ["git", "config", name, ""].map(String::from);
+            assert!(matches!(
+                assess_command(&args, None),
+                ShellAssessment::NeedsInput(_)
+            ));
+        }
+        let args = ["git", "config", "--get", "user.name"].map(String::from);
+        assert!(matches!(
+            assess_command(&args, None),
+            ShellAssessment::NoRecognizedDestruction { .. }
+        ));
     }
 }

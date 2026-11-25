@@ -432,7 +432,8 @@ pub(super) fn reserve_delivery(
     }
     let work = crate::services::work::visible_work(tx.work(), ctx, &candidate.root_id.0)?;
     crate::services::work::open_project(tx, ctx, &work.project_id)?;
-    if ctx.project_id() != Some(&work.project_id) || !GitService::pr_manager(tx, ctx, &work)? {
+    if ctx.project_id() != Some(&work.project_id) || !GitService::pr_manager(tx, ctx, &work, true)?
+    {
         return Err(StorageError::ScopeDenied.into());
     }
     match candidate.kind {

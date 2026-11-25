@@ -1,16 +1,19 @@
 //! Native final merge with real isolated checkouts and a scripted asynchronous GitHub remote.
 use super::*;
 use devworks_core::authority::destructive::FilesystemResolver;
+use devworks_core::context::InvocationContext;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::http::{HttpError, HttpRequest, HttpResponse, HttpTransport, Method};
 use devworks_core::protocol::{
     CommandReply, EventId, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
 };
 use devworks_core::services::{
+    agents::AgentService,
     artifacts::evidence::Evidence,
     effect::EffectOutcome,
     git::{RegisteredGitRoot, github::GitHubClient},
     github::GitHubService,
+    runs::ControlService,
 };
 use serde_json::{Value, json};
 use std::sync::Mutex;
@@ -249,6 +252,70 @@ fn native_standalone_merge_settles_after_a_comment_with_neutral_or_skipped_requi
     for conclusion in ["neutral", "skipped"] {
         native_final_delivery(Some(conclusion));
     }
+}
+
+fn start_issue_coordinator(
+    h: &Harness,
+    store: &Arc<dyn ApplicationStore>,
+    user: &InvocationContext,
+    root: &RootId,
+) -> InvocationContext {
+    let control = Arc::new(ControlService::new(h.ids.clone()));
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: store.as_ref(),
+        authority: &authority,
+        ids: h.ids.as_ref(),
+    };
+    let start = json!({"protocol":"1.0-draft.1","requestKey":"start-standalone-delivery",
+        "command":{"kind":"runs.start","rootId":root,"expectedWorkRevision":"1","expectedControlRevision":"1"}});
+    let reply = gateway
+        .command(
+            user,
+            "runs.start",
+            start.to_string().as_bytes(),
+            control.clone(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Applied { .. })),
+        "{reply:?}"
+    );
+
+    let host = principal(store.as_ref(), "delivery-host", PrincipalKind::Host);
+    let agents = AgentService::new(h.ids.clone(), control.clone());
+    let (session, assignment, activation) = write(store.as_ref(), move |tx| {
+        let claimed = control
+            .claim_activation(tx, &id("delivery-runner"))?
+            .unwrap();
+        let activation = control
+            .start_activation(tx, &claimed.id, claimed.owner_epoch)?
+            .unwrap();
+        let primary = agents
+            .materialize_primary(tx, &host, &activation.id, activation.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+        let assignment = tx.runs().assignment(&primary.assignment_id)?.unwrap();
+        let session = tx.sessions().session(&assignment.session_id)?.unwrap();
+        Ok((session, assignment, activation))
+    })
+    .unwrap();
+    HostIngress::new(store.as_ref())
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("delivery-coordinator-invocation"),
+            id("delivery-coordinator-ingress"),
+            Counter::new(store.info().restore_epoch).unwrap(),
+            user.policy_revision().clone(),
+        )
+        .with_session(session.id)
+        .with_lineage(session.project_id, session.root_id, Some(assignment.id))
+        .with_activation(activation.id, activation.owner_epoch)
 }
 
 fn native_final_delivery(standalone_check: Option<&'static str>) {
@@ -504,6 +571,9 @@ fn native_final_delivery(standalone_check: Option<&'static str>) {
             )))),
         )
     };
+    let coordinator = standalone_check
+        .is_some()
+        .then(|| start_issue_coordinator(&h, &store, &user, &root));
     let submit = |store: &Arc<dyn ApplicationStore>,
                   key: &str,
                   repo: usize,
@@ -526,7 +596,7 @@ fn native_final_delivery(standalone_check: Option<&'static str>) {
         }
         match gateway
             .command(
-                &user,
+                coordinator.as_ref().unwrap_or(&user),
                 "git.integrate",
                 frame.to_string().as_bytes(),
                 service(store),
