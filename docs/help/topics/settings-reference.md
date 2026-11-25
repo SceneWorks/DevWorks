@@ -340,7 +340,7 @@ Auto-Merge.
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.
+Allow DevWorks to submit a merge after the required checks, review, approval and repository policies pass for the exact PR head. Disable this setting to hold automatic submission while other authorized work continues.
 
 ## delivery.mandatoryReview
 

@@ -24,6 +24,15 @@ impl ReviewService {
         ctx: &InvocationContext,
         input: &ReadinessInput,
     ) -> Result<(ReviewReadiness, i64), Failure> {
+        Self::readiness_with_merged(snapshot, ctx, input, &[])
+    }
+
+    pub(crate) fn readiness_with_merged(
+        snapshot: &dyn ReadSnapshot,
+        ctx: &InvocationContext,
+        input: &ReadinessInput,
+        merged: &[Id],
+    ) -> Result<(ReviewReadiness, i64), Failure> {
         let root = crate::services::work::visible_work(snapshot.work(), ctx, &input.root_id.0)?;
         if ctx.root_id().is_some_and(|id| id != &input.root_id)
             || ctx.policy_revision() != &input.policy_revision
@@ -135,6 +144,9 @@ impl ReviewService {
             }
             let mut repairs = Vec::new();
             for entry in &barrier.repositories {
+                if merged.contains(&entry.repository_id) {
+                    continue;
+                }
                 let Some(pull_link) =
                     snapshot
                         .sessions()

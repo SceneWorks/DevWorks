@@ -1,6 +1,7 @@
 //! Bounded GitHub.com PR client, over the shared no-redirect HTTP and OS-secret ports.
 //! Transport credentials remain Git's concern; API authorization uses github.credential.
-use crate::ports::http::{HttpRequest, HttpTransport, Method};
+use crate::ports::http::{HttpRequest, HttpResponse, HttpTransport, Method};
+pub(crate) mod delivery;
 use crate::ports::secrets::{Secret, SecretResolver};
 use crate::ports::storage::{ApplicationStore, ReadOptions, read_snapshot};
 use crate::services::github::credentials;
@@ -179,9 +180,24 @@ impl GitHubClient {
         url: String,
         body: Option<Value>,
     ) -> Result<Value, Fault> {
+        let response = self.request_version(store, method, url, body, "2022-11-28")?;
+        if !response.success() {
+            return Err(Fault::Rejected(response.status));
+        }
+        serde_json::from_slice(&response.body).map_err(|_| Fault::InvalidResponse)
+    }
+
+    fn request_version(
+        &self,
+        store: &dyn ApplicationStore,
+        method: Method,
+        url: String,
+        body: Option<Value>,
+        version: &str,
+    ) -> Result<HttpResponse, Fault> {
         let mut request = HttpRequest::get(url)
             .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("X-GitHub-Api-Version", version)
             .secret_header("Authorization", self.token(store)?);
         request.method = method;
         request.timeout_ms = 15_000;
@@ -190,11 +206,7 @@ impl GitHubClient {
             request = request.header("Content-Type", "application/json");
             request.body = Some(serde_json::to_vec(&body).map_err(|_| Fault::InvalidResponse)?);
         }
-        let response = self.http.send(&request).map_err(|_| Fault::Unavailable)?;
-        if !response.success() {
-            return Err(Fault::Rejected(response.status));
-        }
-        serde_json::from_slice(&response.body).map_err(|_| Fault::InvalidResponse)
+        self.http.send(&request).map_err(|_| Fault::Unavailable)
     }
     pub fn default_branch(
         &self,

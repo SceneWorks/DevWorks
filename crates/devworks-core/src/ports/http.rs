@@ -14,6 +14,7 @@ pub enum Method {
     Get,
     Post,
     Patch,
+    Put,
 }
 
 /// A header value: plain, or a credential that must never be printed.

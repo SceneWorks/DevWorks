@@ -91,19 +91,19 @@ impl StreamingHttp for ScriptedWire {
 }
 
 async fn scenario(fx: &Fx) -> (Arc<Runtime>, UnboundedReceiver<Request>) {
-    boot_with_watch_turns(fx, false).await
+    boot_with_watch_turns(fx, None).await
 }
 
 async fn boot_with_watch_turns(
     fx: &Fx,
-    native_process: bool,
+    native_process: Option<Duration>,
 ) -> (Arc<Runtime>, UnboundedReceiver<Request>) {
     let work = fx.h.root.join("watch-turn-work");
     std::fs::create_dir_all(work.join("work")).unwrap();
     let (mut composed, _) = watch_composition(fx, &work.canonicalize().unwrap());
     composed.application.sessions = Some(devworks_engine::SessionPorts::default());
-    if native_process {
-        composed.config.watch_interval = Duration::from_millis(50);
+    if let Some(interval) = native_process {
+        composed.config.watch_interval = interval;
     } else {
         composed.process_host = Arc::new(crate::compaction::StoppingHost::default());
     }
@@ -265,7 +265,7 @@ fn real_process_exit_wakes_the_idle_agent_with_its_output() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
     runtime().block_on(async {
-        let (app, mut receive) = boot_with_watch_turns(&fx, true).await;
+        let (app, mut receive) = boot_with_watch_turns(&fx, Some(Duration::from_millis(250))).await;
         let (ctx, primary) = agent_context(&fx);
         select_watch_tools(&fx, &ctx);
         let session = ctx.session_id().unwrap();
@@ -318,6 +318,174 @@ fn real_process_exit_wakes_the_idle_agent_with_its_output() {
         wake.answer(COMPLETED);
         assert_completed(finished(task).await);
         assert_eq!(event(&fx, &watcher).state, WatchEventState::Acknowledged);
+        assert!(receive.try_recv().is_err());
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_thousand_log_matches_per_second_are_coalesced_into_agent_wakes() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    runtime().block_on(async {
+        use std::io::Write;
+        let (app, mut receive) = scenario(&fx).await;
+        let (ctx, primary) = agent_context(&fx);
+        select_watch_tools(&fx, &ctx);
+        let session = ctx.session_id().unwrap();
+        let log = fx.h.root.join("watch-turn-work/work/fast.log");
+        let mut writer = std::fs::File::create(&log).unwrap();
+        let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(NativeAgentTurnExecutor::new(&app).run(ctx.clone(), primary, stop));
+        request(&mut receive).await.call(
+            "watch_create_command",
+            "fast-log",
+            json!({
+                "file":{"path":{"rootId":"watch-root","relative":"work/fast.log"}},
+                "matching":{"pattern":"ERROR","each":true,"minIntervalMs":"1000"}
+            }),
+        );
+        request(&mut receive).await.answer(COMPLETED);
+        tokio::time::timeout(LIMIT, async {
+            while turn_id(&fx, session).is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let row = read(fx.store.as_ref(), |snapshot| {
+            snapshot
+                .watchers()
+                .watchers(&WatcherFilter::Session(session.clone()), &[], None, 10)
+        })
+        .pop()
+        .unwrap();
+        let batch = "ERROR\n".repeat(100);
+        let supervisor = app.watchers().unwrap();
+        supervisor.tick().unwrap();
+        writer.write_all(batch.as_bytes()).unwrap();
+        assert_eq!(supervisor.tick().unwrap().delivered, 1);
+        let first = request(&mut receive).await;
+        let first_event = read(fx.store.as_ref(), |snapshot| {
+            snapshot
+                .watchers()
+                .watch_events(session, &[WatchEventState::Delivered], 10)
+        })
+        .into_iter()
+        .find(|event| event.watcher_id == row.id)
+        .unwrap();
+        assert_eq!(first.event_count(&first_event.id), 1);
+        assert_eq!(first_event.match_count, Some(100));
+        first.answer(COMPLETED);
+        for _ in 0..9 {
+            fx.h.advance(100);
+            writer.write_all(batch.as_bytes()).unwrap();
+            assert_eq!(supervisor.tick().unwrap().delivered, 0);
+            assert!(receive.try_recv().is_err());
+        }
+        fx.h.advance(100);
+        writer.write_all(batch.as_bytes()).unwrap();
+        assert_eq!(supervisor.tick().unwrap().delivered, 1);
+        let wake = request(&mut receive).await;
+        let events = read(fx.store.as_ref(), |snapshot| {
+            snapshot.watchers().watch_events(
+                session,
+                &[WatchEventState::Acknowledged, WatchEventState::Delivered],
+                10,
+            )
+        });
+        let second = events
+            .iter()
+            .find(|event| event.id != first_event.id)
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(second.created_at_ms - first_event.created_at_ms, 1000);
+        assert_eq!(second.match_count, Some(1000));
+        assert_eq!(wake.event_count(&second.id), 1);
+        wake.answer(COMPLETED);
+        let current = inspect(&app, &ctx, row.id.as_str());
+        command(
+            &app,
+            &ctx,
+            "watch.cancel",
+            json!({"watcherId":row.id,"expectedRevision":current["revision"]}),
+            "stop-fast-log",
+        );
+        assert_completed(finished(task).await);
+        assert!(receive.try_recv().is_err());
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_backup_catch_wakes_the_waiting_agent_and_no_backup_remains_due() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    runtime().block_on(async {
+        // The normal watcher lane cannot run during this case. Its process consumer is live.
+        let (app, mut receive) = boot_with_watch_turns(&fx, Some(Duration::from_secs(3600))).await;
+        let (ctx, primary) = agent_context(&fx);
+        select_watch_tools(&fx, &ctx);
+        let session = ctx.session_id().unwrap();
+        let source = create(
+            &app,
+            &ctx,
+            "printf 'backup process output'; exit 3",
+            15_000,
+            "backup-native-wake",
+        );
+        let watcher = id(source["id"].as_str().unwrap());
+        let operation = OperationId(id(source["process"]["processId"].as_str().unwrap()));
+        let supervisor = app.watchers().unwrap();
+        assert!(supervisor.backup_if_due().unwrap().is_none());
+        let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(NativeAgentTurnExecutor::new(&app).run(ctx.clone(), primary, stop));
+        request(&mut receive).await.answer(COMPLETED);
+        tokio::time::timeout(LIMIT, async {
+            while turn_id(&fx, session).is_some()
+                || !read(fx.store.as_ref(), |snapshot| {
+                    snapshot.operations().operation(&operation)
+                })
+                .is_some_and(|op| {
+                    op.attempts.iter().any(|a| {
+                        a.observations
+                            .iter()
+                            .any(|o| o.get("watchOutcome").is_some())
+                    })
+                })
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!task.is_finished());
+        assert!(receive.try_recv().is_err());
+        fx.h.advance(899_999);
+        assert!(supervisor.backup_if_due().unwrap().is_none());
+        fx.h.advance(1);
+        let pass = supervisor.backup_if_due().unwrap().unwrap();
+        assert_eq!((pass.caught, pass.reminded), (1, 0));
+        let wake = request(&mut receive).await;
+        let outcome = event(&fx, &watcher);
+        assert_eq!(wake.event_count(&outcome.id), 1);
+        assert!(
+            wake.body["messages"]
+                .to_string()
+                .contains("backup process output")
+        );
+        assert_eq!(
+            watcher_history(&app, watcher.as_str())
+                .iter()
+                .filter(|kind| *kind == "WatcherBackupCatch")
+                .count(),
+            1
+        );
+        wake.answer(COMPLETED);
+        assert_completed(finished(task).await);
+        assert_eq!(event(&fx, &watcher).state, WatchEventState::Acknowledged);
+        fx.h.advance(900_000);
+        assert!(supervisor.backup_if_due().unwrap().is_none());
         assert!(receive.try_recv().is_err());
         app.shutdown().await;
     });

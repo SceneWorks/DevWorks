@@ -251,6 +251,10 @@
       "sha256": "6222a3827a3518fd844c74d6bba30e1d9c507043735096c42e40c9e9ce60dba8"
     },
     {
+      "file": "git-command-request.r17.schema.json",
+      "sha256": "16379a045ccb335ad3ff97b597525b648aca6b5f65c1463ec5403eba31750855"
+    },
+    {
       "file": "git-command-request.r2.schema.json",
       "sha256": "447d08945cc303e3f4096f18ba9a4863cc7cf22ce378b99608c5628222886da3"
     },

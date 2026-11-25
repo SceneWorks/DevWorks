@@ -76,7 +76,7 @@ class SchemaRevisionRules(unittest.TestCase):
             # A prioritization's bounded placement (one move, any bucket size).
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
-            'artifacts.read', 'git.pull_request', 'git.push', 'browser.sessions', 'browser.input',
+            'artifacts.read', 'git.pull_request', 'git.push', 'git.integrate', 'browser.sessions', 'browser.input',
             'reviews.list', 'reviews.inspect', 'reviews.request', 'reviews.findings',
             'reviews.respond', 'reviews.adjudicate', 'reviews.readiness',
             'github.account', 'github.poll_status', 'issues.link', 'issues.publish',

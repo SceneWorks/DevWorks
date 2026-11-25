@@ -774,14 +774,17 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             store: store.clone(),
             fs,
         });
-        Some(Arc::new(devworks_core::services::git::GitService::new(
-            store.clone(),
-            helpers,
-            artifacts.clone(),
-            ids.clone(),
-            clock.clone(),
-            composition.config,
-        )))
+        Some(Arc::new(
+            devworks_core::services::git::GitService::new(
+                store.clone(),
+                helpers,
+                artifacts.clone(),
+                ids.clone(),
+                clock.clone(),
+                composition.config,
+            )
+            .with_delivery_github(github.clone()),
+        ))
     });
     let git = match git {
         Some(service) => {

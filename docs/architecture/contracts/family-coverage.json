@@ -12689,6 +12689,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 17,
+              "inputSchema": "git-command-request.r17.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Existing host authority contract",

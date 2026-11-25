@@ -12422,6 +12422,7 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "git.integrate": [1, 17],
     "reviews.list": [1, 15],
     "reviews.inspect": [1, 15],
     "reviews.request": [1, 15],

@@ -10423,6 +10423,27 @@
     "schemaValid": false
   },
   {
+    "id": "r17-input-git.integrate-with-barrier",
+    "entry": "git-command-request.r17",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":17,\"requestKey\":\"verified-final-delivery\",\"command\":{\"kind\":\"Integrate\",\"deliveryId\":\"delivery-a\",\"expectedBarrierRevision\":\"1\",\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"feature-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pull-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"reviewSource\":\"InAppIndependent\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[]}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-final-merge-with-different-barrier",
+    "entry": "git-command-request.r17",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":17,\"requestKey\":\"verified-final-delivery\",\"command\":{\"kind\":\"Integrate\",\"deliveryId\":\"delivery-a\",\"expectedBarrierRevision\":\"1\",\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"other-delivery\",\"rootId\":\"feature-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pull-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"reviewSource\":\"InAppIndependent\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[]}}}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-final-delivery-barrier",
+    "entry": "git-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"verified-final-delivery\",\"command\":{\"kind\":\"Integrate\",\"deliveryId\":\"delivery-a\",\"expectedBarrierRevision\":\"1\",\"repositoryId\":\"repo-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"barrier\":{\"protocol\":\"1.0-draft.1\",\"deliveryId\":\"delivery-a\",\"rootId\":\"feature-a\",\"kind\":\"Feature\",\"revision\":\"1\",\"approvedScopeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"repositories\":[{\"repositoryId\":\"repo-a\",\"pullRequestId\":\"pull-a\",\"baseRef\":\"refs/heads/main\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"observedBase\":{\"format\":\"Sha1\",\"hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"reviewSource\":\"InAppIndependent\",\"mergeMethod\":\"MergeCommit\",\"evidence\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"policyRevision\":\"1\"}],\"dependencies\":[]}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "reject-null-group-pr",
     "entry": "git-command-request.r2",
     "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":2,\"requestKey\":\"group-pr\",\"command\":{\"kind\":\"OpenPullRequest\",\"repositoryId\":\"repo-a\",\"headRef\":\"refs/heads/task-a\",\"baseRef\":\"refs/heads/feature-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"description\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"coveredWorkIds\":null}}",

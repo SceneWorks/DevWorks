@@ -1042,6 +1042,18 @@ if bad_publication['command']['taskIntegration']['predecessor']==publication['co
 case('reject-task-integration-with-different-predecessor','git-command-request.r16',bad_publication,False,True)
 legacy_publication=copy.deepcopy(publication);legacy_publication.pop('schemaRevision')
 case('reject-r1-task-integration-evidence','git-command-request',legacy_publication,False,False)
+final_barrier={'protocol':'1.0-draft.1','deliveryId':'delivery-a','rootId':'feature-a','kind':'Feature','revision':'1',
+ 'approvedScopeDigest':'a'*64,'repositories':[{'repositoryId':'repo-a','pullRequestId':'pull-a','baseRef':'refs/heads/main',
+ 'expectedHead':BASE['GitOid'],'observedBase':{'format':'Sha1','hex':'b'*40},'reviewSource':'InAppIndependent',
+ 'mergeMethod':'MergeCommit','evidence':ART,'policyRevision':'1'}],'dependencies':[]}
+final_delivery={'protocol':'1.0-draft.1','schemaRevision':17,'requestKey':'verified-final-delivery','command':{
+ 'kind':'Integrate','deliveryId':'delivery-a','expectedBarrierRevision':'1','repositoryId':'repo-a',
+ 'expectedHead':BASE['GitOid'],'barrier':final_barrier}}
+case('r17-input-git.integrate-with-barrier','git-command-request.r17',final_delivery)
+wrong_barrier=copy.deepcopy(final_delivery);wrong_barrier['command']['barrier']['deliveryId']='other-delivery'
+case('reject-final-merge-with-different-barrier','git-command-request.r17',wrong_barrier,False,True)
+legacy_delivery=copy.deepcopy(final_delivery);legacy_delivery.pop('schemaRevision')
+case('reject-r1-final-delivery-barrier','git-command-request',legacy_delivery,False,False)
 bad=copy.deepcopy(pr);bad['command']['coveredWorkIds']=None
 case('reject-null-group-pr','git-command-request.r2',bad,False,False)
 bad=copy.deepcopy(pr);bad['schemaRevision']=1

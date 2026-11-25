@@ -163,9 +163,31 @@ impl GitHubClient {
         document: &'static str,
         input: Value,
     ) -> Result<Value, Fault> {
+        self.graphql_document(token, document, serde_json::json!({"input": input}))
+    }
+
+    pub(crate) fn graphql_query(
+        &self,
+        token: Secret,
+        document: &'static str,
+        variables: Value,
+    ) -> Result<Value, Fault> {
+        let value = self.graphql_document(token, document, variables)?;
+        if value.get("errors").is_some() {
+            return Err(Fault::InvalidResponse);
+        }
+        value.get("data").cloned().ok_or(Fault::InvalidResponse)
+    }
+
+    fn graphql_document(
+        &self,
+        token: Secret,
+        document: &'static str,
+        variables: Value,
+    ) -> Result<Value, Fault> {
         let body = serde_json::to_vec(&serde_json::json!({
             "query": document,
-            "variables": {"input":input},
+            "variables": variables,
         }))
         .map_err(|_| Fault::InvalidResponse)?;
         let mut request =

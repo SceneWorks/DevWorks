@@ -1584,6 +1584,7 @@ impl devworks_core::ports::http::HttpTransport for GitHubHttp {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 return Err(HttpError::Timeout); // write happened, response lost
             }
+            Method::Put => panic!("unexpected final merge request"),
         };
         Ok(HttpResponse {
             status: 200,
@@ -1876,3 +1877,6 @@ mod github_sync;
 
 #[path = "git/feature_workflow.rs"]
 mod feature_workflow;
+
+#[path = "git/final_delivery.rs"]
+mod final_delivery;
