@@ -1287,20 +1287,6 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             authority.clone(),
         ));
     }
-    // No entry path bypasses root controls: every consumer's root-scoped work passes the
-    // run-control gate (and its own port, if it has one).
-    for c in &mut consumers {
-        c.eligibility = Some(Arc::new(RunGate::new(
-            control.clone(),
-            c.eligibility.take(),
-        )));
-    }
-    let mut replies = reply_consumer(
-        Arc::new(ReceiptReplies::new(artifacts.clone())),
-        store.clone(),
-    );
-    replies.max_in_flight = config.reply_max_in_flight;
-    consumers.insert(0, replies);
     let run_owner = config.dispatcher.owner.clone();
     // Indexing runs its Git helpers through this same process owner.
     let index_supervisor = indexing.map(|mut ix| {
