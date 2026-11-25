@@ -67,8 +67,10 @@ pub struct AnalysisService {
 }
 
 impl AnalysisService {
-    pub(crate) fn documentation_source(&self) -> Option<&dyn crate::ports::indexing::SourceTree> {
-        self.indexing.get().map(|index| &*index.source)
+    pub(crate) fn documentation_source(
+        &self,
+    ) -> Option<Arc<dyn crate::ports::indexing::SourceTree>> {
+        self.indexing.get().map(|index| index.source.clone())
     }
 
     pub(crate) fn documentation_language(&self, path: &str) -> Option<&'static str> {

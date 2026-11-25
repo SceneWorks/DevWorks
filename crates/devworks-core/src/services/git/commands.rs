@@ -1632,13 +1632,19 @@ impl GitService {
                         return changed("documentation source authority changed before generation");
                     }
                     let Some(source) = self
-                        .repository_analysis
-                        .get()
+                        .documentation_analysis()
                         .and_then(|analysis| analysis.documentation_source())
                     else {
                         return denied("repository documentation source intake is unavailable");
                     };
-                    match documentation::apply(&git, source, path, &job, &operation.id, draft) {
+                    match documentation::apply(
+                        &git,
+                        source.as_ref(),
+                        path,
+                        &job,
+                        &operation.id,
+                        draft,
+                    ) {
                         Ok(()) => return self.observe_pending(&job, operation),
                         Err(GitFault::SourceChanged) => {
                             return changed("documentation source or target changed");
@@ -2038,10 +2044,11 @@ impl GitService {
             Action::Documentation(draft) => {
                 observed.head == job.tree.head.hex
                     && self
-                        .repository_analysis
-                        .get()
+                        .documentation_analysis()
                         .and_then(|analysis| analysis.documentation_source())
-                        .is_some_and(|source| documentation::observed(&git, source, path, draft))
+                        .is_some_and(|source| {
+                            documentation::observed(&git, source.as_ref(), path, draft)
+                        })
             }
             Action::Create => {
                 let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {

@@ -24,7 +24,7 @@ impl GitService {
             return Err(StorageError::Cancelled);
         }
         let prepared: PreparedDocs = (|| {
-            let analysis = self.repository_analysis.get().ok_or_else(|| {
+            let analysis = self.documentation_analysis().ok_or_else(|| {
                 refuse(
                     DomainErrorCode::UnsupportedCapability,
                     "repository_analysis",
@@ -81,7 +81,7 @@ impl GitService {
             let (entries, _) = git
                 .tree(path, &tree.head.hex)
                 .map_err(|error| read_failure(error, &request.repository_id))?;
-            let facts = source_facts(analysis, &git, path, entries)
+            let facts = source_facts(&analysis, &git, path, entries)
                 .map_err(|error| read_failure(error, &request.repository_id))?;
             let draft = analysis.prepare_documentation(ctx, request, &facts, run_id)?;
             if draft.evidence.view.snapshot.head != tree.head {
@@ -94,7 +94,7 @@ impl GitService {
             let source = analysis
                 .documentation_source()
                 .ok_or(StorageError::ScopeDenied)?;
-            prepare_patch(&git, source, path, &tree, &draft).map_err(|error| {
+            prepare_patch(&git, source.as_ref(), path, &tree, &draft).map_err(|error| {
                 if matches!(error, GitFault::SourceChanged) {
                     refuse(
                         DomainErrorCode::SourceChanged,
@@ -254,8 +254,7 @@ impl GitService {
                 .as_array()
                 .ok_or(StorageError::ScopeDenied)?;
             let source = self
-                .repository_analysis
-                .get()
+                .documentation_analysis()
                 .and_then(|analysis| analysis.documentation_source())
                 .ok_or(StorageError::ScopeDenied)?;
             if files.is_empty()
