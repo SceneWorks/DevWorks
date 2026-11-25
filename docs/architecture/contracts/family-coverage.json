@@ -7523,7 +7523,7 @@
             },
             {
               "revision": 10,
-              "inputSchema": "domain-request.r10.schema.json",
+              "inputSchema": "domain-request.r9.schema.json",
               "resultSchema": "operation-result.r10.schema.json",
               "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
