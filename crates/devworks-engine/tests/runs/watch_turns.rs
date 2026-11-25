@@ -835,6 +835,140 @@ fn home_retries_a_failed_watcher_reply_with_the_same_event() {
     });
 }
 
+/// A reminder has no watcher event row. One appended while a Home summary is in flight is after
+/// the summary's source and before the new epoch's cursor, so the compacted context carries it.
+#[test]
+fn home_compaction_carries_a_reminder_appended_during_the_summary() {
+    use crate::workspace_reply::{open_home, send_workspace, workspace_ports};
+    use devworks_core::context::WorkspaceReply;
+
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    seed_local_route(&fx);
+    let (send, mut receive) = unbounded_channel();
+    let mut ports = workspace_ports(&fx, Arc::new(ScriptedWire(send)));
+    let work = fx.h.root.join("home-reminder-work");
+    std::fs::create_dir_all(work.join("work")).unwrap();
+    let (native, _) = watch_composition(&fx, &work.canonicalize().unwrap());
+    ports.config.process_tools = native.config.process_tools;
+    ports.process_host = native.process_host;
+    ports.config.watch_interval = Duration::from_secs(3600);
+    runtime().block_on(async {
+        let app = boot(ports).await.unwrap();
+        let session = open_home(&fx, &app);
+        let owner = read(fx.store.as_ref(), |snapshot| {
+            snapshot.sessions().session(&session)
+        })
+        .unwrap();
+        let ctx = HostIngress::new(fx.store.as_ref())
+            .context(
+                owner.agent_id,
+                PrincipalKind::Agent,
+                id("reminder-home"),
+                id("reminder-home"),
+                Counter::new(fx.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session.clone());
+        let supervisor = app.watchers().unwrap();
+        assert!(supervisor.backup_if_due().unwrap().is_none());
+        let watcher = create(&app, &ctx, "sleep 30", 60_000, "home-reminder-watcher");
+        let watcher_id = watcher["id"].as_str().unwrap().to_owned();
+        let process = watcher["process"]["processId"].as_str().unwrap().to_owned();
+        tokio::time::timeout(LIMIT, async {
+            while read(fx.store.as_ref(), |snapshot| {
+                snapshot.resources().process(&id(&process))
+            })
+            .is_none_or(|record| record.phase != ProcessPhase::Running)
+            {
+                supervisor.settle().unwrap();
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the watched process never ran");
+
+        send_workspace(
+            &fx,
+            &app,
+            &session,
+            "home-reminder-first",
+            "Earlier work",
+            "watch-model",
+        );
+        let earlier = "earlier work ".repeat(20_000);
+        let answer = json!({"choices":[{"index":0,
+            "delta":{"content":earlier},"finish_reason":"stop"}]});
+        request(&mut receive)
+            .await
+            .answer(format!("data: {answer}\n\ndata: [DONE]\n\n"));
+        crate::workspace_reply::wait_for_replies(&fx, 1).await;
+        let current = read(fx.store.as_ref(), |snapshot| {
+            snapshot.sessions().session(&session)
+        })
+        .unwrap();
+        let measure = ctx.clone().with_workspace_reply(WorkspaceReply {
+            user_sequence: current.last_durable_sequence(),
+            preference: None,
+        });
+        let (head, _, _) = app
+            .recover_native_context_head(&measure, &session)
+            .unwrap()
+            .unwrap();
+        let tokens =
+            devworks_engine::agent_turns::context_tokens(app.turn_engine(), &measure, &head, 0)
+                .unwrap();
+        // As in the workspace compaction case: the 80% boundary falls between the measured
+        // context and its fixed prefix.
+        let window = (tokens - earlier.len() as i64 / 8) * 100 / 80;
+        fx.tx(move |_, tx| {
+            let mut model = tx.router().route_model(&id("watch-model"))?.unwrap();
+            let expected = model.revision;
+            model.context_tokens = Some(window);
+            model.revision += 1;
+            tx.router().put_route_model(&model, Some(expected))?;
+            Ok(())
+        });
+
+        send_workspace(
+            &fx,
+            &app,
+            &session,
+            "home-reminder-second",
+            "Continue",
+            "watch-model",
+        );
+        let summary = request(&mut receive).await;
+        assert!(summary.is_compaction());
+        // The watcher's source can no longer be established, so the backup check reminds.
+        let target = id(&process);
+        write(&**app.store(), move |tx| {
+            let mut record = tx.resources().process(&target)?.expect("record");
+            let expected = record.revision;
+            record.phase = ProcessPhase::Uncertain;
+            record.revision += 1;
+            tx.resources().update_process(&record, expected)
+        })
+        .unwrap();
+        fx.h.advance(900_000);
+        let pass = supervisor.backup_if_due().unwrap().unwrap();
+        assert_eq!((pass.caught, pass.reminded), (0, 1), "{pass:?}");
+        let reminder = format!("Watcher reminder: watcher {watcher_id} ");
+        summary.answer(COMPLETED);
+
+        let next = request(&mut receive).await;
+        assert!(!next.is_compaction());
+        assert_eq!(
+            next.body["messages"].to_string().matches(&reminder).count(),
+            1,
+            "{}",
+            next.body["messages"]
+        );
+        next.answer(COMPLETED);
+        app.shutdown().await;
+    });
+}
+
 #[test]
 fn a_failed_provider_turn_redelivers_the_same_watcher_event() {
     let _native_case = native_runtime_case();

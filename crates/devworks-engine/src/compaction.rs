@@ -136,8 +136,13 @@ pub(crate) fn publish_compacted(
     let previous_epoch = binding.context_epoch.get();
     let (next, omitted) = omitted_native(&source.context, binding)?;
     let mut outstanding = outstanding_calls(store, ctx, session_id, &source.context)?;
-    let (observed, updates) = if ctx.workspace_reply().is_some() {
-        workspace_updates(store, session_id, source.observed_sequence)?
+    let (observed, updates) = if let Some(reply) = ctx.workspace_reply() {
+        workspace_updates(
+            store,
+            session_id,
+            source.observed_sequence,
+            reply.user_sequence,
+        )?
     } else {
         (source.observed_sequence, Vec::new())
     };
@@ -161,6 +166,8 @@ pub(crate) fn publish_compacted(
     );
     // A late operation update is outside the paid summary's exact source. Keep its original
     // call and response, then attach the original update to that response before advancing.
+    // A late watcher reminder is outside it too, and the advanced cursor hides it from later
+    // turns; it has no event row for the restore below, so carry its exact notice here.
     for body in updates {
         crate::tool_turn::append_context_fact(
             &mut compacted,
@@ -204,13 +211,9 @@ pub(crate) fn publish_compacted(
                 .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
             match &body {
                 TranscriptBody::UserMessage { .. } => Ok(Some(body)),
-                TranscriptBody::HostNotice { source, .. } if crate::watch::is_notice(&body) => {
-                    // The exact event was carried above. A reminder has no acknowledgement row.
-                    Ok(read
-                        .watchers()
-                        .watch_event(source)?
-                        .is_none()
-                        .then_some(body))
+                // The exact event was carried above. A reminder has no acknowledgement row.
+                TranscriptBody::HostNotice { .. } if crate::watch::is_notice(&body) => {
+                    Ok(is_reminder(read, &body)?.then_some(body))
                 }
                 _ => Err(StorageError::ScopeDenied),
             }
@@ -247,10 +250,25 @@ pub(crate) fn publish_compacted(
     )
 }
 
+/// A watcher reminder: a watcher notice without an event row. A delivered event is restored from
+/// its row; a reminder exists only in the transcript.
+fn is_reminder(read: &dyn ReadSnapshot, body: &TranscriptBody) -> Result<bool, StorageError> {
+    match body {
+        TranscriptBody::HostNotice { source, .. } if crate::watch::is_notice(body) => {
+            Ok(read.watchers().watch_event(source)?.is_none())
+        }
+        _ => Ok(false),
+    }
+}
+
+/// The advanced cursor and, in transcript order, the operation updates and watcher reminders
+/// after `observed`. The reminder at `reply_sequence` is left to the caller, which carries the
+/// input the reply answers.
 fn workspace_updates(
     store: &dyn ApplicationStore,
     session_id: &Id,
     observed: Option<i64>,
+    reply_sequence: i64,
 ) -> Result<(Option<i64>, Vec<TranscriptBody>), StorageError> {
     let observed = observed.ok_or(StorageError::ScopeDenied)?;
     read_snapshot(store, &ReadOptions::default(), |read| {
@@ -276,7 +294,22 @@ fn workspace_updates(
                 }
                 position = entry.sequence;
                 match entry.kind.as_str() {
-                    "UserMessage" | "HostNotice" => {}
+                    "UserMessage" => {}
+                    "HostNotice" => {
+                        if entry.sequence == reply_sequence {
+                            continue;
+                        }
+                        let body: TranscriptBody = serde_json::from_value(entry.body)
+                            .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+                        if is_reminder(read, &body)? {
+                            if updates.len() == 128 {
+                                return Err(StorageError::InvalidRecord(
+                                    "compaction reminder bound".into(),
+                                ));
+                            }
+                            updates.push(body);
+                        }
+                    }
                     "OperationUpdate" => {
                         let body: TranscriptBody = serde_json::from_value(entry.body)
                             .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
