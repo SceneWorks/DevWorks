@@ -295,12 +295,12 @@ async fn drive_agent_turn_once(
         && !cancellation.is_cancelled()
     {
         if result.is_ok() {
-            result = crate::code_review::complete(&engine, &ctx)
+            result = crate::code_review::complete(engine, ctx)
                 .await
                 .map_err(Into::into);
         }
         if result.is_err() {
-            let _ = crate::code_review::fail(&engine, &ctx).await;
+            let _ = crate::code_review::fail(engine, ctx).await;
         }
     } else if let Some(reviews) = reviews.as_mut() {
         // The active coordinator still owns any review discovered while its children drain.
