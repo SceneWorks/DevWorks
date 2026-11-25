@@ -201,7 +201,7 @@ impl Panel {
                         "Cancelling retention",
                         "maintenance.cancel",
                         move |b| {
-                            frame::with(b, Negotiate::Initial, || {
+                            frame::with(b, Negotiate::Latest, || {
                                 Some(OperationInput::Maintenance(api::Input::Cancel(
                                     api::CancelInput {
                                         preview_id,
@@ -283,7 +283,7 @@ impl Panel {
             "Reading retention preview",
             "maintenance.inspect",
             move |b| {
-                frame::with(b, Negotiate::Initial, || {
+                frame::with(b, Negotiate::Latest, || {
                     Some(OperationInput::Maintenance(api::Input::Inspect(
                         api::InspectInput { preview_id },
                     )))

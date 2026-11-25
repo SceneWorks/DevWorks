@@ -9408,42 +9408,42 @@ pub struct ImportRun {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Digest", extend("x-since" = 2))]
+    #[schemars(with = "Digest", extend("x-since" = 19))]
     pub preview_digest: Option<Digest>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Id", extend("x-since" = 2))]
+    #[schemars(with = "Id", extend("x-since" = 19))]
     pub source_namespace: Option<Id>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+    #[schemars(with = "ImportIntentMode", extend("x-since" = 19))]
     pub mode: Option<ImportIntentMode>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub updated_since_ms: Option<Counter>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub processed: Option<Counter>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub total: Option<Counter>,
 }
 impl Check for ImportRun {
@@ -9470,22 +9470,22 @@ impl Check for ImportRun {
 
 impl Revisioned for ImportRun {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.preview_digest = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.source_namespace = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.mode = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.updated_since_ms = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.processed = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.total = None;
         }
     }
@@ -9565,6 +9565,27 @@ impl Check for ImportedWorkEvidence {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedWorkEvidencePage {
+    pub items: Rows<ImportedWorkEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for ImportedWorkEvidencePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        crate::protocol::rules::record(
+            "ImportedWorkEvidencePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedCodeReference {
     pub repository_id: Id,
     pub view_id: Id,
@@ -9598,14 +9619,14 @@ pub struct ImportConfig {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 19))]
     pub all_projects: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 19))]
     pub allow_scheduled_delta: Option<bool>,
 }
 impl Check for ImportConfig {
@@ -9627,10 +9648,10 @@ impl Check for ImportConfig {
 
 impl Revisioned for ImportConfig {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.all_projects = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.allow_scheduled_delta = None;
         }
     }

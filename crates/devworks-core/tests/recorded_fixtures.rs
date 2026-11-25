@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2238), 2238);
+    assert_eq!(run("domain-fixtures.json", 2249), 2249);
 }
 
 #[test]
@@ -464,7 +464,11 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // bindings alongside the original revision-1 document operations.
     // Document re-extraction adds one revision-12 admission, and activity adds seven at revision 13.
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
-    assert_eq!(admitted.len(), 740);
+    // DW-434 moves the DW-54 import and DW-55 retention additions off the published revisions
+    // 1 and 2 to revision 19: imports.settings and imports.sync lose revisions 1 and 2,
+    // imports.history and imports.cancel lose revision 1, the three maintenance operations
+    // swap revision 1 for 19, and the four import operations gain 19, a net change of -2.
+    assert_eq!(admitted.len(), 738);
 }
 
 #[test]

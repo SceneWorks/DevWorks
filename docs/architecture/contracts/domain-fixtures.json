@@ -2143,29 +2143,29 @@
   },
   {
     "id": "input-imports.settings-Query",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.settings\",\"sourceNamespace\":\"id-a\"}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.settings\",\"sourceNamespace\":\"id-a\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-imports.history-Query",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.history\",\"page\":{\"limit\":20}}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.history\",\"page\":{\"limit\":20}},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-imports.cancel-Command",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.cancel\",\"runId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.cancel\",\"runId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-imports.sync-Command",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.sync\",\"configId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.sync\",\"configId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -2199,22 +2199,22 @@
   },
   {
     "id": "input-maintenance.inspect-Query",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"maintenance.inspect\",\"previewId\":\"id-a\"}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"maintenance.inspect\",\"previewId\":\"id-a\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-maintenance.cancel-Command",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.cancel\",\"previewId\":\"id-a\",\"expectedRevision\":\"1\"}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.cancel\",\"previewId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "input-maintenance.scheduled_prune-Command",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.scheduled_prune\",\"target\":\"Diagnostics\",\"maxItems\":20}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.scheduled_prune\",\"target\":\"Diagnostics\",\"maxItems\":20},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -4488,28 +4488,28 @@
   },
   {
     "id": "result-imports.settings",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.settings\",\"value\":{\"sourceNamespace\":\"id-a\",\"approved\":false,\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-imports.history",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.history\",\"value\":{\"items\":[],\"hasMore\":false}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-imports.cancel",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.cancel\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-imports.sync",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.sync\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}}}",
     "typedValid": true,
     "schemaValid": true
@@ -4544,21 +4544,21 @@
   },
   {
     "id": "result-maintenance.inspect",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"maintenance.inspect\",\"value\":{\"preview\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"},\"requestedCutoffMs\":\"0\",\"effectiveCutoffMs\":\"0\",\"capturedAtMs\":\"0\",\"maxItems\":20,\"held\":[],\"moreCandidates\":false,\"moreHeld\":false,\"phase\":\"Previewed\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-maintenance.cancel",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"maintenance.cancel\",\"value\":{\"preview\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"},\"requestedCutoffMs\":\"0\",\"effectiveCutoffMs\":\"0\",\"capturedAtMs\":\"0\",\"maxItems\":20,\"held\":[],\"moreCandidates\":false,\"moreHeld\":false,\"phase\":\"Previewed\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "result-maintenance.scheduled_prune",
-    "entry": "operation-result",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"maintenance.scheduled_prune\",\"value\":{\"preview\":{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Diagnostics\",\"candidateIds\":[],\"heldIds\":[],\"expiresAtMs\":\"0\"},\"requestedCutoffMs\":\"0\",\"effectiveCutoffMs\":\"0\",\"capturedAtMs\":\"0\",\"maxItems\":20,\"held\":[],\"moreCandidates\":false,\"moreHeld\":false,\"phase\":\"Previewed\"}}",
     "typedValid": true,
     "schemaValid": true
@@ -5888,15 +5888,15 @@
   },
   {
     "id": "reject-diagnostics-job-with-explicit-age",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.scheduled_prune\",\"target\":\"Diagnostics\",\"maxItems\":20,\"retentionDays\":30}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"maintenance.scheduled_prune\",\"target\":\"Diagnostics\",\"maxItems\":20,\"retentionDays\":30},\"schemaRevision\":19}",
     "typedValid": false,
     "schemaValid": true
   },
   {
     "id": "reject-retention-inspection-as-command",
-    "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"maintenance.inspect\",\"previewId\":\"id-a\"}}",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"maintenance.inspect\",\"previewId\":\"id-a\"},\"schemaRevision\":19}",
     "typedValid": false,
     "schemaValid": false
   },
@@ -6881,102 +6881,179 @@
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.preview",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.preview\",\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true},\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\"},\"schemaRevision\":2}",
+    "id": "dw54-r19-input-imports.preview",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.preview\",\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true},\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.preview",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.preview",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.preview\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.configure",
+    "id": "reject-dw54-r2-input-imports.preview",
     "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.configure\",\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true},\"approve\":true},\"schemaRevision\":2}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.preview\",\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true},\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-dw54-r2-result-imports.preview",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"imports.preview\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw54-r19-input-imports.configure",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.configure\",\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true},\"approve\":true},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.configure",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.configure",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.configure\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"changed\":false}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.apply",
+    "id": "reject-dw54-r2-input-imports.configure",
     "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.apply\",\"configId\":\"id-a\",\"expectedRevision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"schemaRevision\":2}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.configure\",\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true},\"approve\":true},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw54-r19-input-imports.apply",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.apply\",\"configId\":\"id-a\",\"expectedRevision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.apply",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.apply",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.apply\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.runs",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.runs\",\"page\":{\"limit\":20},\"sourceNamespace\":\"codegraph-source\"},\"schemaRevision\":2}",
+    "id": "reject-dw54-r2-result-imports.apply",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"imports.apply\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw54-r19-input-imports.runs",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.runs\",\"page\":{\"limit\":20},\"sourceNamespace\":\"codegraph-source\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.runs",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.runs",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.runs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}],\"hasMore\":false}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.inspect",
+    "id": "reject-dw54-r2-input-imports.runs",
     "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.inspect\",\"runId\":\"id-a\"},\"schemaRevision\":2}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.runs\",\"page\":{\"limit\":20},\"sourceNamespace\":\"codegraph-source\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-dw54-r2-result-imports.runs",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"imports.runs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw54-r19-input-imports.inspect",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.inspect\",\"runId\":\"id-a\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.inspect",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.inspect",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.inspect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.settings",
-    "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.settings\",\"sourceNamespace\":\"id-a\",\"proposal\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true}},\"schemaRevision\":2}",
+    "id": "reject-dw54-r2-result-imports.inspect",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"imports.inspect\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw54-r19-input-imports.settings",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.settings\",\"sourceNamespace\":\"id-a\",\"proposal\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true}},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.settings",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.settings",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.settings\",\"value\":{\"sourceNamespace\":\"id-a\",\"approved\":false,\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true}}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-input-imports.sync",
+    "id": "reject-dw54-r2-input-imports.settings",
     "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.sync\",\"configId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"imports.settings\",\"sourceNamespace\":\"id-a\",\"proposal\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true}},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-dw54-r2-result-imports.settings",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"imports.settings\",\"value\":{\"sourceNamespace\":\"id-a\",\"approved\":false,\"config\":{\"source\":{\"rootId\":\"id-a\",\"relative\":\"src/main.rs\"},\"projectIds\":[],\"workIds\":[],\"includeHistory\":false,\"includeGitLinks\":false,\"allowScheduledDelta\":true}}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "dw54-r19-input-imports.sync",
+    "entry": "domain-request.r19",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.sync\",\"configId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":19}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "dw54-r2-result-imports.sync",
-    "entry": "operation-result.r2",
+    "id": "dw54-r19-result-imports.sync",
+    "entry": "operation-result.r19",
     "raw": "{\"kind\":\"imports.sync\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
     "typedValid": true,
     "schemaValid": true
+  },
+  {
+    "id": "reject-dw54-r2-input-imports.sync",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"imports.sync\",\"configId\":\"id-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-dw54-r2-result-imports.sync",
+    "entry": "operation-result.r2",
+    "raw": "{\"kind\":\"imports.sync\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"sourceSnapshot\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"ObservedComplete\",\"importedIds\":[],\"report\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceNamespace\":\"codegraph-source\",\"mode\":\"Delta\",\"updatedSinceMs\":\"1000\",\"processed\":\"1\",\"total\":\"1\"}}",
+    "typedValid": false,
+    "schemaValid": false
   },
   {
     "id": "r2-input-history.work_lineage",
@@ -10017,42 +10094,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1431",
+    "id": "r3-preview-source-13-1442",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1431",
+    "id": "r3-delete-source-13-1442",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1433",
+    "id": "r3-preview-source-15-1444",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1433",
+    "id": "r3-delete-source-15-1444",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1435",
+    "id": "r3-preview-source-256-1446",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1435",
+    "id": "r3-delete-source-256-1446",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

@@ -789,12 +789,16 @@ pub enum OperationResult {
     ImportsRuns { value: Page<ImportRun> },
     #[serde(rename = "imports.inspect")]
     ImportsInspect { value: ImportRun },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.settings")]
     ImportsSettings { value: ImportSettingsView },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.history")]
-    ImportsHistory { value: Page<ImportedWorkEvidence> },
+    ImportsHistory { value: ImportedWorkEvidencePage },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.cancel")]
     ImportsCancel { value: MutationSummary },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.sync")]
     ImportsSync { value: ImportRun },
     #[serde(rename = "maintenance.prune_diagnostics")]
@@ -805,10 +809,13 @@ pub enum OperationResult {
     MaintenancePruneMessages { value: PrunePreview },
     #[serde(rename = "maintenance.prune_sessions")]
     MaintenancePruneSessions { value: PrunePreview },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.inspect")]
     MaintenanceInspect { value: PruneInspection },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.scheduled_prune")]
     MaintenanceScheduledPrune { value: PruneInspection },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.cancel")]
     MaintenanceCancel { value: PruneInspection },
     #[serde(rename = "repository_docs.generate")]
@@ -1950,6 +1957,27 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsSettings { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsHistory { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsCancel { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsSync { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::MaintenanceInspect { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::MaintenanceScheduledPrune { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::MaintenanceCancel { .. } if revision < 19 => {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCreate { .. } if revision < 8 => {

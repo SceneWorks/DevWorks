@@ -30,7 +30,15 @@ fn command_as(
     };
     let mut body = body;
     body["kind"] = json!(operation);
-    let frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":key,"body":body});
+    let mut frame = json!({"mode":"Command","protocol":"1.0-draft.1","requestKey":key,"body":body});
+    // The newest registered revision (DW-434 moved inspect, cancel and scheduled_prune to 19).
+    let revision = devworks_core::registry::find(operation)
+        .and_then(|d| d.revisions.last().copied())
+        .unwrap()
+        .0;
+    if revision > 1 {
+        frame["schemaRevision"] = json!(revision);
+    }
     match ingress
         .command(
             agent,
@@ -315,7 +323,7 @@ fn a_native_firing_keeps_its_original_operation_and_rechecks_current_job_authori
         let definition = json!({
             "kind":"Native","capabilityId":devworks_core::services::jobs::capability_id(capability),
             "arguments":{"schema":devworks_core::services::jobs::argument_schema(
-                capability,devworks_core::registry::SchemaRevision(1)).unwrap(),
+                capability,devworks_core::registry::SchemaRevision(19)).unwrap(),
                 "value":{"target":"Diagnostics","maxItems":1}}
         })
         .to_string();

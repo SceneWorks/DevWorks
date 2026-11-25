@@ -479,7 +479,8 @@ def domain(name,revision=2,**extra):
  obj=request(name,'Query')
  if revision is not None:obj['schemaRevision']=revision
  obj['body'].update(extra);return obj
-# The selected-work importer negotiates revision 2 on both native and scheduled paths.
+# The selected-work importer negotiates revision 19 on both native and scheduled paths; revisions 1
+# and 2 stay as published.
 import_config={**sample('ImportConfig'),'allowScheduledDelta':True}
 import_run={**sample('ImportRun'),'previewDigest':sample('Digest'),'sourceNamespace':'codegraph-source',
             'mode':'Delta','updatedSinceMs':'1000','processed':'1','total':'1'}
@@ -493,10 +494,15 @@ for name,fields,value in [
  ('imports.sync',{},import_run),
 ]:
  frame=request(name,OPS[name]['mode'])
- frame['schemaRevision']=2
+ frame['schemaRevision']=19
  frame['body'].update(fields)
- case('dw54-r2-input-'+name,'domain-request.r2',frame)
- case('dw54-r2-result-'+name,'operation-result.r2',{'kind':name,'value':value})
+ case('dw54-r19-input-'+name,'domain-request.r19',frame)
+ case('dw54-r19-result-'+name,'operation-result.r19',{'kind':name,'value':value})
+ # Revision 2 is published without these members and operations.
+ if fields or OPS[name].get('introducedRevision',1)>1:
+  case('reject-dw54-r2-input-'+name,'domain-request.r2',{**frame,'schemaRevision':2},False,False)
+ if name!='imports.configure':
+  case('reject-dw54-r2-result-'+name,'operation-result.r2',{'kind':name,'value':value},False,False)
 
 for name in ['history.work_lineage','history.git_links','history.evidence_links','history.tool_usage']:
  case('r2-input-'+name,'domain-request.r2',domain(name))

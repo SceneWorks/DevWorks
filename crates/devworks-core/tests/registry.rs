@@ -493,8 +493,6 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "imports.inspect",
             "imports.preview",
             "imports.runs",
-            "imports.settings",
-            "imports.sync",
             "documents.disable_retrieval",
             "documents.import",
             "documents.index",

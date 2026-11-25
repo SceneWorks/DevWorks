@@ -497,6 +497,10 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 }
             }
         }
+        "ImportedWorkEvidencePage" => require(
+            v["hasMore"] == present(v, "nextCursor"),
+            "imported evidence page continuation mismatch",
+        )?,
         "DiagnosticPage" => require(
             v["hasMore"] == present(v, "nextCursor"),
             "page continuation mismatch",
