@@ -2156,7 +2156,10 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         | "merge-base" | "check-attr" => true,
         "config" => rest.iter().all(|arg| {
             let name = arg.text.to_ascii_lowercase();
-            !arg.dynamic && !name.starts_with("tar.") && !name.starts_with("uploadarchive.")
+            !arg.dynamic
+                && name != "core.sshcommand"
+                && !name.starts_with("tar.")
+                && !name.starts_with("uploadarchive.")
         }),
         "archive" => {
             if rest.iter().any(|a| a.dynamic) {
@@ -3437,11 +3440,12 @@ mod transport_operand_tests {
     }
 
     #[test]
-    fn git_config_holds_archive_configuration() {
+    fn git_config_holds_configured_archive_and_ssh_commands() {
         for name in [
             "tar.example.command",
             "TAR.example.command",
             "uploadarchive.allowUnreachable",
+            "core.sshCommand",
         ] {
             let args = ["git", "config", name, ""].map(String::from);
             assert!(matches!(

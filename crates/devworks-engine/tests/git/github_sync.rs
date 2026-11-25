@@ -11,6 +11,7 @@ use devworks_core::protocol::{
 };
 use devworks_core::services::{
     UseCases,
+    agents::AgentService,
     approvals::ApprovalService,
     git::github::GitHubClient,
     git::helper::{HelperFault, HelperLimits, HelperRunner},
@@ -2011,6 +2012,8 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
     // Load triage_input for #50 and populate trusted checks from git commit OID!
     let mut input_50 = github.triage_input(&adm_50.operation).unwrap().unwrap();
     assert_eq!(input_50.destinations.len(), 2);
+    assert_eq!(input_50.title, "Report from the remote");
+    assert!(input_50.report.contains("panicked at empty host segment"));
     let manifest_bytes = std::fs::read(repo_dir.join(".devworks/github-checks.json")).unwrap();
     let parsed_checks = verification::parse_manifest(&manifest_bytes);
     assert_eq!(parsed_checks.len(), 1);
@@ -2083,6 +2086,51 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
         alpha_case_after.state,
         alpha_case_after.evidence
     );
+    let host = principal(
+        store.as_ref(),
+        "triage-coordinator-host",
+        PrincipalKind::Host,
+    );
+    let run_control = control.clone();
+    let agents = AgentService::new(h.ids.clone(), control.clone());
+    let (agent, session) = write(store.as_ref(), move |tx| {
+        let claimed = run_control
+            .claim_activation(tx, &id("triage-runner"))?
+            .unwrap();
+        let running = run_control
+            .start_activation(tx, &claimed.id, claimed.owner_epoch)?
+            .unwrap();
+        let agent = agents
+            .materialize_primary(tx, &host, &running.id, running.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+        let assignment = tx.runs().assignment(&agent.assignment_id)?.unwrap();
+        let session = tx.sessions().session(&assignment.session_id)?.unwrap();
+        Ok((agent, session))
+    })
+    .unwrap();
+    assert_eq!(agent.root_id, alpha_case_after.work_id);
+    let ctx = HostIngress::new(store.as_ref())
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("triage-coordinator-invocation"),
+            id("triage-coordinator-ingress"),
+            Counter::new(store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(
+            session.project_id,
+            session.root_id,
+            Some(agent.assignment_id.clone()),
+        );
+    let context =
+        devworks_engine::agent_turns::initial_context(store.as_ref(), &ctx, &agent).unwrap();
+    let messages = serde_json::to_string(&context.messages).unwrap();
+    assert!(messages.contains("GitHub issue #50"));
+    assert!(messages.contains("https://github.com/Acme/kit/issues/50"));
+    assert!(!messages.contains("Report from the remote"));
+    assert!(!messages.contains("panicked at empty host segment"));
 
     // Advance 600s to admit #51, and test remote/unavailable Docker daemon + setup failure -> AwaitingDecision!
     h.advance(600_000);
