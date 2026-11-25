@@ -1021,6 +1021,7 @@ forged=request('browser.sessions','Command');forged['schemaRevision']=3;forged['
 case('reject-model-supplied-browser-source','domain-request.r3',forged,False,False)
 pr={'protocol':'1.0-draft.1','schemaRevision':2,'requestKey':'group-pr','command':{'kind':'OpenPullRequest','repositoryId':'repo-a','headRef':'refs/heads/task-a','baseRef':'refs/heads/feature-a','expectedHead':BASE['GitOid'],'description':ART,'coveredWorkIds':['task-a','task-b']}}
 case('r2-input-git.pull_request','git-command-request.r2',pr)
+case('r16-input-git.pull_request','git-command-request.r16',{**pr,'schemaRevision':16})
 case('r2-result-git.pull_request','operation-result.r2',result('git.pull_request',LEGACY_RESULTS['git.pull_request']))
 publication={'protocol':'1.0-draft.1','schemaRevision':16,'requestKey':'feature-task-publication','command':{
  'kind':'Push','worktreeId':'feature-tree','remoteId':'origin','targetRef':'refs/heads/feature/fixture',

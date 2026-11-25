@@ -10367,6 +10367,13 @@
     "schemaValid": true
   },
   {
+    "id": "r16-input-git.pull_request",
+    "entry": "git-command-request.r16",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":16,\"requestKey\":\"group-pr\",\"command\":{\"kind\":\"OpenPullRequest\",\"repositoryId\":\"repo-a\",\"headRef\":\"refs/heads/task-a\",\"baseRef\":\"refs/heads/feature-a\",\"expectedHead\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"description\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"coveredWorkIds\":[\"task-a\",\"task-b\"]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "r2-result-git.pull_request",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"git.pull_request\",\"value\":{\"repositoryId\":\"id-a\",\"workId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}",
