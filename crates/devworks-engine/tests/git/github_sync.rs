@@ -1687,6 +1687,7 @@ impl HelperRunner for ScriptedDockerHelpers {
             let mode = self.docker_mode.lock().unwrap();
             return match *mode {
                 DockerOutcome::RemoteDaemon => Ok(b"tcp://10.0.0.5:2375\n".to_vec()),
+                _ if cfg!(windows) => Ok(b"npipe:////./pipe/docker_engine\n".to_vec()),
                 _ => Ok(b"unix:///var/run/docker.sock\n".to_vec()),
             };
         }
@@ -1735,7 +1736,7 @@ impl HelperRunner for ScriptedDockerHelpers {
                 let proc_id = tx.new_id(IdKind::Process);
                 let mut row = tx.resources().insert_process(NewProcess {
                     id: proc_id,
-                    platform: "unix".into(),
+                    platform: if cfg!(windows) { "windows" } else { "unix" }.into(),
                     program: "docker".into(),
                     argv_sha256,
                     operation_id: Some(op_copy),

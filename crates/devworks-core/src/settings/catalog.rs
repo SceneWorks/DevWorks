@@ -234,8 +234,6 @@ impl AgentRole {
 /// [`NOT_YET_ACTIVE_PREFIX`] and says what is missing; Settings marks the row not yet active.
 /// Remove a key here, and the prefix from its description, in the change that makes it work.
 pub const NOT_YET_ACTIVE: &[&str] = &[
-    // Exact-head review resolution, the review/fix cycle and merge: DW-41.
-    "delivery.autoMerge",
     // Vision extraction of scanned documents: DW-288.
     "knowledge.visionExtraction",
 ];
