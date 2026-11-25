@@ -236,6 +236,11 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
             query: "state=all",
             result: exchange(200, json!([issue("open", "2023-11-14T22:16:22Z")]), &[]),
         },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([issue("open", "2023-11-14T22:17:22Z")]), &[]),
+        },
     ]))));
     let git = service(&h, &store, script.clone());
     let actor = principal(store.as_ref(), "github-human", PrincipalKind::Human);
@@ -359,7 +364,7 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
         admitted.clock.next_admission_at_ms,
         T0 + 195_000 + 1_800_000
     );
-    assert!(git.admit_triage(control).unwrap().is_none());
+    assert!(git.admit_triage(control.clone()).unwrap().is_none());
     let ready = read(store.as_ref(), |snapshot| {
         snapshot.queue().deliveries(
             &DeliveryFilter {
@@ -371,6 +376,44 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
         )
     });
     assert_eq!(ready.entries.len(), 1);
+    let old_input = git.triage_input(&admitted.operation).unwrap().unwrap();
+    h.advance(60_000);
+    assert!(matches!(
+        git.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    let revised = read(store.as_ref(), |snapshot| {
+        snapshot.github().github_issue(&key, &scope)
+    })
+    .unwrap();
+    assert_eq!(revised.state, "Queued");
+    assert_eq!(revised.operation_id.as_ref(), Some(&admitted.operation.id));
+    assert_ne!(revised.remote_revision, reopened.remote_revision);
+    assert!(git.triage_input(&admitted.operation).unwrap().is_none());
+
+    h.advance(1_740_000);
+    assert!(
+        git.admit_triage(control.clone()).unwrap().is_none(),
+        "a requeued report waits for the earlier operation to settle"
+    );
+    let work = WorkService::new(h.ids.clone(), control.clone());
+    write(store.as_ref(), move |tx| {
+        let completed = mark_operation_complete(tx, &admitted.operation.id)?;
+        settle_classification(
+            tx,
+            &work,
+            &completed,
+            &old_input,
+            &TriageClassification::FeatureRequest,
+        )
+    })
+    .unwrap();
+    let next = git.admit_triage(control).unwrap().unwrap();
+    assert_eq!(next.issue.key, key);
+    assert_eq!(
+        next.operation.payload["sourceRevision"],
+        revised.remote_revision
+    );
     let head = |oid: &str| {
         json!({
             "ref": "refs/heads/main", "object":{"type":"commit", "sha":oid}

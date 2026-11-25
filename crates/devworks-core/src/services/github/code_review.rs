@@ -14,12 +14,14 @@ pub struct CodeReviewQuery<'a> {
     pub pull_number: &'a str,
     pub head: &'a str,
     pub bot_id: u64,
+    pub fresh_after_ms: Option<i64>,
 }
 
 #[derive(Debug)]
 pub enum CodeReviewObservation {
     Waiting,
     Failed,
+    Dismissed,
     Unavailable,
     Stale,
     Completed {
@@ -122,14 +124,17 @@ pub(crate) fn code_review_observation(
             row.payload["submittedAt"]
                 .as_str()
                 .and_then(|value| value.parse::<jiff::Timestamp>().ok())
-                .is_some_and(|at| at.as_millisecond() <= complete_through)
+                .map(|at| at.as_millisecond())
+                .is_some_and(|at| {
+                    at <= complete_through && query.fresh_after_ms.is_none_or(|after| at > after)
+                })
         })
         .max_by_key(|row| (row.payload["submittedAt"].as_str(), row.observed_at_ms));
     let Some(review) = review else {
         return Ok(CodeReviewObservation::Waiting);
     };
     if review.payload["state"] == "DISMISSED" {
-        return Ok(CodeReviewObservation::Failed);
+        return Ok(CodeReviewObservation::Dismissed);
     }
     let declared_comments = match review.payload["state"].as_str() {
         Some("APPROVED" | "CHANGES_REQUESTED") => None,

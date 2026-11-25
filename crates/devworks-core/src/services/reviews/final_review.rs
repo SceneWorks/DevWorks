@@ -30,6 +30,8 @@ pub(super) struct FinalRound {
     pub settings_digest: String,
     pub bot_id: Option<u64>,
     pub requested_at_ms: i64,
+    #[serde(default)]
+    pub fresh_bot_after_ms: Option<i64>,
     pub deadline_ms: i64,
     pub head_digest: Digest,
     pub fallback_requested: bool,
@@ -408,6 +410,19 @@ impl ReviewService {
                 },
                 evidence: BoundedList(Vec::new()),
             });
+            // A bot review identifies the head but carries no base commit. Require a
+            // new submission when an earlier review of this head used a different base.
+            let reused_head = settings.github_bot_id.is_some()
+                && previous.iter().any(|state| {
+                    state.final_rounds.iter().any(|prior| {
+                        prior.repository_id == entry.repository_id && prior.pull_number == number
+                    }) && matches!(&state.target, ReviewTarget::PullRequests { barrier }
+                    if barrier.repositories.iter().any(|prior| {
+                        prior.repository_id == entry.repository_id
+                            && prior.expected_head == entry.expected_head
+                            && prior.observed_base != entry.observed_base
+                    }))
+                });
             rounds.push(FinalRound {
                 repository_id: entry.repository_id.clone(),
                 pull_id: entry.pull_request_id.clone(),
@@ -416,6 +431,7 @@ impl ReviewService {
                 settings_digest: settings.digest,
                 bot_id: settings.github_bot_id,
                 requested_at_ms: now,
+                fresh_bot_after_ms: reused_head.then_some(now),
                 deadline_ms: now.saturating_add(settings.wait_seconds.saturating_mul(1000)),
                 head_digest,
                 fallback_requested: settings.github_bot_id.is_none(),

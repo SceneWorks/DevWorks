@@ -603,6 +603,11 @@ pub(super) fn capture(
     row.revision += 1;
     row.remote_revision = observation.id.as_str().into();
     row.observation_id = observation.id;
+    if row.state == "Triaging" {
+        // Keep the old operation attached until it settles. It can no longer classify this
+        // revision, and the next paced admission will wait for its terminal receipt.
+        row.state = "Queued".into();
+    }
     tx.github().put_github_issue(&row, revision)?;
     if let Some(prev) = &previous
         && (!tx

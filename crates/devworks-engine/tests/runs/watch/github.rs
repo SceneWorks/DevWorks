@@ -251,6 +251,8 @@ fn a_github_run_shares_conditional_polls_and_the_backup_reads_it_directly() {
 struct RecordedPull {
     requests: Mutex<Vec<String>>,
     suite_queued: std::sync::atomic::AtomicBool,
+    workflow_conclusion: Option<&'static str>,
+    suite_conclusion: Option<&'static str>,
 }
 
 const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -284,10 +286,17 @@ impl HttpTransport for RecordedPull {
         } else if path.contains("/check-suites?") {
             let queued = self.suite_queued.load(std::sync::atomic::Ordering::Relaxed);
             json!({"total_count":1,"check_suites":[
-                {"id":3,"head_sha":HEAD,"status":if queued {"queued"} else {"completed"}}
+                {"id":3,"head_sha":HEAD,"status":if queued {"queued"} else {"completed"},
+                    "conclusion":if queued {None} else {self.suite_conclusion.or(Some("success"))}}
             ]})
         } else if path.contains("/actions/runs?") {
-            json!({"total_count":0,"workflow_runs":[]})
+            if let Some(conclusion) = self.workflow_conclusion {
+                json!({"total_count":1,"workflow_runs":[
+                    {"id":4,"head_sha":HEAD,"status":"completed","conclusion":conclusion}
+                ]})
+            } else {
+                json!({"total_count":0,"workflow_runs":[]})
+            }
         } else {
             panic!("unexpected request {path}");
         };
@@ -303,10 +312,28 @@ impl HttpTransport for RecordedPull {
 
 #[test]
 fn pr_check_settlement_waits_for_pending_suites_and_honors_head_pacing() {
+    pr_check_settlement(None, None, "Succeeded");
+}
+
+#[test]
+fn pr_check_settlement_counts_failed_workflows_and_suites() {
+    pr_check_settlement(Some("startup_failure"), None, "Failed");
+    pr_check_settlement(None, Some("failure"), "Failed");
+}
+
+fn pr_check_settlement(
+    workflow_conclusion: Option<&'static str>,
+    suite_conclusion: Option<&'static str>,
+    expected: &str,
+) {
     let _native_case = native_runtime_case();
     runtime().block_on(async {
         let fx = Fx::new();
-        let wire = Arc::new(RecordedPull::default());
+        let wire = Arc::new(RecordedPull {
+            workflow_conclusion,
+            suite_conclusion,
+            ..Default::default()
+        });
         wire.suite_queued.store(true, std::sync::atomic::Ordering::Relaxed);
         let client = Arc::new(GitHubClient {
             http: wire.clone(),
@@ -336,7 +363,7 @@ fn pr_check_settlement_waits_for_pending_suites_and_honors_head_pacing() {
         wire.suite_queued.store(false, std::sync::atomic::Ordering::Relaxed);
         fx.h.advance(30_000);
         assert_eq!(supervisor.settle().unwrap(), 1);
-        assert_eq!(event().unwrap().payload["outcome"]["kind"], "Succeeded");
+        assert_eq!(event().unwrap().payload["outcome"]["kind"], expected);
         app.shutdown().await;
     });
 }
@@ -483,12 +510,24 @@ impl HttpTransport for RecordedCodeReviews {
 
 #[test]
 fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair() {
-    final_review_case(false);
+    final_review_case(ReviewExercise::Repair);
 }
 
 #[test]
 fn native_final_review_recovers_one_fallback_and_holds_while_its_late_bot_result_arrives() {
-    final_review_case(true);
+    final_review_case(ReviewExercise::RecoverFallback);
+}
+
+#[test]
+fn native_final_review_requires_fresh_bot_evidence_after_base_change_and_honors_dismissal() {
+    final_review_case(ReviewExercise::BaseChangeAndDismissal);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReviewExercise {
+    Repair,
+    RecoverFallback,
+    BaseChangeAndDismissal,
 }
 
 #[derive(Default)]
@@ -535,7 +574,9 @@ impl StreamingHttp for ReviewFallback {
     }
 }
 
-fn final_review_case(recover: bool) {
+fn final_review_case(exercise: ReviewExercise) {
+    let recover = exercise == ReviewExercise::RecoverFallback;
+    let change_base = exercise == ReviewExercise::BaseChangeAndDismissal;
     use crate::code_review_tests::git;
     use devworks_core::authority::destructive::FilesystemResolver;
     use devworks_core::ports::storage::{
@@ -631,8 +672,8 @@ fn final_review_case(recover: bool) {
                 let schema = |key| devworks_core::settings::catalog::descriptor(key).unwrap().schema_ref();
                 tx.configuration().append_revision(&scope, "settings", 1, 1,
                     json!({"values":{"reviews.githubBotId":{"schema":schema(bot),"value":42},
-                        "delivery.maxReviewFixCycles":{"schema":schema("delivery.maxReviewFixCycles"),"value":1},
-                        "reviews.automationWaitSeconds":{"schema":schema("reviews.automationWaitSeconds"),"value":1}
+                        "delivery.maxReviewFixCycles":{"schema":schema("delivery.maxReviewFixCycles"),"value":if change_base {2} else {1}},
+                        "reviews.automationWaitSeconds":{"schema":schema("reviews.automationWaitSeconds"),"value":if change_base {120} else {1}}
                     }}))?;
                 tx.work().set_work_repositories(&root.0, std::slice::from_ref(&repository))?;
                 tx.git().insert_git_worktree(&worktree)?;
@@ -810,6 +851,92 @@ fn final_review_case(recover: bool) {
         });
         assert_eq!(review.body["value"]["sources"][0]["head"], json!(oid(&head)));
         assert_eq!(review.body["value"]["sources"][0]["zeroFindingsConfirmed"], true);
+
+        if change_base {
+            std::fs::write(source.join("base-only"), "New base").unwrap();
+            git(source, &["add", "base-only"]);
+            git(source, &["commit", "-qm", "Advance base without changing PR head"]);
+            let new_base = git(source, &["rev-parse", "HEAD"]);
+            fx.tx({
+                let (remote, head, new_base) = (remote.clone(), head.clone(), new_base.clone());
+                move |_,tx| {
+                    tx.github().append_github_observation(&StoredGithubObservation {
+                        id:id("observed-pr-new-base"),repository_id:remote,kind:"PullRequest".into(),
+                        subject_id:"42".into(),remote_revision:"new-base".into(),url:pull.into(),head:Some(head),
+                        payload:json!({"resourceId":25,"state":"open","baseRef":"main","baseHead":new_base}),
+                        source_updated_at_ms:Some(T0+1),observed_at_ms:T0,
+                    })?;
+                    Ok(())
+                }
+            });
+            let mut changed = barrier.clone();
+            changed["revision"] = json!("2");
+            changed["repositories"][0]["observedBase"] = json!(oid(&new_base));
+            let response = app.command(&fx.user, "reviews.request", json!({
+                "mode":"Command","protocol":PROTOCOL,"schemaRevision":15,
+                "requestKey":"native-final-review-new-base",
+                "body":{"kind":"reviews.request","rootId":root,"expectedRevision":"1","policyRevision":"1","barrier":changed}
+            }).to_string().as_bytes()).unwrap();
+            let CommandReply::Recorded {receipt,..} = response else { panic!("{response:?}") };
+            let DomainDecision::Accepted {operation_id} = receipt.decision else { panic!("{receipt:?}") };
+            let second = read(&*fx.store, |s| s.operations().operation(&operation_id)).unwrap();
+            let review_service = devworks_core::services::reviews::ReviewService::new(
+                fx.h.ids.clone(), fx.store.clone(), app.git().unwrap().clone(), app.artifacts().clone(),
+                fx.h.clock(), None,
+            );
+            review_service.poll_final_review(&second, false).unwrap();
+            assert!(matches!(readiness("await-fresh-bot", &changed), DomainQueryReply::Result {
+                result:OperationResult::ReviewsReadiness {value}, ..
+            } if !value.ready));
+
+            let record_bot_review = |state: &'static str, observed: i64| {
+                let (remote, head) = (remote.clone(), head.clone());
+                fx.tx(move |_,tx| {
+                    tx.github().append_github_observation(&StoredGithubObservation {
+                        id: id(if state == "DISMISSED" { "dismissed-new-review" } else { "approved-new-review" }),
+                        repository_id: remote.clone(), kind: "Review".into(), subject_id: "42".into(),
+                        remote_revision: state.into(), url: format!("{pull}#pullrequestreview-16"),
+                        head: Some(head.clone()),
+                        payload: json!({"resourceId":"16","authorId":42,"authorType":"Bot",
+                            "state":state,"submittedAt":"2023-11-14T22:13:21Z"}),
+                        source_updated_at_ms: None, observed_at_ms: observed,
+                    })?;
+                    for kind in ["Review", "ReviewComment"] {
+                        let key = format!("pull:42:{head}:{kind}");
+                        let mut row = tx.github().github_poll_cursor(&remote, &key)?.unwrap();
+                        let revision = row.revision;
+                        row.revision += 1;
+                        row.last_polled_at_ms = Some(observed);
+                        tx.github().put_github_poll_cursor(&row, Some(revision))?;
+                    }
+                    Ok(())
+                });
+            };
+            fx.h.advance(2_000);
+            record_bot_review("APPROVED", T0+2_000);
+            review_service.poll_final_review(&second, false).unwrap();
+            assert!(matches!(readiness("fresh-bot-ready", &changed), DomainQueryReply::Result {
+                result:OperationResult::ReviewsReadiness {value}, ..
+            } if value.ready));
+
+            within("the fresh review's operation settles", async {
+                while read(&*fx.store, |s| s.operations().operation(&operation_id)).unwrap().state
+                    != OperationState::ObservedComplete {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await;
+            fx.h.advance(1_000);
+            record_bot_review("DISMISSED", T0+3_000);
+            assert!(matches!(readiness("dismissed-bot-blocked", &changed), DomainQueryReply::Result {
+                result:OperationResult::ReviewsReadiness {value}, ..
+            } if !value.ready));
+            review_service.reconcile_late_page(None).unwrap();
+            let review_id = serde_json::from_value(second.payload["reviewId"].clone()).unwrap();
+            let dropped = read(&*fx.store, |s| s.git().code_review(&review_id)).unwrap();
+            assert_eq!(dropped.body["value"]["sources"][0]["state"], "Failed");
+            app.shutdown().await;
+            return;
+        }
 
         let changed_path = "ci/retry.env";
         std::fs::create_dir(location.join("ci")).unwrap();
