@@ -105,9 +105,10 @@ fn feature_task_publication(recovery: Recovery) {
     runtime().block_on(async {
         let project = ProjectId(id("project-a"));
         let repository = id("feature-delivery-repo");
-        let source = fx.h.root.join("source");
-        let remote = fx.h.root.join("remote.git");
-        let worktrees = fx.h.root.join("owned");
+        let fixture_root = std::fs::canonicalize(&fx.h.root).unwrap();
+        let source = fixture_root.join("source");
+        let remote = fixture_root.join("remote.git");
+        let worktrees = fixture_root.join("owned");
         std::fs::create_dir(&source).unwrap();
         std::fs::create_dir(&worktrees).unwrap();
         git(&source,&["init","-qb","main"]);

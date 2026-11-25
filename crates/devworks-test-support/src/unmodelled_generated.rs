@@ -1216,6 +1216,14 @@ impl GithubRead for Unmodelled {
     ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
         unmodelled()
     }
+    fn github_bound_registrations(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<Id>, StorageError> {
+        unmodelled()
+    }
     fn github_repository_binding_history(
         &self,
         _: &Id,

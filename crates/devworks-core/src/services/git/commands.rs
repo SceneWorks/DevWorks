@@ -4,6 +4,9 @@ mod attach;
 mod auto_cleanup;
 pub(super) use auto_cleanup::CleanupSchedule;
 mod delivery;
+pub(crate) use delivery::{
+    already_merged_review_repositories, qualifies_github_resolution_after_cleanup,
+};
 mod feature_delivery;
 pub(crate) use feature_delivery::{
     feature_head_digest, requires_local_integration, waits_for_publication,
@@ -53,6 +56,8 @@ struct Job {
     policy_revision: i64,
     repository_revision: i64,
     work_revision: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_scope_revision: Option<i64>,
     root_epochs: Vec<(RootId, i64)>,
     assignment_generation: Option<i64>,
     delivery_id: Id,
@@ -583,7 +588,8 @@ impl GitService {
                 };
                 let (reservation, work) = delivery::reserve_delivery(tx, ctx, &op, &input.command)?;
                 let selected = reservation.repository(repository_id)?;
-                let (tree, repository, source) = self.pr_command(tx, ctx, &selected.worktree)?;
+                let (tree, repository, source) =
+                    self.pr_command(tx, ctx, &selected.worktree, true)?;
                 if source != work || repository.revision != selected.registration_revision {
                     return Err(StorageError::ScopeDenied.into());
                 }
@@ -607,8 +613,8 @@ impl GitService {
                     .work()
                     .work(&recorded.work_id)?
                     .ok_or(StorageError::ScopeDenied)?;
-                let (tree, repository, work) = if Self::pr_manager(tx, ctx, &scoped)? {
-                    self.pr_command(tx, ctx, worktree_id)?
+                let (tree, repository, work) = if Self::pr_manager(tx, ctx, &scoped, false)? {
+                    self.pr_command(tx, ctx, worktree_id, false)?
                 } else {
                     self.owned_command(tx, ctx, worktree_id)?
                 };
@@ -736,6 +742,8 @@ impl GitService {
             policy_revision: ctx.policy_revision().get(),
             repository_revision: repository.revision,
             work_revision: work.revision,
+            work_scope_revision: matches!(&action, Action::Integrate)
+                .then_some(work.scope_revision),
             root_epochs,
             assignment_generation,
             fences,
@@ -890,9 +898,11 @@ impl GitService {
                 return Err(StorageError::ScopeDenied);
             }
             let brief = crate::services::work::model::WorkBrief::of(&work)?;
-            let managing = (matches!(j.action, Action::PullRequest { .. } | Action::Integrate)
+            let final_delivery = matches!(j.action, Action::Integrate);
+            let managing = (final_delivery
+                || matches!(j.action, Action::PullRequest { .. })
                 || (matches!(j.action, Action::Cleanup) && j.cleanup_proof.is_some()))
-                && Self::pr_manager(tx, &c, &work)?;
+                && Self::pr_manager(tx, &c, &work, final_delivery)?;
             if let Action::PullRequest {
                 covered,
                 final_feature,

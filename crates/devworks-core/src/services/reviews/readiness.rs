@@ -8,7 +8,7 @@ use crate::protocol::Id;
 use crate::protocol::provider::Digest;
 use crate::protocol::records::{
     CodeReviewResolution, LocalReviewTarget, ReviewFinding, ReviewObservationState,
-    ReviewReadiness, ReviewState,
+    ReviewReadiness, ReviewSourceKind, ReviewState,
 };
 use crate::protocol::support::BoundedList;
 use crate::services::github::code_review::{
@@ -236,14 +236,48 @@ impl ReviewService {
                     out.blocker_ids.0.push(saved.value.id.clone());
                     continue;
                 }
-                let source = saved.value.sources.0.iter().find(|source| {
+                let mut sources = saved.value.sources.0.iter().filter(|source| {
                     source.repository_id == entry.repository_id
                         && matches!(source.state, ReviewObservationState::Completed)
                 });
-                let Some(source) = source else {
+                let Some(mut source) = sources.next() else {
                     out.blocker_ids.0.push(saved.value.id.clone());
                     continue;
                 };
+                if let Some(bot_id) = round.bot_id {
+                    let number = round.pull_number.to_string();
+                    let query = CodeReviewQuery {
+                        project: &root.project_id,
+                        repository: &entry.repository_id,
+                        head: &source.head.hex,
+                        pull_number: &number,
+                        bot_id,
+                        fresh_after_ms: round.fresh_bot_after_ms,
+                    };
+                    match code_review_observation(snapshot, &query)? {
+                        CodeReviewObservation::Completed { review, comments }
+                            if round.observed_ids.first() != Some(&review.id)
+                                || comments
+                                    .iter()
+                                    .any(|comment| !round.observed_ids.contains(&comment.id)) =>
+                        {
+                            out.blocker_ids.0.push(saved.value.id.clone());
+                            continue;
+                        }
+                        CodeReviewObservation::Dismissed
+                            if matches!(source.source_kind, ReviewSourceKind::GitHubAutomation) =>
+                        {
+                            let Some(independent) = sources.find(|other| {
+                                !matches!(other.source_kind, ReviewSourceKind::GitHubAutomation)
+                            }) else {
+                                out.blocker_ids.0.push(saved.value.id.clone());
+                                continue;
+                            };
+                            source = independent;
+                        }
+                        _ => {}
+                    }
+                }
                 if source.head != entry.expected_head {
                     let Some(repair) = saved.verified_candidates.iter().find(|repair| {
                         repair.repository_id == entry.repository_id
@@ -254,26 +288,6 @@ impl ReviewService {
                         continue;
                     };
                     repairs.push(repair.clone());
-                }
-                if let Some(bot_id) = round.bot_id {
-                    let number = round.pull_number.to_string();
-                    let query = CodeReviewQuery {
-                        project: &root.project_id,
-                        repository: &entry.repository_id,
-                        head: &source.head.hex,
-                        pull_number: &number,
-                        bot_id,
-                    };
-                    if let CodeReviewObservation::Completed { review, comments } =
-                        code_review_observation(snapshot, &query)?
-                        && (round.observed_ids.first() != Some(&review.id)
-                            || comments
-                                .iter()
-                                .any(|comment| !round.observed_ids.contains(&comment.id)))
-                    {
-                        out.blocker_ids.0.push(saved.value.id.clone());
-                        continue;
-                    }
                 }
                 out.review_ids.0.push(saved.value.id.clone());
                 for earlier in states.iter().filter(|state| {

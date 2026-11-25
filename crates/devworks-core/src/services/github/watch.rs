@@ -154,7 +154,7 @@ impl GitHubService {
             .observe_authenticated_page(&endpoint, None, validators, now, POLL_INTERVAL_MS, token)
             .map_err(repositories::api_fault)?;
         let due = page.control.poll_after_ms;
-        self.update_watch_pacing(account, &page);
+        self.note_poll_pacing(account, &page);
         let observation =
             decode_run(page, target, run, validators.is_some()).map_err(repositories::api_fault)?;
         Ok((observation, due))
@@ -171,7 +171,7 @@ impl GitHubService {
         let fallback = now.saturating_add(POLL_INTERVAL_MS);
         let number_text = number.to_string();
         let head_page = self.observe_pull_head_page(target, &number_text)?;
-        self.update_watch_pacing(account, &head_page);
+        self.note_poll_pacing(account, &head_page);
         if head_page.throttled() {
             return Ok((RunObservation::Deferred, head_page.control.poll_after_ms));
         }
@@ -281,16 +281,20 @@ impl GitHubService {
         if value["sha"].as_str() != Some(&head) {
             return Err(repositories::api_fault(Fault::InvalidResponse));
         }
-        match (value["total_count"].as_u64(), value["state"].as_str()) {
-            (Some(0), _) => {}
-            (Some(_), Some("success")) => statuses.passed = true,
-            (Some(_), Some("failure" | "error")) => statuses.failed = true,
-            (Some(_), Some("pending")) => statuses.pending = true,
+        let commit_statuses = value["total_count"]
+            .as_u64()
+            .ok_or_else(|| repositories::api_fault(Fault::InvalidResponse))?;
+        match (commit_statuses, value["state"].as_str()) {
+            (0, _) => {}
+            (_, Some("success")) => statuses.passed = true,
+            (_, Some("failure" | "error")) => statuses.failed = true,
+            (_, Some("pending")) => statuses.pending = true,
             _ => return Err(repositories::api_fault(Fault::InvalidResponse)),
         }
-        if statuses.pending || seen.is_empty() && !statuses.passed && !statuses.failed {
+        if statuses.pending {
             return Ok((RunObservation::Changed(None, None), fallback));
         }
+        let mut has_evidence = !seen.is_empty() || commit_statuses != 0;
         for evidence in [Evidence::CheckSuite, Evidence::WorkflowRun] {
             let (mut path, member) = evidence.endpoint(&number_text, &head);
             if !path.ends_with('?') {
@@ -337,15 +341,12 @@ impl GitHubService {
                     {
                         return Err(repositories::api_fault(Fault::InvalidResponse));
                     }
-                    match row["status"].as_str() {
-                        Some("completed") => {}
-                        Some("queued" | "in_progress" | "requested" | "waiting" | "pending") => {
-                            return Ok((
-                                RunObservation::Changed(None, None),
-                                page.control.poll_after_ms,
-                            ));
-                        }
-                        _ => return Err(repositories::api_fault(Fault::InvalidResponse)),
+                    statuses.record(row).map_err(repositories::api_fault)?;
+                    if statuses.pending {
+                        return Ok((
+                            RunObservation::Changed(None, None),
+                            page.control.poll_after_ms,
+                        ));
                     }
                 }
                 next = page.next_page;
@@ -356,6 +357,10 @@ impl GitHubService {
             if next.is_some() || Some(ids.len() as u64) != total {
                 return Err(repositories::api_fault(Fault::InvalidResponse));
             }
+            has_evidence |= !ids.is_empty();
+        }
+        if !has_evidence {
+            return Ok((RunObservation::Changed(None, None), fallback));
         }
         if self.is_stopped() {
             return Err(StorageError::Cancelled.into());
@@ -367,7 +372,7 @@ impl GitHubService {
             return Ok(self.deferred_watch(account));
         }
         let head_page = self.observe_pull_head_page(target, &number_text)?;
-        self.update_watch_pacing(account, &head_page);
+        self.note_poll_pacing(account, &head_page);
         if head_page.throttled() {
             return Ok((RunObservation::Deferred, head_page.control.poll_after_ms));
         }
@@ -421,11 +426,11 @@ impl GitHubService {
                 token.clone(),
             )
             .map_err(repositories::api_fault)?;
-        self.update_watch_pacing(account, &page);
+        self.note_poll_pacing(account, &page);
         Ok(Some(page))
     }
 
-    fn update_watch_pacing(&self, account: &PollAccount, page: &ApiPage) {
+    pub(super) fn note_poll_pacing(&self, account: &PollAccount, page: &ApiPage) {
         if let Some(until) = page.shared_backoff() {
             self.defer_polls(account.clone(), until);
         }
@@ -457,20 +462,12 @@ struct Checks {
 
 impl Checks {
     fn record(&mut self, check: &Value) -> Result<(), Fault> {
-        match (check["status"].as_str(), check["conclusion"].as_str()) {
-            (Some("completed"), Some("success")) => self.passed = true,
-            (Some("completed"), Some("neutral" | "skipped")) => {}
-            (
-                Some("completed"),
-                Some(
-                    "failure" | "cancelled" | "timed_out" | "stale" | "action_required"
-                    | "startup_failure",
-                ),
-            ) => self.failed = true,
-            (Some("queued" | "in_progress" | "requested" | "waiting" | "pending"), None) => {
-                self.pending = true;
-            }
-            _ => return Err(Fault::InvalidResponse),
+        match workflow_result(check)? {
+            Some(("Succeeded", _)) => self.passed = true,
+            Some(("Uncertain", _)) => {}
+            Some(_) => self.failed = true,
+            None if check["conclusion"].is_null() => self.pending = true,
+            None => return Err(Fault::InvalidResponse),
         }
         Ok(())
     }
@@ -509,7 +506,7 @@ fn decode_run(
     ))
 }
 
-fn workflow_conclusion(value: &Value, url: String) -> Result<Option<WatchConclusion>, Fault> {
+fn workflow_result(value: &Value) -> Result<Option<(&'static str, &'static str)>, Fault> {
     match value["status"].as_str() {
         Some("queued" | "in_progress" | "requested" | "waiting" | "pending") => return Ok(None),
         Some("completed") => {}
@@ -526,6 +523,13 @@ fn workflow_conclusion(value: &Value, url: String) -> Result<Option<WatchConclus
         Some("neutral") => ("Uncertain", "neutral"),
         Some("skipped") => ("Uncertain", "skipped"),
         _ => return Err(Fault::InvalidResponse),
+    };
+    Ok(Some((kind, conclusion)))
+}
+
+fn workflow_conclusion(value: &Value, url: String) -> Result<Option<WatchConclusion>, Fault> {
+    let Some((kind, conclusion)) = workflow_result(value)? else {
+        return Ok(None);
     };
     let timestamp = |name: &str| {
         value[name]

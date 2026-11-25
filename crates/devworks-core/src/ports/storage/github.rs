@@ -10,6 +10,12 @@ pub struct GithubIssueKey {
     pub repository_id: Id,
     pub number: i64,
 }
+
+impl GithubIssueKey {
+    pub fn comment_cursor_endpoint(&self) -> String {
+        format!("issue-comments:{}", self.number)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoredGithubAccount {
@@ -256,6 +262,13 @@ pub trait GithubRead {
         &self,
         repository: &Id,
     ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError>;
+    /// Active native registrations bound to one canonical repository at their current remote.
+    fn github_bound_registrations(
+        &self,
+        canonical: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<Id>, StorageError>;
     fn github_repository_binding_history(
         &self,
         repository: &Id,

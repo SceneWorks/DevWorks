@@ -144,7 +144,21 @@ impl GitHubService {
         target: &PollTarget,
         number: &str,
     ) -> Result<Option<String>, Failure> {
+        if self.is_stopped() {
+            return Err(StorageError::Cancelled.into());
+        }
+        let account = super::schedule::PollAccount::from(&target.account);
+        if self
+            .poll_deferred_until(&account, self.clock.now_ms().get())
+            .is_some()
+        {
+            return Ok(None);
+        }
         let page = self.observe_pull_head_page(target, number)?;
+        self.note_poll_pacing(&account, &page);
+        if page.throttled() {
+            return Ok(None);
+        }
         Self::decode_pull_head(&page, target, number)
     }
 
@@ -292,13 +306,17 @@ impl GitHubService {
         pull: &Pull<'_>,
         kind: Evidence,
     ) -> Result<Option<i64>, Failure> {
+        let account = super::schedule::PollAccount::from(&target.account);
+        let now = self.clock.now_ms().get();
+        if let Some(until) = self.poll_deferred_until(&account, now) {
+            return Ok(Some(until));
+        }
         let key = format!("pull:{}:{}:{}", pull.number, pull.head, kind.kind());
         let current = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             snapshot
                 .github()
                 .github_poll_cursor(&target.repository.id, &key)
         })?;
-        let now = self.clock.now_ms().get();
         if current
             .as_ref()
             .is_some_and(|row| row.next_poll_at_ms > now)
@@ -343,6 +361,9 @@ impl GitHubService {
                     token,
                 )
             });
+        if let Ok(page) = &page {
+            self.note_poll_pacing(&account, page);
+        }
         let rows = match &page {
             Ok(page) if page.status == 304 && validators.is_some() => Ok(Vec::new()),
             Ok(page) if page.status == 200 => {

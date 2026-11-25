@@ -393,17 +393,22 @@ pub fn settle(
             .projects()
             .members(&job.recipe.project_id)?
             .contains(&job.repository_id)
-        || !tx
-            .work()
-            .work(&case.work_id.0)?
-            .is_some_and(|row| row.revision == job.work_revision)
-        || !tx
-            .github()
-            .github_issue(&job.issue, &issue_poll::scope(&job.repository_id))?
-            .is_some_and(|row| row.remote_revision == job.source_revision)
     {
         return Err(StorageError::ScopeDenied);
     }
+    let work = tx
+        .work()
+        .work(&case.work_id.0)?
+        .filter(|work| work.project_id == case.project_id)
+        .ok_or(StorageError::ScopeDenied)?;
+    let issue = tx
+        .github()
+        .github_issue(&job.issue, &issue_poll::scope(&job.repository_id))?
+        .ok_or(StorageError::ScopeDenied)?;
+    // A superseded result may settle the old case, but it cannot authorize new work.
+    let current =
+        issue.remote_revision == job.source_revision && work.revision == job.work_revision;
+    let witness = witness.filter(|_| current);
     let root = control_of(tx.runs(), &case.work_id)?;
     let mut valid = false;
     if let Some(witness) = &witness {
@@ -457,7 +462,12 @@ pub fn settle(
                 decision_id: None,
                 project_id: Some(case.project_id.clone()),
                 root_id: Some(case.work_id.clone()),
-                title: "Review a GitHub issue that could not be verified automatically".into(),
+                title: if current {
+                    "Review a GitHub issue that could not be verified automatically"
+                } else {
+                    "Review a GitHub issue that changed during verification"
+                }
+                .into(),
                 body: job.issue_title.clone(),
                 links: vec![NotificationLink {
                     kind: BoundedText("GitHub issue".into()),
@@ -471,8 +481,11 @@ pub fn settle(
             },
         )?;
     }
-    case.evidence =
-        Some(serde_json::json!({"verificationOperationId":operation.id,"reproduction":witness}));
+    case.evidence = Some(serde_json::json!({
+        "verificationOperationId": operation.id,
+        "reproduction": witness,
+        "sourceChanged": !current,
+    }));
     tx.github().put_github_triage_case(&case, Some(expected))?;
     super::triage_case::refresh_intake_state(tx, &job.repository_id, &job.issue)?;
     Ok(())

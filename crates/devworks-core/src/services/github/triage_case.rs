@@ -6,8 +6,9 @@ use crate::context::{InvocationContext, PrincipalKind};
 use crate::kernel::notice::{NotificationDraft, publish};
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    GithubIssueKey, GithubScope, OperationRecord, ReadOptions, ReadSnapshot, RepositoryFilter,
-    StorageError, StoredGithubIssueIntake, StoredGithubTriageCase, WriteTransaction, read_snapshot,
+    GithubIssueKey, GithubRead, GithubScope, OperationRecord, ReadOptions, ReadSnapshot,
+    RepositoryFilter, StorageError, StoredGithubIssueIntake, StoredGithubTriageCase,
+    WriteTransaction, read_snapshot,
 };
 use crate::protocol::records::{NotificationLink, WorkItemType};
 use crate::protocol::results::{DomainDecision, OperationResult};
@@ -173,6 +174,9 @@ fn load_input(
         .github()
         .github_observation(&row.observation_id, &scope)?
         .ok_or_else(invalid)?;
+    if row.work_id.is_none() && observation.payload["state"] != "open" {
+        return Ok(None);
+    }
     Ok(Some(TriageInput {
         title: observation.payload["title"]
             .as_str()
@@ -483,6 +487,27 @@ fn begin_case(
     };
     tx.github().put_github_triage_case(&row, None)?;
     Ok(row)
+}
+
+pub(crate) fn linked_report(
+    github: &dyn GithubRead,
+    root: &RootId,
+    repositories: &[Id],
+) -> Result<Option<(i64, String)>, StorageError> {
+    for repository in repositories {
+        if let Some(binding) = github.github_repository_binding(repository)?
+            && let Some(issue) = github
+                .github_issues_for_work(root, &binding.github_repository_id, 1)?
+                .into_iter()
+                .next()
+            && let Some(remote) =
+                github.github_discovered_repository(&binding.github_repository_id)?
+        {
+            let number = issue.key.number;
+            return Ok(Some((number, format!("{}/issues/{number}", remote.url))));
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn notify_for_work(

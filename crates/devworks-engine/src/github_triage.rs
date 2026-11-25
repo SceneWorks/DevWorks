@@ -110,11 +110,16 @@ impl TriageWorker {
         Ok(())
     }
 
-    fn populate_checks(&self, ctx: &InvocationContext, input: &mut triage_case::TriageInput) {
+    fn populate_checks(
+        &self,
+        ctx: &InvocationContext,
+        input: &mut triage_case::TriageInput,
+        abandoned: &Cancellation,
+    ) {
         let Some((helpers, program)) = &self.git_helpers else {
             return;
         };
-        let stop = || self.stop.is_cancelled();
+        let stop = || self.stop.is_cancelled() || abandoned.is_cancelled();
         let git = Git {
             runner: &**helpers,
             ctx,
@@ -123,6 +128,9 @@ impl TriageWorker {
             stop: &stop,
         };
         for destination in &mut input.destinations {
+            if stop() {
+                break;
+            }
             let Some(oid) = destination.indexed_commit.as_deref() else {
                 continue;
             };
@@ -138,7 +146,7 @@ impl TriageWorker {
     }
 
     async fn run(
-        &self,
+        self: &Arc<Self>,
         operation: OperationRecord,
         observe: bool,
         abandoned: Cancellation,
@@ -156,7 +164,7 @@ impl TriageWorker {
         let Some(provider) = engine.providers() else {
             return EffectResult::Unknown("GitHub triage inference is unavailable".into());
         };
-        let mut input = match self.service.triage_input(&operation) {
+        let input = match self.service.triage_input(&operation) {
             Ok(Some(input)) => input,
             Ok(None) => return EffectResult::Completed(json!({"superseded":true})),
             Err(_) => return EffectResult::Unknown("GitHub triage source is unavailable".into()),
@@ -165,7 +173,28 @@ impl TriageWorker {
             Ok(ctx) => ctx,
             Err(_) => return EffectResult::Unknown("GitHub triage session is unavailable".into()),
         };
-        self.populate_checks(&ctx, &mut input);
+        let input = if self.git_helpers.is_some() {
+            let worker = self.clone();
+            let context = ctx.clone();
+            let cancellation = abandoned.clone();
+            let enriched = tokio::task::spawn_blocking(move || {
+                let mut input = input;
+                worker.populate_checks(&context, &mut input, &cancellation);
+                input
+            })
+            .await;
+            match enriched {
+                Ok(input) => input,
+                Err(_) => {
+                    return EffectResult::Unknown("GitHub triage checks are unavailable".into());
+                }
+            }
+        } else {
+            input
+        };
+        if self.stop.is_cancelled() || abandoned.is_cancelled() {
+            return EffectResult::Unknown("GitHub triage stopped".into());
+        }
         let request = identity("github-triage-request", &operation);
         let result = if observe {
             provider.recorded_result(&request, &request)

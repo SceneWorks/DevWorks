@@ -3,7 +3,7 @@ use super::{ReviewService, ReviewStateRecord, ReviewTarget, decode};
 use crate::ports::IdKind;
 use crate::ports::storage::{
     NewEvent, OperationRecord, ReadOptions, StorageError, StoredCodeFinding, StoredCodeReview,
-    StoredGithubObservation, WriteOptions, WriteTransaction, read_snapshot, run_write,
+    StoredGithubObservation, WriteOptions, WriteTransaction, is_terminal, read_snapshot, run_write,
 };
 use crate::protocol::records::{
     CodeReviewSeverity, ReviewFinding, ReviewObservationState, ReviewSourceKind, ReviewState,
@@ -86,6 +86,7 @@ impl ReviewService {
                 head: &source.expected_head.hex,
                 pull_number: &pull_number,
                 bot_id,
+                fresh_after_ms: round.fresh_bot_after_ms,
             };
             let observed = if !refresh {
                 read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
@@ -158,7 +159,8 @@ impl ReviewService {
                 }
                 match observed {
                     CodeReviewObservation::Completed { review, comments } => {
-                        if round.observed_ids.first() == Some(&review.id)
+                        if matches!(source.state, ReviewObservationState::Completed)
+                            && round.observed_ids.first() == Some(&review.id)
                             && comments
                                 .iter()
                                 .all(|comment| round.observed_ids.contains(&comment.id))
@@ -204,7 +206,18 @@ impl ReviewService {
                             crate::protocol::data::CoverageState::Complete;
                         changed = true;
                     }
-                    CodeReviewObservation::Failed
+                    CodeReviewObservation::Dismissed
+                        if matches!(source.state, ReviewObservationState::Completed) =>
+                    {
+                        source.state = ReviewObservationState::Failed;
+                        source.completed_at = None;
+                        source.zero_findings_confirmed = false;
+                        source.findings_coverage.state =
+                            crate::protocol::data::CoverageState::Unavailable;
+                        changed = true;
+                    }
+                    CodeReviewObservation::Dismissed
+                    | CodeReviewObservation::Failed
                     | CodeReviewObservation::Unavailable
                     | CodeReviewObservation::Waiting
                         if !round.fallback_requested
@@ -214,7 +227,9 @@ impl ReviewService {
                     {
                         round.fallback_requested = true;
                         source.state = match observed {
-                            CodeReviewObservation::Failed => ReviewObservationState::Failed,
+                            CodeReviewObservation::Dismissed | CodeReviewObservation::Failed => {
+                                ReviewObservationState::Failed
+                            }
                             CodeReviewObservation::Unavailable => {
                                 ReviewObservationState::Unavailable
                             }
@@ -241,7 +256,7 @@ impl ReviewService {
                     (page.len() == 32).then(|| page.last().expect("nonempty page").id.clone());
                 let mut operations = Vec::new();
                 for row in page {
-                    if !matches!(row.state.as_str(), "Ready" | "ChangesRequired") {
+                    if !matches!(row.state.as_str(), "Ready" | "ChangesRequired" | "Running") {
                         continue;
                     }
                     let saved: ReviewStateRecord =
@@ -256,6 +271,7 @@ impl ReviewService {
                             .is_some_and(|root| root.completion.is_none())
                         && let Some(operation) =
                             snapshot.operations().operation(&saved.operation)?
+                        && is_terminal(operation.state)
                     {
                         operations.push(operation);
                     }

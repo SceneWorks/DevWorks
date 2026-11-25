@@ -1671,7 +1671,9 @@ impl devworks_core::ports::process::ProcessHost for ReviewedProcessHost {
         if matches!(
             self.case,
             Some(ReviewedCommitCase::LateTrackedFilter | ReviewedCommitCase::LateUntrackedFilter)
-        ) && spec.args.first().is_some_and(|arg| arg == "diff")
+        ) && (matches!(spec.args.as_slice(), [command, ..] if command == "diff")
+            || matches!(spec.args.as_slice(), [option, command, ..]
+                if option == "--no-replace-objects" && command == "diff"))
             && spec.args.iter().any(|arg| arg == "--binary")
             && let Some(path) = spec.cwd.as_deref()
             && path.join(".manifest-race-armed").exists()

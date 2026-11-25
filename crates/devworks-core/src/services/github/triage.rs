@@ -65,7 +65,7 @@ fn admit(
             project_id: None,
             repositories: registrations,
         },
-        states: vec!["Queued".into()],
+        states: vec!["Queued".into(), "Triaging".into()],
     };
     let Some(issue) = next_eligible(tx, &filter, control)? else {
         return Ok(None);
@@ -178,14 +178,31 @@ fn next_eligible(
     let mut earliest = None;
     loop {
         let page = tx.github().github_issues(filter, after.as_ref(), PAGE)?;
-        for issue in &page {
-            if let Some(operation) = &issue.operation_id
-                && tx
+        let more = page.len() == usize::from(PAGE);
+        after = page.last().map(|issue| issue.key.clone());
+        for mut issue in page {
+            let mut superseded = false;
+            if let Some(operation) = &issue.operation_id {
+                let Some(operation) = tx
                     .operations()
                     .operation(operation)?
-                    .is_none_or(|op| !is_terminal(op.state))
-            {
-                continue;
+                    .filter(|operation| is_terminal(operation.state))
+                else {
+                    continue;
+                };
+                superseded = operation.payload["sourceRevision"]
+                    .as_str()
+                    .is_some_and(|source| source != issue.remote_revision);
+            }
+            if issue.state == "Triaging" {
+                if !superseded {
+                    continue;
+                }
+                // Recover a persisted superseded admission written before polling requeued it.
+                let expected = issue.revision;
+                issue.revision += 1;
+                issue.state = "Queued".into();
+                tx.github().put_github_issue(&issue, Some(expected))?;
             }
             if let Some(root) = &issue.work_id
                 && !control.root_permits_dispatch(tx, root)?
@@ -198,6 +215,9 @@ fn next_eligible(
             else {
                 continue;
             };
+            if issue.work_id.is_none() && observation.payload["state"] != "open" {
+                continue;
+            }
             let sort = (observation.observed_at_ms, observation.id);
             if earliest
                 .as_ref()
@@ -205,12 +225,11 @@ fn next_eligible(
                     (sort.0, sort.1.as_str()) < (at.0, at.1.as_str())
                 })
             {
-                earliest = Some((sort, issue.clone()));
+                earliest = Some((sort, issue));
             }
         }
-        if page.len() < usize::from(PAGE) {
+        if !more {
             return Ok(earliest.map(|(_, issue)| issue));
         }
-        after = page.last().map(|issue| issue.key.clone());
     }
 }

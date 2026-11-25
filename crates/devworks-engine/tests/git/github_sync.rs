@@ -7,10 +7,11 @@ use devworks_core::ports::http::{
 };
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::protocol::{
-    CommandReply, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
+    CommandReply, Id, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
 };
 use devworks_core::services::{
     UseCases,
+    agents::AgentService,
     approvals::ApprovalService,
     git::github::GitHubClient,
     git::helper::{HelperFault, HelperLimits, HelperRunner},
@@ -231,6 +232,16 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
             query: "state=all",
             result: exchange(200, json!([issue("closed", "2023-11-14T22:15:22Z")]), &[]),
         },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([issue("open", "2023-11-14T22:16:22Z")]), &[]),
+        },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([issue("open", "2023-11-14T22:17:22Z")]), &[]),
+        },
     ]))));
     let git = service(&h, &store, script.clone());
     let actor = principal(store.as_ref(), "github-human", PrincipalKind::Human);
@@ -323,19 +334,38 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
     .unwrap();
     assert_eq!(observation.payload["state"], "closed");
     let control = Arc::new(ControlService::new(h.ids.clone()));
+    assert!(git.admit_triage(control.clone()).unwrap().is_none());
+    assert_eq!(
+        read(store.as_ref(), |snapshot| snapshot
+            .github()
+            .github_intake_clock()),
+        clock
+    );
+    h.advance(60_000);
+    assert!(matches!(
+        git.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    let reopened = read(store.as_ref(), |snapshot| {
+        snapshot.github().github_issue(&key, &scope)
+    })
+    .unwrap();
+    assert_eq!(reopened.state, "Queued");
+    assert_eq!(reopened.revision, updated.revision + 1);
+    assert!(reopened.operation_id.is_none());
     let admitted = git.admit_triage(control.clone()).unwrap().unwrap();
     assert_eq!(admitted.issue.key, key);
     assert_eq!(admitted.issue.state, "Triaging");
     assert_eq!(
         admitted.operation.payload["sourceRevision"],
-        updated.remote_revision
+        reopened.remote_revision
     );
-    assert_eq!(admitted.clock.last_admitted_at_ms, Some(T0 + 135_000));
+    assert_eq!(admitted.clock.last_admitted_at_ms, Some(T0 + 195_000));
     assert_eq!(
         admitted.clock.next_admission_at_ms,
-        T0 + 135_000 + 1_800_000
+        T0 + 195_000 + 1_800_000
     );
-    assert!(git.admit_triage(control).unwrap().is_none());
+    assert!(git.admit_triage(control.clone()).unwrap().is_none());
     let ready = read(store.as_ref(), |snapshot| {
         snapshot.queue().deliveries(
             &DeliveryFilter {
@@ -347,6 +377,44 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
         )
     });
     assert_eq!(ready.entries.len(), 1);
+    let old_input = git.triage_input(&admitted.operation).unwrap().unwrap();
+    h.advance(60_000);
+    assert!(matches!(
+        git.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    let revised = read(store.as_ref(), |snapshot| {
+        snapshot.github().github_issue(&key, &scope)
+    })
+    .unwrap();
+    assert_eq!(revised.state, "Queued");
+    assert_eq!(revised.operation_id.as_ref(), Some(&admitted.operation.id));
+    assert_ne!(revised.remote_revision, reopened.remote_revision);
+    assert!(git.triage_input(&admitted.operation).unwrap().is_none());
+
+    h.advance(1_740_000);
+    assert!(
+        git.admit_triage(control.clone()).unwrap().is_none(),
+        "a requeued report waits for the earlier operation to settle"
+    );
+    let work = WorkService::new(h.ids.clone(), control.clone());
+    write(store.as_ref(), move |tx| {
+        let completed = mark_operation_complete(tx, &admitted.operation.id)?;
+        settle_classification(
+            tx,
+            &work,
+            &completed,
+            &old_input,
+            &TriageClassification::FeatureRequest,
+        )
+    })
+    .unwrap();
+    let next = git.admit_triage(control).unwrap().unwrap();
+    assert_eq!(next.issue.key, key);
+    assert_eq!(
+        next.operation.payload["sourceRevision"],
+        revised.remote_revision
+    );
     let head = |oid: &str| {
         json!({
             "ref": "refs/heads/main", "object":{"type":"commit", "sha":oid}
@@ -383,30 +451,69 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
     ));
     assert!(deliveries(notices).is_empty());
     assert!(deliveries(indexes).is_empty());
+    let alias = id("github-sync-alias");
+    let alias_id = alias.clone();
+    let alias_path = h
+        .root
+        .join("second-registration")
+        .to_string_lossy()
+        .into_owned();
+    let binding_template = binding.clone();
+    let original = repo.clone();
+    write(store.as_ref(), move |tx| {
+        let mut registration = tx.projects().repository(&original)?.unwrap();
+        registration.id = alias_id.clone();
+        registration.location = alias_path.clone();
+        registration.primary = false;
+        tx.projects().insert_repository(&registration)?;
+        tx.github().put_github_repository_binding(
+            &StoredGithubRepositoryBinding {
+                repository_id: alias_id,
+                ..binding_template
+            },
+            None,
+        )
+    })
+    .unwrap();
     h.advance(60_000);
     assert!(matches!(
         git.poll_default_ref(&repo).unwrap(),
         IssuePageResult::Captured { reports: 1, .. }
     ));
-    assert_eq!(deliveries(notices).len(), 1);
-    assert_eq!(deliveries(indexes).len(), 1);
-    assert_eq!(
-        deliveries(notices)[0].event_id,
-        deliveries(indexes)[0].event_id
+    assert_eq!(deliveries(notices).len(), 2);
+    assert_eq!(deliveries(indexes).len(), 2);
+    let delivery_for = |consumer, registration: &Id| {
+        deliveries(consumer)
+            .into_iter()
+            .find(|entry| entry.payload["repositoryId"] == registration.as_str())
+            .unwrap()
+    };
+    for registration in [&repo, &alias] {
+        let notice = delivery_for(notices, registration);
+        let index = delivery_for(indexes, registration);
+        assert_eq!(notice.event_id, index.event_id);
+        assert_eq!(index.payload["head"], "b".repeat(40));
+    }
+    assert_ne!(
+        delivery_for(notices, &repo).event_id,
+        delivery_for(notices, &alias).event_id
     );
-    assert_eq!(deliveries(indexes)[0].payload["head"], "b".repeat(40));
+    assert_eq!(
+        git.poll_default_ref(&alias).unwrap(),
+        IssuePageResult::NotDue
+    );
     h.advance(60_000);
     assert!(matches!(
         git.poll_default_ref(&repo).unwrap(),
         IssuePageResult::Captured { reports: 0, .. }
     ));
-    assert_eq!(deliveries(notices).len(), 1);
-    assert_eq!(deliveries(indexes).len(), 1);
+    assert_eq!(deliveries(notices).len(), 2);
+    assert_eq!(deliveries(indexes).len(), 2);
     assert!(script.0.lock().unwrap().is_empty());
 
     // Prove github_index_refresh failure/hold never suppresses github_agent_notices!
-    let notice_entry_id = deliveries(notices)[0].id.clone();
-    let index_entry_id = deliveries(indexes)[0].id.clone();
+    let notice_entry_id = delivery_for(notices, &alias).id;
+    let index_entry_id = delivery_for(indexes, &alias).id;
     struct FailingIndexRefresh;
     impl devworks_engine::DeliveryHandler for FailingIndexRefresh {
         fn apply(
@@ -1581,6 +1688,7 @@ impl HelperRunner for ScriptedDockerHelpers {
             let mode = self.docker_mode.lock().unwrap();
             return match *mode {
                 DockerOutcome::RemoteDaemon => Ok(b"tcp://10.0.0.5:2375\n".to_vec()),
+                _ if cfg!(windows) => Ok(b"npipe:////./pipe/docker_engine\n".to_vec()),
                 _ => Ok(b"unix:///var/run/docker.sock\n".to_vec()),
             };
         }
@@ -1629,7 +1737,7 @@ impl HelperRunner for ScriptedDockerHelpers {
                 let proc_id = tx.new_id(IdKind::Process);
                 let mut row = tx.resources().insert_process(NewProcess {
                     id: proc_id,
-                    platform: "unix".into(),
+                    platform: if cfg!(windows) { "windows" } else { "unix" }.into(),
                     program: "docker".into(),
                     argv_sha256,
                     operation_id: Some(op_copy),
@@ -1805,6 +1913,14 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
     feat_52["html_url"] = json!("https://github.com/Acme/kit/issues/52");
     feat_52["title"] = json!("Add dark mode export");
 
+    let mut bug_53 = bug_50.clone();
+    bug_53["number"] = json!(53);
+    bug_53["node_id"] = json!("issue-node-53");
+    bug_53["html_url"] = json!("https://github.com/Acme/kit/issues/53");
+    let mut commented_53 = bug_53.clone();
+    commented_53["comments"] = json!(1);
+    commented_53["updated_at"] = json!("2023-11-14T22:40:00Z");
+
     let script = Arc::new(Script(Mutex::new(VecDeque::from([
         Request {
             path: "/user",
@@ -1829,6 +1945,16 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
             path: "/repos/Acme/kit/issues",
             query: "state=open",
             result: exchange(200, json!([bug_50, bug_51, feat_52]), &[]),
+        },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([bug_53]), &[]),
+        },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([commented_53]), &[]),
         },
     ]))));
 
@@ -1886,6 +2012,8 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
     // Load triage_input for #50 and populate trusted checks from git commit OID!
     let mut input_50 = github.triage_input(&adm_50.operation).unwrap().unwrap();
     assert_eq!(input_50.destinations.len(), 2);
+    assert_eq!(input_50.title, "Report from the remote");
+    assert!(input_50.report.contains("panicked at empty host segment"));
     let manifest_bytes = std::fs::read(repo_dir.join(".devworks/github-checks.json")).unwrap();
     let parsed_checks = verification::parse_manifest(&manifest_bytes);
     assert_eq!(parsed_checks.len(), 1);
@@ -1958,6 +2086,51 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
         alpha_case_after.state,
         alpha_case_after.evidence
     );
+    let host = principal(
+        store.as_ref(),
+        "triage-coordinator-host",
+        PrincipalKind::Host,
+    );
+    let run_control = control.clone();
+    let agents = AgentService::new(h.ids.clone(), control.clone());
+    let (agent, session) = write(store.as_ref(), move |tx| {
+        let claimed = run_control
+            .claim_activation(tx, &id("triage-runner"))?
+            .unwrap();
+        let running = run_control
+            .start_activation(tx, &claimed.id, claimed.owner_epoch)?
+            .unwrap();
+        let agent = agents
+            .materialize_primary(tx, &host, &running.id, running.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+        let assignment = tx.runs().assignment(&agent.assignment_id)?.unwrap();
+        let session = tx.sessions().session(&assignment.session_id)?.unwrap();
+        Ok((agent, session))
+    })
+    .unwrap();
+    assert_eq!(agent.root_id, alpha_case_after.work_id);
+    let ctx = HostIngress::new(store.as_ref())
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("triage-coordinator-invocation"),
+            id("triage-coordinator-ingress"),
+            Counter::new(store.info().restore_epoch).unwrap(),
+            Revision::new(1).unwrap(),
+        )
+        .with_session(session.id)
+        .with_lineage(
+            session.project_id,
+            session.root_id,
+            Some(agent.assignment_id.clone()),
+        );
+    let context =
+        devworks_engine::agent_turns::initial_context(store.as_ref(), &ctx, &agent).unwrap();
+    let messages = serde_json::to_string(&context.messages).unwrap();
+    assert!(messages.contains("GitHub issue #50"));
+    assert!(messages.contains("https://github.com/Acme/kit/issues/50"));
+    assert!(!messages.contains("Report from the remote"));
+    assert!(!messages.contains("panicked at empty host segment"));
 
     // Advance 600s to admit #51, and test remote/unavailable Docker daemon + setup failure -> AwaitingDecision!
     h.advance(600_000);
@@ -2086,6 +2259,60 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
     })
     .unwrap();
     assert_eq!(intake_52.state, "AwaitingDecision");
+    h.advance(600_000);
+    assert!(matches!(
+        github.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    let admitted = github.admit_triage(control.clone()).unwrap().unwrap();
+    assert_eq!(admitted.issue.key.number, 53);
+    let key = admitted.issue.key.clone();
+    let mut input = github.triage_input(&admitted.operation).unwrap().unwrap();
+    for destination in &mut input.destinations {
+        destination.checks = parsed_checks.clone();
+    }
+    let project = ProjectId(id("proj-alpha"));
+    write(store.as_ref(), {
+        let project = project.clone();
+        move |tx| {
+            let completed = mark_operation_complete(tx, &admitted.operation.id)?;
+            settle_classification(
+                tx,
+                &work_service,
+                &completed,
+                &input,
+                &TriageClassification::Bugs {
+                    destinations: vec![project.clone()],
+                    verifications: vec![BugVerificationProposal {
+                        project_id: project,
+                        check_id: id("unit-suite"),
+                        report_quote: "panicked at empty host segment".into(),
+                        test_identifier: "parse_url_panic".into(),
+                        expected_failure: "panicked at empty host segment".into(),
+                    }],
+                },
+            )
+        }
+    })
+    .unwrap();
+    let case = || {
+        read(store.as_ref(), |s| {
+            s.github().github_triage_case(&key, &project)
+        })
+        .unwrap()
+    };
+    assert_eq!(case().state, "NeedsProof");
+    h.advance(60_000);
+    assert!(matches!(
+        github.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    runtime().block_on(verify_outbox.run_until_idle()).unwrap();
+    let settled = case();
+    assert_eq!(settled.state, "AwaitingDecision");
+    let evidence = settled.evidence.unwrap();
+    assert_eq!(evidence["sourceChanged"], true);
+    assert!(evidence["reproduction"].is_null());
     assert!(script.0.lock().unwrap().is_empty());
 }
 
@@ -2179,6 +2406,20 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
             result: exchange(200, json!([closed_60]), &[]),
         },
         Request {
+            path: "/repos/Acme/kit/issues/60/comments",
+            query: "",
+            result: exchange(
+                200,
+                json!([
+                    {"id":61,"html_url":"https://github.com/Acme/kit/issues/60#issuecomment-61",
+                        "updated_at":"2023-11-14T22:09:00Z","body":"Old comment before linking"},
+                    {"id":62,"html_url":"https://github.com/Acme/kit/issues/60#issuecomment-62",
+                        "updated_at":"2023-11-14T22:14:00Z","body":"New comment after linking"}
+                ]),
+                &[],
+            ),
+        },
+        Request {
             path: "/repos/Acme/kit/issues",
             query: "state=all",
             result: exchange(200, json!([reopened_60]), &[]),
@@ -2240,7 +2481,24 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
     let host_actor = store.info().host_actor;
     let key_seed = key_60.clone();
     let remote_rev = intake_60.remote_revision.clone();
+    let mirror_location = h
+        .root
+        .join("second-linked-checkout")
+        .to_string_lossy()
+        .into_owned();
     write(store.as_ref(), move |tx| {
+        let mut mirror = tx.projects().repository(&id("github-sync-repo"))?.unwrap();
+        mirror.id = id("github-sync-mirror");
+        mirror.location = mirror_location;
+        mirror.primary = false;
+        tx.projects().insert_repository(&mirror)?;
+        tx.github().put_github_repository_binding(
+            &StoredGithubRepositoryBinding {
+                repository_id: mirror.id,
+                ..binding
+            },
+            None,
+        )?;
         for pid in ["proj-unrepro", "proj-started", "proj-feature"] {
             let p = ProjectId(id(pid));
             tx.projects().insert_project(&StoredProject {
@@ -2257,7 +2515,12 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
                 archive_epoch: 0,
                 archive_stop_pending: false,
             })?;
-            tx.projects().set_members(&p, &[id("github-sync-repo")])?;
+            let local = if pid == "proj-started" {
+                "github-sync-mirror"
+            } else {
+                "github-sync-repo"
+            };
+            tx.projects().set_members(&p, &[id(local)])?;
             workflow::ensure_workflow(tx, &p)?;
         }
 
@@ -2430,6 +2693,22 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
             "backlog"
         ))
     );
+
+    github.poll_issue_comments(&repo, 60).unwrap();
+    runtime().block_on(notice_outbox.run_until_idle()).unwrap();
+    for work in ["work-started", "work-feature-req"] {
+        let commented = read(store.as_ref(), |s| s.work().work(&id(work))).unwrap();
+        let brief = commented.brief.to_string();
+        assert_eq!(
+            brief.matches("New comment after linking").count(),
+            1,
+            "{work}: {brief}"
+        );
+        assert!(
+            !brief.contains("Old comment before linking"),
+            "{work}: {brief}"
+        );
+    }
 
     // 2. Poll remote reopening of #60 (with appended clarifying text):
     //    Verify GH-06: human pause on work-started is preserved!

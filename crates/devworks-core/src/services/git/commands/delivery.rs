@@ -104,6 +104,77 @@ impl Delivery {
     }
 }
 
+pub(crate) fn already_merged_review_repositories(
+    history: &dyn HistoryRead,
+    project: &ProjectId,
+    barrier: &DeliveryBarrier,
+) -> Result<std::collections::HashSet<Id>, StorageError> {
+    let Some(state) = read_delivery(history, &barrier.root_id)?.filter(|state| {
+        &state.project == project
+            && state.barrier.delivery_id == barrier.delivery_id
+            && state.barrier.approved_scope_digest == barrier.approved_scope_digest
+    }) else {
+        return Ok(Default::default());
+    };
+    let mut merged = std::collections::HashSet::new();
+    for entry in &barrier.repositories {
+        let Ok(row) = state.repository(&entry.repository_id) else {
+            continue;
+        };
+        let stored = state.entry(&entry.repository_id)?;
+        if row.merge_commit.is_some()
+            && stored.pull_request_id == entry.pull_request_id
+            && stored.expected_head == entry.expected_head
+            && stored.observed_base == entry.observed_base
+            && stored.base_ref == entry.base_ref
+        {
+            merged.insert(entry.repository_id.clone());
+        }
+    }
+    Ok(merged)
+}
+
+pub(crate) fn qualifies_github_resolution_after_cleanup(
+    tx: &mut dyn WriteTransaction,
+    control: &StoredRootControl,
+) -> Result<bool, StorageError> {
+    let Some(stop_id) = &control.stop_operation_id else {
+        return Ok(false);
+    };
+    let Some(stop) = tx.operations().operation(stop_id)? else {
+        return Ok(false);
+    };
+    if stop.state != OperationState::ObservedComplete
+        || stop.root_id.as_ref() != Some(&control.root_id)
+        || stop.capability != crate::services::runs::STOP_CAPABILITY
+        || stop.payload["cause"] != StopCause::Superseded.as_str()
+        || stop.payload["stopEpoch"].as_i64() != Some(control.stop_epoch)
+    {
+        return Ok(false);
+    }
+    let Some(final_operation) = read_delivery(tx.history(), &control.root_id)?
+        .filter(|state| state.all_merged() && state.cleanup_stop_requested)
+        .and_then(|state| state.final_operation)
+    else {
+        return Ok(false);
+    };
+    // The stop's own hold is expected. A manual pause before or after cleanup still wins.
+    let holds = crate::services::runs::active_blockers(
+        tx.runs(),
+        &BlockerFilter::RootLevel(control.root_id.clone()),
+    )?;
+    if holds.iter().any(|hold| {
+        hold.cause == HoldCause::HumanPause
+            && stop.payload["holdId"].as_str() != Some(hold.id.as_str())
+    }) {
+        return Ok(false);
+    }
+    Ok(tx
+        .operations()
+        .operation(&final_operation)?
+        .is_some_and(|operation| operation.state == OperationState::ObservedComplete))
+}
+
 pub(super) fn read_delivery(
     history: &dyn HistoryRead,
     root: &RootId,
@@ -361,7 +432,8 @@ pub(super) fn reserve_delivery(
     }
     let work = crate::services::work::visible_work(tx.work(), ctx, &candidate.root_id.0)?;
     crate::services::work::open_project(tx, ctx, &work.project_id)?;
-    if ctx.project_id() != Some(&work.project_id) || !GitService::pr_manager(tx, ctx, &work)? {
+    if ctx.project_id() != Some(&work.project_id) || !GitService::pr_manager(tx, ctx, &work, true)?
+    {
         return Err(StorageError::ScopeDenied.into());
     }
     match candidate.kind {
@@ -1172,7 +1244,18 @@ impl GitService {
                         })
                         .is_some_and(|plan| plan.digest == state.barrier.approved_scope_digest.0)
                 } else {
-                    root.revision == j.work_revision
+                    let repositories = tx.work().work_repositories(&root.id)?;
+                    matches!(state.barrier.kind, DeliveryKind::StandaloneIssue)
+                        && root.project_id == state.project
+                        && root.parent_feature_id.is_none()
+                        && matches!(root.kind.as_str(), TASK | "issue")
+                        && j.work_scope_revision
+                            .is_none_or(|revision| root.scope_revision == revision)
+                        && repositories.len() == state.repositories.len()
+                        && state
+                            .repositories
+                            .iter()
+                            .all(|row| repositories.contains(&row.repo))
                 };
                 if current {
                     state.final_operation = Some(op.clone());

@@ -432,7 +432,11 @@ impl GitHubClient {
                     let name = string(row, if runs { "/name" } else { "/context" })?;
                     let app = row["app"]["id"].as_u64();
                     let green = if runs {
-                        row["status"] == "completed" && row["conclusion"] == "success"
+                        row["status"] == "completed"
+                            && matches!(
+                                row["conclusion"].as_str(),
+                                Some("success" | "skipped" | "neutral")
+                            )
                     } else {
                         row["state"] == "success"
                     };

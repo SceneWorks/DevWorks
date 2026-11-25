@@ -1,15 +1,19 @@
 //! Native final merge with real isolated checkouts and a scripted asynchronous GitHub remote.
 use super::*;
 use devworks_core::authority::destructive::FilesystemResolver;
+use devworks_core::context::InvocationContext;
+use devworks_core::ports::IdKind;
 use devworks_core::ports::http::{HttpError, HttpRequest, HttpResponse, HttpTransport, Method};
 use devworks_core::protocol::{
     CommandReply, EventId, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
 };
 use devworks_core::services::{
+    agents::AgentService,
     artifacts::evidence::Evidence,
     effect::EffectOutcome,
     git::{RegisteredGitRoot, github::GitHubClient},
     github::GitHubService,
+    runs::ControlService,
 };
 use serde_json::{Value, json};
 use std::sync::Mutex;
@@ -20,6 +24,7 @@ struct RemoteRepo {
     head: String,
     merge: String,
     green: bool,
+    success_conclusion: &'static str,
     merged: bool,
     accepted: bool,
     workflow_pending: bool,
@@ -177,7 +182,7 @@ impl HttpTransport for Remote {
             (Method::Get, ["commits", sha, "check-runs"]) if *sha == repo.head => {
                 json!({"check_runs":[{
                 "head_sha":repo.head,"name":"native","app":{"id":7},"status":"completed",
-                "conclusion":if repo.green {"success"} else {"failure"}}]})
+                "conclusion":if repo.green {repo.success_conclusion} else {"failure"}}]})
             }
             (Method::Get, ["commits", sha, "status"]) if *sha == repo.head => {
                 json!({"sha":repo.head,"statuses":[]})
@@ -239,6 +244,81 @@ fn mark_settled(store: &dyn ApplicationStore, id: &OperationId, effect: EffectOu
 
 #[test]
 fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_without_repeating() {
+    native_final_delivery(None);
+}
+
+#[test]
+fn native_standalone_merge_settles_after_a_comment_with_neutral_or_skipped_required_checks() {
+    for conclusion in ["neutral", "skipped"] {
+        native_final_delivery(Some(conclusion));
+    }
+}
+
+fn start_issue_coordinator(
+    h: &Harness,
+    store: &Arc<dyn ApplicationStore>,
+    user: &InvocationContext,
+    root: &RootId,
+) -> InvocationContext {
+    let control = Arc::new(ControlService::new(h.ids.clone()));
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: store.as_ref(),
+        authority: &authority,
+        ids: h.ids.as_ref(),
+    };
+    let start = json!({"protocol":"1.0-draft.1","requestKey":"start-standalone-delivery",
+        "command":{"kind":"runs.start","rootId":root,"expectedWorkRevision":"1","expectedControlRevision":"1"}});
+    let reply = gateway
+        .command(
+            user,
+            "runs.start",
+            start.to_string().as_bytes(),
+            control.clone(),
+        )
+        .unwrap();
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Applied { .. })),
+        "{reply:?}"
+    );
+
+    let host = principal(store.as_ref(), "delivery-host", PrincipalKind::Host);
+    let agents = AgentService::new(h.ids.clone(), control.clone());
+    let (session, assignment, activation) = write(store.as_ref(), move |tx| {
+        let claimed = control
+            .claim_activation(tx, &id("delivery-runner"))?
+            .unwrap();
+        let activation = control
+            .start_activation(tx, &claimed.id, claimed.owner_epoch)?
+            .unwrap();
+        let primary = agents
+            .materialize_primary(tx, &host, &activation.id, activation.owner_epoch)
+            .map_err(|error| StorageError::InvalidRecord(format!("{error:?}")))?;
+        let assignment = tx.runs().assignment(&primary.assignment_id)?.unwrap();
+        let session = tx.sessions().session(&assignment.session_id)?.unwrap();
+        Ok((session, assignment, activation))
+    })
+    .unwrap();
+    HostIngress::new(store.as_ref())
+        .context(
+            session.agent_id,
+            PrincipalKind::Agent,
+            id("delivery-coordinator-invocation"),
+            id("delivery-coordinator-ingress"),
+            Counter::new(store.info().restore_epoch).unwrap(),
+            user.policy_revision().clone(),
+        )
+        .with_session(session.id)
+        .with_lineage(session.project_id, session.root_id, Some(assignment.id))
+        .with_activation(activation.id, activation.owner_epoch)
+}
+
+fn native_final_delivery(standalone_check: Option<&'static str>) {
     let h = Harness::new();
     let store = h.open();
     let user = principal(store.as_ref(), "delivery-owner", PrincipalKind::Human);
@@ -258,7 +338,12 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             .unwrap()
     };
     let mut checkouts = Vec::new();
-    for name in ["first", "second"] {
+    let names = if standalone_check.is_some() {
+        &["first"][..]
+    } else {
+        &["first", "second"][..]
+    };
+    for &name in names {
         let source = h.root.join(name);
         let location = owned.join(name);
         std::fs::create_dir(&source).unwrap();
@@ -327,6 +412,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             head: tree.head.hex.clone(),
             merge: merge.clone(),
             green: *name == "first",
+            success_conclusion: standalone_check.unwrap_or("success"),
             merged: false,
             accepted: false,
             workflow_pending: false,
@@ -360,7 +446,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             tx.github().put_github_account(&StoredGithubAccount {id:id("github-account"),revision:1,state:"Connected".into(),
                 remote_user_id:Some("7".into()),login:Some("delivery-owner".into()),credential_revision,permission_revision:1,
                 granted_scopes:vec!["repo".into()],granted_scopes_reported:true,observed_at_ms:T0,last_error:None},None)?;
-            tx.work().insert_work(&StoredWork {id:root.0.clone(),project_id:project.clone(),kind:FEATURE.into(),parent_feature_id:None,
+            tx.work().insert_work(&StoredWork {id:root.0.clone(),project_id:project.clone(),kind:if standalone_check.is_some() {TASK} else {FEATURE}.into(),parent_feature_id:None,
                 status_id:None,title:"Final feature".into(),priority:0,manual_order:0,revision:1,scope_revision:1,created_at_ms:T0,
                 updated_at_ms:T0,created_by:Some(actor.clone()),updated_by:Some(actor.clone()),search_key:"feature".into(),caller_ref:None,
                 completion:None,brief:json!({})})?;
@@ -385,16 +471,22 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
                     head:Some(tree.head.hex.clone()),payload:json!({"state":"open","baseRef":"main","baseHead":base}),
                     source_updated_at_ms:Some(T0),observed_at_ms:T0})?;
                 tx.git().insert_git_worktree(tree)?;
+                let operation = OperationId(id(&format!("pr-operation-{name}")));
+                tx.operations().record_intent(NewOperation {
+                    id:operation.clone(), root_id:None, assignment_id:None, capability:"git.pr.create".into(),
+                    schema_version:1, args_digest:"fixture".into(), payload:json!({}),
+                })?;
                 let event=EventId(id(&format!("pr-event-{name}")));
                 let sequence=tx.history().append(NewEvent{id:event.clone(),actor:actor.clone(),project_id:Some(project.clone()),
-                    root_id:Some(root.clone()),operation_id:None,aggregate_kind:"git_worktree".into(),aggregate_id:tree.id.as_str().into(),
-                    aggregate_revision:1,kind:"GitPullRequestObserved".into(),payload:json!({})})?;
+                    root_id:Some(root.clone()),operation_id:Some(operation),aggregate_kind:"git_worktree".into(),aggregate_id:tree.id.as_str().into(),
+                    aggregate_revision:1,kind:"GitPullRequestObserved".into(),
+                    payload:json!({"repositoryId":id(name),"pullRequestUrl":format!("{url}/pull/1")})})?;
                 tx.sessions().insert_link(&StoredLink{id:id(&format!("pr-link-{name}")),project_id:project.clone(),root_id:root.clone(),
                     kind:"pull_request".into(),target_kind:"pull_request".into(),target_id:format!("{url}/pull/1"),parent_id:None,
                     supersedes_id:None,actor:actor.clone(),event_id:event.0,sequence,repository_id:Some(id(name)),revision:Some(tree.head.hex.clone()),
                     summary:"Fixture final pull request".into(),body:json!({"worktreeId":tree.id,"branch":tree.branch,"head":tree.head}),created_at_ms:T0})?;
             }
-            let members=[id("first"),id("second")];
+            let members=checkouts.iter().map(|(name,_,_,_,_)|id(name)).collect::<Vec<_>>();
             tx.projects().set_members(&project,&members)?;
             tx.work().set_work_repositories(&root.0,&members)?;
             Ok(())
@@ -431,18 +523,20 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         .unwrap()
         .0;
     let plan_digest = "a".repeat(64);
-    write(store.as_ref(),{let (evidence,root,actor,plan_digest)=(evidence.clone(),root.clone(),actor.clone(),plan_digest.clone());move |tx| {
+    if standalone_check.is_none() {
+        write(store.as_ref(),{let (evidence,root,actor,plan_digest)=(evidence.clone(),root.clone(),actor.clone(),plan_digest.clone());move |tx| {
         tx.work().put_feature_plan(&StoredFeaturePlan {feature_id:root.0.clone(),revision:1,
             approved:Some(json!({"draft":{"content":evidence,"acceptance":[],"repositoryIds":["first","second"],"goals":[],"requirements":[],"acceptanceTests":[]},
                 "digest":plan_digest,"planRevision":1,"proposalId":"approved-feature-plan"})),approved_by:Some(actor),approved_at_ms:Some(T0),
             pending:None,pending_revision:None},None)
     }}).unwrap();
-    let barrier = json!({"protocol":"1.0-draft.1","deliveryId":"delivery-fixture","rootId":root,"kind":"Feature","revision":"1",
+    }
+    let barrier = json!({"protocol":"1.0-draft.1","deliveryId":"delivery-fixture","rootId":root,"kind":if standalone_check.is_some() {"StandaloneIssue"} else {"Feature"},"revision":"1",
         "approvedScopeDigest":plan_digest,"repositories":checkouts.iter().map(|(name,_,tree,base,_)|json!({"repositoryId":name,
             "pullRequestId":format!("pr-link-{name}"),"baseRef":"refs/heads/main","expectedHead":tree.head,
             "observedBase":{"format":"Sha1","hex":base},"reviewSource":"GitHubAutomated","mergeMethod":"MergeCommit",
             "evidence":evidence,"policyRevision":"1"})).collect::<Vec<_>>(),
-        "dependencies":[{"before":"first","after":"second"}]});
+        "dependencies":if standalone_check.is_some() {json!([])} else {json!([{"before":"first","after":"second"}])}});
     let service = |store: &Arc<dyn ApplicationStore>| {
         Arc::new(
             GitService::new(
@@ -477,6 +571,9 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             )))),
         )
     };
+    let coordinator = standalone_check
+        .is_some()
+        .then(|| start_issue_coordinator(&h, &store, &user, &root));
     let submit = |store: &Arc<dyn ApplicationStore>,
                   key: &str,
                   repo: usize,
@@ -499,7 +596,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         }
         match gateway
             .command(
-                &user,
+                coordinator.as_ref().unwrap_or(&user),
                 "git.integrate",
                 frame.to_string().as_bytes(),
                 service(store),
@@ -514,6 +611,68 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         DomainDecision::Accepted { operation_id } => operation_id,
         other => panic!("{other:?}"),
     };
+    if standalone_check.is_some() {
+        let operation = accepted(submit(&store, "standalone-merge", 0, Some(&barrier)));
+        let record = begin(store.as_ref(), &operation);
+        assert!(matches!(
+            service(&store).execute(&record),
+            EffectOutcome::Unknown(_)
+        ));
+        assert_eq!(wire.submissions.lock().unwrap().as_slice(), ["first"]);
+
+        let before = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+        let control = Arc::new(devworks_core::services::runs::ControlService::new(
+            h.ids.clone(),
+        ));
+        let work = Arc::new(devworks_core::services::work::WorkService::new(
+            h.ids.clone(),
+            control,
+        ));
+        let authority = HostAuthority {
+            store: store.as_ref(),
+            clock: h.clock.as_ref(),
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            store: store.as_ref(),
+            authority: &authority,
+            ids: h.ids.as_ref(),
+        };
+        let reply = gateway.command(&user, "tasks.edit", json!({
+            "mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"comment-during-merge",
+            "body":{"kind":"tasks.edit","workId":root,"expectedRevision":before.revision.to_string(),
+                "changes":{"addComment":{"id":"pending-merge-comment","content":"Reviewed while GitHub was merging","evidence":[]}}}
+        }).to_string().as_bytes(), work).unwrap();
+        assert!(
+            matches!(&reply, CommandReply::Recorded{receipt,..}
+            if matches!(&receipt.decision, DomainDecision::Applied{..})),
+            "{reply:?}"
+        );
+        let edited = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+        assert!(edited.revision > before.revision);
+        assert_eq!(edited.scope_revision, before.scope_revision);
+
+        wire.repos.lock().unwrap()[0].merged = true;
+        let result = service(&store).observe(&record);
+        assert!(
+            matches!(&result, EffectOutcome::Completed(value)
+            if value["result"]["value"]["featureComplete"] == true),
+            "{result:?}"
+        );
+        mark_settled(store.as_ref(), &operation, result);
+        let accepted = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+        assert_eq!(accepted.completion.as_deref(), Some(VERIFIED));
+        let cleanup = service(&store);
+        cleanup.set_approval_control(Arc::new(
+            devworks_core::services::runs::ControlService::new(h.ids.clone()),
+        ));
+        cleanup.schedule_completed_cleanup().unwrap();
+        assert!(
+            read(store.as_ref(), |s| s.runs().root_control(&root))
+                .is_some_and(|control| control.stop_operation_id.is_some())
+        );
+        return;
+    }
     assert!(matches!(
         submit(&store, "dependent-before-predecessor", 1, Some(&barrier)),
         DomainDecision::Refused { .. }
@@ -617,6 +776,101 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     ));
     assert_eq!(wire.submissions.lock().unwrap().as_slice(), ["first"]);
     mark_settled(store.as_ref(), &first, observed);
+    // The GitHub watcher observes the first repository's verified merge.
+    write(store.as_ref(), {
+        let (_, _, tree, _, merge) = &checkouts[0];
+        let (head, merge) = (tree.head.hex.clone(), merge.clone());
+        move |tx| {
+            let observation_id = tx.new_id(IdKind::Event);
+            tx.github()
+                .append_github_observation(&StoredGithubObservation {
+                    id: observation_id,
+                    repository_id: id("github-first"),
+                    kind: "PullRequest".into(),
+                    subject_id: "1".into(),
+                    remote_revision: "merged".into(),
+                    url: "https://github.com/o/first/pull/1".into(),
+                    head: Some(head),
+                    payload: json!({"state": "merged", "mergeCommit": merge}),
+                    observed_at_ms: T0 + 1,
+                    source_updated_at_ms: Some(T0 + 1),
+                })?;
+            Ok(())
+        }
+    })
+    .unwrap();
+    let set_second_review_required = |required| {
+        let scope = ConfigScope::Repository {
+            project: project.clone(),
+            repository: id("second"),
+        };
+        let key = "delivery.finalPullRequestReview";
+        let schema = devworks_core::settings::catalog::descriptor(key)
+            .unwrap()
+            .schema_ref();
+        write(store.as_ref(), move |tx| {
+            let current = tx.configuration().current(&scope, "settings")?;
+            let (revision, mut body) = current
+                .map(|row| (row.revision, row.body))
+                .unwrap_or_else(|| (1, json!({"values": {}})));
+            body["values"][key] = json!({"schema": schema, "value": required});
+            tx.configuration()
+                .append_revision(&scope, "settings", revision, 1, body)?;
+            Ok(())
+        })
+        .unwrap();
+    };
+    set_second_review_required(true);
+    let mut remaining = barrier.clone();
+    remaining["repositories"][1]["reviewSource"] = json!("InAppIndependent");
+    let reviewer = Arc::new(devworks_core::services::reviews::ReviewService::new(
+        h.ids.clone(),
+        store.clone(),
+        service(&store),
+        artifacts.clone(),
+        h.clock(),
+        None,
+    ));
+    let work = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+    let review_authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let review_gateway = Gateway {
+        store: store.as_ref(),
+        authority: &review_authority,
+        ids: h.ids.as_ref(),
+    };
+    let review = review_gateway
+        .command(
+            &user,
+            "reviews.request",
+            json!({
+                "mode":"Command", "protocol":"1.0-draft.1", "schemaRevision":15,
+                "requestKey":"review-after-first-repository-merged",
+                "body":{"kind":"reviews.request", "rootId":root, "policyRevision":"1",
+                    "expectedRevision":work.revision.to_string(), "barrier":remaining}
+            })
+            .to_string()
+            .as_bytes(),
+            reviewer,
+        )
+        .unwrap();
+    assert!(
+        matches!(&review, CommandReply::Recorded {receipt, ..}
+        if matches!(receipt.decision, DomainDecision::Accepted{..})),
+        "{review:?}"
+    );
+    let rows = read(store.as_ref(), |s| {
+        s.git().code_reviews(Some(&project), Some(&root), None, 10)
+    });
+    assert_eq!(rows.len(), 1);
+    let rounds = rows[0].body["final_rounds"].as_array().unwrap();
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(rounds[0]["repository_id"], "second");
+    set_second_review_required(false);
+
     let mut changed_order = barrier.clone();
     changed_order["revision"] = json!("2");
     changed_order["dependencies"] = json!([{"before":"second","after":"first"}]);
@@ -743,6 +997,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     assert_eq!(
         write(store.as_ref(), {
             let root = root.clone();
+            let control = control.clone();
             move |tx| control.settle_stop(tx, &root, &stop, &[])
         })
         .unwrap(),
@@ -855,5 +1110,96 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             .status()
             .unwrap()
             .success()
+    );
+
+    let publisher = GitHubService::new(store.clone(), client, h.ids.clone(), h.clock());
+    let link_issue =
+        |number| {
+            let key = GithubIssueKey {
+                repository_id: id("github-first"),
+                number,
+            };
+            write(store.as_ref(), {
+            let key = key.clone();
+            let root = root.clone();
+            move |tx| {
+                let observation_id = tx.new_id(IdKind::Event);
+                let observation = tx.github().append_github_observation(&StoredGithubObservation {
+                    id: observation_id,
+                    repository_id: key.repository_id.clone(),
+                    kind: "Issue".into(),
+                    subject_id: number.to_string(),
+                    remote_revision: "1".into(),
+                    url: format!("https://github.com/o/first/issues/{number}"),
+                    head: None,
+                    payload: json!({"state": "open", "remoteIssueId": format!("issue-{number}")}),
+                    observed_at_ms: T0,
+                    source_updated_at_ms: Some(T0),
+                })?;
+                tx.github().put_github_issue(&StoredGithubIssueIntake {
+                    key: key.clone(),
+                    revision: 1,
+                    state: "Queued".into(),
+                    observation_id: observation.id.clone(),
+                    remote_revision: observation.id.as_str().into(),
+                    project_id: None,
+                    work_id: None,
+                    operation_id: None,
+                    last_triaged_revision: None,
+                }, None)?;
+                let revision = tx.work().work(&root.0)?.unwrap().revision;
+                tx.github().link_github_work(&key, &root, revision)
+            }
+        }).unwrap();
+            key
+        };
+    let resolutions = |key| {
+        read(store.as_ref(), |s| {
+            s.github().github_resolutions(key, None, 10)
+        })
+    };
+    let delivered_issue = link_issue(81);
+    publisher.queue_one_resolution(&id("first")).unwrap();
+    let published = resolutions(&delivered_issue);
+    assert_eq!(
+        published.len(),
+        1,
+        "cleanup stop permits verified resolution"
+    );
+    assert_eq!(published[0].state, "Sealed");
+
+    let paused_issue = link_issue(82);
+    let current = read(store.as_ref(), |s| s.runs().root_control(&root)).unwrap();
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: store.as_ref(),
+        authority: &authority,
+        ids: h.ids.as_ref(),
+    };
+    let pause = gateway
+        .command(
+            &user,
+            "runs.pause",
+            json!({
+                "protocol": "1.0-draft.1", "requestKey": "pause-after-verified-cleanup",
+                "command": {"kind": "runs.pause", "rootId":root,
+                    "expectedControlRevision": current.revision.to_string()}
+            })
+            .to_string()
+            .as_bytes(),
+            control,
+        )
+        .unwrap();
+    assert!(matches!(pause, CommandReply::Recorded {receipt, ..}
+        if matches!(receipt.decision, DomainDecision::Applied{..})));
+    h.advance(1_000);
+    publisher.queue_one_resolution(&id("first")).unwrap();
+    assert!(
+        resolutions(&paused_issue).is_empty(),
+        "human pause holds publication"
     );
 }
