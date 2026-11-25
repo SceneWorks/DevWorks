@@ -116,6 +116,11 @@ fn confirm_frame(b: &dyn Backend, op: &str, preview: &PrunePreview, limit: u32) 
 
 fn inspect(b: &dyn Backend, id: &Id) -> PruneInspection {
     let op = "maintenance.inspect";
+    let initial = fixture::query(b, op, json!({"previewId":id}));
+    assert!(
+        ops::query_result(b.query(op, &initial)).is_err(),
+        "maintenance.inspect is not negotiable at the published revision 1"
+    );
     let frame = fixture::at_revision(fixture::query(b, op, json!({"previewId":id})), 19);
     match ops::query_result(b.query(op, &frame)) {
         Ok((OperationResult::MaintenanceInspect { value }, _)) => value,
