@@ -2145,6 +2145,21 @@ fn git_config_read(args: &[Word]) -> bool {
     }
 }
 
+fn git_config_override(arg: &Word) -> bool {
+    if arg.dynamic || arg.text.chars().any(char::is_control) {
+        return false;
+    }
+    let Some((key, value)) = arg.text.split_once('=') else {
+        return false;
+    };
+    matches!(
+        (key.to_ascii_lowercase().as_str(), value),
+        ("user.name" | "user.email", _)
+            | ("protocol.file.allow" | "protocol.ext.allow", "never")
+            | ("commit.gpgsign", "false")
+    )
+}
+
 fn git(args: &[Word], c: &mut Collector) -> bool {
     // Exact discovery forms only: --exec-path=<path> and extra arguments stay unmodeled.
     if args.len() == 1 && matches!(args[0].text.as_str(), "--version" | "--exec-path") {
@@ -2170,13 +2185,7 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 j += 2;
             }
             "-c" => {
-                if !args.get(j + 1).is_some_and(|value| {
-                    !value.dynamic
-                        && matches!(
-                            value.text.as_str(),
-                            "protocol.file.allow=never" | "protocol.ext.allow=never"
-                        )
-                }) {
+                if !args.get(j + 1).is_some_and(git_config_override) {
                     return false;
                 }
                 j += 2;
@@ -3529,6 +3538,25 @@ mod transport_operand_tests {
             &["git", "config", "get", "user.name"][..],
             &["git", "config", "--null", "--show-scope", "--list"][..],
             &["git", "-c", "protocol.file.allow=never", "fetch"][..],
+            &[
+                "git",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Fixture",
+            ][..],
+            &[
+                "git",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "merge",
+                "--no-ff",
+                "--no-commit",
+                "feature",
+            ][..],
         ] {
             let args = args
                 .iter()
@@ -3543,6 +3571,14 @@ mod transport_operand_tests {
             &["git", "config", "set", "user.name", "Test"][..],
             &["git", "config", "--get", "user.name", "--edit"][..],
             &["git", "-c", "credential.helper=", "status"][..],
+            &[
+                "git",
+                "-c",
+                "commit.gpgsign=true",
+                "commit",
+                "-qm",
+                "Fixture",
+            ][..],
         ] {
             let args = args
                 .iter()
