@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2238), 2238);
+    assert_eq!(run("domain-fixtures.json", 2297), 2297);
 }
 
 #[test]
@@ -464,7 +464,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // bindings alongside the original revision-1 document operations.
     // Document re-extraction adds one revision-12 admission, and activity adds seven at revision 13.
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
-    assert_eq!(admitted.len(), 740);
+    // The GitHub delivery and watcher branches add 23 operation revision admissions.
+    assert_eq!(admitted.len(), 763);
 }
 
 #[test]

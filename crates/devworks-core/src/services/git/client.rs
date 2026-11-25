@@ -361,6 +361,53 @@ mod process_argument_tests {
 }
 
 impl Git<'_> {
+    /// Captures tracked bytes of an immutable commit for an isolated verifier. A Git archive
+    /// carries no shared Git directory, configuration or working-copy changes.
+    pub fn archive_commit(
+        &self,
+        dir: &Path,
+        oid: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(oid)
+            || self
+                .resolve(dir, oid)?
+                .is_none_or(|(current, _)| current != oid)
+        {
+            return Err(GitFault::Malformed(
+                "verification commit is unavailable".into(),
+            ));
+        }
+        self.run(dir, &["archive", "--format=tar", oid], max_bytes)
+    }
+
+    /// Reads one committed file blob at `oid:path` without touching the working tree.
+    pub fn show_blob(
+        &self,
+        dir: &Path,
+        oid: &str,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, GitFault> {
+        if !oid_ok(oid)
+            || path.is_empty()
+            || path.starts_with('/')
+            || path.contains("..")
+            || path.contains('\0')
+            || self
+                .resolve(dir, oid)?
+                .is_none_or(|(current, _)| current != oid)
+        {
+            return Ok(None);
+        }
+        let spec = format!("{oid}:{path}");
+        match self.run(dir, &["show", &spec], max_bytes) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(GitFault::Helper(HelperFault::Failed { .. })) => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
     pub fn version(&self, dir: &Path) -> Result<String, GitFault> {
         self.line(dir, &["version"])?
             .ok_or_else(|| GitFault::Malformed("Git version unavailable".into()))
@@ -625,6 +672,36 @@ impl Git<'_> {
         Ok(result)
     }
 
+    /// Remove only the branch named by an exact, verified cleanup reservation.
+    /// The typed owner has proved integration and authority before satisfying the generic
+    /// Git destructive-command hold. Use Git's compare-and-delete, with hooks disabled.
+    pub(crate) fn retire_owned_branch(
+        &self,
+        dir: &Path,
+        branch: &str,
+        head: &str,
+        operation: &OperationId,
+    ) -> Result<(), GitFault> {
+        if !branch.starts_with("refs/heads/") || !oid_ok(head) {
+            return Err(GitFault::SourceChanged);
+        }
+        let policy = self.reviewed_commit_policy(dir)?;
+        let args = ["update-ref", "--no-deref", "-d", branch, head];
+        let spec = self.reviewed_spec(dir, &args, None, &policy)?;
+        self.runner.run_recorded(
+            self.ctx,
+            spec,
+            HelperLimits {
+                deadline: self.deadline,
+                max_stdout: 1024,
+            },
+            self.stop,
+            operation,
+            true,
+        )?;
+        Ok(())
+    }
+
     /// Local-only configuration inventory for the host-owned transport boundary. Values may
     /// contain credentials: callers must never publish them as approval or journal evidence.
     pub(crate) fn transport_configuration(&self, dir: &Path) -> Result<Vec<u8>, GitFault> {
@@ -689,6 +766,64 @@ impl Git<'_> {
         }
         self.line(dir, &["ls-remote", "--get-url", "--", url])?
             .ok_or_else(|| GitFault::Malformed("literal push URL unavailable".into()))
+    }
+
+    /// Obtain one observed GitHub commit for indexing. This uses Git's own transport
+    /// credentials and a private ref and does not switch or update any user's branch.
+    pub(crate) fn fetch_index_source(
+        &self,
+        dir: &Path,
+        remote: &str,
+        head: &str,
+    ) -> Result<String, GitFault> {
+        let expected = super::github::Repository::from_remote(remote)
+            .ok_or_else(|| GitFault::Malformed("GitHub index remote identity".into()))?;
+        if !crate::services::github::indexing::valid_oid(head) {
+            return Err(GitFault::Malformed("GitHub index commit identity".into()));
+        }
+        if let Some((oid, _)) = self.resolve(dir, head)?
+            && oid == head
+        {
+            return Ok(oid);
+        }
+        let effective = self
+            .line(dir, &["ls-remote", "--get-url", "--", remote])?
+            .and_then(|url| super::github::Repository::from_remote(&url))
+            .ok_or_else(|| GitFault::Malformed("GitHub index remote is unavailable".into()))?;
+        if !effective.owner.eq_ignore_ascii_case(&expected.owner)
+            || !effective.name.eq_ignore_ascii_case(&expected.name)
+        {
+            return Err(GitFault::Malformed(
+                "GitHub index remote was redirected".into(),
+            ));
+        }
+        let reference = format!("refs/devworks/github-index/{head}");
+        let refspec = format!("{head}:{reference}");
+        self.run(
+            dir,
+            &[
+                "-c",
+                "protocol.file.allow=never",
+                "-c",
+                "protocol.ext.allow=never",
+                "fetch",
+                "--no-tags",
+                "--no-recurse-submodules",
+                "--no-write-fetch-head",
+                "--no-auto-gc",
+                "--refmap=",
+                "--",
+                remote,
+                &refspec,
+            ],
+            64 * 1024,
+        )?;
+        self.resolve(dir, &reference)?
+            .filter(|(oid, _)| oid == head)
+            .map(|(oid, _)| oid)
+            .ok_or_else(|| {
+                GitFault::Malformed("Fetched GitHub commit does not match the observation".into())
+            })
     }
 
     pub fn remote_default(&self, dir: &Path, url: &str) -> Result<Option<String>, GitFault> {
@@ -809,7 +944,17 @@ impl Git<'_> {
         if !oid_ok(base) || !oid_ok(head) {
             return Err(GitFault::Malformed("invalid ancestry IDs".into()));
         }
-        match self.run(dir, &["merge-base", "--is-ancestor", base, head], 1024) {
+        match self.run(
+            dir,
+            &[
+                "--no-replace-objects",
+                "merge-base",
+                "--is-ancestor",
+                base,
+                head,
+            ],
+            1024,
+        ) {
             Ok(_) => Ok(true),
             Err(GitFault::Helper(HelperFault::Failed { code: Some(1), .. })) => Ok(false),
             Err(error) => Err(error),
@@ -835,7 +980,16 @@ impl Git<'_> {
             return Err(GitFault::Malformed("invalid commit ID".into()));
         }
         let parents = self
-            .line(dir, &["show", "--no-patch", "--format=%P", head])?
+            .line(
+                dir,
+                &[
+                    "--no-replace-objects",
+                    "show",
+                    "--no-patch",
+                    "--format=%P",
+                    head,
+                ],
+            )?
             .unwrap_or_default();
         let parents: Vec<String> = parents.split_whitespace().map(str::to_owned).collect();
         if parents.iter().any(|p| !oid_ok(p)) {
@@ -1144,6 +1298,39 @@ impl Git<'_> {
         ];
         args.extend(paths.iter().map(String::as_str));
         self.run(dir, &args, MAX_LISTING_BYTES)
+    }
+
+    /// An immutable patch for an independent review. Do not accept local object replacements,
+    /// diff drivers, text conversion or helpers as part of the review's source.
+    pub(crate) fn review_patch(
+        &self,
+        dir: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<u8>, GitFault> {
+        if !oid_ok(base) || !oid_ok(head) {
+            return Err(GitFault::Malformed("review commit".into()));
+        }
+        let policy = self.reviewed_commit_policy(dir)?;
+        self.reviewed_read(
+            dir,
+            &[
+                "--no-replace-objects",
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--ignore-submodules=none",
+                "--binary",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                base,
+                head,
+                "--",
+            ],
+            MAX_LISTING_BYTES,
+            &policy,
+        )
     }
 
     /// The branch `HEAD` points at (`refs/heads/...`), `None` when detached.
@@ -1598,7 +1785,7 @@ impl Git<'_> {
         } else {
             "--ignore-submodules=dirty"
         };
-        let mut args = vec!["diff"];
+        let mut args = vec!["--no-replace-objects", "diff"];
         if staged {
             args.push("--cached");
         }
@@ -1680,7 +1867,7 @@ impl Git<'_> {
                     self.stop,
                 )?
             } else {
-                let mut args = vec!["diff"];
+                let mut args = vec!["--no-replace-objects", "diff"];
                 if staged {
                     args.push("--cached");
                 }

@@ -84,7 +84,12 @@ pub(crate) fn publish_input(
             || session.context_epoch != binding.context_epoch.get()
             || (session.last_durable_sequence() != observed
                 && !(ctx.workspace_reply().is_some()
-                    && crate::tool_turn::workspace_input_tail(tx.sessions(), &session, observed)?))
+                    && crate::tool_turn::workspace_input_tail(
+                        tx.sessions(),
+                        &session,
+                        observed,
+                        true,
+                    )?))
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -166,6 +171,22 @@ pub(crate) fn publish_compacted(
             body,
         )?;
     }
+    if ctx.assignment_id().is_some() || ctx.workspace_reply().is_some() {
+        for notice in crate::watch::unacknowledged_notices(
+            store,
+            session_id,
+            observed.ok_or(StorageError::ScopeDenied)?,
+        )? {
+            crate::tool_turn::append_context_fact(
+                &mut compacted,
+                store,
+                artifacts,
+                ctx,
+                session_id,
+                notice,
+            )?;
+        }
+    }
     if let Some(reply) = ctx.workspace_reply()
         && reply.user_sequence > 1
     {
@@ -177,21 +198,33 @@ pub(crate) fn publish_compacted(
                 .entries(session_id, reply.user_sequence - 1, 1)?;
             let entry = entries
                 .first()
-                .filter(|entry| {
-                    entry.sequence == reply.user_sequence && entry.kind == "UserMessage"
-                })
+                .filter(|entry| entry.sequence == reply.user_sequence)
                 .ok_or(StorageError::ScopeDenied)?;
-            serde_json::from_value(entry.body.clone())
-                .map_err(|error| StorageError::InvalidRecord(error.to_string()))
+            let body = serde_json::from_value::<TranscriptBody>(entry.body.clone())
+                .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
+            match &body {
+                TranscriptBody::UserMessage { .. } => Ok(Some(body)),
+                TranscriptBody::HostNotice { source, .. } if crate::watch::is_notice(&body) => {
+                    // The exact event was carried above. A reminder has no acknowledgement row.
+                    Ok(read
+                        .watchers()
+                        .watch_event(source)?
+                        .is_none()
+                        .then_some(body))
+                }
+                _ => Err(StorageError::ScopeDenied),
+            }
         })?;
-        crate::tool_turn::append_context_fact(
-            &mut compacted,
-            store,
-            artifacts,
-            ctx,
-            session_id,
-            body,
-        )?;
+        if let Some(body) = body {
+            crate::tool_turn::append_context_fact(
+                &mut compacted,
+                store,
+                artifacts,
+                ctx,
+                session_id,
+                body,
+            )?;
+        }
     }
     let (context, _) = compacted
         .converted_for_new_epoch(binding, &next)

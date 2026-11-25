@@ -39,6 +39,7 @@ mod builders;
 mod forms;
 mod replies;
 mod requests;
+pub(crate) mod reviews;
 pub(crate) mod workflow;
 
 pub use crate::work_screen::activity::{activity_line, event_summary};
@@ -113,10 +114,17 @@ pub struct WorkUi {
         BTreeMap<String, Paged<devworks_core::protocol::records::LineageRecord>>,
     /// Each root's source-control links: a re-read keeps the list on screen until every page
     /// arrived, so a refresh never shifts the controls beneath it.
+    pub code_reviews: BTreeMap<String, reviews::ReviewPane>,
     pub git: BTreeMap<String, Paged<devworks_core::protocol::records::AttributedGitLink>>,
     pub runs: BTreeMap<String, RootSnapshot>,
     pub git_inspections:
         BTreeMap<String, Result<devworks_core::protocol::records::GitInspection, String>>,
+    pub github_links: BTreeMap<String, devworks_core::protocol::records::GithubIssueLink>,
+    pub github_link_number_drafts: BTreeMap<String, String>,
+    pub github_pr_checks:
+        BTreeMap<String, Vec<devworks_core::protocol::records::GithubObservation>>,
+    pub github_pr_reviews:
+        BTreeMap<String, Vec<devworks_core::protocol::records::GithubObservation>>,
     /// The feature the board shows.
     pub board: Option<String>,
     /// The selected card of the board.
@@ -315,9 +323,26 @@ pub(crate) enum Action {
     SelectCard(Option<String>),
     OpenDetail(String),
     RefreshGit(String),
+    CodeReview(reviews::ReviewAction),
     ReadinessHistory(String, bool),
     InspectGit(String, String),
     OpenGitSession(String),
+    PublishGithubIssue {
+        issue_id: String,
+        expected_revision: String,
+        repository_id: String,
+    },
+    LinkGithubIssue {
+        issue_id: String,
+        expected_revision: String,
+        repository_id: String,
+        remote_issue_number: String,
+    },
+    ReadGithubPullObservations {
+        repository_id: String,
+        pull_request_url: String,
+        expected_head: String,
+    },
 }
 
 pub(crate) fn kind_label(w: &WorkRecord) -> &'static str {

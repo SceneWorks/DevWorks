@@ -1076,7 +1076,7 @@ fn effect_result(operation: &OperationRecord, run: &WorkImportRun) -> EffectOutc
 }
 
 impl JournaledEffect for ImportService {
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         true
     }
 

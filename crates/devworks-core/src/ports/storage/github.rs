@@ -21,6 +21,8 @@ pub struct StoredGithubAccount {
     pub credential_revision: i64,
     pub permission_revision: i64,
     pub granted_scopes: Vec<String>,
+    #[serde(default)]
+    pub granted_scopes_reported: bool,
     pub observed_at_ms: i64,
     pub last_error: Option<String>,
 }
@@ -183,7 +185,47 @@ pub struct StoredGithubObligationRetirement {
     pub adjudication_ref: Value,
     pub created_at_ms: i64,
 }
+/// A project-owned investigation of one inbound issue, retained across source updates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredGithubTriageCase {
+    pub id: Id,
+    pub revision: i64,
+    pub key: GithubIssueKey,
+    pub project_id: ProjectId,
+    pub work_id: RootId,
+    pub source_revision: String,
+    pub triage_operation_id: OperationId,
+    pub state: String,
+    pub evidence: Option<Value>,
+}
+
+/// Source requested by a committed GitHub ref event for one native indexing run.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredGithubIndexTarget {
+    pub run_id: Id,
+    pub repository_id: Id,
+    pub github_repository_id: Id,
+    pub repository_revision: i64,
+    pub registered_remote: String,
+    pub reference: String,
+    pub head: String,
+    pub source_event: crate::protocol::EventId,
+}
+
 pub trait GithubRead {
+    fn github_triage_case(
+        &self,
+        key: &GithubIssueKey,
+        project: &ProjectId,
+    ) -> Result<Option<StoredGithubTriageCase>, StorageError>;
+
+    fn github_index_target(
+        &self,
+        run: &Id,
+    ) -> Result<Option<StoredGithubIndexTarget>, StorageError>;
+
     /// Actual retained source association for the core artifact lifecycle guard, never a grant.
     fn github_adjudication_owner(
         &self,
@@ -254,6 +296,13 @@ pub trait GithubRead {
         after: Option<&Id>,
         limit: u16,
     ) -> Result<Vec<StoredGithubObservation>, StorageError>;
+    /// Latest open pull requests of an already-authorized canonical repository, by number.
+    fn github_open_pulls(
+        &self,
+        repository: &Id,
+        after: i64,
+        limit: u16,
+    ) -> Result<Vec<StoredGithubObservation>, StorageError>;
     fn github_poll_cursor(
         &self,
         repository: &Id,
@@ -272,6 +321,13 @@ pub trait GithubRead {
     ) -> Result<Vec<StoredGithubIssueIntake>, StorageError>;
     /// Implicit initial revision one, interval1800, no accumulated credits.
     fn github_intake_clock(&self) -> Result<GithubIntakeClock, StorageError>;
+    /// Current issues linked to one work item in the already-authorized canonical repository.
+    fn github_issues_for_work(
+        &self,
+        work: &RootId,
+        repository: &Id,
+        limit: u16,
+    ) -> Result<Vec<StoredGithubIssueIntake>, StorageError>;
     fn github_obligation_revision(&self, key: &GithubIssueKey) -> Result<i64, StorageError>;
     fn github_work_links(
         &self,
@@ -296,6 +352,17 @@ pub trait GithubRead {
     ) -> Result<Vec<StoredGithubResolutionWitness>, StorageError>;
 }
 pub trait GithubRepository: GithubRead {
+    fn put_github_triage_case(
+        &mut self,
+        case: &StoredGithubTriageCase,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError>;
+
+    fn put_github_index_target(
+        &mut self,
+        target: &StoredGithubIndexTarget,
+    ) -> Result<(), StorageError>;
+
     fn retire_github_work_link(
         &mut self,
         witness: &StoredGithubObligationRetirement,

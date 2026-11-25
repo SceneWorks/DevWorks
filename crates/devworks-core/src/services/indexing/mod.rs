@@ -327,7 +327,7 @@ fn request_scope(
     Ok(project)
 }
 
-fn history(
+pub(crate) fn history(
     tx: &mut dyn WriteTransaction,
     actor: &ActorId,
     project: Option<&ProjectId>,

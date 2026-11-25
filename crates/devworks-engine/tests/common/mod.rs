@@ -79,10 +79,10 @@ impl Harness {
         // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
         // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
         // durable commits of native Help startup past the `within` guard.
-        let guard = TempRoot::under(
-            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
-            "devworks-engine-test",
-        );
+        Self::under(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")))
+    }
+    pub fn under(base: &std::path::Path) -> Self {
+        let guard = TempRoot::under(base, "devworks-engine-test");
         Self {
             root: guard.path().to_path_buf(),
             _root: guard,

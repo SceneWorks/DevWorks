@@ -8151,6 +8151,10 @@
                 }
               ]
             },
+            "github": {
+              "$ref": "#/$defs/WatchGithubTarget",
+              "x-since": 9
+            },
             "kind": {
               "const": "watch.create",
               "type": "string"
@@ -10789,6 +10793,10 @@
             "kind": {
               "const": "github.poll_status",
               "type": "string"
+            },
+            "page": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 3
             },
             "repositoryId": {
               "$ref": "#/$defs/Id"
@@ -17179,6 +17187,38 @@
       },
       "required": [
         "path"
+      ],
+      "type": "object"
+    },
+    "WatchGithubTarget": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "repositoryId",
+            "workflowRunId"
+          ]
+        },
+        {
+          "required": [
+            "repositoryId",
+            "pullRequestNumber"
+          ]
+        }
+      ],
+      "properties": {
+        "pullRequestNumber": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "workflowRunId": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "repositoryId"
       ],
       "type": "object"
     },

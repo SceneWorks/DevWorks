@@ -217,6 +217,170 @@ fn parallel_migrations_preserve_keep_working_claims_and_systemone_rotation() {
 }
 
 #[test]
+fn published_watcher_migrations_preserve_attached_and_delegated_sources() {
+    for (prefix, has_assignment) in [(63, false), (66, false), (66, true)] {
+        let h = Harness::new();
+        let mut branch = through(prefix);
+        let version = prefix + 1;
+        branch.push(crate::storage::sqlite::Migration {
+            version,
+            minimum_reader: version,
+            minimum_writer: version,
+            sql: include_str!("../migrations/0067_external_process_watchers.sql"),
+            expected_sha256: "a23ddfe3134f16970b55a18a91f6582fd3e3fe9f087a3ed5224e04288211b8e2",
+            rebuilds_tables: true,
+        });
+        if has_assignment {
+            branch.push(crate::storage::sqlite::Migration {
+                version: 68,
+                minimum_reader: 68,
+                minimum_writer: 68,
+                sql: include_str!("../migrations/0068_assignment_watchers.sql"),
+                expected_sha256: "b2432a633eec00d44bc5f9bcd7cb23161e4f6dd303755fad5d27e245afdc50b1",
+                rebuilds_tables: true,
+            });
+        }
+        drop(seeded_with(&h, &branch));
+        let conn = h.raw();
+        conn.execute_batch(
+            "INSERT INTO conversations(id, created_at) VALUES ('watch-chat', 0);
+             INSERT INTO sessions(id, conversation_id, agent_id, context_epoch, revision)
+                VALUES ('watch-session', 'watch-chat', 'host', 0, 1);
+             INSERT INTO watchers(id, revision, phase, source_kind, session_id, actor_id, tail_bytes,
+                outcome_kind,output_truncated,stop_requested,created_at,updated_at,settled_at,
+                attached_pid,attached_birth)
+                VALUES ('attached',2,'Settled','AttachedProcess','watch-session','host',0,
+                    'Exited',0,0,0,0,0,1234,'process-identity');
+             INSERT INTO watcher_events(id,watcher_id,session_id,state,payload_json,created_at)
+                VALUES ('watch-durable-event','attached','watch-session','Pending','{}',0);"
+        ).unwrap();
+        if has_assignment {
+            conn.execute_batch(
+                "INSERT INTO watchers(id, revision, phase, source_kind,session_id,actor_id,
+                    tail_bytes,output_truncated,stop_requested,created_at,updated_at,
+                    assignment_id,child_session_id)
+                    VALUES ('delegated',1,'Active','Assignment','watch-session','host',0,0,0,0,0,
+                        'child-assignment','watch-session');",
+            )
+            .unwrap();
+        }
+        drop(conn);
+        for _ in 0..2 {
+            let store = h.store();
+            assert!(store.integrity_check().unwrap().problems.is_empty());
+            read_snapshot(&store, &ReadOptions::default(), |snapshot| {
+                let attached = snapshot.watchers().watcher(&id("attached"))?.unwrap();
+                let identity = attached.attached_process.unwrap();
+                assert_eq!(
+                    (identity.pid, identity.birth.as_str()),
+                    (1234, "process-identity")
+                );
+                assert!(
+                    snapshot
+                        .watchers()
+                        .watch_event(&id("watch-durable-event"))?
+                        .is_some()
+                );
+                let delegated = snapshot.watchers().watcher(&id("delegated"))?;
+                assert_eq!(delegated.is_some(), has_assignment);
+                if let Some(watcher) = delegated {
+                    assert_eq!(
+                        watcher.assignment.unwrap().id.0.as_str(),
+                        "child-assignment"
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+            drop(store);
+        }
+        let conn = h.raw();
+        let entries = super::super::migrations::ledger(&conn).unwrap();
+        assert_eq!(entries.len(), MIGRATIONS.len());
+        for (entry, migration) in entries.iter().zip(MIGRATIONS) {
+            assert_eq!(entry.version, migration.version);
+            assert_eq!(entry.checksum, migration.checksum());
+        }
+    }
+}
+
+#[test]
+fn combined_watcher_store_upgrades_through_the_signed_installer_ledger() {
+    let h = Harness::new();
+    let mut branch = through(68);
+    branch.extend(MIGRATIONS[78..80].iter().map(|migration| {
+        let version = migration.version - 10;
+        crate::storage::sqlite::Migration {
+            version,
+            minimum_reader: version,
+            minimum_writer: version,
+            ..*migration
+        }
+    }));
+    drop(seeded_with(&h, &branch));
+    let conn = h.raw();
+    conn.execute_batch(
+        "INSERT INTO conversations(id, created_at) VALUES ('watch-chat', 0);
+         INSERT INTO sessions(id, conversation_id, agent_id, context_epoch, revision)
+            VALUES ('watch-session', 'watch-chat', 'host', 0, 1);
+         INSERT INTO watchers(id, revision, phase, source_kind, session_id, actor_id,
+            tail_bytes, output_truncated, stop_requested, created_at, updated_at, github_json)
+            VALUES ('github',1,'Active','GitHub','watch-session','host',0,0,0,0,0,'{}');
+         INSERT INTO watchers(id, revision, phase, source_kind, session_id, actor_id,
+            tail_bytes, output_truncated, stop_requested, created_at, updated_at, attached_pid, attached_birth)
+            VALUES ('attached',1,'Active','AttachedProcess','watch-session','host',0,0,0,0,0,1234,'birth');
+         INSERT INTO watchers(id, revision, phase, source_kind, session_id, actor_id,
+            tail_bytes, output_truncated, stop_requested, created_at, updated_at, assignment_id, child_session_id)
+            VALUES ('assignment',1,'Active','Assignment','watch-session','host',0,0,0,0,0,'child','watch-session');
+         INSERT INTO watcher_events(id,watcher_id,session_id,state,payload_json,created_at)
+            VALUES ('saved-event','attached','watch-session','Pending','{}',0);",
+    ).unwrap();
+    drop(conn);
+    for _ in 0..2 {
+        let store = h.store();
+        assert!(store.integrity_check().unwrap().problems.is_empty());
+        drop(store);
+        let conn = h.raw();
+        let identities: (Option<String>, i64, String, String) = conn
+            .query_row(
+                "SELECT g.github_json, p.attached_pid, p.attached_birth, a.assignment_id
+             FROM watchers g, watchers p, watchers a
+             WHERE g.id='github' AND p.id='attached' AND a.id='assignment'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            identities,
+            (Some("{}".into()), 1234, "birth".into(), "child".into())
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT state FROM watcher_events WHERE id='saved-event'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "Pending"
+        );
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            80
+        );
+        let entries = super::super::migrations::ledger(&conn).unwrap();
+        assert_eq!(entries.len(), MIGRATIONS.len());
+        assert!(
+            entries
+                .iter()
+                .zip(MIGRATIONS)
+                .all(|(actual, expected)| actual.version == expected.version
+                    && actual.checksum == expected.checksum())
+        );
+    }
+}
+
+#[test]
 fn concurrent_distinct_reservations_have_durable_invocation_identity() {
     let h = Harness::new();
     let s = Arc::new(seeded(&h));

@@ -24,9 +24,35 @@ fn one(c: &Connection, id: &Id) -> Result<Option<StoredGitWorktree>, StorageErro
     .map(decode)
     .transpose()
 }
+#[path = "git_review_records.rs"]
+mod review_records;
+
 macro_rules! reads {
     ($t:ty) => {
         impl GitRead for $t {
+            fn code_review(&self, id: &Id) -> Result<Option<StoredCodeReview>, StorageError> {
+                review_records::lookup(self.conn, "CodeReview", id)
+            }
+            fn code_reviews(
+                &self,
+                project: Option<&devworks_core::protocol::ProjectId>,
+                root: Option<&devworks_core::protocol::RootId>,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredCodeReview>, StorageError> {
+                review_records::reviews(self.conn, project, root, after, limit)
+            }
+            fn code_finding(&self, id: &Id) -> Result<Option<StoredCodeFinding>, StorageError> {
+                review_records::lookup(self.conn, "CodeReviewFinding", id)
+            }
+            fn code_findings(
+                &self,
+                review: &Id,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<StoredCodeFinding>, StorageError> {
+                review_records::findings(self.conn, review, after, limit)
+            }
             fn git_worktree_for_branch(
                 &self,
                 repository: &Id,
@@ -133,6 +159,21 @@ macro_rules! reads {
 reads!(Snapshot<'_>);
 reads!(Unit<'_>);
 impl GitRepository for Unit<'_> {
+    fn put_code_review(
+        &mut self,
+        record: &StoredCodeReview,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        review_records::save_review(self.conn, record, expected)
+    }
+
+    fn put_code_finding(
+        &mut self,
+        record: &StoredCodeFinding,
+        expected: Option<i64>,
+    ) -> Result<(), StorageError> {
+        review_records::save_finding(self.conn, record, expected)
+    }
     fn insert_git_worktree(&mut self, r: &StoredGitWorktree) -> Result<(), StorageError> {
         r.validate()?;
         if r.revision != 1 || r.removed {

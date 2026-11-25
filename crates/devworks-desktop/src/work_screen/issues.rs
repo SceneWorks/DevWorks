@@ -108,6 +108,7 @@ impl WorkCtl<'_, '_> {
                                     open && !waiting.contains(&id),
                                     actions,
                                 );
+                                reviews::section(ui, work, &id, actions);
                             }
                         }
                     });

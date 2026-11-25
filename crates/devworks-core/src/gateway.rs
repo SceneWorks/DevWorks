@@ -532,7 +532,8 @@ impl Gateway<'_> {
             && (graph_request::is_graph_read(&admitted.input) || operation == "indexing.status");
         let recheck = handler.publication_check(&admitted);
         if let Ok(Some((Ok(answer), _))) = &answered
-            && (scoped_worktree || recheck.is_some()
+            && (scoped_worktree
+                || recheck.is_some()
                 || !authorization.fences().is_empty()
                 || !authorization.authority_grants().is_empty())
         {

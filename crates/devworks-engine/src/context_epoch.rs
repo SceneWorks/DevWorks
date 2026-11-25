@@ -319,7 +319,12 @@ pub(crate) fn publish(
         if let Some(sequence) = observed_sequence
             && session.last_durable_sequence() != sequence
             && !(ctx_for_write.workspace_reply().is_some()
-                && crate::tool_turn::workspace_input_tail(tx.sessions(), &session, sequence)?)
+                && crate::tool_turn::workspace_input_tail(
+                    tx.sessions(),
+                    &session,
+                    sequence,
+                    false,
+                )?)
         {
             return Err(StorageError::ScopeDenied);
         }

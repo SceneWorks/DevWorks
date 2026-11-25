@@ -694,7 +694,7 @@ impl NativeProviders {
                 )?;
                 // Capture before dispatch. Even an empty completion must have a cursor, and a
                 // concurrent redirect must be visible when continuation scans this turn.
-                turn_start_sequence = Some(fence.sequence);
+                turn_start_sequence = Some(fence.input_sequence.unwrap_or(fence.sequence));
                 context_head_fence = Some(fence);
             }
         }
@@ -1601,6 +1601,33 @@ impl OwnedInferenceSource for LazySource {
                             &captured.request_id,
                             &AttemptId(captured.attempt_id.clone()),
                         )?;
+                    }
+                    if let Some(fence) = &context_head_fence
+                        && let Some(input_sequence) = fence.input_sequence
+                    {
+                        let turn = if let Some((execution, epoch)) = context.activation() {
+                            tx.runs()
+                                .session_turn(&fence.session_id)?
+                                .filter(|turn| {
+                                    &turn.execution_id == execution
+                                        && turn.owner_epoch == epoch
+                                        && context.assignment_id() == Some(&turn.assignment_id)
+                                })
+                                .map(|turn| turn.turn_id)
+                        } else if context.workspace_reply().is_some() {
+                            crate::workspace_reply::watcher_turn(tx, &context, &fence.session_id)?
+                        } else {
+                            None
+                        };
+                        if let Some(turn) = turn {
+                            // The sealed context has passed the final send fence. A notice appended
+                            // after this request belongs to a later provider input.
+                            tx.watchers().carry_watch_events(
+                                &fence.session_id,
+                                &turn,
+                                input_sequence,
+                            )?;
+                        }
                     }
                     Ok(())
                 })

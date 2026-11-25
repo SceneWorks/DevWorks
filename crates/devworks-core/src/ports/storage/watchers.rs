@@ -2,7 +2,7 @@
 //! observed outcome as one durable watcher event. The event is delivered into the session's
 //! input, carried by the next turn that starts, and acknowledged only when that turn completes.
 use super::StorageError;
-use crate::protocol::{ActorId, Id, OperationId, ProjectId};
+use crate::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId};
 use serde_json::Value;
 
 /// Bound on a stored output tail.
@@ -58,7 +58,7 @@ pub struct StoredWatcher {
     pub id: Id,
     pub revision: i64,
     pub phase: WatcherPhase,
-    /// `Process`, `Probe` or `Timer`.
+    /// The source kind persisted by the watcher service.
     pub source_kind: String,
     pub project_id: Option<ProjectId>,
     pub session_id: Id,
@@ -87,6 +87,34 @@ pub struct StoredWatcher {
     pub matching: Option<StoredMatch>,
     /// The watched file (`File` only), resolved when the watcher was created.
     pub file_path: Option<String>,
+    /// The external process identity. It confers observation only and has no group.
+    pub attached_process: Option<crate::ports::process::NativeIdentity>,
+    /// The direct child observed by the watcher.
+    pub assignment: Option<StoredWatchAssignment>,
+    /// The exact GitHub observation selected at admission.
+    pub github: Option<StoredGithubWatch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredWatchAssignment {
+    pub id: AssignmentId,
+    pub session_id: Id,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StoredGithubWatch {
+    pub registration: Id,
+    pub remote_user: String,
+    pub remote_repository: Id,
+    pub subject: GithubWatchSubject,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GithubWatchSubject {
+    WorkflowRun(u64),
+    PullRequest(u64),
 }
 
 /// A watcher's match rule and its progress through the source.
@@ -236,6 +264,14 @@ pub trait WatcherRead {
         states: &[WatchEventState],
         limit: u16,
     ) -> Result<Vec<StoredWatchEvent>, StorageError>;
+    /// Delivered events within an exact provider transcript, ordered by notice sequence.
+    fn delivered_watch_events(
+        &self,
+        session: &Id,
+        after_sequence: i64,
+        through_sequence: i64,
+        limit: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError>;
 }
 
 pub trait WatcherRepository: WatcherRead {
@@ -252,9 +288,14 @@ pub trait WatcherRepository: WatcherRead {
         transcript_sequence: i64,
         at_ms: i64,
     ) -> Result<bool, StorageError>;
-    /// Marks the session's delivered, unacknowledged events as carried by `turn` (replacing a
-    /// carry left by an ended turn). Returns how many it carries.
-    fn carry_watch_events(&mut self, session: &Id, turn: &Id) -> Result<u64, StorageError>;
+    /// Carries delivered, unacknowledged events through the provider input's transcript cursor.
+    /// A new turn replaces the carry of a turn interrupted by a previous owner.
+    fn carry_watch_events(
+        &mut self,
+        session: &Id,
+        turn: &Id,
+        through_sequence: i64,
+    ) -> Result<u64, StorageError>;
     /// Ends `turn`'s carry: a completed turn acknowledges its events; any other end leaves them
     /// delivered for the next turn. Returns how many it changed.
     fn release_watch_events(

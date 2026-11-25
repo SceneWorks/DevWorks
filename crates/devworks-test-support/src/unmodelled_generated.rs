@@ -1384,6 +1384,29 @@ impl EvalRepository for Unmodelled {
     }
 }
 impl GitRead for Unmodelled {
+    fn code_review(&self, _: &Id) -> Result<Option<StoredCodeReview>, StorageError> {
+        unmodelled()
+    }
+    fn code_reviews(
+        &self,
+        _: Option<&devworks_core::protocol::ProjectId>,
+        _: Option<&RootId>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredCodeReview>, StorageError> {
+        unmodelled()
+    }
+    fn code_finding(&self, _: &Id) -> Result<Option<StoredCodeFinding>, StorageError> {
+        unmodelled()
+    }
+    fn code_findings(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredCodeFinding>, StorageError> {
+        unmodelled()
+    }
     fn git_worktree_for_branch(
         &self,
         _: &Id,
@@ -1422,6 +1445,20 @@ impl GitRead for Unmodelled {
     }
 }
 impl GitRepository for Unmodelled {
+    fn put_code_review(
+        &mut self,
+        _: &StoredCodeReview,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_code_finding(
+        &mut self,
+        _: &StoredCodeFinding,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn insert_git_worktree(&mut self, _: &StoredGitWorktree) -> Result<(), StorageError> {
         Err(StorageError::InvalidRecord(
             "Git test store not configured".into(),
@@ -1434,6 +1471,16 @@ impl GitRepository for Unmodelled {
     }
 }
 impl GithubRead for Unmodelled {
+    fn github_triage_case(
+        &self,
+        _: &GithubIssueKey,
+        _: &ProjectId,
+    ) -> Result<Option<StoredGithubTriageCase>, StorageError> {
+        unmodelled()
+    }
+    fn github_index_target(&self, _: &Id) -> Result<Option<StoredGithubIndexTarget>, StorageError> {
+        unmodelled()
+    }
     fn github_adjudication_owner(
         &self,
         _: &Id,
@@ -1523,6 +1570,14 @@ impl GithubRead for Unmodelled {
     ) -> Result<Vec<StoredGithubObservation>, StorageError> {
         unmodelled()
     }
+    fn github_open_pulls(
+        &self,
+        _: &Id,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredGithubObservation>, StorageError> {
+        unmodelled()
+    }
     fn github_poll_cursor(
         &self,
         _: &Id,
@@ -1546,6 +1601,14 @@ impl GithubRead for Unmodelled {
         unmodelled()
     }
     fn github_intake_clock(&self) -> Result<GithubIntakeClock, StorageError> {
+        unmodelled()
+    }
+    fn github_issues_for_work(
+        &self,
+        _: &RootId,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredGithubIssueIntake>, StorageError> {
         unmodelled()
     }
     fn github_obligation_revision(&self, _: &GithubIssueKey) -> Result<i64, StorageError> {
@@ -1582,6 +1645,16 @@ impl GithubRead for Unmodelled {
     }
 }
 impl GithubRepository for Unmodelled {
+    fn put_github_triage_case(
+        &mut self,
+        _: &StoredGithubTriageCase,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_github_index_target(&mut self, _: &StoredGithubIndexTarget) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn retire_github_work_link(
         &mut self,
         _: &StoredGithubObligationRetirement,
@@ -4176,6 +4249,15 @@ impl WatcherRead for Unmodelled {
     ) -> Result<Vec<StoredWatchEvent>, StorageError> {
         unmodelled()
     }
+    fn delivered_watch_events(
+        &self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+        unmodelled()
+    }
 }
 impl WatcherRepository for Unmodelled {
     fn insert_watcher(&mut self, _: &StoredWatcher) -> Result<(), StorageError> {
@@ -4190,7 +4272,7 @@ impl WatcherRepository for Unmodelled {
     fn deliver_watch_event(&mut self, _: &Id, _: i64, _: i64) -> Result<bool, StorageError> {
         unmodelled()
     }
-    fn carry_watch_events(&mut self, _: &Id, _: &Id) -> Result<u64, StorageError> {
+    fn carry_watch_events(&mut self, _: &Id, _: &Id, _: i64) -> Result<u64, StorageError> {
         unmodelled()
     }
     fn release_watch_events(

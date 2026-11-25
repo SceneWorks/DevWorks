@@ -2009,6 +2009,100 @@
         "kinds": "Items<Label>"
       }
     },
+    "CodeReviewSeverity": {
+      "kind": "enum",
+      "values": [
+        "Blocker",
+        "Major",
+        "Minor",
+        "Informational"
+      ]
+    },
+    "CodeReviewResolution": {
+      "kind": "union",
+      "variants": {
+        "FixVerified": {
+          "candidate_head": "GitOid",
+          "focused_check_ids": "Items<Id>"
+        },
+        "NotActionable": {},
+        "Followup": {
+          "bug_id": "Id",
+          "review_thread_reply": "Url"
+        },
+        "NeedsHuman": {
+          "decision_id": "Id"
+        }
+      }
+    },
+    "LocalReviewDiff": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "worktree_id": "Id",
+        "base": "GitOid",
+        "head": "GitOid"
+      }
+    },
+    "LocalReviewTarget": {
+      "kind": "record",
+      "fields": {
+        "task_id": "Id",
+        "diffs": "Items<LocalReviewDiff>"
+      }
+    },
+    "LocalReviewEvidence": {
+      "kind": "record",
+      "fields": {
+        "target": "LocalReviewTarget",
+        "diff_digest": "Digest",
+        "state": "ReviewObservationState",
+        "reviewer_actor_id": "?Id",
+        "reviewer_session_id": "?Id",
+        "completed_at": "?Counter",
+        "finding_count": "Counter",
+        "report": "?ArtifactRef"
+      }
+    },
+    "ReviewCheckDiagnosis": {
+      "kind": "record",
+      "fields": {
+        "failed_check_id": "Id",
+        "diagnosis": "Content"
+      }
+    },
+    "ReviewChangeReason": {
+      "kind": "union",
+      "variants": {
+        "RequiredCheck": {
+          "failed_check_id": "Id"
+        },
+        "Finding": {
+          "finding_id": "Id"
+        }
+      }
+    },
+    "ReviewClassifiedChange": {
+      "kind": "record",
+      "fields": {
+        "change_digest": "Digest",
+        "reason": "ReviewChangeReason"
+      }
+    },
+    "ReviewCandidateRepair": {
+      "kind": "record",
+      "fields": {
+        "original_review_id": "Id",
+        "expected_review_revision": "Revision",
+        "repository_id": "Id",
+        "reviewed_head": "GitOid",
+        "candidate_head": "GitOid",
+        "diagnoses": "Items<ReviewCheckDiagnosis>",
+        "changes": "Rows<ReviewClassifiedChange>",
+        "focused_check_ids": "Items<Id>",
+        "verification_report": "ArtifactRef"
+      }
+    },
     "ReviewRecord": {
       "kind": "record",
       "fields": {
@@ -2019,7 +2113,13 @@
         "barrier": "?ArtifactRef",
         "finding_ids": "Items<Id>",
         "head_digest": "Digest",
-        "sources": "Items<ReviewSourceEvidence>"
+        "sources": "Items<ReviewSourceEvidence>",
+        "local_review": "?LocalReviewEvidence",
+        "candidate_repair": "?ReviewCandidateRepair"
+      },
+      "since": {
+        "local_review": 15,
+        "candidate_repair": 15
       }
     },
     "ReviewFinding": {
@@ -2033,7 +2133,13 @@
         "severity": "Severity",
         "actionable": "bool",
         "response": "?Content",
-        "evidence": "Items<ArtifactRef>"
+        "evidence": "Items<ArtifactRef>",
+        "code_severity": "?CodeReviewSeverity",
+        "resolution": "?CodeReviewResolution"
+      },
+      "since": {
+        "code_severity": 15,
+        "resolution": 15
       }
     },
     "ReviewReadiness": {
@@ -2043,7 +2149,11 @@
         "review_ids": "Items<Id>",
         "blocker_ids": "Items<Id>",
         "head_digest": "Digest",
-        "policy_revision": "Revision"
+        "policy_revision": "Revision",
+        "candidate_repairs": "?Items<ReviewCandidateRepair>"
+      },
+      "since": {
+        "candidate_repairs": 15
       }
     },
     "GitInspection": {
@@ -2116,6 +2226,74 @@
         "state": "ItemState",
         "permission_revision": "Revision"
       }
+    },
+    "GithubIssueLink": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "work_id": "RootId",
+        "remote_repository_id": "Text",
+        "remote_issue_id": "Text",
+        "remote_issue_number": "PositiveCounter",
+        "url": "Url",
+        "source_revision": "Text"
+      }
+    },
+    "GithubIssueLinkResult": {
+      "kind": "versioned",
+      "legacy": "GitLink",
+      "current": "GithubIssueLink",
+      "revision": 3,
+      "projection": "none"
+    },
+    "GithubPollEndpoint": {
+      "kind": "record",
+      "fields": {
+        "endpoint": "Label",
+        "state": "Label",
+        "next_poll_at_ms": "Counter",
+        "last_polled_at_ms": "?Counter",
+        "failure": "?Text"
+      }
+    },
+    "GithubIssueIntakeView": {
+      "kind": "record",
+      "fields": {
+        "remote_issue_number": "PositiveCounter",
+        "source_revision": "Text",
+        "state": "Label",
+        "url": "Url",
+        "work_id": "?RootId",
+        "comment_state": "?OperationState",
+        "close_state": "?OperationState"
+      }
+    },
+    "GithubIssueIntakePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<GithubIssueIntakeView>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "GithubPollStatusView": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "endpoints": "Items<GithubPollEndpoint>",
+        "intake": "GithubIssueIntakePage",
+        "interval_seconds": "PositiveCounter",
+        "next_admission_at_ms": "Counter",
+        "last_admitted_at_ms": "?Counter"
+      }
+    },
+    "GithubPollStatusResult": {
+      "kind": "versioned",
+      "legacy": "Page<GithubObservation>",
+      "current": "GithubPollStatusView",
+      "revision": 3,
+      "projection": "none",
+      "earlierName": "Page"
     },
     "GithubObservation": {
       "kind": "record",
@@ -3615,8 +3793,14 @@
       "fields": {
         "account": "?GithubAccount",
         "auth_flow_id": "?Id",
-        "state": "ItemState"
-      }
+        "state": "ItemState",
+        "api_host": "?Label",
+        "authorization_state": "?Label",
+        "permission_revision": "?Revision",
+        "granted_scopes": "?Items<Label>",
+        "failure": "?Text"
+      },
+      "since": {"api_host": 3, "authorization_state": 3, "permission_revision": 3, "granted_scopes": 3, "failure": 3}
     },
     "EvidenceKind": {
       "kind": "enum",
@@ -7293,8 +7477,42 @@
         "Process",
         "Probe",
         "Timer",
-        "File"
-      ]
+        "File",
+        "GitHub",
+        "AttachedProcess",
+        "Assignment"
+      ],
+      "introducedVariants": {
+        "GitHub": 9,
+        "AttachedProcess": 18,
+        "Assignment": 18
+      },
+      "fallbackVariants": {
+        "AttachedProcess": "Process"
+      }
+    },
+    "WatchAssignmentSource": {
+      "kind": "record",
+      "fields": {
+        "assignment_id": "AssignmentId",
+        "session_id": "Id"
+      }
+    },
+    "WatchAttachedProcess": {
+      "kind": "record",
+      "fields": {
+        "pid": "u32",
+        "birth_token": "Label"
+      }
+    },
+    "WatchGithubTarget": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "workflow_run_id": "?Counter",
+        "pull_request_number": "?Counter"
+      },
+      "exactlyOne": ["workflow_run_id", "pull_request_number"]
     },
     "WatchOutcomeKind": {
       "kind": "enum",
@@ -7305,8 +7523,15 @@
         "TimedOut",
         "Interrupted",
         "Lost",
-        "Uncertain"
-      ]
+        "Uncertain",
+        "Exited"
+      ],
+      "introducedVariants": {
+        "Exited": 18
+      },
+      "fallbackVariants": {
+        "Exited": "Uncertain"
+      }
     },
     "WatchOutcome": {
       "kind": "record",
@@ -7416,6 +7641,7 @@
         "state": "WatcherState",
         "source_kind": "WatchSourceKind",
         "process": "?WatchProcessSource",
+        "github": "?WatchGithubTarget",
         "probe": "?WatchProbeStatus",
         "due_at_ms": "?Counter",
         "expires_at_ms": "?Counter",
@@ -7432,7 +7658,14 @@
         "output_tail": "?Content",
         "output_truncated": "bool",
         "stop_requested": "bool",
-        "event": "?WatchEvent"
+        "event": "?WatchEvent",
+        "attached_pid": "?u32",
+        "assignment": "?WatchAssignmentSource"
+      },
+      "since": {
+        "github": 9,
+        "attached_pid": 18,
+        "assignment": 18
       }
     }
   },
@@ -7826,10 +8059,10 @@
         "repository_id": "Id",
         "expected_remote_revision": "?Text"
       },
-      "result": "GitLink",
+      "result": "GithubIssueLinkResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Reconcile saved remote identity after an uncertain create; no duplicate publish."
+      "rules": "Reconcile saved remote identity after an uncertain create without duplicate publication. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "issues.link": {
       "operation": "issues.link",
@@ -7840,10 +8073,10 @@
         "repository_id": "Id",
         "remote_issue_number": "PositiveCounter"
       },
-      "result": "GitLink",
+      "result": "GithubIssueLinkResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Link an existing authenticated issue to this local work and preserve both identities. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "tasks.move": {
       "operation": "tasks.move",
@@ -10262,13 +10495,24 @@
       "fields": {
         "root_id": "RootId",
         "expected_revision": "Revision",
-        "barrier": "DeliveryBarrier",
-        "policy_revision": "Revision"
+        "barrier": "?DeliveryBarrier",
+        "policy_revision": "Revision",
+        "local_target": "?LocalReviewTarget",
+        "candidate_repair": "?ReviewCandidateRepair"
       },
       "result": "ReviewRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights."
+      "rules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights. Revision 15 can request a single independent review of an exact local task diff or submit candidate repair evidence to the last completed round. Verifying a candidate does not start a review or change the head attributed to the reviewer.",
+      "exactlyOne": [
+        "barrier",
+        "local_target",
+        "candidate_repair"
+      ],
+      "since": {
+        "local_target": 15,
+        "candidate_repair": 15
+      }
     },
     "reviews.findings": {
       "operation": "reviews.findings",
@@ -10304,25 +10548,37 @@
         "expected_revision": "Revision",
         "actionable": "bool",
         "rationale": "Content",
-        "evidence": "Items<ArtifactRef>"
+        "evidence": "Items<ArtifactRef>",
+        "resolution": "?CodeReviewResolution"
       },
       "result": "ReviewFinding",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Resolve through configured independent review policy; author cannot self-waive required review without explicit policy authority."
+      "rules": "Resolve through configured independent review policy; author cannot self-waive required review without explicit policy authority.",
+      "since": {
+        "resolution": 15
+      }
     },
     "reviews.readiness": {
       "operation": "reviews.readiness",
       "mode": "Query",
       "fields": {
         "root_id": "RootId",
-        "barrier": "DeliveryBarrier",
-        "policy_revision": "Revision"
+        "barrier": "?DeliveryBarrier",
+        "policy_revision": "Revision",
+        "local_target": "?LocalReviewTarget"
       },
       "result": "ReviewReadiness",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source."
+      "rules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source. Revision 15 also projects exact local review or qualified post-cap evidence. Final merge still requires current separate delivery gates.",
+      "exactlyOne": [
+        "barrier",
+        "local_target"
+      ],
+      "since": {
+        "local_target": 15
+      }
     },
     "releases.inspect": {
       "operation": "releases.inspect",
@@ -10366,9 +10622,11 @@
       "operation": "github.poll_status",
       "mode": "Query",
       "fields": {
-        "repository_id": "Id"
+        "repository_id": "Id",
+        "page": "?PageRequest"
       },
-      "result": "Page<GithubObservation>",
+      "since": {"page": 3},
+      "result": "GithubPollStatusResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Include persisted issue intake/admission timing and pending/failed resolution observations; scope unrouted incoming reports by repository access. No agent is required to inspect a waiting queue."
@@ -12458,14 +12716,22 @@
         "probe": "?WatchProbe",
         "timer": "?WatchTimer",
         "file": "?WatchFile",
+        "github": "?WatchGithubTarget",
         "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
-        "max_lifetime_ms": "?Counter"
+        "max_lifetime_ms": "?Counter",
+        "attached_process": "?WatchAttachedProcess",
+        "assignment_id": "?AssignmentId"
+      },
+      "since": {
+        "github": 9,
+        "attached_process": 18,
+        "assignment_id": 18
       },
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A GitHub watcher observes an exact bound workflow run or the current pull request head checks, within the shared account polling budget, and resumes on restart. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers and cannot launch a process through a watcher. Revision 18 adds read-only attachment by PID and birth token and watches for a direct delegated assignment.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -12597,6 +12863,18 @@
     "documents.remove_index": [1, 10, 13],
     "documents.resolve_citation": [11],
     "documents.index": [1, 12],
+    "git.integrate": [1, 17],
+    "reviews.list": [1, 15],
+    "reviews.inspect": [1, 15],
+    "reviews.request": [1, 15],
+    "reviews.findings": [1, 15],
+    "reviews.respond": [1, 15],
+    "reviews.adjudicate": [1, 15],
+    "reviews.readiness": [1, 15],
+    "issues.publish": [1, 3],
+    "issues.link": [1, 3],
+    "github.account": [1, 3],
+    "github.poll_status": [1, 3],
     "analysis.health": [1, 3],
     "analysis.cross_repo_links": [1, 3],
     "analysis.status": [1, 3],
@@ -13194,9 +13472,14 @@
       1,
       3
     ],
+    "git.push": [
+      1,
+      16
+    ],
     "git.pull_request": [
       1,
-      2
+      2,
+      16
     ],
     "browser.sessions": [
       1,
@@ -13609,16 +13892,24 @@
       3
     ],
     "watch.create": [
-      8
+      8,
+      9,
+      18
     ],
     "watch.list": [
-      8
+      8,
+      9,
+      18
     ],
     "watch.inspect": [
-      8
+      8,
+      9,
+      18
     ],
     "watch.cancel": [
-      8
+      8,
+      9,
+      18
     ]
   },
   "familyRules": {
@@ -13908,7 +14199,7 @@
     "git.diff": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "git.commit": {"assignmentScope": "assignment", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.push": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
-    "git.pull_request": {"assignmentScope": "assignment", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "git.pull_request": {"assignmentScope": "assignment", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.integrate": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.cleanup": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "reviews.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

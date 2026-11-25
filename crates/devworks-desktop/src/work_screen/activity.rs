@@ -223,7 +223,7 @@ pub(crate) fn activity(
         .max_height(ui.available_height() - 40.0)
         .show(ui, |ui| {
             for r in &rows {
-                ui.label(r);
+                widgets::text_with_github_links(ui, r);
             }
         });
 }

@@ -419,10 +419,19 @@ impl Exec<'_> {
     pub(super) fn baseline(&mut self) -> Result<(), Stop> {
         let env = self.w.env.clone();
         let repo_id = self.run.repository_id.clone();
-        let (repo, source) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        let run_id = self.run.id.clone();
+        let (repo, source, remote) = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+            let target = s.github().github_index_target(&run_id)?;
+            let remote = target
+                .map(|target| {
+                    crate::services::github::indexing::target_is_current(s, &target)
+                        .map(|current| (target, current))
+                })
+                .transpose()?;
             Ok((
                 s.projects().repository(&repo_id)?,
                 s.indexing().repository_source(&repo_id)?,
+                remote,
             ))
         })
         .map_err(Stop::storage)?;
@@ -452,12 +461,29 @@ impl Exec<'_> {
         let stopping = &self.w.stopping;
         let stop = move || stop_flag.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst);
         let git = git_for(&env, &ctx, &stop);
-        let observed = git.head_observation(&dir).map_err(|error| match error {
-            GitFault::Unborn => Stop::det("no_commit", "the repository has no commit to index"),
-            other => Stop::git(other),
-        })?;
-        let head = observed.head;
-        let head_ref = observed.branch;
+        let (head, head_ref) = match remote {
+            Some((target, true)) => {
+                let head = git
+                    .fetch_index_source(&dir, &target.registered_remote, &target.head)
+                    .map_err(|_| Stop::transient("github_source", "the observed GitHub commit is unavailable through the registered Git remote"))?;
+                (head, Some(target.reference))
+            }
+            Some((_, false)) => {
+                return Err(Stop::det(
+                    "github_binding_changed",
+                    "the GitHub source binding is no longer current",
+                ));
+            }
+            None => {
+                let observed = git.head_observation(&dir).map_err(|error| match error {
+                    GitFault::Unborn => {
+                        Stop::det("no_commit", "the repository has no commit to index")
+                    }
+                    other => Stop::git(other),
+                })?;
+                (observed.head, observed.branch)
+            }
+        };
         let format = git.object_format(&dir).map_err(Stop::git)?;
         let h = head.clone();
         self.fenced(WritePriority::Authoritative, move |_, r| {

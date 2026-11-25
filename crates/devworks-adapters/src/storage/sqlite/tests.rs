@@ -420,6 +420,54 @@ fn migration_one_is_exactly_the_adopted_schema_fixture() {
     assert!(has_column);
 }
 
+#[test]
+fn the_watcher_feature_ledger_upgrades_with_its_pending_watch() {
+    let h = Harness::new();
+    let watcher = MIGRATIONS[68];
+    let mut legacy = MIGRATIONS[..66].to_vec();
+    legacy.push(Migration {
+        version: 67,
+        minimum_reader: 67,
+        minimum_writer: 67,
+        ..watcher
+    });
+    let store = SqliteStore::open_with(h.config(), &legacy).unwrap();
+    store.with_writer_connection(|conn| {
+        db(conn.execute_batch(
+            "INSERT INTO actors VALUES('watch-owner','human','Watch owner');
+             INSERT INTO conversations(id,created_at) VALUES('watch-conversation',0);
+             INSERT INTO sessions(id,conversation_id,agent_id,context_epoch,revision)
+                 VALUES('watch-session','watch-conversation','watch-owner',0,1);
+             INSERT INTO watchers(id,revision,phase,source_kind,session_id,actor_id,
+                                  tail_bytes,output_truncated,stop_requested,created_at,updated_at,github_json)
+                 VALUES('pending-watch',1,'Active','GitHub','watch-session','watch-owner',0,0,0,0,0,
+                        '{\"repositoryId\":\"watch-repo\",\"workflowRunId\":\"42\"}');",
+        ))
+    }).unwrap();
+    let old = store.compatibility().unwrap().migrations[66].clone();
+    drop(store);
+
+    let upgraded = SqliteStore::open(h.config()).unwrap();
+    let current = upgraded.compatibility().unwrap();
+    assert_eq!(
+        current.store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
+    assert_eq!(current.migrations[66].checksum, MIGRATIONS[66].checksum());
+    assert_eq!(current.migrations[67].checksum, MIGRATIONS[67].checksum());
+    assert_eq!(current.migrations[68].checksum, old.checksum);
+    assert_eq!(current.migrations[68].app_build, old.app_build);
+    assert_eq!(current.migrations[68].applied_at_ms, old.applied_at_ms);
+    assert_eq!(
+        h.raw().query_row(
+            "SELECT phase || ':' || json_extract(github_json,'$.workflowRunId') FROM watchers WHERE id='pending-watch'",
+            [],
+            |row| row.get::<_, String>(0),
+        ).unwrap(),
+        "Active:42",
+    );
+}
+
 /// A version-1 store with pending deliveries upgrades in place through migrations 2 and 3: their
 /// event sequences are backfilled, they stay unordered and claimable, and older writers are then
 /// refused write access.

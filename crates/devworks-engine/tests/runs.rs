@@ -8829,6 +8829,8 @@ mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
 
+#[path = "runs/code_review.rs"]
+mod code_review_tests;
 #[path = "runs/plan_review.rs"]
 mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
@@ -8836,3 +8838,6 @@ mod review_capacity_tests;
 
 #[path = "runs/dreaming.rs"]
 mod dreaming;
+#[cfg(unix)]
+#[path = "runs/feature_delivery.rs"]
+mod feature_delivery_tests;

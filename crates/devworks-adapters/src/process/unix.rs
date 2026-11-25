@@ -496,15 +496,20 @@ impl Drop for UnixTree {
     }
 }
 
-pub(super) fn current_identity() -> Option<NativeIdentity> {
-    let pid = std::process::id();
-    let birth = start_time(pid as libc::pid_t, false)?;
+mod exit_watch;
+pub(super) use exit_watch::{inspect_external, watch_external};
+
+pub(super) fn external_identity(pid: u32) -> Option<NativeIdentity> {
+    let native_pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
     Some(NativeIdentity {
         pid,
-        birth,
-        // The host is not one of our launched group leaders. Its liveness is process-only.
+        birth: start_time(native_pid, false)?,
         group: None,
     })
+}
+
+pub(super) fn current_identity() -> Option<NativeIdentity> {
+    external_identity(std::process::id())
 }
 
 pub(super) fn probe(identity: &NativeIdentity) -> Probe {

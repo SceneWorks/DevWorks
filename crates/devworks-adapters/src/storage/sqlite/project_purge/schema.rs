@@ -86,8 +86,9 @@ use rusqlite::Connection;
 /// action records, plus scoped source observations. A project's settings and runs belong to
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
+/// Migrations 79 and 80 extend watcher sources without changing project/session ownership.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "854be39290acdaa87e4632b8207980ed7a9945ea13fa73b5867c2eea846d0f06";
+    "777e56828846c366bf1544bfcbfcff872672c88e6734db0029e72e303d012105";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

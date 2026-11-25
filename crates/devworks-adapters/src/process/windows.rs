@@ -2,7 +2,8 @@
 //! child is still suspended.
 use devworks_core::locks::LockExt;
 use devworks_core::ports::process::{
-    ControlChannel, NativeIdentity, Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
+    ControlChannel, ExternalExit, ExternalProcessStatus, ExternalProcessWatch, NativeIdentity,
+    Probe, ProcessError, ProcessSpec, ProcessTree, TreeStatus,
 };
 use std::io::{Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
@@ -12,7 +13,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
     CloseHandle, FILETIME, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, STILL_ACTIVE,
-    SetHandleInformation,
+    SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
@@ -410,33 +411,123 @@ impl Drop for JobTree {
     }
 }
 
-fn open_verified(identity: &NativeIdentity, access: u32) -> Result<Owned, Probe> {
+enum OpenError {
+    Missing,
+    Different,
+    InvalidIdentity,
+    Unavailable(String),
+}
+
+fn open_process(pid: u32, access: u32) -> Result<Owned, OpenError> {
+    // SAFETY: opening a process by PID for query access and the caller's explicit extra rights.
+    let handle = Owned(unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) });
+    if handle.0.is_null() {
+        let error = std::io::Error::last_os_error();
+        // ERROR_INVALID_PARAMETER means there is no such process.
+        Err(if error.raw_os_error() == Some(87) {
+            OpenError::Missing
+        } else {
+            OpenError::Unavailable(format!("open the recorded process: {error}"))
+        })
+    } else {
+        Ok(handle)
+    }
+}
+
+fn verified_handle(identity: &NativeIdentity, access: u32) -> Result<Owned, OpenError> {
     if !identity
         .birth
         .parse::<u64>()
         .is_ok_and(|n| n.to_string() == identity.birth)
     {
-        return Err(Probe::Unknown(
-            "the recorded start time was unavailable".into(),
-        ));
+        return Err(OpenError::InvalidIdentity);
     }
-    // SAFETY: opening a process by pid for query (and optionally terminate) access.
-    let handle =
-        Owned(unsafe { OpenProcess(access | PROCESS_QUERY_LIMITED_INFORMATION, 0, identity.pid) });
-    if handle.0.is_null() {
-        let e = std::io::Error::last_os_error();
-        // ERROR_INVALID_PARAMETER: no such process.
-        return Err(if e.raw_os_error() == Some(87) {
-            Probe::Gone
-        } else {
-            Probe::Unknown(format!("open the recorded process: {e}"))
-        });
-    }
+    let handle = open_process(identity.pid, access)?;
     match creation_time(handle.0) {
-        Some(b) if b == identity.birth => Ok(handle),
-        // Another process now has this pid: the recorded one is gone.
-        Some(_) => Err(Probe::Gone),
-        None => Err(Probe::Unknown(last_error("read the process start time"))),
+        Some(birth) if birth == identity.birth => Ok(handle),
+        Some(_) => Err(OpenError::Different),
+        None => Err(OpenError::Unavailable(last_error(
+            "read the process start time",
+        ))),
+    }
+}
+
+fn open_verified(identity: &NativeIdentity, access: u32) -> Result<Owned, Probe> {
+    verified_handle(identity, access).map_err(|error| match error {
+        OpenError::Missing | OpenError::Different => Probe::Gone,
+        OpenError::InvalidIdentity => {
+            Probe::Unknown("the recorded start time was unavailable".into())
+        }
+        OpenError::Unavailable(reason) => Probe::Unknown(reason),
+    })
+}
+
+pub(super) fn external_identity(pid: u32) -> Option<NativeIdentity> {
+    if pid == 0 {
+        return None;
+    }
+    let handle = open_process(pid, PROCESS_SYNCHRONIZE).ok()?;
+    let birth = creation_time(handle.0)?;
+    let mut watcher = ExitWatch(handle);
+    watcher
+        .poll_exit()
+        .ok()?
+        .is_none()
+        .then_some(NativeIdentity {
+            pid,
+            birth,
+            group: None,
+        })
+}
+
+struct ExitWatch(Owned);
+// SAFETY: the uniquely owned kernel handle may be moved to another thread.
+unsafe impl Send for ExitWatch {}
+
+impl ExternalProcessWatch for ExitWatch {
+    fn poll_exit(&mut self) -> Result<Option<ExternalExit>, ProcessError> {
+        // SAFETY: this is our live process handle opened with synchronize rights. Zero is nonblocking.
+        match unsafe { WaitForSingleObject(self.0.0, 0) } {
+            WAIT_TIMEOUT => Ok(None),
+            WAIT_OBJECT_0 => {
+                let mut code = 0;
+                // SAFETY: the handle permits querying and the exit-code out parameter is writable.
+                let ok = unsafe { GetExitCodeProcess(self.0.0, &mut code) };
+                Ok(Some(ExternalExit {
+                    exit_code: (ok != 0).then_some(code as i32),
+                }))
+            }
+            _ => Err(ProcessError::Control(last_error(
+                "read external process signal state",
+            ))),
+        }
+    }
+}
+
+pub(super) fn watch_external(
+    identity: &NativeIdentity,
+) -> Result<Box<dyn ExternalProcessWatch>, ExternalProcessStatus> {
+    if identity.pid == 0 {
+        return Err(ExternalProcessStatus::InvalidIdentity);
+    }
+    verified_handle(identity, PROCESS_SYNCHRONIZE)
+        .map(|handle| Box::new(ExitWatch(handle)) as Box<dyn ExternalProcessWatch>)
+        .map_err(|error| match error {
+            OpenError::Missing => ExternalProcessStatus::Missing,
+            OpenError::Different => ExternalProcessStatus::Different,
+            OpenError::InvalidIdentity => ExternalProcessStatus::InvalidIdentity,
+            OpenError::Unavailable(_) => ExternalProcessStatus::Unavailable,
+        })
+}
+
+pub(super) fn inspect_external(identity: &NativeIdentity) -> ExternalProcessStatus {
+    match watch_external(identity) {
+        Ok(mut watch) => match watch.poll_exit() {
+            Ok(Some(exit)) => ExternalProcessStatus::Exited(exit),
+            Ok(None) => ExternalProcessStatus::Running,
+            Err(_) => ExternalProcessStatus::Unavailable,
+        },
+        Err(status) => status,
     }
 }
 

@@ -1,6 +1,6 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
-  "date": "2026-11-19",
+  "date": "2026-11-24",
   "catalogSha256": "bc40b60c7aa42c6c983bee986ebc50f890326f8ba904f293060a1b5978a6660a",
   "familyCount": 50,
   "operationCount": 393,
@@ -1387,7 +1387,7 @@
             "pointer": "/kind",
             "equals": "issues.publish"
           },
-          "resultValueType": "GitLink",
+          "resultValueType": "GithubIssueLinkResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -1399,11 +1399,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "External",
-          "semanticRules": "Reconcile saved remote identity after an uncertain create; no duplicate publish.",
+          "semanticRules": "Reconcile saved remote identity after an uncertain create without duplicate publication. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect.",
           "familyRules": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -1433,7 +1441,7 @@
             "pointer": "/kind",
             "equals": "issues.link"
           },
-          "resultValueType": "GitLink",
+          "resultValueType": "GithubIssueLinkResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -1445,11 +1453,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "",
+          "semanticRules": "Link an existing authenticated issue to this local work and preserve both identities. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect.",
           "familyRules": "Clear standalone issues may implement immediately under explicit Start. Remote publish/link preserves exact issue/repository identity and conflict observations.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -7507,7 +7523,7 @@
             },
             {
               "revision": 10,
-              "inputSchema": "domain-request.r9.schema.json",
+              "inputSchema": "domain-request.r10.schema.json",
               "resultSchema": "operation-result.r10.schema.json",
               "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
@@ -9568,7 +9584,7 @@
             },
             {
               "revision": 10,
-              "inputSchema": "domain-request.r9.schema.json",
+              "inputSchema": "domain-request.r10.schema.json",
               "resultSchema": "operation-result.r10.schema.json",
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r10.schema.json",
@@ -9630,7 +9646,7 @@
             },
             {
               "revision": 10,
-              "inputSchema": "domain-request.r9.schema.json",
+              "inputSchema": "domain-request.r10.schema.json",
               "resultSchema": "operation-result.r10.schema.json",
               "queryReplySchema": "domain-query-reply.r10.schema.json",
               "commandReplySchema": null,
@@ -12788,6 +12804,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 16,
+              "inputSchema": "git-command-request.r16.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -12842,6 +12866,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 16,
+              "inputSchema": "git-command-request.r16.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -12888,6 +12920,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 17,
+              "inputSchema": "git-command-request.r17.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -12987,6 +13027,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -13031,6 +13079,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -13079,11 +13135,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Journaled",
-          "semanticRules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights.",
+          "semanticRules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights. Revision 15 can request a single independent review of an exact local task diff or submit candidate repair evidence to the last completed round. Verifying a candidate does not start a review or change the head attributed to the reviewer.",
           "familyRules": "Exact heads/policies and independent verified-read evidence. Actionable findings require resolution; changed heads invalidate readiness.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13123,6 +13187,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -13171,6 +13243,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -13217,6 +13297,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r15.schema.json",
+              "completionSchema": "operation-completion.r15.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -13263,11 +13351,19 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 15,
+              "inputSchema": "domain-request.r15.schema.json",
+              "resultSchema": "operation-result.r15.schema.json",
+              "queryReplySchema": "domain-query-reply.r15.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source.",
+          "semanticRules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source. Revision 15 also projects exact local review or qualified post-cap evidence. Final merge still requires current separate delivery gates.",
           "familyRules": "Exact heads/policies and independent verified-read evidence. Actionable findings require resolution; changed heads invalidate readiness.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13513,6 +13609,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
+              "commandReplySchema": "domain-command-reply.r3.schema.json",
+              "completionSchema": "operation-completion.r3.schema.json"
             }
           ],
           "authority": "HumanConfiguration",
@@ -13593,7 +13697,7 @@
             "pointer": "/kind",
             "equals": "github.poll_status"
           },
-          "resultValueType": "Page<GithubObservation>",
+          "resultValueType": "GithubPollStatusResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -13603,6 +13707,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 3,
+              "inputSchema": "domain-request.r3.schema.json",
+              "resultSchema": "operation-result.r3.schema.json",
+              "queryReplySchema": "domain-query-reply.r3.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -21025,11 +21137,27 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r8.schema.json",
               "completionSchema": "operation-completion.r8.schema.json"
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            },
+            {
+              "revision": 18,
+              "inputSchema": "domain-request.r18.schema.json",
+              "resultSchema": "operation-result.r18.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r18.schema.json",
+              "completionSchema": "operation-completion.r18.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "External",
-          "semanticRules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers (timers) and cannot launch a process through a watcher.",
+          "semanticRules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A GitHub watcher observes an exact bound workflow run or the current pull request head checks, within the shared account polling budget, and resumes on restart. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers and cannot launch a process through a watcher. Revision 18 adds read-only attachment by PID and birth token and watches for a direct delegated assignment.",
           "familyRules": "Watchers observe a source on an agent's behalf and wake its session with the observed outcome; no agent polling. Watcher messages are a host-only input class no agent or package can create. Launching (a process or a probe command) and stopping reuse the process.execute and process.cancel services and their authority; reviewer roles may create observing watchers but cannot launch or stop processes through a watcher. Outcomes are only what the process supervisor or the host clock observed.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -21070,6 +21198,22 @@
               "inputSchema": "domain-request.r8.schema.json",
               "resultSchema": "operation-result.r8.schema.json",
               "queryReplySchema": "domain-query-reply.r8.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 18,
+              "inputSchema": "domain-request.r18.schema.json",
+              "resultSchema": "operation-result.r18.schema.json",
+              "queryReplySchema": "domain-query-reply.r18.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -21119,6 +21263,22 @@
               "queryReplySchema": "domain-query-reply.r8.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": "domain-query-reply.r9.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 18,
+              "inputSchema": "domain-request.r18.schema.json",
+              "resultSchema": "operation-result.r18.schema.json",
+              "queryReplySchema": "domain-query-reply.r18.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -21166,6 +21326,22 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r8.schema.json",
               "completionSchema": "operation-completion.r8.schema.json"
+            },
+            {
+              "revision": 9,
+              "inputSchema": "domain-request.r9.schema.json",
+              "resultSchema": "operation-result.r9.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r9.schema.json",
+              "completionSchema": "operation-completion.r9.schema.json"
+            },
+            {
+              "revision": 18,
+              "inputSchema": "domain-request.r18.schema.json",
+              "resultSchema": "operation-result.r18.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r18.schema.json",
+              "completionSchema": "operation-completion.r18.schema.json"
             }
           ],
           "authority": "Scoped",

@@ -23,7 +23,8 @@ mod unix;
 mod windows;
 
 use devworks_core::ports::process::{
-    NativeIdentity, Probe, ProcessError, ProcessHost, ProcessSpec, ProcessTree,
+    ExternalProcessStatus, ExternalProcessWatch, NativeIdentity, Probe, ProcessError, ProcessHost,
+    ProcessSpec, ProcessTree,
 };
 
 /// The native process host of this platform.
@@ -39,6 +40,18 @@ impl NativeProcessHost {
         #[cfg(windows)]
         let parent = windows::parent_pid();
         parent == Some(expected.pid) && matches!(self.probe(expected), Probe::Alive)
+    }
+
+    /// The birth token that identifies a live PID for a read-only process watch.
+    pub fn identity(pid: u32) -> Option<NativeIdentity> {
+        #[cfg(unix)]
+        {
+            unix::external_identity(pid)
+        }
+        #[cfg(windows)]
+        {
+            windows::external_identity(pid)
+        }
     }
 }
 
@@ -79,6 +92,29 @@ impl ProcessHost for NativeProcessHost {
         #[cfg(windows)]
         {
             windows::current_identity()
+        }
+    }
+    fn inspect_external(&self, identity: &NativeIdentity) -> ExternalProcessStatus {
+        #[cfg(unix)]
+        {
+            unix::inspect_external(identity)
+        }
+        #[cfg(windows)]
+        {
+            windows::inspect_external(identity)
+        }
+    }
+    fn watch_external(
+        &self,
+        identity: &NativeIdentity,
+    ) -> Result<Box<dyn ExternalProcessWatch>, ExternalProcessStatus> {
+        #[cfg(unix)]
+        {
+            unix::watch_external(identity)
+        }
+        #[cfg(windows)]
+        {
+            windows::watch_external(identity)
         }
     }
     fn probe(&self, identity: &NativeIdentity) -> Probe {

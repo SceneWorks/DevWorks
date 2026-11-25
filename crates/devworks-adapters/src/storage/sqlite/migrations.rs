@@ -851,6 +851,25 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
         rebuilds_tables: false,
     },
+    Migration {
+        version: 79,
+        minimum_reader: 79,
+        minimum_writer: 79,
+        sql: include_str!("migrations/0069_github_watchers.sql"),
+        expected_sha256: "b4655417647e74fda9a997fa35e0fb814a8f9ec2b1aa5e83a8ad391a66b494b5",
+        rebuilds_tables: true,
+    },
+    Migration {
+        version: 80,
+        minimum_reader: 80,
+        minimum_writer: 80,
+        sql: concat!(
+            include_str!("migrations/0070_watcher_source_columns.sql"),
+            include_str!("migrations/0070_combined_watchers.sql")
+        ),
+        expected_sha256: "7e3c3df3cf96d962469169ba453d7437afb505b060ecb89cb00d6021fd0d0db3",
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -1342,6 +1361,11 @@ pub(super) fn checkpoint_catalogue(
         );
         return Ok((meta, source));
     }
+    if let Some((prefix, watcher)) = watcher_lineage(migrations, &meta, &applied, sqlite_version) {
+        let mut source = migrations[..prefix].to_vec();
+        source.extend(watcher);
+        return Ok((meta, source));
+    }
     if let Some(known) = exact_catalogue(migrations, &meta, &applied, sqlite_version) {
         return Ok((meta, known.to_vec()));
     }
@@ -1509,6 +1533,142 @@ fn reconcile_intelligence_branch(
     }
 }
 
+/// Exact pre-combination catalogues that are safe to translate without dropping watcher data.
+fn watcher_lineage(
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+    sqlite_version: i64,
+) -> Option<(usize, Vec<Migration>)> {
+    let github = *migrations.get(78)?;
+    let combined = *migrations.get(79)?;
+    if github.version != 79
+        || combined.version != 80
+        || sqlite_version != meta.schema_version
+        || meta.minimum_reader != sqlite_version
+        || meta.minimum_writer != sqlite_version
+    {
+        return None;
+    }
+    let attached = Migration {
+        version: sqlite_version.min(67),
+        minimum_reader: sqlite_version.min(67),
+        minimum_writer: sqlite_version.min(67),
+        sql: include_str!("migrations/0067_external_process_watchers.sql"),
+        expected_sha256: "a23ddfe3134f16970b55a18a91f6582fd3e3fe9f087a3ed5224e04288211b8e2",
+        rebuilds_tables: true,
+    };
+    let original = |migration: Migration, version| Migration {
+        version,
+        minimum_reader: version,
+        minimum_writer: version,
+        ..migration
+    };
+    let branch = match sqlite_version {
+        64 => (63, vec![attached]),
+        67 if applied.last()?.checksum == github.expected_sha256 => {
+            (66, vec![original(github, 67)])
+        }
+        67 => (66, vec![attached]),
+        68 => (
+            66,
+            vec![
+                attached,
+                Migration {
+                    version: 68,
+                    minimum_reader: 68,
+                    minimum_writer: 68,
+                    sql: include_str!("migrations/0068_assignment_watchers.sql"),
+                    expected_sha256: "b2432a633eec00d44bc5f9bcd7cb23161e4f6dd303755fad5d27e245afdc50b1",
+                    rebuilds_tables: true,
+                },
+            ],
+        ),
+        69 => (68, vec![original(github, 69)]),
+        70 => (68, vec![original(github, 69), original(combined, 70)]),
+        _ => return None,
+    };
+    if matches_catalogue(applied.get(..branch.0)?, &migrations[..branch.0])
+        && matches_catalogue(applied.get(branch.0..)?, &branch.1)
+    {
+        Some(branch)
+    } else {
+        None
+    }
+}
+
+fn reconcile_watchers(
+    conn: &Connection,
+    migrations: &[Migration],
+    prefix: usize,
+    source: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    db(conn.pragma_update(None, "foreign_keys", false))?;
+    let result = (|| {
+        let tx = db(rusqlite::Transaction::new_unchecked(
+            conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
+        let changed =
+            || StorageError::IncompatibleSchema("watcher migration ledger changed".into());
+        let meta = read_meta(&tx)?.ok_or_else(changed)?;
+        let applied = ledger(&tx)?;
+        let (checked_prefix, checked) =
+            watcher_lineage(migrations, &meta, &applied, user_version(&tx)?).ok_or_else(changed)?;
+        if checked_prefix != prefix
+            || checked
+                .iter()
+                .map(|m| m.expected_sha256)
+                .ne(source.iter().map(|m| m.expected_sha256))
+        {
+            return Err(changed());
+        }
+        for row in &applied[prefix..] {
+            if db(tx.execute(
+                "DELETE FROM schema_migrations WHERE version=?1 AND checksum=?2",
+                params![row.version, row.checksum],
+            ))? != 1
+            {
+                return Err(changed());
+            }
+        }
+        for migration in &migrations[prefix..78] {
+            db(tx.execute_batch(migration.sql))?;
+        }
+        let github = &migrations[78];
+        let combined = &migrations[79];
+        if !source
+            .iter()
+            .any(|m| m.expected_sha256 == combined.expected_sha256)
+        {
+            if source
+                .iter()
+                .any(|m| m.expected_sha256 == github.expected_sha256)
+            {
+                db(tx.execute_batch(combined.sql))?;
+            } else {
+                if source.len() == 1 {
+                    db(tx.execute_batch(include_str!("migrations/0068_assignment_watchers.sql")))?;
+                }
+                db(tx.execute_batch("ALTER TABLE watchers ADD COLUMN github_json TEXT;"))?;
+                db(tx.execute_batch(include_str!("migrations/0070_combined_watchers.sql")))?;
+            }
+        }
+        for migration in &migrations[prefix..80] {
+            record_applied(&tx, migration, now_ms, app_build)?;
+        }
+        update_schema_meta(&tx, combined)?;
+        db(tx.pragma_update(None, "user_version", combined.version))?;
+        verify_after(&tx)?;
+        db(tx.commit())?;
+        Ok(combined.version)
+    })();
+    db(conn.pragma_update(None, "foreign_keys", true))?;
+    result
+}
+
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
 /// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
 pub(crate) fn check(
@@ -1542,6 +1702,7 @@ pub(crate) fn check(
     }
     let sqlite_version = user_version(conn)?;
     if document_lineage(migrations, &meta, &applied, sqlite_version).is_some()
+        || watcher_lineage(migrations, &meta, &applied, sqlite_version).is_some()
         || intelligence_branch(migrations, &meta, &applied).is_some()
         || application_lineage(migrations, &meta, &applied, sqlite_version).is_some()
     {
@@ -1626,6 +1787,10 @@ pub(crate) fn prepare(
         application_lineage(migrations, &meta, &applied, user_version(conn)?)
     {
         version = reconcile_application(conn, migrations, count, now_ms, app_build)?;
+    } else if let Some((prefix, source)) =
+        watcher_lineage(migrations, &meta, &applied, user_version(conn)?)
+    {
+        version = reconcile_watchers(conn, migrations, prefix, &source, now_ms, app_build)?;
     } else if intelligence_branch(migrations, &meta, &applied).is_some() {
         version = reconcile_intelligence_branch(conn, migrations, now_ms, app_build)?;
     } else if version == 64

@@ -2095,8 +2095,13 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
             }
             "-c" => {
                 let key = args.get(j + 1).map(|v| v.text.to_ascii_lowercase());
-                if key.is_none_or(|k| k.starts_with("alias.") || k.starts_with("core.")) {
-                    // An alias or core setting can change what the subcommand does.
+                if key.is_none_or(|k| {
+                    k.starts_with("alias.")
+                        || k.starts_with("core.")
+                        || k.starts_with("tar.")
+                        || k.starts_with("uploadarchive.")
+                }) {
+                    // An alias, core, or tar.<fmt>.command setting can execute commands or change semantics.
                     return false;
                 }
                 j += 2;
@@ -2149,6 +2154,36 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         | "remote" | "tag" | "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am"
         | "config" | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file"
         | "ls-remote" | "merge-base" | "check-attr" => true,
+        "archive" => {
+            if rest.iter().any(|a| a.dynamic) {
+                return false;
+            }
+            let mut seen = Vec::new();
+            match parse_options(
+                rest,
+                0,
+                &Options {
+                    value_letters: "",
+                    flag_letters: "vl0123456789",
+                    long_values: &["--format", "--prefix", "--mtime"],
+                    long_flags: &["--verbose", "--no-verbose", "--list", "--no-list"],
+                    stop: &[],
+                },
+                &mut seen,
+            ) {
+                Parsed::Operand(k) => {
+                    let after_double_dash = k > 0 && rest[k - 1].text == "--";
+                    after_double_dash
+                        || !rest
+                            .get(k..)
+                            .unwrap_or(&[])
+                            .iter()
+                            .any(|a| a.text.starts_with('-'))
+                }
+                Parsed::NoExecution => true,
+                Parsed::Unknown => false,
+            }
+        }
         "stash" => match rest.first().map(|w| w.text.as_str()) {
             Some("drop" | "clear") => consequential(c, &dir),
             _ => true,
@@ -3342,5 +3377,49 @@ mod transport_operand_tests {
             ),
             ShellAssessment::Destructive { .. } | ShellAssessment::NeedsInput(_)
         ));
+    }
+
+    #[test]
+    fn git_archive_models_only_stdout_reads_and_holds_output_remote_or_tar_commands() {
+        let argv = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).into())
+                .collect::<Vec<String>>()
+        };
+        assert!(matches!(
+            assess_command(&argv(&["git", "archive", "--format=tar", "HEAD"]), None),
+            ShellAssessment::NoRecognizedDestruction { .. }
+        ));
+        for unsafe_args in [
+            &["git", "archive", "-vo", "out.tar", "HEAD"][..],
+            &["git", "archive", "-9o", "out.tar", "HEAD"][..],
+            &["git", "archive", "--out=out.tar", "HEAD"][..],
+            &["git", "archive", "--output", "out.tar", "HEAD"][..],
+            &["git", "archive", "HEAD", "-o", "out.tar"][..],
+            &[
+                "git",
+                "archive",
+                "--rem=https://host/repo",
+                "--exec=cmd",
+                "HEAD",
+            ][..],
+            &[
+                "git",
+                "-c",
+                "tar.tgz.command=tar -xf -",
+                "archive",
+                "--format=tgz",
+                "HEAD",
+            ][..],
+            &["sh", "-c", "git archive $OPTS HEAD"][..],
+        ] {
+            assert!(
+                matches!(
+                    assess_command(&argv(unsafe_args), None),
+                    ShellAssessment::NeedsInput(_)
+                ),
+                "expected NeedsInput for {unsafe_args:?}"
+            );
+        }
     }
 }

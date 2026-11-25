@@ -8622,6 +8622,10 @@
             }
           ]
         },
+        "apiHost": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
         "authFlowId": {
           "anyOf": [
             {
@@ -8632,12 +8636,54 @@
             }
           ]
         },
+        "authorizationState": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "failure": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 3
+        },
+        "grantedScopes": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
+        },
+        "permissionRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 3
+        },
         "state": {
           "$ref": "#/$defs/ItemState"
         }
       },
       "required": [
         "state"
+      ],
+      "type": "object"
+    },
+    "GithubIssueIntakePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_GithubIssueIntakeView_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
       ],
       "type": "object"
     },
@@ -8651,6 +8697,100 @@
         "Closed"
       ],
       "type": "string"
+    },
+    "GithubIssueIntakeView": {
+      "additionalProperties": false,
+      "properties": {
+        "closeState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commentState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remoteIssueNumber": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "state": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        },
+        "workId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "remoteIssueNumber",
+        "sourceRevision",
+        "state",
+        "url"
+      ],
+      "type": "object"
+    },
+    "GithubIssueLink": {
+      "additionalProperties": false,
+      "properties": {
+        "remoteIssueId": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "remoteIssueNumber": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "remoteRepositoryId": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "workId",
+        "remoteRepositoryId",
+        "remoteIssueId",
+        "remoteIssueNumber",
+        "url",
+        "sourceRevision"
+      ],
+      "type": "object"
+    },
+    "GithubIssueLinkResult": {
+      "$ref": "#/$defs/GithubIssueLink",
+      "x-since": 3
     },
     "GithubIssueTracking": {
       "additionalProperties": false,
@@ -8749,6 +8889,88 @@
         "kind",
         "state",
         "revision"
+      ],
+      "type": "object"
+    },
+    "GithubPollEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastPolledAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextPollAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "state": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "endpoint",
+        "state",
+        "nextPollAtMs"
+      ],
+      "type": "object"
+    },
+    "GithubPollStatusResult": {
+      "$ref": "#/$defs/GithubPollStatusView",
+      "x-since": 3
+    },
+    "GithubPollStatusView": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "$ref": "#/$defs/List_GithubPollEndpoint_0_128"
+        },
+        "intake": {
+          "$ref": "#/$defs/GithubIssueIntakePage"
+        },
+        "intervalSeconds": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "lastAdmittedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextAdmissionAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "endpoints",
+        "intake",
+        "intervalSeconds",
+        "nextAdmissionAtMs"
       ],
       "type": "object"
     },
@@ -12112,11 +12334,27 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_GithubIssueIntakeView_0_500": {
+      "items": {
+        "$ref": "#/$defs/GithubIssueIntakeView"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_GithubObservation_0_500": {
       "items": {
         "$ref": "#/$defs/GithubObservation"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_GithubPollEndpoint_0_128": {
+      "items": {
+        "$ref": "#/$defs/GithubPollEndpoint"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -22493,6 +22731,38 @@
       ],
       "type": "object"
     },
+    "WatchGithubTarget": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "repositoryId",
+            "workflowRunId"
+          ]
+        },
+        {
+          "required": [
+            "repositoryId",
+            "pullRequestNumber"
+          ]
+        }
+      ],
+      "properties": {
+        "pullRequestNumber": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "workflowRunId": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "repositoryId"
+      ],
+      "type": "object"
+    },
     "WatchOutcome": {
       "additionalProperties": false,
       "properties": {
@@ -22646,13 +22916,22 @@
       "type": "object"
     },
     "WatchSourceKind": {
-      "enum": [
-        "Process",
-        "Probe",
-        "Timer",
-        "File"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "Process",
+            "Probe",
+            "Timer",
+            "File"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "GitHub",
+          "type": "string",
+          "x-since": 9
+        }
+      ]
     },
     "WatcherPage": {
       "additionalProperties": false,
@@ -22724,6 +23003,10 @@
               "type": "null"
             }
           ]
+        },
+        "github": {
+          "$ref": "#/$defs/WatchGithubTarget",
+          "x-since": 9
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -23787,7 +24070,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/GitLink"
+          "$ref": "#/$defs/GithubIssueLinkResult"
         }
       },
       "required": [
@@ -23804,7 +24087,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/GitLink"
+          "$ref": "#/$defs/GithubIssueLinkResult"
         }
       },
       "required": [
@@ -26533,7 +26816,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page28"
+          "$ref": "#/$defs/GithubPollStatusResult"
         }
       },
       "required": [

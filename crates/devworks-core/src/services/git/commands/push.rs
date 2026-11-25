@@ -4,12 +4,18 @@ use crate::protocol::data::PushMode;
 use crate::services::effect::EffectOutcome;
 
 pub(super) struct StagedPush(Result<Destination, Failure>);
+impl StagedPush {
+    pub(super) fn integration_diff(&self) -> Option<&crate::services::artifacts::StagedFile> {
+        Some(&self.0.as_ref().ok()?.integration.as_ref()?.diff)
+    }
+}
 struct Destination {
     tree: StoredGitWorktree,
     repository_revision: i64,
     url: String,
     observed: crate::services::git::client::RevisionObservation,
     transport_digest: String,
+    integration: Option<feature_delivery::PreparedPublication>,
 }
 
 /// A Git remote transport may execute a helper. Accept only explicit supported transports
@@ -74,6 +80,7 @@ impl GitService {
             worktree_id,
             remote_id,
             expected_head,
+            task_integration,
             ..
         } = input
         else {
@@ -170,7 +177,15 @@ impl GitService {
                 &tree.head.format,
                 &repository.id,
             )?;
+            let integration = task_integration
+                .as_ref()
+                .filter(|_| !preview)
+                .map(|proof| {
+                    self.prepare_feature_publication(ctx, env, &git, &tree, expected_head, proof)
+                })
+                .transpose()?;
             Ok(Destination {
+                integration,
                 transport_digest: transport.digest.clone(),
                 tree,
                 repository_revision: repository.revision,
@@ -195,6 +210,7 @@ impl GitService {
             expected_head,
             expected_remote,
             mode,
+            task_integration,
         } = input
         else {
             unreachable!("selected push")
@@ -271,6 +287,50 @@ impl GitService {
                 worktree_id,
             ));
         }
+        if let Some(feature) = &work.parent_feature_id
+            && feature_delivery::uses_local_integration(tx, feature, &repository.id)?
+        {
+            return Err(refuse(
+                DomainErrorCode::PermissionDenied,
+                "local_feature_task",
+                &work.id,
+            ));
+        }
+        let publication = match (task_integration, &destination.integration) {
+            (Some(proof), Some(prepared)) => {
+                Some(Box::new(feature_delivery::persist_task_publication(
+                    self, tx, ctx, &work, &tree, proof, prepared,
+                )?))
+            }
+            (None, None)
+                if work.kind != FEATURE
+                    || !tree.branch.starts_with("refs/heads/feature/")
+                    || expected_remote
+                        .as_ref()
+                        .is_none_or(|remote| remote == expected_head) =>
+            {
+                None
+            }
+            (None, None)
+                if !force
+                    && let Some(predecessor) = expected_remote
+                    && feature_delivery::observed_publication(tx, &tree, predecessor)?
+                    && feature_delivery::has_final_pull_request(
+                        tx,
+                        &tree,
+                        repository.revision,
+                    )? =>
+            {
+                None
+            }
+            _ => {
+                return Err(refuse(
+                    DomainErrorCode::ApprovalRequired,
+                    "feature_integration",
+                    &work.id,
+                ));
+            }
+        };
         tree.head = expected_head.clone();
         Ok((
             tree,
@@ -284,6 +344,7 @@ impl GitService {
                 expected: expected_head.clone(),
                 remote_head: expected_remote.clone(),
                 force,
+                task_publication: publication,
             },
         ))
     }
@@ -303,6 +364,7 @@ impl GitService {
             remote_head,
             force,
             transport_digest,
+            task_publication,
         } = &job.action
         else {
             unreachable!("push effect")
@@ -359,6 +421,14 @@ impl GitService {
             Err(_) => return denied("remote head is unavailable"),
         };
         if observed.as_deref() != remote_head.as_ref().map(|h| h.hex.as_str()) {
+            if task_publication.is_some()
+                && observed.as_deref().is_some_and(|remote| {
+                    remote == expected.hex
+                        || git.is_ancestor(path, &expected.hex, remote) == Ok(true)
+                })
+            {
+                return self.finish_git(job, &operation.id, observation, None);
+            }
             return changed("remote lease is stale");
         }
         // The lease also guards a normal push against races. It may authorize a rewrite at
@@ -368,6 +438,9 @@ impl GitService {
             && git.is_ancestor(path, base, &expected.hex) != Ok(true)
         {
             return changed("normal push is not a verified fast forward");
+        }
+        if self.git_stopped(job) {
+            return denied("work or authority changed before push");
         }
         let lease = format!(
             "--force-with-lease={target}:{}",
@@ -393,7 +466,11 @@ impl GitService {
         // A timeout/nonzero status does not establish failure. Observe the remote ref even
         // after transport loss; never repeat the guarded write as recovery.
         match network.remote_head(path, url, target) {
-            Ok(Some(head)) if head == expected.hex => {
+            Ok(Some(head))
+                if head == expected.hex
+                    || (task_publication.is_some()
+                        && git.is_ancestor(path, &expected.hex, &head) == Ok(true)) =>
+            {
                 let docs = match super::documentation::matching_commit(
                     &*self.store,
                     git,
