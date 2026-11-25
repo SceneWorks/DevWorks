@@ -112,7 +112,7 @@ impl GitHubService {
         issue: &GithubIssueKey,
         now: i64,
     ) -> Result<Option<i64>, Failure> {
-        let key = format!("issue-comments:{}", issue.number);
+        let key = issue.comment_cursor_endpoint();
         let current = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             snapshot
                 .github()
@@ -135,8 +135,11 @@ impl GitHubService {
         )
         .map_err(repositories::api_fault)?;
         let current_permission = current.as_ref().filter(|row| {
-            row.watermark.as_ref().and_then(Value::as_i64)
-                == Some(target.account.permission_revision)
+            row.watermark.as_ref().and_then(|watermark| {
+                watermark["permissionRevision"]
+                    .as_i64()
+                    .or_else(|| watermark.as_i64())
+            }) == Some(target.account.permission_revision)
         });
         let next = current_permission.and_then(|row| row.next_page.as_deref());
         let validators = current_permission
@@ -198,17 +201,24 @@ impl GitHubService {
             let pacing = page.as_ref().map_or(now, |page| page.control.poll_after_ms);
             match (observations, page) {
                 (Ok(observations), Ok(page)) => {
-                    let issue_scope = issue_poll::scope(&target.binding.repository_id);
-                    let issue_baseline_ms = tx
-                        .github()
-                        .github_issue(&issue, &issue_scope)?
-                        .and_then(|intake| {
-                            tx.github()
-                                .github_observation(&intake.observation_id, &issue_scope)
-                                .transpose()
-                        })
-                        .transpose()?
-                        .and_then(|obs| obs.source_updated_at_ms);
+                    let mut issue_baseline_ms = row
+                        .watermark
+                        .as_ref()
+                        .and_then(|watermark| watermark["baselineMs"].as_i64());
+                    if !row.bootstrap_complete && issue_baseline_ms.is_none() {
+                        // Older stores can have linked work before the baseline was persisted.
+                        let issue_scope = issue_poll::scope(&target.binding.repository_id);
+                        issue_baseline_ms = tx
+                            .github()
+                            .github_issue(&issue, &issue_scope)?
+                            .and_then(|intake| {
+                                tx.github()
+                                    .github_observation(&intake.observation_id, &issue_scope)
+                                    .transpose()
+                            })
+                            .transpose()?
+                            .and_then(|obs| obs.source_updated_at_ms);
+                    }
                     for mut observation in observations {
                         observation.id = tx.new_id(IdKind::Event);
                         let stored = tx.github().append_github_observation(&observation)?;
@@ -266,7 +276,10 @@ impl GitHubService {
                     row.next_poll_at_ms = pacing;
                     row.failure_count = 0;
                     row.last_error = None;
-                    row.watermark = Some(json!(target.account.permission_revision));
+                    row.watermark = Some(json!({
+                        "permissionRevision": target.account.permission_revision,
+                        "baselineMs": issue_baseline_ms,
+                    }));
                 }
                 _ => {
                     row.failure_count = row.failure_count.saturating_add(1);

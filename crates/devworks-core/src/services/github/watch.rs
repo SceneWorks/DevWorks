@@ -154,7 +154,7 @@ impl GitHubService {
             .observe_authenticated_page(&endpoint, None, validators, now, POLL_INTERVAL_MS, token)
             .map_err(repositories::api_fault)?;
         let due = page.control.poll_after_ms;
-        self.update_watch_pacing(account, &page);
+        self.note_poll_pacing(account, &page);
         let observation =
             decode_run(page, target, run, validators.is_some()).map_err(repositories::api_fault)?;
         Ok((observation, due))
@@ -171,7 +171,7 @@ impl GitHubService {
         let fallback = now.saturating_add(POLL_INTERVAL_MS);
         let number_text = number.to_string();
         let head_page = self.observe_pull_head_page(target, &number_text)?;
-        self.update_watch_pacing(account, &head_page);
+        self.note_poll_pacing(account, &head_page);
         if head_page.throttled() {
             return Ok((RunObservation::Deferred, head_page.control.poll_after_ms));
         }
@@ -372,7 +372,7 @@ impl GitHubService {
             return Ok(self.deferred_watch(account));
         }
         let head_page = self.observe_pull_head_page(target, &number_text)?;
-        self.update_watch_pacing(account, &head_page);
+        self.note_poll_pacing(account, &head_page);
         if head_page.throttled() {
             return Ok((RunObservation::Deferred, head_page.control.poll_after_ms));
         }
@@ -426,11 +426,11 @@ impl GitHubService {
                 token.clone(),
             )
             .map_err(repositories::api_fault)?;
-        self.update_watch_pacing(account, &page);
+        self.note_poll_pacing(account, &page);
         Ok(Some(page))
     }
 
-    fn update_watch_pacing(&self, account: &PollAccount, page: &ApiPage) {
+    pub(super) fn note_poll_pacing(&self, account: &PollAccount, page: &ApiPage) {
         if let Some(until) = page.shared_backoff() {
             self.defer_polls(account.clone(), until);
         }

@@ -10,6 +10,12 @@ pub struct GithubIssueKey {
     pub repository_id: Id,
     pub number: i64,
 }
+
+impl GithubIssueKey {
+    pub fn comment_cursor_endpoint(&self) -> String {
+        format!("issue-comments:{}", self.number)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoredGithubAccount {

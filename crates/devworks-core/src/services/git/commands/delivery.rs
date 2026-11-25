@@ -1243,7 +1243,18 @@ impl GitService {
                         })
                         .is_some_and(|plan| plan.digest == state.barrier.approved_scope_digest.0)
                 } else {
-                    root.revision == j.work_revision
+                    let repositories = tx.work().work_repositories(&root.id)?;
+                    matches!(state.barrier.kind, DeliveryKind::StandaloneIssue)
+                        && root.project_id == state.project
+                        && root.parent_feature_id.is_none()
+                        && matches!(root.kind.as_str(), TASK | "issue")
+                        && j.work_scope_revision
+                            .is_none_or(|revision| root.scope_revision == revision)
+                        && repositories.len() == state.repositories.len()
+                        && state
+                            .repositories
+                            .iter()
+                            .all(|row| repositories.contains(&row.repo))
                 };
                 if current {
                     state.final_operation = Some(op.clone());

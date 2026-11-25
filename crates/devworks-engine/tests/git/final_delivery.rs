@@ -21,6 +21,7 @@ struct RemoteRepo {
     head: String,
     merge: String,
     green: bool,
+    success_conclusion: &'static str,
     merged: bool,
     accepted: bool,
     workflow_pending: bool,
@@ -178,7 +179,7 @@ impl HttpTransport for Remote {
             (Method::Get, ["commits", sha, "check-runs"]) if *sha == repo.head => {
                 json!({"check_runs":[{
                 "head_sha":repo.head,"name":"native","app":{"id":7},"status":"completed",
-                "conclusion":if repo.green {"success"} else {"failure"}}]})
+                "conclusion":if repo.green {repo.success_conclusion} else {"failure"}}]})
             }
             (Method::Get, ["commits", sha, "status"]) if *sha == repo.head => {
                 json!({"sha":repo.head,"statuses":[]})
@@ -240,6 +241,17 @@ fn mark_settled(store: &dyn ApplicationStore, id: &OperationId, effect: EffectOu
 
 #[test]
 fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_without_repeating() {
+    native_final_delivery(None);
+}
+
+#[test]
+fn native_standalone_merge_settles_after_a_comment_with_neutral_or_skipped_required_checks() {
+    for conclusion in ["neutral", "skipped"] {
+        native_final_delivery(Some(conclusion));
+    }
+}
+
+fn native_final_delivery(standalone_check: Option<&'static str>) {
     let h = Harness::new();
     let store = h.open();
     let user = principal(store.as_ref(), "delivery-owner", PrincipalKind::Human);
@@ -259,7 +271,12 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             .unwrap()
     };
     let mut checkouts = Vec::new();
-    for name in ["first", "second"] {
+    let names = if standalone_check.is_some() {
+        &["first"][..]
+    } else {
+        &["first", "second"][..]
+    };
+    for &name in names {
         let source = h.root.join(name);
         let location = owned.join(name);
         std::fs::create_dir(&source).unwrap();
@@ -328,6 +345,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             head: tree.head.hex.clone(),
             merge: merge.clone(),
             green: *name == "first",
+            success_conclusion: standalone_check.unwrap_or("success"),
             merged: false,
             accepted: false,
             workflow_pending: false,
@@ -361,7 +379,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             tx.github().put_github_account(&StoredGithubAccount {id:id("github-account"),revision:1,state:"Connected".into(),
                 remote_user_id:Some("7".into()),login:Some("delivery-owner".into()),credential_revision,permission_revision:1,
                 granted_scopes:vec!["repo".into()],granted_scopes_reported:true,observed_at_ms:T0,last_error:None},None)?;
-            tx.work().insert_work(&StoredWork {id:root.0.clone(),project_id:project.clone(),kind:FEATURE.into(),parent_feature_id:None,
+            tx.work().insert_work(&StoredWork {id:root.0.clone(),project_id:project.clone(),kind:if standalone_check.is_some() {TASK} else {FEATURE}.into(),parent_feature_id:None,
                 status_id:None,title:"Final feature".into(),priority:0,manual_order:0,revision:1,scope_revision:1,created_at_ms:T0,
                 updated_at_ms:T0,created_by:Some(actor.clone()),updated_by:Some(actor.clone()),search_key:"feature".into(),caller_ref:None,
                 completion:None,brief:json!({})})?;
@@ -401,7 +419,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
                     supersedes_id:None,actor:actor.clone(),event_id:event.0,sequence,repository_id:Some(id(name)),revision:Some(tree.head.hex.clone()),
                     summary:"Fixture final pull request".into(),body:json!({"worktreeId":tree.id,"branch":tree.branch,"head":tree.head}),created_at_ms:T0})?;
             }
-            let members=[id("first"),id("second")];
+            let members=checkouts.iter().map(|(name,_,_,_,_)|id(name)).collect::<Vec<_>>();
             tx.projects().set_members(&project,&members)?;
             tx.work().set_work_repositories(&root.0,&members)?;
             Ok(())
@@ -438,18 +456,20 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         .unwrap()
         .0;
     let plan_digest = "a".repeat(64);
-    write(store.as_ref(),{let (evidence,root,actor,plan_digest)=(evidence.clone(),root.clone(),actor.clone(),plan_digest.clone());move |tx| {
+    if standalone_check.is_none() {
+        write(store.as_ref(),{let (evidence,root,actor,plan_digest)=(evidence.clone(),root.clone(),actor.clone(),plan_digest.clone());move |tx| {
         tx.work().put_feature_plan(&StoredFeaturePlan {feature_id:root.0.clone(),revision:1,
             approved:Some(json!({"draft":{"content":evidence,"acceptance":[],"repositoryIds":["first","second"],"goals":[],"requirements":[],"acceptanceTests":[]},
                 "digest":plan_digest,"planRevision":1,"proposalId":"approved-feature-plan"})),approved_by:Some(actor),approved_at_ms:Some(T0),
             pending:None,pending_revision:None},None)
     }}).unwrap();
-    let barrier = json!({"protocol":"1.0-draft.1","deliveryId":"delivery-fixture","rootId":root,"kind":"Feature","revision":"1",
+    }
+    let barrier = json!({"protocol":"1.0-draft.1","deliveryId":"delivery-fixture","rootId":root,"kind":if standalone_check.is_some() {"StandaloneIssue"} else {"Feature"},"revision":"1",
         "approvedScopeDigest":plan_digest,"repositories":checkouts.iter().map(|(name,_,tree,base,_)|json!({"repositoryId":name,
             "pullRequestId":format!("pr-link-{name}"),"baseRef":"refs/heads/main","expectedHead":tree.head,
             "observedBase":{"format":"Sha1","hex":base},"reviewSource":"GitHubAutomated","mergeMethod":"MergeCommit",
             "evidence":evidence,"policyRevision":"1"})).collect::<Vec<_>>(),
-        "dependencies":[{"before":"first","after":"second"}]});
+        "dependencies":if standalone_check.is_some() {json!([])} else {json!([{"before":"first","after":"second"}])}});
     let service = |store: &Arc<dyn ApplicationStore>| {
         Arc::new(
             GitService::new(
@@ -521,6 +541,68 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
         DomainDecision::Accepted { operation_id } => operation_id,
         other => panic!("{other:?}"),
     };
+    if standalone_check.is_some() {
+        let operation = accepted(submit(&store, "standalone-merge", 0, Some(&barrier)));
+        let record = begin(store.as_ref(), &operation);
+        assert!(matches!(
+            service(&store).execute(&record),
+            EffectOutcome::Unknown(_)
+        ));
+        assert_eq!(wire.submissions.lock().unwrap().as_slice(), ["first"]);
+
+        let before = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+        let control = Arc::new(devworks_core::services::runs::ControlService::new(
+            h.ids.clone(),
+        ));
+        let work = Arc::new(devworks_core::services::work::WorkService::new(
+            h.ids.clone(),
+            control,
+        ));
+        let authority = HostAuthority {
+            store: store.as_ref(),
+            clock: h.clock.as_ref(),
+            protected_branches: &[],
+        };
+        let gateway = Gateway {
+            store: store.as_ref(),
+            authority: &authority,
+            ids: h.ids.as_ref(),
+        };
+        let reply = gateway.command(&user, "tasks.edit", json!({
+            "mode":"Command","protocol":"1.0-draft.1","schemaRevision":3,"requestKey":"comment-during-merge",
+            "body":{"kind":"tasks.edit","workId":root,"expectedRevision":before.revision.to_string(),
+                "changes":{"addComment":{"id":"pending-merge-comment","content":"Reviewed while GitHub was merging","evidence":[]}}}
+        }).to_string().as_bytes(), work).unwrap();
+        assert!(
+            matches!(&reply, CommandReply::Recorded{receipt,..}
+            if matches!(&receipt.decision, DomainDecision::Applied{..})),
+            "{reply:?}"
+        );
+        let edited = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+        assert!(edited.revision > before.revision);
+        assert_eq!(edited.scope_revision, before.scope_revision);
+
+        wire.repos.lock().unwrap()[0].merged = true;
+        let result = service(&store).observe(&record);
+        assert!(
+            matches!(&result, EffectOutcome::Completed(value)
+            if value["result"]["value"]["featureComplete"] == true),
+            "{result:?}"
+        );
+        mark_settled(store.as_ref(), &operation, result);
+        let accepted = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+        assert_eq!(accepted.completion.as_deref(), Some(VERIFIED));
+        let cleanup = service(&store);
+        cleanup.set_approval_control(Arc::new(
+            devworks_core::services::runs::ControlService::new(h.ids.clone()),
+        ));
+        cleanup.schedule_completed_cleanup().unwrap();
+        assert!(
+            read(store.as_ref(), |s| s.runs().root_control(&root))
+                .is_some_and(|control| control.stop_operation_id.is_some())
+        );
+        return;
+    }
     assert!(matches!(
         submit(&store, "dependent-before-predecessor", 1, Some(&barrier)),
         DomainDecision::Refused { .. }

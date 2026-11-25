@@ -1911,6 +1911,14 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
     feat_52["html_url"] = json!("https://github.com/Acme/kit/issues/52");
     feat_52["title"] = json!("Add dark mode export");
 
+    let mut bug_53 = bug_50.clone();
+    bug_53["number"] = json!(53);
+    bug_53["node_id"] = json!("issue-node-53");
+    bug_53["html_url"] = json!("https://github.com/Acme/kit/issues/53");
+    let mut commented_53 = bug_53.clone();
+    commented_53["comments"] = json!(1);
+    commented_53["updated_at"] = json!("2023-11-14T22:40:00Z");
+
     let script = Arc::new(Script(Mutex::new(VecDeque::from([
         Request {
             path: "/user",
@@ -1935,6 +1943,16 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
             path: "/repos/Acme/kit/issues",
             query: "state=open",
             result: exchange(200, json!([bug_50, bug_51, feat_52]), &[]),
+        },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([bug_53]), &[]),
+        },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([commented_53]), &[]),
         },
     ]))));
 
@@ -2192,6 +2210,60 @@ fn shared_repo_triage_verifies_trusted_checks_and_handles_setup_or_runner_failur
     })
     .unwrap();
     assert_eq!(intake_52.state, "AwaitingDecision");
+    h.advance(600_000);
+    assert!(matches!(
+        github.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    let admitted = github.admit_triage(control.clone()).unwrap().unwrap();
+    assert_eq!(admitted.issue.key.number, 53);
+    let key = admitted.issue.key.clone();
+    let mut input = github.triage_input(&admitted.operation).unwrap().unwrap();
+    for destination in &mut input.destinations {
+        destination.checks = parsed_checks.clone();
+    }
+    let project = ProjectId(id("proj-alpha"));
+    write(store.as_ref(), {
+        let project = project.clone();
+        move |tx| {
+            let completed = mark_operation_complete(tx, &admitted.operation.id)?;
+            settle_classification(
+                tx,
+                &work_service,
+                &completed,
+                &input,
+                &TriageClassification::Bugs {
+                    destinations: vec![project.clone()],
+                    verifications: vec![BugVerificationProposal {
+                        project_id: project,
+                        check_id: id("unit-suite"),
+                        report_quote: "panicked at empty host segment".into(),
+                        test_identifier: "parse_url_panic".into(),
+                        expected_failure: "panicked at empty host segment".into(),
+                    }],
+                },
+            )
+        }
+    })
+    .unwrap();
+    let case = || {
+        read(store.as_ref(), |s| {
+            s.github().github_triage_case(&key, &project)
+        })
+        .unwrap()
+    };
+    assert_eq!(case().state, "NeedsProof");
+    h.advance(60_000);
+    assert!(matches!(
+        github.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    runtime().block_on(verify_outbox.run_until_idle()).unwrap();
+    let settled = case();
+    assert_eq!(settled.state, "AwaitingDecision");
+    let evidence = settled.evidence.unwrap();
+    assert_eq!(evidence["sourceChanged"], true);
+    assert!(evidence["reproduction"].is_null());
     assert!(script.0.lock().unwrap().is_empty());
 }
 
@@ -2283,6 +2355,20 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
             path: "/repos/Acme/kit/issues",
             query: "state=all",
             result: exchange(200, json!([closed_60]), &[]),
+        },
+        Request {
+            path: "/repos/Acme/kit/issues/60/comments",
+            query: "",
+            result: exchange(
+                200,
+                json!([
+                    {"id":61,"html_url":"https://github.com/Acme/kit/issues/60#issuecomment-61",
+                        "updated_at":"2023-11-14T22:09:00Z","body":"Old comment before linking"},
+                    {"id":62,"html_url":"https://github.com/Acme/kit/issues/60#issuecomment-62",
+                        "updated_at":"2023-11-14T22:14:00Z","body":"New comment after linking"}
+                ]),
+                &[],
+            ),
         },
         Request {
             path: "/repos/Acme/kit/issues",
@@ -2536,6 +2622,13 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
             "backlog"
         ))
     );
+
+    github.poll_issue_comments(&repo, 60).unwrap();
+    runtime().block_on(notice_outbox.run_until_idle()).unwrap();
+    let commented = read(store.as_ref(), |s| s.work().work(&id("work-started"))).unwrap();
+    let brief = commented.brief.to_string();
+    assert!(brief.contains("New comment after linking"), "{brief}");
+    assert!(!brief.contains("Old comment before linking"), "{brief}");
 
     // 2. Poll remote reopening of #60 (with appended clarifying text):
     //    Verify GH-06: human pause on work-started is preserved!

@@ -508,6 +508,32 @@ impl HttpTransport for RecordedCodeReviews {
     }
 }
 
+struct RateLimitedReviewHead {
+    upstream: Arc<RecordedCodeReviews>,
+    head_requests: std::sync::atomic::AtomicUsize,
+}
+
+impl HttpTransport for RateLimitedReviewHead {
+    fn send(&self, request: &HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.send_with_headers(request).map(|page| page.response)
+    }
+
+    fn send_with_headers(&self, request: &HttpRequest) -> Result<HttpExchange, HttpError> {
+        if request.url.ends_with("/pulls/42")
+            && self.head_requests.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            return Ok(HttpExchange {
+                response: HttpResponse {
+                    status: 429,
+                    body: Vec::new(),
+                },
+                headers: vec![("retry-after".into(), "120".into())],
+            });
+        }
+        self.upstream.send_with_headers(request)
+    }
+}
+
 #[test]
 fn native_final_review_qualifies_current_bot_evidence_and_exact_post_cap_repair() {
     final_review_case(ReviewExercise::Repair);
@@ -880,10 +906,22 @@ fn final_review_case(exercise: ReviewExercise) {
             let CommandReply::Recorded {receipt,..} = response else { panic!("{response:?}") };
             let DomainDecision::Accepted {operation_id} = receipt.decision else { panic!("{receipt:?}") };
             let second = read(&*fx.store, |s| s.operations().operation(&operation_id)).unwrap();
+            let throttled = Arc::new(RateLimitedReviewHead {
+                upstream: wire.clone(), head_requests: Default::default(),
+            });
+            let source = Arc::new(GitHubService::new(
+                fx.store.clone(),
+                Arc::new(GitHubClient {http:throttled.clone(), secrets:Arc::new(Credentials)}),
+                fx.h.ids.clone(), fx.h.clock(),
+            ));
             let review_service = devworks_core::services::reviews::ReviewService::new(
                 fx.h.ids.clone(), fx.store.clone(), app.git().unwrap().clone(), app.artifacts().clone(),
-                fx.h.clock(), None,
+                fx.h.clock(), Some(source),
             );
+            for _ in 0..2 {
+                review_service.poll_final_review(&second, true).unwrap();
+            }
+            assert_eq!(throttled.head_requests.load(Ordering::SeqCst), 1);
             review_service.poll_final_review(&second, false).unwrap();
             assert!(matches!(readiness("await-fresh-bot", &changed), DomainQueryReply::Result {
                 result:OperationResult::ReviewsReadiness {value}, ..
@@ -934,6 +972,10 @@ fn final_review_case(exercise: ReviewExercise) {
             let review_id = serde_json::from_value(second.payload["reviewId"].clone()).unwrap();
             let dropped = read(&*fx.store, |s| s.git().code_review(&review_id)).unwrap();
             assert_eq!(dropped.body["value"]["sources"][0]["state"], "Failed");
+            assert_eq!(throttled.head_requests.load(Ordering::SeqCst), 1);
+            fx.h.advance(120_000);
+            review_service.poll_final_review(&second, true).unwrap();
+            assert_eq!(throttled.head_requests.load(Ordering::SeqCst), 2);
             app.shutdown().await;
             return;
         }

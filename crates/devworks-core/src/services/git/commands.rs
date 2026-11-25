@@ -56,6 +56,8 @@ struct Job {
     policy_revision: i64,
     repository_revision: i64,
     work_revision: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_scope_revision: Option<i64>,
     root_epochs: Vec<(RootId, i64)>,
     assignment_generation: Option<i64>,
     delivery_id: Id,
@@ -739,6 +741,8 @@ impl GitService {
             policy_revision: ctx.policy_revision().get(),
             repository_revision: repository.revision,
             work_revision: work.revision,
+            work_scope_revision: matches!(&action, Action::Integrate)
+                .then_some(work.scope_revision),
             root_epochs,
             assignment_generation,
             fences,

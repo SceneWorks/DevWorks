@@ -1556,7 +1556,8 @@ impl GithubRepository for Unit<'_> {
         w: &RootId,
         expected: i64,
     ) -> Result<(), StorageError> {
-        issue(self.conn, k)?.ok_or_else(|| invalid("GitHub source missing"))?;
+        let issue = issue(self.conn, k)?.ok_or_else(|| invalid("GitHub source missing"))?;
+        let conn = self.conn;
         let (p, revision) = work(self.conn, w)?;
         if revision != expected {
             return Err(conflict_strict(
@@ -1569,7 +1570,7 @@ impl GithubRepository for Unit<'_> {
         }
         member(self.conn, &p, &k.repository_id)?;
         let sid = source_id(k)?;
-        atomic(self.conn, || {
+        atomic(conn, || {
             let changed = db(self.conn.execute(
                 "INSERT INTO integration_links(record_id,work_id,purpose) VALUES(?1,?2,\
                 'GithubIssue') ON CONFLICT DO NOTHING",
@@ -1588,6 +1589,29 @@ impl GithubRepository for Unit<'_> {
                     "UPDATE integration_records SET revision=?2 WHERE id=?1",
                     params![sid, revision],
                 ))?;
+                let endpoint = k.comment_cursor_endpoint();
+                if poll(conn, &k.repository_id, &endpoint)?.is_none() {
+                    let baseline = observation(conn, &issue.observation_id)?
+                        .and_then(|row| row.source_updated_at_ms)
+                        .unwrap_or(self.now);
+                    self.put_github_poll_cursor(
+                        &StoredGithubPollCursor {
+                            repository_id: k.repository_id.clone(),
+                            endpoint,
+                            revision: 1,
+                            etag: None,
+                            last_modified: None,
+                            next_page: None,
+                            watermark: Some(serde_json::json!({"baselineMs": baseline})),
+                            bootstrap_complete: false,
+                            next_poll_at_ms: 0,
+                            last_polled_at_ms: None,
+                            failure_count: 0,
+                            last_error: None,
+                        },
+                        None,
+                    )?;
+                }
             }
             Ok(())
         })
