@@ -4,6 +4,9 @@ mod attach;
 mod auto_cleanup;
 pub(super) use auto_cleanup::CleanupSchedule;
 mod delivery;
+pub(crate) use delivery::{
+    already_merged_review_repositories, qualifies_github_resolution_after_cleanup,
+};
 mod feature_delivery;
 pub(crate) use feature_delivery::{
     feature_head_digest, requires_local_integration, waits_for_publication,

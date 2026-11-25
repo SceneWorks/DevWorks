@@ -791,7 +791,10 @@ fn resolution_permitted(
 
 fn permits_publication(tx: &mut dyn WriteTransaction, root: &RootId) -> Result<bool, StorageError> {
     let control = control_of(tx.runs(), root)?;
-    Ok(control.desired == DesiredExecution::Enabled && control.stop_operation_id.is_none())
+    if control.desired == DesiredExecution::Enabled {
+        return Ok(control.stop_operation_id.is_none());
+    }
+    crate::services::git::qualifies_github_resolution_after_cleanup(tx, &control)
 }
 
 impl ResolutionEffect {

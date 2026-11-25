@@ -173,6 +173,9 @@ fn load_input(
         .github()
         .github_observation(&row.observation_id, &scope)?
         .ok_or_else(invalid)?;
+    if row.work_id.is_none() && observation.payload["state"] != "open" {
+        return Ok(None);
+    }
     Ok(Some(TriageInput {
         title: observation.payload["title"]
             .as_str()

@@ -133,9 +133,15 @@ impl ReviewService {
             let work =
                 crate::services::work::visible_work(snapshot.work(), ctx, &barrier.root_id.0)
                     .map_err(Failure::into_storage)?;
+            let merged = crate::services::git::already_merged_review_repositories(
+                snapshot.history(),
+                &work.project_id,
+                barrier,
+            )?;
             barrier
                 .repositories
                 .iter()
+                .filter(|entry| !merged.contains(&entry.repository_id))
                 .map(|entry| {
                     let link = snapshot
                         .sessions()
@@ -295,7 +301,15 @@ impl ReviewService {
         let mut sources = Vec::new();
         let mut reuse = None;
         let mut capped = None;
+        let merged = crate::services::git::already_merged_review_repositories(
+            tx.history(),
+            &work.project_id,
+            barrier,
+        )?;
         for entry in &barrier.repositories {
+            if merged.contains(&entry.repository_id) {
+                continue;
+            }
             let (_, number) = qualified_pull(
                 tx,
                 &work.project_id,

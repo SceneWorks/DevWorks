@@ -256,6 +256,13 @@ pub trait GithubRead {
         &self,
         repository: &Id,
     ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError>;
+    /// Active native registrations bound to one canonical repository at their current remote.
+    fn github_bound_registrations(
+        &self,
+        canonical: &Id,
+        after: Option<&Id>,
+        limit: u16,
+    ) -> Result<Vec<Id>, StorageError>;
     fn github_repository_binding_history(
         &self,
         repository: &Id,

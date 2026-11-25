@@ -522,7 +522,10 @@ mod tests {
 
     #[test]
     fn verifier_rejects_remote_daemons() {
+        #[cfg(unix)]
         assert!(local_socket("unix:///var/run/docker.sock"));
+        #[cfg(windows)]
+        assert!(!local_socket("unix:///var/run/docker.sock"));
         assert!(local_socket("npipe:////./pipe/docker_engine"));
         assert!(!local_socket("ssh://build-host"));
         assert!(!local_socket("tcp://127.0.0.1:2375"));

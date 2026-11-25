@@ -1841,7 +1841,10 @@ impl ControlService {
         control_conflict(&control, expected)?;
         let paused = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
             .iter()
-            .any(|b| b.cause == HoldCause::HumanPause);
+            .any(|b| {
+                b.cause == HoldCause::HumanPause
+                    && b.clearance["stopCause"] != StopCause::Superseded.as_str()
+            });
         if control.desired == DesiredExecution::Paused && paused {
             return Ok(DomainDecision::NoChange {
                 result: snapshot_result(tx.runs(), &root.id, |value| OperationResult::RunsPause {

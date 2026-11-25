@@ -537,6 +537,30 @@ macro_rules! reads {
             ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
                 binding_projection(self.conn, id)
             }
+            fn github_bound_registrations(
+                &self,
+                canonical: &Id,
+                after: Option<&Id>,
+                limit: u16,
+            ) -> Result<Vec<Id>, StorageError> {
+                let n = page_limit(limit)?;
+                let sql = format!(
+                    "SELECT native.id {BINDING_NATIVE} WHERE binding.kind='GithubRepositoryBinding' \
+                     AND binding.state='Active' AND coalesce(details.lifecycle,'Active')='Active' \
+                     AND details.remote_url=json_extract(binding.body_json,'$.registered_remote') \
+                     AND json_extract(binding.body_json,'$.github_repository_id')=?1 \
+                     AND (?2 IS NULL OR native.id>?2) ORDER BY native.id LIMIT ?3"
+                );
+                let mut q = db(self.conn.prepare_cached(&sql))?;
+                let rows = db(db(q.query_map(
+                    params![canonical.as_str(), after.map(Id::as_str), n],
+                    |row| row.get::<_, String>(0),
+                ))?
+                .collect::<rusqlite::Result<Vec<_>>>())?;
+                rows.into_iter()
+                    .map(|value| Id::new(value).map_err(|_| invalid("invalid native repository ID")))
+                    .collect()
+            }
             fn github_repository_binding_history(
                 &self,
                 id: &Id,

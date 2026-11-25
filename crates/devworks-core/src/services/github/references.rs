@@ -236,7 +236,6 @@ fn enqueue_change(
     revision: i64,
 ) -> Result<(), StorageError> {
     let repo = &target.repository;
-    let registration = &target.binding.repository_id;
     let mut branch_url =
         url::Url::parse(&format!("{}/tree", repo.url)).map_err(|_| invalid_ref())?;
     branch_url
@@ -244,7 +243,6 @@ fn enqueue_change(
         .map_err(|_| invalid_ref())?
         .extend(branch.split('/'));
     let payload: Value = json!({
-        "repositoryId": registration,
         "githubRepositoryId": repo.id,
         "repositoryUrl": repo.url,
         "ref": format!("refs/heads/{branch}"),
@@ -253,22 +251,44 @@ fn enqueue_change(
         "head": after,
         "headUrl": format!("{}/commit/{after}", repo.url),
     });
-    let event = EventId(tx.new_id(IdKind::Event));
-    let actor = tx.store().host_actor.clone();
-    tx.history().append(NewEvent {
-        id: event.clone(),
-        actor,
-        project_id: None,
-        root_id: None,
-        operation_id: None,
-        aggregate_kind: "github_ref".into(),
-        aggregate_id: format!("{}:{}", repo.id.as_str(), endpoint_key(branch)),
-        aggregate_revision: revision,
-        kind: "GithubRefChanged".into(),
-        payload: payload.clone(),
-    })?;
-    enqueue(tx, &event, registration, NOTICE_CONSUMER, payload.clone())?;
-    enqueue(tx, &event, registration, INDEX_CONSUMER, payload)
+    let mut after = None;
+    const PAGE: u16 = 128;
+    loop {
+        let registrations =
+            tx.github()
+                .github_bound_registrations(&repo.id, after.as_ref(), PAGE)?;
+        for local in &registrations {
+            let mut local_payload = payload.clone();
+            local_payload["repositoryId"] = json!(local);
+            // One queue entry per consumer and event. Each native registration has its own
+            // event while the authenticated ref cursor remains shared by the remote.
+            let event = EventId(tx.new_id(IdKind::Event));
+            let actor = tx.store().host_actor.clone();
+            tx.history().append(NewEvent {
+                id: event.clone(),
+                actor,
+                project_id: None,
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: "github_ref".into(),
+                aggregate_id: format!(
+                    "{}:{}:{}",
+                    repo.id.as_str(),
+                    local.as_str(),
+                    endpoint_key(branch)
+                ),
+                aggregate_revision: revision,
+                kind: "GithubRefChanged".into(),
+                payload: local_payload.clone(),
+            })?;
+            enqueue(tx, &event, local, NOTICE_CONSUMER, local_payload.clone())?;
+            enqueue(tx, &event, local, INDEX_CONSUMER, local_payload)?;
+        }
+        if registrations.len() < usize::from(PAGE) {
+            return Ok(());
+        }
+        after = registrations.last().cloned();
+    }
 }
 
 pub(super) fn enqueue(

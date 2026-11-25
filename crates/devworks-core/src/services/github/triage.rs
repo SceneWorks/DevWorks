@@ -198,6 +198,9 @@ fn next_eligible(
             else {
                 continue;
             };
+            if issue.work_id.is_none() && observation.payload["state"] != "open" {
+                continue;
+            }
             let sort = (observation.observed_at_ms, observation.id);
             if earliest
                 .as_ref()

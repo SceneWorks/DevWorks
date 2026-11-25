@@ -1,6 +1,7 @@
 //! Native final merge with real isolated checkouts and a scripted asynchronous GitHub remote.
 use super::*;
 use devworks_core::authority::destructive::FilesystemResolver;
+use devworks_core::ports::IdKind;
 use devworks_core::ports::http::{HttpError, HttpRequest, HttpResponse, HttpTransport, Method};
 use devworks_core::protocol::{
     CommandReply, EventId, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
@@ -385,10 +386,16 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
                     head:Some(tree.head.hex.clone()),payload:json!({"state":"open","baseRef":"main","baseHead":base}),
                     source_updated_at_ms:Some(T0),observed_at_ms:T0})?;
                 tx.git().insert_git_worktree(tree)?;
+                let operation = OperationId(id(&format!("pr-operation-{name}")));
+                tx.operations().record_intent(NewOperation {
+                    id:operation.clone(), root_id:None, assignment_id:None, capability:"git.pr.create".into(),
+                    schema_version:1, args_digest:"fixture".into(), payload:json!({}),
+                })?;
                 let event=EventId(id(&format!("pr-event-{name}")));
                 let sequence=tx.history().append(NewEvent{id:event.clone(),actor:actor.clone(),project_id:Some(project.clone()),
-                    root_id:Some(root.clone()),operation_id:None,aggregate_kind:"git_worktree".into(),aggregate_id:tree.id.as_str().into(),
-                    aggregate_revision:1,kind:"GitPullRequestObserved".into(),payload:json!({})})?;
+                    root_id:Some(root.clone()),operation_id:Some(operation),aggregate_kind:"git_worktree".into(),aggregate_id:tree.id.as_str().into(),
+                    aggregate_revision:1,kind:"GitPullRequestObserved".into(),
+                    payload:json!({"repositoryId":id(name),"pullRequestUrl":format!("{url}/pull/1")})})?;
                 tx.sessions().insert_link(&StoredLink{id:id(&format!("pr-link-{name}")),project_id:project.clone(),root_id:root.clone(),
                     kind:"pull_request".into(),target_kind:"pull_request".into(),target_id:format!("{url}/pull/1"),parent_id:None,
                     supersedes_id:None,actor:actor.clone(),event_id:event.0,sequence,repository_id:Some(id(name)),revision:Some(tree.head.hex.clone()),
@@ -617,6 +624,101 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     ));
     assert_eq!(wire.submissions.lock().unwrap().as_slice(), ["first"]);
     mark_settled(store.as_ref(), &first, observed);
+    // The GitHub watcher observes the first repository's verified merge.
+    write(store.as_ref(), {
+        let (_, _, tree, _, merge) = &checkouts[0];
+        let (head, merge) = (tree.head.hex.clone(), merge.clone());
+        move |tx| {
+            let observation_id = tx.new_id(IdKind::Event);
+            tx.github()
+                .append_github_observation(&StoredGithubObservation {
+                    id: observation_id,
+                    repository_id: id("github-first"),
+                    kind: "PullRequest".into(),
+                    subject_id: "1".into(),
+                    remote_revision: "merged".into(),
+                    url: "https://github.com/o/first/pull/1".into(),
+                    head: Some(head),
+                    payload: json!({"state": "merged", "mergeCommit": merge}),
+                    observed_at_ms: T0 + 1,
+                    source_updated_at_ms: Some(T0 + 1),
+                })?;
+            Ok(())
+        }
+    })
+    .unwrap();
+    let set_second_review_required = |required| {
+        let scope = ConfigScope::Repository {
+            project: project.clone(),
+            repository: id("second"),
+        };
+        let key = "delivery.finalPullRequestReview";
+        let schema = devworks_core::settings::catalog::descriptor(key)
+            .unwrap()
+            .schema_ref();
+        write(store.as_ref(), move |tx| {
+            let current = tx.configuration().current(&scope, "settings")?;
+            let (revision, mut body) = current
+                .map(|row| (row.revision, row.body))
+                .unwrap_or_else(|| (1, json!({"values": {}})));
+            body["values"][key] = json!({"schema": schema, "value": required});
+            tx.configuration()
+                .append_revision(&scope, "settings", revision, 1, body)?;
+            Ok(())
+        })
+        .unwrap();
+    };
+    set_second_review_required(true);
+    let mut remaining = barrier.clone();
+    remaining["repositories"][1]["reviewSource"] = json!("InAppIndependent");
+    let reviewer = Arc::new(devworks_core::services::reviews::ReviewService::new(
+        h.ids.clone(),
+        store.clone(),
+        service(&store),
+        artifacts.clone(),
+        h.clock(),
+        None,
+    ));
+    let work = read(store.as_ref(), |s| s.work().work(&root.0)).unwrap();
+    let review_authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let review_gateway = Gateway {
+        store: store.as_ref(),
+        authority: &review_authority,
+        ids: h.ids.as_ref(),
+    };
+    let review = review_gateway
+        .command(
+            &user,
+            "reviews.request",
+            json!({
+                "mode":"Command", "protocol":"1.0-draft.1", "schemaRevision":15,
+                "requestKey":"review-after-first-repository-merged",
+                "body":{"kind":"reviews.request", "rootId":root, "policyRevision":"1",
+                    "expectedRevision":work.revision.to_string(), "barrier":remaining}
+            })
+            .to_string()
+            .as_bytes(),
+            reviewer,
+        )
+        .unwrap();
+    assert!(
+        matches!(&review, CommandReply::Recorded {receipt, ..}
+        if matches!(receipt.decision, DomainDecision::Accepted{..})),
+        "{review:?}"
+    );
+    let rows = read(store.as_ref(), |s| {
+        s.git().code_reviews(Some(&project), Some(&root), None, 10)
+    });
+    assert_eq!(rows.len(), 1);
+    let rounds = rows[0].body["final_rounds"].as_array().unwrap();
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(rounds[0]["repository_id"], "second");
+    set_second_review_required(false);
+
     let mut changed_order = barrier.clone();
     changed_order["revision"] = json!("2");
     changed_order["dependencies"] = json!([{"before":"second","after":"first"}]);
@@ -743,6 +845,7 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
     assert_eq!(
         write(store.as_ref(), {
             let root = root.clone();
+            let control = control.clone();
             move |tx| control.settle_stop(tx, &root, &stop, &[])
         })
         .unwrap(),
@@ -855,5 +958,96 @@ fn native_final_merge_holds_all_repositories_and_recovers_partial_delivery_witho
             .status()
             .unwrap()
             .success()
+    );
+
+    let publisher = GitHubService::new(store.clone(), client, h.ids.clone(), h.clock());
+    let link_issue =
+        |number| {
+            let key = GithubIssueKey {
+                repository_id: id("github-first"),
+                number,
+            };
+            write(store.as_ref(), {
+            let key = key.clone();
+            let root = root.clone();
+            move |tx| {
+                let observation_id = tx.new_id(IdKind::Event);
+                let observation = tx.github().append_github_observation(&StoredGithubObservation {
+                    id: observation_id,
+                    repository_id: key.repository_id.clone(),
+                    kind: "Issue".into(),
+                    subject_id: number.to_string(),
+                    remote_revision: "1".into(),
+                    url: format!("https://github.com/o/first/issues/{number}"),
+                    head: None,
+                    payload: json!({"state": "open", "remoteIssueId": format!("issue-{number}")}),
+                    observed_at_ms: T0,
+                    source_updated_at_ms: Some(T0),
+                })?;
+                tx.github().put_github_issue(&StoredGithubIssueIntake {
+                    key: key.clone(),
+                    revision: 1,
+                    state: "Queued".into(),
+                    observation_id: observation.id.clone(),
+                    remote_revision: observation.id.as_str().into(),
+                    project_id: None,
+                    work_id: None,
+                    operation_id: None,
+                    last_triaged_revision: None,
+                }, None)?;
+                let revision = tx.work().work(&root.0)?.unwrap().revision;
+                tx.github().link_github_work(&key, &root, revision)
+            }
+        }).unwrap();
+            key
+        };
+    let resolutions = |key| {
+        read(store.as_ref(), |s| {
+            s.github().github_resolutions(key, None, 10)
+        })
+    };
+    let delivered_issue = link_issue(81);
+    publisher.queue_one_resolution(&id("first")).unwrap();
+    let published = resolutions(&delivered_issue);
+    assert_eq!(
+        published.len(),
+        1,
+        "cleanup stop permits verified resolution"
+    );
+    assert_eq!(published[0].state, "Sealed");
+
+    let paused_issue = link_issue(82);
+    let current = read(store.as_ref(), |s| s.runs().root_control(&root)).unwrap();
+    let authority = HostAuthority {
+        store: store.as_ref(),
+        clock: h.clock.as_ref(),
+        protected_branches: &[],
+    };
+    let gateway = Gateway {
+        store: store.as_ref(),
+        authority: &authority,
+        ids: h.ids.as_ref(),
+    };
+    let pause = gateway
+        .command(
+            &user,
+            "runs.pause",
+            json!({
+                "protocol": "1.0-draft.1", "requestKey": "pause-after-verified-cleanup",
+                "command": {"kind": "runs.pause", "rootId":root,
+                    "expectedControlRevision": current.revision.to_string()}
+            })
+            .to_string()
+            .as_bytes(),
+            control,
+        )
+        .unwrap();
+    assert!(matches!(pause, CommandReply::Recorded {receipt, ..}
+        if matches!(receipt.decision, DomainDecision::Applied{..})));
+    h.advance(1_000);
+    publisher.queue_one_resolution(&id("first")).unwrap();
+    assert!(
+        resolutions(&paused_issue).is_empty(),
+        "human pause holds publication"
     );
 }

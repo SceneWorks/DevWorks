@@ -7,7 +7,7 @@ use devworks_core::ports::http::{
 };
 use devworks_core::ports::process::ProcessSpec;
 use devworks_core::protocol::{
-    CommandReply, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
+    CommandReply, Id, OperationId, OperationState, ProjectId, RootId, results::DomainDecision,
 };
 use devworks_core::services::{
     UseCases,
@@ -231,6 +231,11 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
             query: "state=all",
             result: exchange(200, json!([issue("closed", "2023-11-14T22:15:22Z")]), &[]),
         },
+        Request {
+            path: "/repos/Acme/kit/issues",
+            query: "state=all",
+            result: exchange(200, json!([issue("open", "2023-11-14T22:16:22Z")]), &[]),
+        },
     ]))));
     let git = service(&h, &store, script.clone());
     let actor = principal(store.as_ref(), "github-human", PrincipalKind::Human);
@@ -323,17 +328,36 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
     .unwrap();
     assert_eq!(observation.payload["state"], "closed");
     let control = Arc::new(ControlService::new(h.ids.clone()));
+    assert!(git.admit_triage(control.clone()).unwrap().is_none());
+    assert_eq!(
+        read(store.as_ref(), |snapshot| snapshot
+            .github()
+            .github_intake_clock()),
+        clock
+    );
+    h.advance(60_000);
+    assert!(matches!(
+        git.poll_issue_page(&repo).unwrap(),
+        IssuePageResult::Captured { reports: 1, .. }
+    ));
+    let reopened = read(store.as_ref(), |snapshot| {
+        snapshot.github().github_issue(&key, &scope)
+    })
+    .unwrap();
+    assert_eq!(reopened.state, "Queued");
+    assert_eq!(reopened.revision, updated.revision + 1);
+    assert!(reopened.operation_id.is_none());
     let admitted = git.admit_triage(control.clone()).unwrap().unwrap();
     assert_eq!(admitted.issue.key, key);
     assert_eq!(admitted.issue.state, "Triaging");
     assert_eq!(
         admitted.operation.payload["sourceRevision"],
-        updated.remote_revision
+        reopened.remote_revision
     );
-    assert_eq!(admitted.clock.last_admitted_at_ms, Some(T0 + 135_000));
+    assert_eq!(admitted.clock.last_admitted_at_ms, Some(T0 + 195_000));
     assert_eq!(
         admitted.clock.next_admission_at_ms,
-        T0 + 135_000 + 1_800_000
+        T0 + 195_000 + 1_800_000
     );
     assert!(git.admit_triage(control).unwrap().is_none());
     let ready = read(store.as_ref(), |snapshot| {
@@ -383,30 +407,69 @@ fn github_issue_poll_resumes_its_exact_page_and_coalesces_remote_updates_without
     ));
     assert!(deliveries(notices).is_empty());
     assert!(deliveries(indexes).is_empty());
+    let alias = id("github-sync-alias");
+    let alias_id = alias.clone();
+    let alias_path = h
+        .root
+        .join("second-registration")
+        .to_string_lossy()
+        .into_owned();
+    let binding_template = binding.clone();
+    let original = repo.clone();
+    write(store.as_ref(), move |tx| {
+        let mut registration = tx.projects().repository(&original)?.unwrap();
+        registration.id = alias_id.clone();
+        registration.location = alias_path.clone();
+        registration.primary = false;
+        tx.projects().insert_repository(&registration)?;
+        tx.github().put_github_repository_binding(
+            &StoredGithubRepositoryBinding {
+                repository_id: alias_id,
+                ..binding_template
+            },
+            None,
+        )
+    })
+    .unwrap();
     h.advance(60_000);
     assert!(matches!(
         git.poll_default_ref(&repo).unwrap(),
         IssuePageResult::Captured { reports: 1, .. }
     ));
-    assert_eq!(deliveries(notices).len(), 1);
-    assert_eq!(deliveries(indexes).len(), 1);
-    assert_eq!(
-        deliveries(notices)[0].event_id,
-        deliveries(indexes)[0].event_id
+    assert_eq!(deliveries(notices).len(), 2);
+    assert_eq!(deliveries(indexes).len(), 2);
+    let delivery_for = |consumer, registration: &Id| {
+        deliveries(consumer)
+            .into_iter()
+            .find(|entry| entry.payload["repositoryId"] == registration.as_str())
+            .unwrap()
+    };
+    for registration in [&repo, &alias] {
+        let notice = delivery_for(notices, registration);
+        let index = delivery_for(indexes, registration);
+        assert_eq!(notice.event_id, index.event_id);
+        assert_eq!(index.payload["head"], "b".repeat(40));
+    }
+    assert_ne!(
+        delivery_for(notices, &repo).event_id,
+        delivery_for(notices, &alias).event_id
     );
-    assert_eq!(deliveries(indexes)[0].payload["head"], "b".repeat(40));
+    assert_eq!(
+        git.poll_default_ref(&alias).unwrap(),
+        IssuePageResult::NotDue
+    );
     h.advance(60_000);
     assert!(matches!(
         git.poll_default_ref(&repo).unwrap(),
         IssuePageResult::Captured { reports: 0, .. }
     ));
-    assert_eq!(deliveries(notices).len(), 1);
-    assert_eq!(deliveries(indexes).len(), 1);
+    assert_eq!(deliveries(notices).len(), 2);
+    assert_eq!(deliveries(indexes).len(), 2);
     assert!(script.0.lock().unwrap().is_empty());
 
     // Prove github_index_refresh failure/hold never suppresses github_agent_notices!
-    let notice_entry_id = deliveries(notices)[0].id.clone();
-    let index_entry_id = deliveries(indexes)[0].id.clone();
+    let notice_entry_id = delivery_for(notices, &alias).id;
+    let index_entry_id = delivery_for(indexes, &alias).id;
     struct FailingIndexRefresh;
     impl devworks_engine::DeliveryHandler for FailingIndexRefresh {
         fn apply(
