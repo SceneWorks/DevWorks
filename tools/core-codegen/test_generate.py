@@ -38,6 +38,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual({n for n, s in carried.items() if s}, {
             'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides',
             'router.decision_models', 'router.decide',
+            'git.integrate', 'git.push',
+            'reviews.request', 'reviews.list', 'reviews.findings', 'reviews.readiness',
+            'reviews.respond', 'reviews.adjudicate', 'reviews.inspect',
             'repositories.nodes', 'code.search', 'code.architecture', 'code.dependency',
             'code.impact', 'code.source', 'code.traverse', 'code.graph_scope_status', 'code.overview',
             'code.nodes_by_file', 'code.node_detail', 'code.set_trust', 'code.file_impact',
