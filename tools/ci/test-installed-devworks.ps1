@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory)][string]$Tests,
     [Parameter(Mandatory)][string]$Output,
     [Parameter(Mandatory)][string]$Source,
-    [Parameter(Mandatory)][ValidateSet('76', '78')][int]$ExpectedSchema,
+    [Parameter(Mandatory)][ValidateSet('76', '78', '80')][int]$ExpectedSchema,
     [ValidateSet('x64','arm64')][string]$Architecture = 'x64',
     [switch]$ProbeIncomingMcp
 )
@@ -101,7 +101,8 @@ profile, release = (Path(value) for value in sys.argv[1:3])
 schema = int(sys.argv[3])
 expected = json.loads(release.read_text(encoding="utf-8"))["migrations"]
 database = sqlite3.connect((profile / "workspace.sqlite").resolve().as_uri() + "?mode=ro", uri=True)
-assert database.execute("SELECT schema_version, minimum_writer, minimum_reader FROM store_meta").fetchone() == (schema, schema, 68)
+reader = {76: 68, 78: 68, 80: 80}[schema]
+assert database.execute("SELECT schema_version, minimum_writer, minimum_reader FROM store_meta").fetchone() == (schema, schema, reader)
 assert database.execute("PRAGMA user_version").fetchone() == (schema,)
 assert database.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall() == [
     (row["version"], row["checksum"]) for row in expected
@@ -171,6 +172,9 @@ $signed.qualification = [ordered]@{
     architecture = $Architecture
     scope = 'per-user'
     schemaVersion = $ExpectedSchema
+    runtimeBuild = $evidence.build
+    runtimeTarget = $evidence.target
+    migrations = $evidence.migrations
     startShortcutOpenedAndClosedCleanly = $true
     startLauncherSubsystem = 'Windows GUI'
     renderedAndClosedCleanly = $true
