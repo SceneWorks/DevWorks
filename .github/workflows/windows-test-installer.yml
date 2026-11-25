@@ -155,6 +155,7 @@ jobs:
           ARCHITECTURE: ${{ inputs.architecture || 'x64' }}
           ACCEPTED_DW414: 1ae1be523bd7202900904fb9d1b173d1caa07996
           ACCEPTED_DW417: b52af93099e00ff1e9131996cf78a0d3c66450d0
+          APPROVED_LOCAL_TEST: c2a9acce80af8433c7a12124cae34a4bf406f871
           ACCEPTED_DW62: 23751f08d9c7f2a1d8bb793ef9463b9faa4599bc
         run: |
           set -euo pipefail
@@ -162,6 +163,7 @@ jobs:
             "x64:$ACCEPTED_DW414"|"x64:$ACCEPTED_DW417"|"arm64:$ACCEPTED_DW417")
               branch=feature/dw-f12; schema=76; incoming_mcp=false ;;
             "x64:$ACCEPTED_DW62") branch=codex/dw-62-composed-analysis; schema=78; incoming_mcp=true ;;
+            "x64:$APPROVED_LOCAL_TEST") branch=codex/devworks-local-test-installers; schema=80; incoming_mcp=false ;;
             *) echo 'The requested source is not approved for this installer.' >&2; exit 1 ;;
           esac
           published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq .object.sha)"
