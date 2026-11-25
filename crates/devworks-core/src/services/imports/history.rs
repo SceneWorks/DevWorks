@@ -4,8 +4,10 @@ use super::service::invalid;
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::imports::HistoryInput;
 use crate::ports::storage::{ACTIVE, EventFilter, ReadSnapshot, StorageError, UNIT_REPLACE};
-use crate::protocol::records::{ImportedCodeReference, ImportedWorkEvidence};
-use crate::protocol::support::{BoundedList, BoundedText, DynamicJson, Page, RelativePath};
+use crate::protocol::records::{
+    ImportedCodeReference, ImportedWorkEvidence, ImportedWorkEvidencePage,
+};
+use crate::protocol::support::{BoundedList, BoundedText, DynamicJson, RelativePath};
 use crate::protocol::{DomainErrorCode, Id, ProjectId, RootId};
 use crate::services::cursor::CursorBinding;
 use crate::services::kernel::{Failure, counter, visible_root};
@@ -17,7 +19,7 @@ pub(super) fn history(
     read: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     input: &HistoryInput,
-) -> Result<Page<ImportedWorkEvidence>, Failure> {
+) -> Result<ImportedWorkEvidencePage, Failure> {
     if ctx.principal_kind() != PrincipalKind::Human
         || ctx.root_id().is_some()
         || ctx.session_id().is_some()
@@ -123,7 +125,7 @@ pub(super) fn history(
         output.push(row);
     }
     let has_more = output.len() < count;
-    Ok(Page {
+    Ok(ImportedWorkEvidencePage {
         items: BoundedList(output),
         has_more,
         next_cursor: has_more.then(|| cursor.cursor(&position.to_string())),

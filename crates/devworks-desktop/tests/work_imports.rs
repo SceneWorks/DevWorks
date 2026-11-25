@@ -66,6 +66,10 @@ fn export(path: &Path, captured: i64, title: &str) {
     std::fs::write(path, capture).unwrap();
 }
 
+/// The schema revision that carries the DW-54 import additions; revisions 1 and 2 stay as
+/// published.
+const CURRENT: u32 = 19;
+
 fn config_body() -> Value {
     json!({"source":{"rootId":"work-import-inbox","relative":"source.ndjson"},
         "projectIds":[],"workIds":[ITEM,BLOCKER],"includeHistory":true,"includeGitLinks":true})
@@ -129,7 +133,7 @@ fn apply_frame(b: &dyn Backend, cfg: &MutationSummary, preview: &ImportRun, rev:
 }
 
 fn inspect(b: &dyn Backend, id: &Id) -> ImportRun {
-    match query(b, "imports.inspect", 2, json!({"runId":id})) {
+    match query(b, "imports.inspect", CURRENT, json!({"runId":id})) {
         Ok(OperationResult::ImportsInspect { value }) => value,
         other => panic!("unexpected inspect {other:?}"),
     }
@@ -217,7 +221,7 @@ fn native_v1_import_deduplicates_preserves_history_and_never_adopts_source_work(
     match query(
         b,
         "imports.history",
-        1,
+        CURRENT,
         json!({"workId":work,"page":{"limit":10}}),
     )
     .unwrap()
@@ -244,8 +248,8 @@ fn native_v1_import_deduplicates_preserves_history_and_never_adopts_source_work(
     let (_, report) = completed(b, &rerun.0);
     assert_eq!(report["counts"]["unchanged"], 6);
     export(&path, captured + 60_000, "Updated source title");
-    let delta = self::preview(b, &config, 2, Some(captured - 30 * 60 * 1000));
-    let frame = apply_frame(b, &cfg, &delta, 2);
+    let delta = self::preview(b, &config, CURRENT, Some(captured - 30 * 60 * 1000));
+    let frame = apply_frame(b, &cfg, &delta, CURRENT);
     let updated = ops::accepted_decision(b.command("imports.apply", &frame)).unwrap();
     let (_, report) = completed(b, &updated.0);
     assert_eq!(report["counts"]["added"], 0);
@@ -287,7 +291,7 @@ fn native_runtime_accepts_export_from_frozen_mariadb_schema_when_supplied() {
     let project = match query(
         b,
         "imports.history",
-        1,
+        CURRENT,
         json!({"projectId":local("Project",PROJECT),"page":{"limit":20}}),
     )
     .unwrap()
@@ -297,10 +301,20 @@ fn native_runtime_accepts_export_from_frozen_mariadb_schema_when_supplied() {
     };
     assert!(project.iter().any(|row| row.kind.0 == "Session"
         && row.evidence.0["source"]["transcriptAvailability"].is_string()));
+    assert!(
+        query(
+            b,
+            "imports.history",
+            1,
+            json!({"workId":local("Item",ITEM),"page":{"limit":20}}),
+        )
+        .is_err(),
+        "imports.history is not negotiable at the published revision 1"
+    );
     let history = match query(
         b,
         "imports.history",
-        1,
+        CURRENT,
         json!({"workId":local("Item",ITEM),"page":{"limit":20}}),
     )
     .unwrap()
@@ -342,16 +356,17 @@ fn native_authorized_job_runs_delta_for_same_owner_and_scope() {
     export(&path, captured, "Historical ready card");
     let mut config = config_body();
     config["allowScheduledDelta"] = json!(true);
-    let reviewed = preview(b, &config, 2, None);
-    let cfg = approve(b, &config, 2);
-    let original =
-        ops::accepted_decision(b.command("imports.apply", &apply_frame(b, &cfg, &reviewed, 2)))
-            .unwrap();
+    let reviewed = preview(b, &config, CURRENT, None);
+    let cfg = approve(b, &config, CURRENT);
+    let original = ops::accepted_decision(
+        b.command("imports.apply", &apply_frame(b, &cfg, &reviewed, CURRENT)),
+    )
+    .unwrap();
     completed(b, &original.0);
     let direct = wire(
         b,
         "imports.sync",
-        2,
+        CURRENT,
         json!({"configId":cfg.id,"expectedRevision":cfg.revision}),
         false,
     );
@@ -362,7 +377,7 @@ fn native_authorized_job_runs_delta_for_same_owner_and_scope() {
     export(&path, captured + 80_000, "Scheduled source update");
     let definition: JobDefinition = serde_json::from_value(json!({
         "kind":"Native","capabilityId":capability_id("imports.sync"),
-        "arguments":{"schema":argument_schema("imports.sync", SchemaRevision(2)).unwrap(),
+        "arguments":{"schema":argument_schema("imports.sync", SchemaRevision(CURRENT)).unwrap(),
             "value":{"configId":cfg.id,"expectedRevision":cfg.revision}}
     }))
     .unwrap();
@@ -544,7 +559,7 @@ fn historical_code_location_resolves_only_against_an_explicit_native_index() {
     let find = || match query(
         b,
         "imports.history",
-        1,
+        CURRENT,
         json!({"workId":local("Item", ITEM),"page":{"limit":10}}),
     )
     .unwrap()
@@ -628,7 +643,7 @@ fn staged_import_survives_source_replacement_and_a_queued_stop_survives_restart(
     let cancel = wire(
         b,
         "imports.cancel",
-        1,
+        CURRENT,
         json!({
             "runId":pending.id,"expectedRevision":pending.revision
         }),
@@ -768,18 +783,20 @@ fn first_delta_retains_the_older_parent_of_current_and_large_history() {
     std::fs::write(&path, sealed).unwrap();
 
     let config = config_body();
-    let reviewed = preview(b, &config, 2, Some(captured - 50));
-    let profile = approve(b, &config, 2);
-    let run =
-        ops::accepted_decision(b.command("imports.apply", &apply_frame(b, &profile, &reviewed, 2)))
-            .unwrap();
+    let reviewed = preview(b, &config, CURRENT, Some(captured - 50));
+    let profile = approve(b, &config, CURRENT);
+    let run = ops::accepted_decision(b.command(
+        "imports.apply",
+        &apply_frame(b, &profile, &reviewed, CURRENT),
+    ))
+    .unwrap();
     let (_, report) = completed(b, &run.0);
     assert_eq!(report["counts"]["added"], 4);
     assert_eq!(report["counts"]["skipped"], 2);
     let first = match query(
         b,
         "imports.history",
-        1,
+        CURRENT,
         json!({"workId":local("Item",ITEM),"page":{"limit":1}}),
     )
     .unwrap()
@@ -791,7 +808,7 @@ fn first_delta_retains_the_older_parent_of_current_and_large_history() {
     let second = match query(
         b,
         "imports.history",
-        1,
+        CURRENT,
         json!({"workId":local("Item",ITEM),"page":{"limit":1,"cursor":cursor}}),
     )
     .unwrap()

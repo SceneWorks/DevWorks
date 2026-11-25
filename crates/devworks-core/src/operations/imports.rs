@@ -28,14 +28,14 @@ pub struct PreviewInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+    #[schemars(with = "ImportIntentMode", extend("x-since" = 19))]
     pub mode: Option<ImportIntentMode>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub updated_since_ms: Option<Counter>,
 }
 impl Check for PreviewInput {
@@ -48,10 +48,10 @@ impl Check for PreviewInput {
 }
 impl Revisioned for PreviewInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.mode = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.updated_since_ms = None;
         }
         self.config.retain_revision(revision);
@@ -72,7 +72,7 @@ pub struct ConfigureInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 19))]
     pub approve: Option<bool>,
 }
 impl Check for ConfigureInput {
@@ -86,7 +86,7 @@ impl Check for ConfigureInput {
 }
 impl Revisioned for ConfigureInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.approve = None;
         }
         self.config.retain_revision(revision);
@@ -125,7 +125,7 @@ pub struct RunsInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Id", extend("x-since" = 2))]
+    #[schemars(with = "Id", extend("x-since" = 19))]
     pub source_namespace: Option<Id>,
 }
 impl Check for RunsInput {
@@ -137,7 +137,7 @@ impl Check for RunsInput {
 }
 impl Revisioned for RunsInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.source_namespace = None;
         }
     }

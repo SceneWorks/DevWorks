@@ -116,7 +116,7 @@ fn confirm_frame(b: &dyn Backend, op: &str, preview: &PrunePreview, limit: u32) 
 
 fn inspect(b: &dyn Backend, id: &Id) -> PruneInspection {
     let op = "maintenance.inspect";
-    let frame = fixture::query(b, op, json!({"previewId":id}));
+    let frame = fixture::at_revision(fixture::query(b, op, json!({"previewId":id})), 19);
     match ops::query_result(b.query(op, &frame)) {
         Ok((OperationResult::MaintenanceInspect { value }, _)) => value,
         result => panic!("{result:?}"),
@@ -374,11 +374,11 @@ fn an_explicit_native_job_firing_applies_one_bounded_preview() {
     .unwrap();
     let b = app.backend();
     let args = json!({"target":"IndexRuns","maxItems":1});
-    let direct = fixture::command(&*b, SCHEDULE, args.clone());
+    let direct = fixture::at_revision(fixture::command(&*b, SCHEDULE, args.clone()), 19);
     assert!(ops::accepted_decision(b.command(SCHEDULE, &direct)).is_err());
     let definition: JobDefinition = serde_json::from_value(json!({
         "kind":"Native","capabilityId":capability_id(SCHEDULE),
-        "arguments":{"schema":argument_schema(SCHEDULE, SchemaRevision(1)).unwrap(),"value":args}
+        "arguments":{"schema":argument_schema(SCHEDULE, SchemaRevision(19)).unwrap(),"value":args}
     }))
     .unwrap();
     let create = ops::job_create(

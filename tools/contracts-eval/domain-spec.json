@@ -3269,7 +3269,7 @@
         "processed": "?Counter",
         "total": "?Counter"
       },
-      "since": {"preview_digest": 2, "source_namespace": 2, "mode": 2, "updated_since_ms": 2, "processed": 2, "total": 2}
+      "since": {"preview_digest": 19, "source_namespace": 19, "mode": 19, "updated_since_ms": 19, "processed": 19, "total": 19}
     },
     "ImportIntentMode": {
       "kind": "enum",
@@ -3297,6 +3297,14 @@
         "current_reference": "?ImportedCodeReference"
       }
     },
+    "ImportedWorkEvidencePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<ImportedWorkEvidence>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
     "ImportedCodeReference": {
       "kind": "record",
       "fields": {
@@ -3317,7 +3325,7 @@
         "all_projects": "?bool",
         "allow_scheduled_delta": "?bool"
       },
-      "since": {"all_projects": 2, "allow_scheduled_delta": 2}
+      "since": {"all_projects": 19, "allow_scheduled_delta": 19}
     },
     "PrunePreview": {
       "kind": "record",
@@ -11999,7 +12007,7 @@
         "mode": "?ImportIntentMode",
         "updated_since_ms": "?Counter"
       },
-      "since": {"mode": 2, "updated_since_ms": 2},
+      "since": {"mode": 19, "updated_since_ms": 19},
       "result": "ImportRun",
       "effect": "ExternalRead",
       "authority": "Scoped",
@@ -12014,7 +12022,7 @@
         "config": "ImportConfig",
         "approve": "?bool"
       },
-      "since": {"approve": 2},
+      "since": {"approve": 19},
       "result": "MutationSummary",
       "effect": "Local",
       "authority": "Configuration",
@@ -12041,7 +12049,7 @@
         "page": "PageRequest",
         "source_namespace": "?Id"
       },
-      "since": {"source_namespace": 2},
+      "since": {"source_namespace": 19},
       "result": "Page<ImportRun>",
       "effect": "Local",
       "authority": "Scoped",
@@ -12061,6 +12069,7 @@
     "imports.settings": {
       "operation": "imports.settings",
       "mode": "Query",
+      "introducedRevision": 19,
       "fields": {
         "source_namespace": "Id",
         "proposal": "?ImportConfig"
@@ -12073,12 +12082,13 @@
     "imports.history": {
       "operation": "imports.history",
       "mode": "Query",
+      "introducedRevision": 19,
       "fields": {
         "work_id": "?Id",
         "project_id": "?ProjectId",
         "page": "PageRequest"
       },
-      "result": "Page<ImportedWorkEvidence>",
+      "result": "ImportedWorkEvidencePage",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Return inert imported evidence for the requested project or work and independently resolve its exact historical code location against the published native view when available."
@@ -12086,6 +12096,7 @@
     "imports.cancel": {
       "operation": "imports.cancel",
       "mode": "Command",
+      "introducedRevision": 19,
       "fields": {
         "run_id": "Id",
         "expected_revision": "Revision"
@@ -12098,6 +12109,7 @@
     "imports.sync": {
       "operation": "imports.sync",
       "mode": "Command",
+      "introducedRevision": 19,
       "fields": {
         "config_id": "Id",
         "expected_revision": "Revision"
@@ -12170,6 +12182,7 @@
     "maintenance.inspect": {
       "operation": "maintenance.inspect",
       "mode": "Query",
+      "introducedRevision": 19,
       "fields": {
         "preview_id": "Id"
       },
@@ -12181,6 +12194,7 @@
     "maintenance.cancel": {
       "operation": "maintenance.cancel",
       "mode": "Command",
+      "introducedRevision": 19,
       "fields": {
         "preview_id": "Id",
         "expected_revision": "Revision"
@@ -12193,6 +12207,7 @@
     "maintenance.scheduled_prune": {
       "operation": "maintenance.scheduled_prune",
       "mode": "Command",
+      "introducedRevision": 19,
       "fields": {
         "target": "PruneKind",
         "retention_days": "?Limit",
@@ -13548,15 +13563,18 @@
       1,
       5
     ],
-    "imports.preview": [1, 2],
-    "imports.configure": [1, 2],
-    "imports.apply": [1, 2],
-    "imports.runs": [1, 2],
-    "imports.inspect": [1, 2],
-    "imports.settings": [1, 2],
-    "imports.sync": [1, 2],
-    "imports.history": [1],
-    "imports.cancel": [1],
+    "imports.preview": [1, 19],
+    "imports.configure": [1, 19],
+    "imports.apply": [1, 19],
+    "imports.runs": [1, 19],
+    "imports.inspect": [1, 19],
+    "imports.settings": [19],
+    "imports.sync": [19],
+    "imports.history": [19],
+    "imports.cancel": [19],
+    "maintenance.inspect": [19],
+    "maintenance.cancel": [19],
+    "maintenance.scheduled_prune": [19],
     "projects.prepare_purge": [
       6
     ],

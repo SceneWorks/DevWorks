@@ -9417,42 +9417,42 @@ pub struct ImportRun {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Digest", extend("x-since" = 2))]
+    #[schemars(with = "Digest", extend("x-since" = 19))]
     pub preview_digest: Option<Digest>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Id", extend("x-since" = 2))]
+    #[schemars(with = "Id", extend("x-since" = 19))]
     pub source_namespace: Option<Id>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+    #[schemars(with = "ImportIntentMode", extend("x-since" = 19))]
     pub mode: Option<ImportIntentMode>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub updated_since_ms: Option<Counter>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub processed: Option<Counter>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Counter", extend("x-since" = 2))]
+    #[schemars(with = "Counter", extend("x-since" = 19))]
     pub total: Option<Counter>,
 }
 impl Check for ImportRun {
@@ -9479,22 +9479,22 @@ impl Check for ImportRun {
 
 impl Revisioned for ImportRun {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.preview_digest = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.source_namespace = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.mode = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.updated_since_ms = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.processed = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.total = None;
         }
     }
@@ -9574,6 +9574,27 @@ impl Check for ImportedWorkEvidence {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedWorkEvidencePage {
+    pub items: Rows<ImportedWorkEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+}
+impl Check for ImportedWorkEvidencePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        super::domain_rules::record(
+            "ImportedWorkEvidencePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedCodeReference {
     pub repository_id: Id,
     pub view_id: Id,
@@ -9607,14 +9628,14 @@ pub struct ImportConfig {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 19))]
     pub all_projects: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 2))]
+    #[schemars(with = "bool", extend("x-since" = 19))]
     pub allow_scheduled_delta: Option<bool>,
 }
 impl Check for ImportConfig {
@@ -9636,10 +9657,10 @@ impl Check for ImportConfig {
 
 impl Revisioned for ImportConfig {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 2 {
+        if revision < 19 {
             self.all_projects = None;
         }
-        if revision < 2 {
+        if revision < 19 {
             self.allow_scheduled_delta = None;
         }
     }
@@ -22286,14 +22307,14 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "ImportIntentMode", extend("x-since" = 2))]
+        #[schemars(with = "ImportIntentMode", extend("x-since" = 19))]
         mode: Option<ImportIntentMode>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Counter", extend("x-since" = 2))]
+        #[schemars(with = "Counter", extend("x-since" = 19))]
         updated_since_ms: Option<Counter>,
     },
     #[serde(rename = "imports.runs")]
@@ -22304,17 +22325,19 @@ pub enum DomainQuery {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "Id", extend("x-since" = 2))]
+        #[schemars(with = "Id", extend("x-since" = 19))]
         source_namespace: Option<Id>,
     },
     #[serde(rename = "imports.inspect")]
     ImportsInspect { run_id: Id },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.settings")]
     ImportsSettings {
         source_namespace: Id,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         proposal: Option<ImportConfig>,
     },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.history")]
     ImportsHistory {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -22323,6 +22346,7 @@ pub enum DomainQuery {
         project_id: Option<ProjectId>,
         page: PageRequest,
     },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.inspect")]
     MaintenanceInspect { preview_id: Id },
     #[serde(rename = "mcp_server.status")]
@@ -24327,17 +24351,17 @@ impl Revisioned for DomainQuery {
                 ..
             } => {
                 config.retain_revision(revision);
-                if revision < 2 {
+                if revision < 19 {
                     *mode = None;
                 }
-                if revision < 2 {
+                if revision < 19 {
                     *updated_since_ms = None;
                 }
             }
             Self::ImportsRuns {
                 source_namespace, ..
             } => {
-                if revision < 2 {
+                if revision < 19 {
                     *source_namespace = None;
                 }
             }
@@ -24365,6 +24389,15 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ImportsSettings { .. } if revision < 19 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ImportsHistory { .. } if revision < 19 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::MaintenanceInspect { .. } if revision < 19 => {
                 Err("operation predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
@@ -26315,7 +26348,7 @@ pub enum DomainCommand {
             skip_serializing_if = "Option::is_none",
             deserialize_with = "gated_member"
         )]
-        #[schemars(with = "bool", extend("x-since" = 2))]
+        #[schemars(with = "bool", extend("x-since" = 19))]
         approve: Option<bool>,
     },
     #[serde(rename = "imports.apply")]
@@ -26325,11 +26358,13 @@ pub enum DomainCommand {
         source_snapshot: Digest,
         preview_digest: Digest,
     },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.cancel")]
     ImportsCancel {
         run_id: Id,
         expected_revision: Revision,
     },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.sync")]
     ImportsSync {
         config_id: Id,
@@ -26375,11 +26410,13 @@ pub enum DomainCommand {
         older_than_ms: Counter,
         max_items: Limit,
     },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.cancel")]
     MaintenanceCancel {
         preview_id: Id,
         expected_revision: Revision,
     },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.scheduled_prune")]
     MaintenanceScheduledPrune {
         target: PruneKind,
@@ -29354,7 +29391,7 @@ impl Revisioned for DomainCommand {
                 config, approve, ..
             } => {
                 config.retain_revision(revision);
-                if revision < 2 {
+                if revision < 19 {
                     *approve = None;
                 }
             }
@@ -29411,6 +29448,18 @@ impl Revisioned for DomainCommand {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsRunWorkflow { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ImportsCancel { .. } if revision < 19 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::ImportsSync { .. } if revision < 19 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::MaintenanceCancel { .. } if revision < 19 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::MaintenanceScheduledPrune { .. } if revision < 19 => {
                 Err("operation predates its introduction".into())
             }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
@@ -30124,12 +30173,16 @@ pub enum OperationResult {
     ImportsRuns { value: Page<ImportRun> },
     #[serde(rename = "imports.inspect")]
     ImportsInspect { value: ImportRun },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.settings")]
     ImportsSettings { value: ImportSettingsView },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.history")]
-    ImportsHistory { value: Page<ImportedWorkEvidence> },
+    ImportsHistory { value: ImportedWorkEvidencePage },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.cancel")]
     ImportsCancel { value: MutationSummary },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "imports.sync")]
     ImportsSync { value: ImportRun },
     #[serde(rename = "maintenance.prune_diagnostics")]
@@ -30140,10 +30193,13 @@ pub enum OperationResult {
     MaintenancePruneMessages { value: PrunePreview },
     #[serde(rename = "maintenance.prune_sessions")]
     MaintenancePruneSessions { value: PrunePreview },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.inspect")]
     MaintenanceInspect { value: PruneInspection },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.cancel")]
     MaintenanceCancel { value: PruneInspection },
+    #[schemars(extend("x-since" = 19))]
     #[serde(rename = "maintenance.scheduled_prune")]
     MaintenanceScheduledPrune { value: PruneInspection },
     #[serde(rename = "repository_docs.generate")]
@@ -31407,6 +31463,27 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsSettings { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsHistory { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsCancel { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::ImportsSync { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::MaintenanceInspect { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::MaintenanceCancel { .. } if revision < 19 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::MaintenanceScheduledPrune { .. } if revision < 19 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {

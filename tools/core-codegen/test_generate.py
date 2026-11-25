@@ -111,7 +111,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
             'roles.history', 'roles.rollback', 'sessions.transcript',
             'imports.preview', 'imports.configure', 'imports.apply', 'imports.runs', 'imports.inspect',
-            'imports.settings', 'imports.sync', 'repository_docs.generate'})
+            'imports.settings', 'imports.sync', 'imports.history', 'imports.cancel',
+            'maintenance.inspect', 'maintenance.cancel', 'maintenance.scheduled_prune',
+            'repository_docs.generate'})
         self.assertEqual(carried['repository_docs.generate'], {14})
         for name in MCP:
             self.assertEqual(carried[name], {8})
