@@ -1563,6 +1563,26 @@ fn snapshot_result(
 }
 
 impl ControlService {
+    /// A trusted host-owned validation may use the normal Start path. Requiring an enabled
+    /// root here preserves every human pause, allocation check and ordinary readiness gate.
+    pub(crate) fn start_verified_issue(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        root: &RootId,
+        expected_work: i64,
+        expected_control: i64,
+    ) -> Result<bool, StorageError> {
+        if ctx.principal_kind() != PrincipalKind::Host {
+            return Err(StorageError::ScopeDenied);
+        }
+        match self.start(tx, ctx, root, expected_work, expected_control) {
+            Ok(_) => Ok(true),
+            Err(Fail::Refused(_, _)) => Ok(false),
+            Err(Fail::Storage(error)) => Err(error),
+        }
+    }
+
     fn start(
         &self,
         tx: &mut dyn WriteTransaction,
@@ -1821,7 +1841,10 @@ impl ControlService {
         control_conflict(&control, expected)?;
         let paused = active_blockers(tx.runs(), &BlockerFilter::RootLevel(root.id.clone()))?
             .iter()
-            .any(|b| b.cause == HoldCause::HumanPause);
+            .any(|b| {
+                b.cause == HoldCause::HumanPause
+                    && b.clearance["stopCause"] != StopCause::Superseded.as_str()
+            });
         if control.desired == DesiredExecution::Paused && paused {
             return Ok(DomainDecision::NoChange {
                 result: snapshot_result(tx.runs(), &root.id, |value| OperationResult::RunsPause {

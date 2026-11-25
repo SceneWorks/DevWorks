@@ -204,6 +204,7 @@ impl NativeStreamingHttp {
             Method::Get => reqwest::Method::GET,
             Method::Post => reqwest::Method::POST,
             Method::Patch => reqwest::Method::PATCH,
+            Method::Put => reqwest::Method::PUT,
         };
         let mut headers = reqwest::header::HeaderMap::new();
         for (name, value) in &request.headers {

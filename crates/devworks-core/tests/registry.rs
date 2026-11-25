@@ -357,7 +357,9 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "browser.upload",
             "dreaming.instructions",
             "dreaming.revert",
+            "git.integrate",
             "git.pull_request",
+            "git.push",
             "history.command_receipt",
             "history.events",
             "history.evidence_links",
@@ -488,6 +490,22 @@ fn schema_revisions_match_the_register_and_each_revision_has_its_own_schemas() {
             "features.prioritize",
             "issues.prioritize",
             "tasks.prioritize",
+            "watch.create",
+            "watch.list",
+            "watch.inspect",
+            "reviews.adjudicate",
+            "reviews.findings",
+            "reviews.inspect",
+            "reviews.list",
+            "reviews.readiness",
+            "reviews.request",
+            "reviews.respond",
+            "watch.cancel",
+            // GitHub account diagnostics, resumable poll status and explicit issue links (DW-40).
+            "github.account",
+            "github.poll_status",
+            "issues.link",
+            "issues.publish",
         ])
     );
     // Revision 1 of the history pages is exactly the recorded Page; revision 2 adds the tail

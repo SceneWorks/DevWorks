@@ -74,9 +74,9 @@ pub enum OperationResult {
     #[serde(rename = "issues.prioritize")]
     IssuesPrioritize { value: MutationSummary },
     #[serde(rename = "issues.publish")]
-    IssuesPublish { value: GitLink },
+    IssuesPublish { value: GithubIssueLinkResult },
     #[serde(rename = "issues.link")]
-    IssuesLink { value: GitLink },
+    IssuesLink { value: GithubIssueLinkResult },
     #[serde(rename = "tasks.list")]
     TasksList { value: Page<WorkRecord> },
     #[serde(rename = "tasks.get")]
@@ -537,7 +537,7 @@ pub enum OperationResult {
     #[serde(rename = "github.repositories")]
     GithubRepositories { value: Page<RepositoryRecord> },
     #[serde(rename = "github.poll_status")]
-    GithubPollStatus { value: Page<GithubObservation> },
+    GithubPollStatus { value: GithubPollStatusResult },
     #[serde(rename = "github.issue_sync")]
     GithubIssueSync { value: OperationRef },
     #[serde(rename = "github.checks")]
@@ -1625,6 +1625,8 @@ impl Revisioned for OperationResult {
             Self::IssuesGet { value } => value.retain_revision(revision),
             Self::IssuesCreate { value } => value.retain_revision(revision),
             Self::IssuesEdit { value } => value.retain_revision(revision),
+            Self::IssuesPublish { value } => value.retain_revision(revision),
+            Self::IssuesLink { value } => value.retain_revision(revision),
             Self::TasksList { value } => value.retain_revision(revision),
             Self::TasksGet { value } => value.retain_revision(revision),
             Self::TasksCreate { value } => value.retain_revision(revision),
@@ -1754,6 +1756,15 @@ impl Revisioned for OperationResult {
             Self::NotificationsRead { value } => value.retain_revision(revision),
             Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
+            Self::ReviewsList { value } => value.retain_revision(revision),
+            Self::ReviewsInspect { value } => value.retain_revision(revision),
+            Self::ReviewsRequest { value } => value.retain_revision(revision),
+            Self::ReviewsFindings { value } => value.retain_revision(revision),
+            Self::ReviewsRespond { value } => value.retain_revision(revision),
+            Self::ReviewsAdjudicate { value } => value.retain_revision(revision),
+            Self::ReviewsReadiness { value } => value.retain_revision(revision),
+            Self::GithubAccount { value } => value.retain_revision(revision),
+            Self::GithubPollStatus { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -1819,6 +1830,10 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::RepositoriesNodes { value } => value.retain_revision(revision),
+            Self::WatchCreate { value } => value.retain_revision(revision),
+            Self::WatchList { value } => value.retain_revision(revision),
+            Self::WatchInspect { value } => value.retain_revision(revision),
+            Self::WatchCancel { value } => value.retain_revision(revision),
             _ => {}
         }
     }
@@ -1911,6 +1926,8 @@ impl Revisioned for OperationResult {
             Self::WatchCancel { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::IssuesPublish { value } => value.check_revision(revision),
+            Self::IssuesLink { value } => value.check_revision(revision),
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
@@ -1952,6 +1969,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::GithubPollStatus { value } => value.check_revision(revision),
             Self::JobsList { value } => value.check_revision(revision),
             Self::JobsCreate { value } => value.check_revision(revision),
             Self::JobsEdit { value } => value.check_revision(revision),
@@ -1970,6 +1988,10 @@ impl Revisioned for OperationResult {
             Self::HelpTopicForScreen { value } => value.check_revision(revision),
             Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::WatchCreate { value } => value.check_revision(revision),
+            Self::WatchList { value } => value.check_revision(revision),
+            Self::WatchInspect { value } => value.check_revision(revision),
+            Self::WatchCancel { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }

@@ -65,8 +65,10 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// scope key. Workspace runs and ordinary repository index views keep their independent ownership.
 /// Migration 68 adds database_sensitive_policies. Rules follow the workspace or shared schema
 /// source. Project purge removes only the project's existing access to that shared source.
+/// Migration 69 rebuilds watchers to bind a GitHub source and preserves their existing project
+/// and session owners. The source is an observation selector and adds no ownership reference.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "bed9baac9e211f99a516787c0626600d8439b1a49f6b158149cdfd402b12a23c";
+    "e20c96c3dbe006687feea65637826ebfadeb39e4ee9d73350d1e3e0a994fc395";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

@@ -17,9 +17,9 @@ use crate::settings_ops::SettingsSlot;
 use crate::settings_screen::{HostSection, KEEP_AWAKE, SettingsAction, SettingsScreen};
 use crate::web_panel::WebAction;
 use crate::widgets::{self, Tone};
-use devworks_core::operations::{OperationInput as In, mcp};
+use devworks_core::operations::{OperationInput as In, github, mcp};
 use devworks_core::protocol::records::{
-    ConnectionLifecycle, ItemState, McpTransport, RouterConfigAction,
+    AccountAction, ConnectionLifecycle, ItemState, McpTransport, RouterConfigAction,
 };
 use devworks_core::protocol::{DomainErrorCode, Id};
 use devworks_core::settings::validate::codes;
@@ -41,6 +41,12 @@ impl Screen for SettingsScreen {
     /// inventory is read on normal hints and periodic repair. Loading keeps unsaved model edits
     /// and leaves unknown configure outcomes untouched.
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
+        if self.category == Some(devworks_core::settings::catalog::Category::GitHub)
+            && !self.github_loading
+            && !self.github_busy
+        {
+            SettingsCtl { settings: self, cx }.load_github_account();
+        }
         if self.show_connections && !self.connections.connections.loading() {
             SettingsCtl { settings: self, cx }.load_connections();
         }
@@ -95,6 +101,15 @@ impl Screen for SettingsScreen {
         }
         for action in index_actions {
             ctl.index(action);
+        }
+        if up
+            && ctl.settings.category == Some(devworks_core::settings::catalog::Category::GitHub)
+            && ctl.settings.github_account.is_none()
+            && ctl.settings.github_error.is_none()
+            && !ctl.settings.github_loading
+            && !ctl.settings.github_busy
+        {
+            ctl.load_github_account();
         }
         let ctx = ui.ctx().clone();
         ctl.poll_connections(&ctx);
@@ -220,11 +235,91 @@ impl SettingsCtl<'_, '_> {
         );
     }
 
+    fn load_github_account(&mut self) {
+        if self.settings.github_loading {
+            return;
+        }
+        self.settings.github_loading = self.query(
+            SettingsSlot::GithubAccount,
+            "Reading GitHub account",
+            "github.account",
+            |backend| {
+                crate::frame::build(
+                    backend,
+                    crate::frame::Negotiate::Latest,
+                    Some(In::Github(github::Input::AccountQuery(
+                        github::AccountQueryInput {},
+                    ))),
+                )
+            },
+        );
+    }
+
+    fn change_github_account(&mut self, action: AccountAction) {
+        if !self.settings.github_busy {
+            self.settings.github_busy = self.command(
+                SettingsSlot::GithubAccountChange,
+                "Updating GitHub authorization",
+                "github.account",
+                move |backend| {
+                    crate::frame::build(
+                        backend,
+                        crate::frame::Negotiate::Latest,
+                        Some(In::Github(github::Input::AccountCommand(
+                            github::AccountCommandInput {
+                                action,
+                                connection_id: None,
+                                auth_flow_id: None,
+                            },
+                        ))),
+                    )
+                },
+            );
+        }
+    }
+
+    fn discover_github_repositories(&mut self, cursor: Option<String>) {
+        if self.settings.github_repos_loading {
+            return;
+        }
+        let org = self.settings.github_org_filter.trim().to_owned();
+        self.settings.github_repos_loading = self.query(
+            SettingsSlot::GithubRepositories,
+            "Discovering GitHub repositories",
+            "github.repositories",
+            move |backend| {
+                use devworks_core::protocol::{
+                    records::PageRequest,
+                    support::{BoundedText, Limit},
+                };
+                crate::frame::build(
+                    backend,
+                    crate::frame::Negotiate::Latest,
+                    Some(In::Github(github::Input::Repositories(
+                        github::RepositoriesInput {
+                            account_id: Id::new("github-com").expect("static GitHub account ID"),
+                            page: PageRequest {
+                                limit: Limit::new(50).expect("bounded GitHub repository page"),
+                                cursor: cursor.map(BoundedText),
+                            },
+                            organization: (!org.is_empty()).then_some(BoundedText(org)),
+                        },
+                    ))),
+                )
+            },
+        );
+    }
+
     fn settings_actions(&mut self, actions: Vec<SettingsAction>) {
         for a in actions {
             match a {
                 SettingsAction::Reload => self.load_settings(),
                 SettingsAction::RefreshContainers => self.refresh_container_capabilities(),
+                SettingsAction::ReadGithub => self.load_github_account(),
+                SettingsAction::ChangeGithub(action) => self.change_github_account(action),
+                SettingsAction::DiscoverGithubRepositories(cursor) => {
+                    self.discover_github_repositories(cursor);
+                }
                 SettingsAction::Validate => {
                     let Some(b) = self.backend() else { continue };
                     let Some(frame) = self
@@ -782,7 +877,57 @@ impl SettingsCtl<'_, '_> {
         slot: SettingsSlot,
         reply: Reply,
     ) -> Option<(SettingsSlot, Reply)> {
+        use devworks_core::protocol::results::OperationResult;
         match (slot, reply) {
+            (SettingsSlot::GithubAccount, Reply::Query(outcome)) => {
+                self.settings.github_loading = false;
+                if !self.settings.github_busy {
+                    match ops::query_result(outcome).map(|(result, _)| result) {
+                        Ok(OperationResult::GithubAccount { value }) => {
+                            self.settings.github_account = Some(value);
+                            self.settings.github_error = None;
+                        }
+                        Err(error) => self.settings.github_error = Some(error.describe()),
+                        _ => {
+                            self.settings.github_error =
+                                Some("Unexpected GitHub account response".into())
+                        }
+                    }
+                }
+            }
+            (SettingsSlot::GithubAccountChange, Reply::Command(outcome)) => {
+                self.settings.github_busy = false;
+                match ops::command_result(outcome) {
+                    Ok(OperationResult::GithubAccount { value }) => {
+                        if value.account.is_none() {
+                            self.settings.github_repositories.clear();
+                            self.settings.github_repos_next_cursor = None;
+                        }
+                        self.settings.github_account = Some(value);
+                        self.settings.github_error = None;
+                    }
+                    Err(error) => self.settings.github_error = Some(error.describe()),
+                    _ => {
+                        self.settings.github_error =
+                            Some("Unexpected GitHub account response".into())
+                    }
+                }
+            }
+            (SettingsSlot::GithubRepositories, Reply::Query(outcome)) => {
+                self.settings.github_repos_loading = false;
+                match ops::query_result(outcome).map(|(result, _)| result) {
+                    Ok(OperationResult::GithubRepositories { value }) => {
+                        self.settings.github_repositories = value.items.0;
+                        self.settings.github_repos_next_cursor = value.next_cursor.map(|c| c.0);
+                        self.settings.github_error = None;
+                    }
+                    Err(error) => self.settings.github_error = Some(error.describe()),
+                    _ => {
+                        self.settings.github_error =
+                            Some("Unexpected GitHub repository response".into())
+                    }
+                }
+            }
             // Started before a session mutation was applied: it may lack that change.
             (SettingsSlot::ContainerCapabilities, Reply::Query(q)) => {
                 match ops::container_capability_entries(q) {

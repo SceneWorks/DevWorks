@@ -771,6 +771,14 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "a702716325ba7e39d34906db691762fdb215b7321b67e2ea2bd5fa637901ab69",
         rebuilds_tables: false,
     },
+    Migration {
+        version: 69,
+        minimum_reader: 69,
+        minimum_writer: 69,
+        sql: include_str!("migrations/0069_github_watchers.sql"),
+        expected_sha256: "b4655417647e74fda9a997fa35e0fb814a8f9ec2b1aa5e83a8ad391a66b494b5",
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -1112,6 +1120,83 @@ fn reconcile_intelligence_branch(
     }
 }
 
+/// The staged GitHub watcher branch used 67 before analysis and database policy landed.
+fn watcher_branch(
+    conn: &Connection,
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+) -> Result<bool, StorageError> {
+    let Some(watcher) = migrations.get(68) else {
+        return Ok(false);
+    };
+    if watcher.version != 69
+        || watcher.expected_sha256
+            != "b4655417647e74fda9a997fa35e0fb814a8f9ec2b1aa5e83a8ad391a66b494b5"
+        || (
+            meta.schema_version,
+            meta.minimum_reader,
+            meta.minimum_writer,
+        ) != (67, 67, 67)
+        || applied.len() != 67
+        || applied[66].version != 67
+        || applied[66].checksum != watcher.checksum()
+        || !migrations[..66]
+            .iter()
+            .zip(applied)
+            .all(|(expected, actual)| {
+                expected.version == actual.version && expected.checksum() == actual.checksum
+            })
+    {
+        return Ok(false);
+    }
+    Ok(db(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)))? == 67)
+}
+
+fn reconcile_watcher_branch(
+    conn: &Connection,
+    migrations: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    let tx = db(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    ))?;
+    let changed = || {
+        StorageError::IncompatibleSchema(
+            "GitHub watcher migration ledger changed before reconciliation".into(),
+        )
+    };
+    let meta = read_meta(&tx)?.ok_or_else(changed)?;
+    if !watcher_branch(&tx, migrations, &meta, &ledger(&tx)?)? {
+        return Err(changed());
+    }
+    let watcher = &migrations[68];
+    let moved = db(tx.execute(
+        "UPDATE schema_migrations SET version=69 WHERE version=67 AND checksum=?1",
+        [watcher.checksum()],
+    ))?;
+    if moved != 1 {
+        return Err(changed());
+    }
+    for missing in &migrations[66..68] {
+        db(tx.execute_batch(missing.sql))?;
+        db(tx.execute(
+            "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+            params![missing.version, missing.checksum(), now_ms, app_build],
+        ))?;
+    }
+    db(tx.execute(
+        "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+        params![watcher.version, watcher.minimum_reader, watcher.minimum_writer],
+    ))?;
+    db(tx.pragma_update(None, "user_version", watcher.version))?;
+    verify_after(&tx)?;
+    db(tx.commit())?;
+    Ok(watcher.version)
+}
+
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
 /// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
 pub(crate) fn check(
@@ -1136,6 +1221,7 @@ pub(crate) fn check(
     }
     let applied = ledger(conn)?;
     let intelligence = intelligence_branch(migrations, &meta, &applied);
+    let watcher_history = watcher_branch(conn, migrations, &meta, &applied)?;
     for m in migrations
         .iter()
         .filter(|m| m.version <= meta.schema_version)
@@ -1144,6 +1230,7 @@ pub(crate) fn check(
             Some(a) if a.checksum == m.checksum() => {}
             Some(a) if split_migration(migrations, &meta, a).is_some() => {}
             Some(_) if matches!(m.version, 64 | 65) && intelligence.is_some() => {}
+            Some(_) if m.version == 67 && watcher_history => {}
             Some(a) => {
                 return Err(StorageError::IncompatibleSchema(format!(
                     "migration {} checksum {} does not match this build ({})",
@@ -1210,6 +1297,9 @@ pub(crate) fn prepare(
             apply_in_transaction(conn, systemone, None, now_ms, app_build, Some(keep_working))?;
             version = keep_working.version;
         }
+    }
+    if version == 67 && watcher_branch(conn, migrations, &meta, &ledger(conn)?)? {
+        version = reconcile_watcher_branch(conn, migrations, now_ms, app_build)?;
     }
     for m in migrations.iter().filter(|m| m.version > version) {
         apply(conn, m, None, now_ms, app_build)?;

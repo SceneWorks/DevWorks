@@ -479,6 +479,102 @@ pub fn icon_button(
     response.on_hover_text(tooltip)
 }
 
+/// Formats an authenticated/public `https://github.com/<owner>/<repo>...` URL as an identifiable
+/// `owner/repo` label (`GH-04`), returning `None` for any non-GitHub or credential-bearing URL.
+pub fn github_link_label(raw: &str) -> Option<String> {
+    let rest = raw.strip_prefix("https://github.com/")?;
+    if rest.is_empty() || rest.chars().any(char::is_control) {
+        return None;
+    }
+    let (before_frag, fragment) = match rest.split_once('#') {
+        Some((p, f)) => (p, f),
+        None => (rest, ""),
+    };
+    let path = before_frag.split_once('?').map_or(before_frag, |(p, _)| p);
+    if path.contains('@') || path.starts_with('/') {
+        return None;
+    }
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    let (owner, repo_raw) = (segments[0], segments[1]);
+    let repo = repo_raw.strip_suffix(".git").unwrap_or(repo_raw);
+    if owner.is_empty() || repo.is_empty() || owner.contains(':') || repo.contains(':') {
+        return None;
+    }
+    let base = format!("{owner}/{repo}");
+    let label = match segments.get(2..) {
+        Some([]) | None => base,
+        Some(["issues" | "pull", number, ..])
+            if number.bytes().all(|b| b.is_ascii_digit()) && !number.is_empty() =>
+        {
+            if fragment.starts_with("issuecomment-") {
+                format!("{base} #{number} (comment)")
+            } else if fragment.starts_with("pullrequestreview-")
+                || fragment.starts_with("discussion_r")
+            {
+                format!("{base} #{number} (review)")
+            } else {
+                format!("{base} #{number}")
+            }
+        }
+        Some(["commit", sha, ..]) if !sha.is_empty() => {
+            let short = &sha[..sha.len().min(7)];
+            format!("{base}@{short}")
+        }
+        Some(["tree" | "blob", reference, ..]) if !reference.is_empty() => {
+            format!("{base}:{reference}")
+        }
+        Some(["actions", "runs", run_id, ..])
+            if run_id.bytes().all(|b| b.is_ascii_digit()) && !run_id.is_empty() =>
+        {
+            format!("{base} run #{run_id}")
+        }
+        Some(rest) => format!("{base}/{}", rest.join("/")),
+    };
+    Some(label)
+}
+
+/// Extracts unique `https://github.com/<owner>/<repo>...` URLs with their identifiable `owner/repo`
+/// labels from prose or markdown links (`[text](<url>)`, `[text](url)`, or bare URLs).
+pub fn extract_github_links(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(idx) = rest.find("https://github.com/") {
+        let candidate = &rest[idx..];
+        let end = candidate
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '>' | ')' | ']' | '"' | '\'' | '`' | ',')
+            })
+            .unwrap_or(candidate.len());
+        let raw = candidate[..end].trim_end_matches(['.', ';', ':']);
+        if let Some(label) = github_link_label(raw)
+            && !out
+                .iter()
+                .any(|(_, existing): &(String, String)| existing == raw)
+        {
+            out.push((label, raw.to_owned()));
+        }
+        rest = &candidate[end.max(1)..];
+    }
+    out
+}
+
+/// Renders `text` and, when it references any GitHub repository/issue/PR/commit/check URLs,
+/// adds clickable hyperlinks labeled with identifiable `owner/repo` context (`GH-04`).
+pub fn text_with_github_links(ui: &mut Ui, text: &str) {
+    ui.label(text);
+    let links = extract_github_links(text);
+    if !links.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for (label, url) in links {
+                ui.hyperlink_to(label, url);
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod time_tests {
     use super::*;
@@ -510,6 +606,46 @@ mod time_tests {
         assert_eq!(
             time_in(i64::MAX, &jiff::tz::TimeZone::UTC),
             TIME_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn github_links_carry_identifiable_owner_and_repository_context() {
+        assert_eq!(
+            github_link_label("https://github.com/Acme/kit/issues/42").as_deref(),
+            Some("Acme/kit #42")
+        );
+        assert_eq!(
+            github_link_label("https://github.com/Acme/kit/issues/42#issuecomment-77").as_deref(),
+            Some("Acme/kit #42 (comment)")
+        );
+        assert_eq!(
+            github_link_label("https://github.com/Acme/kit/pull/81#pullrequestreview-9").as_deref(),
+            Some("Acme/kit #81 (review)")
+        );
+        assert_eq!(
+            github_link_label("https://github.com/Acme/kit/commit/0123456789abcdef").as_deref(),
+            Some("Acme/kit@0123456")
+        );
+        assert_eq!(
+            github_link_label("https://user:secret@github.com/Acme/kit/issues/42"),
+            None
+        );
+        let extracted = extract_github_links(
+            "Observed [GitHub issue #42 changed](<https://github.com/Acme/kit/issues/42>) and PR https://github.com/Acme/kit/pull/81.",
+        );
+        assert_eq!(
+            extracted,
+            vec![
+                (
+                    "Acme/kit #42".to_owned(),
+                    "https://github.com/Acme/kit/issues/42".to_owned()
+                ),
+                (
+                    "Acme/kit #81".to_owned(),
+                    "https://github.com/Acme/kit/pull/81".to_owned()
+                ),
+            ]
         );
     }
 }

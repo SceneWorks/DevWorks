@@ -9548,6 +9548,10 @@
               "const": "github.poll_status",
               "type": "string"
             },
+            "page": {
+              "$ref": "#/$defs/PageRequest",
+              "x-since": 3
+            },
             "repositoryId": {
               "$ref": "#/$defs/Id"
             }

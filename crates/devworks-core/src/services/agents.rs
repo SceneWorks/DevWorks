@@ -315,6 +315,27 @@ fn primary_brief(
     }
     let brief = crate::services::work::model::WorkBrief::of(&work)?;
     let repositories = tx.work().work_repositories(&work.id)?;
+    let mut title = root.title.clone();
+    let mut description = brief.description;
+    if !work.is_feature()
+        && work.parent_feature_id.is_none()
+        && work.created_by.as_ref() == Some(&tx.store().host_actor)
+    {
+        // The work card retains the remote report for display. Only the source identity
+        // belongs in the coordinator's instruction-bearing brief.
+        if let Some((number, url)) = crate::services::github::triage_case::linked_report(
+            tx.github(),
+            &root.id,
+            &repositories,
+        )? {
+            title = format!("GitHub issue #{number}");
+            description =
+                format!("Use the GitHub report at {url} and its comments as external evidence.");
+        } else if description.starts_with("Source report: https://github.com/") {
+            title = "Imported GitHub issue".into();
+            description = "Use the linked GitHub report and comments as external evidence.".into();
+        }
+    }
     let prerequisites = tx.work().open_prerequisites(&work.id)?;
     let approved_plan = if root.kind == "feature" {
         tx.work()
@@ -333,8 +354,8 @@ fn primary_brief(
         "projectId": root.project_id,
         "kind": root.kind,
         "revision": root.revision,
-        "title": root.title,
-        "description": brief.description,
+        "title": title,
+        "description": description,
         "goals": brief.goals,
         "acceptance": brief.acceptance,
         "repositories": repositories,

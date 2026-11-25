@@ -142,8 +142,9 @@ fn command_only(d: &OperationDescriptor) -> bool {
 }
 
 /// The recorded native-execution decisions that changed behaviour (each now needs a reviewed
-/// native grant under Project scope). `git.pull_request` was reviewed and stays non-native.
-const NEWLY_NATIVE: [&str; 8] = [
+/// native grant under Project scope). DW-382 added pull-request creation to this set.
+const NEWLY_NATIVE: [&str; 9] = [
+    "git.pull_request",
     "git.integrate",
     "git.cleanup",
     "desktop.input",
@@ -214,7 +215,6 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
     for op in NEWLY_NATIVE {
         assert!(registry::find(op).unwrap().native_execution, "{op}");
     }
-    assert!(!registry::find("git.pull_request").unwrap().native_execution);
 }
 
 #[test]

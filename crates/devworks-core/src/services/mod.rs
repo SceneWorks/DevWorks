@@ -39,6 +39,7 @@ pub mod process;
 pub mod projects;
 pub mod queue;
 pub mod resources;
+pub mod reviews;
 pub mod router;
 pub mod runs;
 pub mod schemas;
@@ -216,9 +217,47 @@ impl UseCases {
             "git.commit",
             "git.push",
             "git.pull_request",
+            "git.integrate",
             "git.cleanup",
         ] {
             self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        self
+    }
+
+    /// One review use case backs the workspace and agent tools.
+    pub fn with_reviews(mut self, service: Arc<reviews::ReviewService>) -> Self {
+        for operation in [
+            "reviews.list",
+            "reviews.inspect",
+            "reviews.findings",
+            "reviews.readiness",
+        ] {
+            self.register(operation, Some(service.clone()), None);
+        }
+        for operation in ["reviews.request", "reviews.respond", "reviews.adjudicate"] {
+            self.register(operation, None, Some(service.clone()));
+        }
+        self
+    }
+
+    /// GitHub account, saved issue history and observations share the native gateway.
+    pub fn with_github(mut self, service: Arc<github::GitHubService>) -> Self {
+        self.register(
+            "github.account",
+            Some(service.clone()),
+            Some(service.clone()),
+        );
+        for op in [
+            "github.repositories",
+            "github.poll_status",
+            "github.checks",
+            "github.reviews",
+        ] {
+            self.register(op, Some(service.clone()), None);
+        }
+        for op in ["github.issue_sync", "issues.link", "issues.publish"] {
+            self.register(op, None, Some(service.clone()));
         }
         self
     }

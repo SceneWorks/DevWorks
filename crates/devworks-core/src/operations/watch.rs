@@ -29,6 +29,13 @@ pub struct CreateInput {
     pub timer: Option<WatchTimer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<WatchFile>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchGithubTarget", extend("x-since" = 9))]
+    pub github: Option<WatchGithubTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching: Option<WatchMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,6 +49,7 @@ impl Check for CreateInput {
         self.probe.check()?;
         self.timer.check()?;
         self.file.check()?;
+        self.github.check()?;
         self.matching.check()?;
         self.tail_bytes.check()?;
         self.max_lifetime_ms.check()?;
@@ -49,7 +57,11 @@ impl Check for CreateInput {
     }
 }
 impl Revisioned for CreateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.github = None;
+        }
+    }
 }
 
 /// `watch.list` Query input.

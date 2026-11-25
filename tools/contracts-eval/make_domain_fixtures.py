@@ -169,6 +169,23 @@ case('input-watch.create-file-match','domain-request.r8',_watch_body(file=_file,
 case('reject-watch.create-file-without-match','domain-request.r8',_watch_body(file=_file),False,True)
 case('reject-watch.create-timer-match','domain-request.r8',_watch_body(timer={'afterMs':'5000'},matching=_match),False,True)
 case('reject-watch.create-match-too-often','domain-request.r8',_watch_body(process=_proc,matching={**_match,'minIntervalMs':'99'}),False,True)
+_github_run={'repositoryId':'github-repository','workflowRunId':'45402362601'}
+_github_pr={'repositoryId':'github-repository','pullRequestNumber':'263'}
+def _github_watch(target,revision=9,**extra):
+ frame=_watch_body(github=target,**extra); frame['schemaRevision']=revision; return frame
+case('input-watch.create-github-run','domain-request.r9',_github_watch(_github_run,maxLifetimeMs='60000'))
+case('input-watch.create-github-pr','domain-request.r9',_github_watch(_github_pr))
+case('reject-watch.create-github-r8','domain-request.r8',_github_watch(_github_run,revision=8),False,False)
+case('reject-watch.create-github-two-targets','domain-request.r9',_github_watch({**_github_run,**_github_pr}),False,False)
+case('reject-watch.create-github-zero','domain-request.r9',_github_watch({**_github_run,'workflowRunId':'0'}),False,True)
+case('reject-watch.create-github-tail','domain-request.r9',_github_watch(_github_run,tailBytes=64),False,True)
+_github_watcher=result('watch.inspect','WatcherRecord')
+_github_watcher['value']['sourceKind']='GitHub'
+_github_watcher['value']['github']=_github_run
+case('result-watch.inspect-github','operation-result.r9',_github_watcher)
+for op in ('watch.list','watch.inspect','watch.cancel'):
+ frame=request(op,OPS[op]['mode']); frame['schemaRevision']=9
+ case('input-'+op+'-r9','domain-request.r9',frame)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):
@@ -189,6 +206,39 @@ mutate('reject-eval-rate-without-denominator','result-evals.grade',['value','cov
 mutate('eval-text-proxy-predicate','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'},typed=True,schema=True)
 mutate('reject-eval-false-enforced-rule','input-evals.grade-Command',['body','suite','checks',0,'measurement'],'EnforcedRule',typed=False,schema=True)
 mutate('eval-valid-text-proxy','input-evals.grade-Command',['body','suite','checks',0],{'id':'check-a','ruleRef':'RULE-1','measurement':'Proxy','predicate':{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'}},typed=True,schema=True)
+
+# Exact local task reviews use no PR identity. Candidate evidence uses its original final review
+# plus a complete classified diff, and is a separate selected write within the request operation.
+_review_root={'rootId':'feature-a','expectedRevision':'2','policyRevision':'3'}
+_review_base={'format':'Sha1','hex':'a'*40}
+_review_head={'format':'Sha1','hex':'b'*40}
+_local_review={'taskId':'task-a','diffs':[
+ {'repositoryId':'repo-a','worktreeId':'tree-a','base':_review_base,'head':_review_head}
+]}
+_review_repair={'originalReviewId':'review-a','expectedReviewRevision':'4','repositoryId':'repo-a',
+ 'reviewedHead':_review_base,'candidateHead':_review_head,
+ 'diagnoses':[{'failedCheckId':'failed-a','diagnosis':'Repair the failing CI environment'}],
+ 'changes':[{'changeDigest':'a'*64,'reason':{'kind':'RequiredCheck','failedCheckId':'failed-a'}}],
+ 'focusedCheckIds':['focused-a'],'verificationReport':copy.deepcopy(ART)}
+def _review_request(revision=15, **members):
+ return {'mode':'Command','protocol':'1.0-draft.1','schemaRevision':revision,
+  'requestKey':'review-request','body':{'kind':'reviews.request',**_review_root,**members}}
+case('input-reviews.request-local','domain-request.r15',_review_request(localTarget=_local_review))
+case('input-reviews.request-candidate','domain-request.r15',_review_request(candidateRepair=_review_repair))
+case('reject-reviews.request-local-legacy','domain-request',_review_request(revision=1,localTarget=_local_review),False,False)
+case('reject-reviews.request-two-targets','domain-request.r15',_review_request(localTarget=_local_review,candidateRepair=_review_repair),False,False)
+case('reject-reviews.request-duplicate-local-repo','domain-request.r15',
+     _review_request(localTarget={**_local_review,'diffs':_local_review['diffs']*2}),False,True)
+case('input-reviews.readiness-local','domain-request.r15',{'mode':'Query','protocol':'1.0-draft.1',
+ 'schemaRevision':15,'queryId':'review-query','body':{'kind':'reviews.readiness','rootId':'feature-a',
+ 'policyRevision':'3','localTarget':_local_review}})
+for name in ('list','inspect','findings','respond','adjudicate'):
+ op='reviews.'+name
+ frame=request(op,OPS[op]['mode'])
+ frame['schemaRevision']=15
+ case('input-'+op+'-r15','domain-request.r15',frame)
+
+
 
 for source in TYPES['EvalRecordSource']['values']:
  mutate('eval-record-field-'+source,'input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':source,'pointer':'/state','expected':{'observed':True}},typed=True,schema=True)
@@ -971,7 +1021,34 @@ forged=request('browser.sessions','Command');forged['schemaRevision']=3;forged['
 case('reject-model-supplied-browser-source','domain-request.r3',forged,False,False)
 pr={'protocol':'1.0-draft.1','schemaRevision':2,'requestKey':'group-pr','command':{'kind':'OpenPullRequest','repositoryId':'repo-a','headRef':'refs/heads/task-a','baseRef':'refs/heads/feature-a','expectedHead':BASE['GitOid'],'description':ART,'coveredWorkIds':['task-a','task-b']}}
 case('r2-input-git.pull_request','git-command-request.r2',pr)
+case('r16-input-git.pull_request','git-command-request.r16',{**pr,'schemaRevision':16})
 case('r2-result-git.pull_request','operation-result.r2',result('git.pull_request',LEGACY_RESULTS['git.pull_request']))
+publication={'protocol':'1.0-draft.1','schemaRevision':16,'requestKey':'feature-task-publication','command':{
+ 'kind':'Push','worktreeId':'feature-tree','remoteId':'origin','targetRef':'refs/heads/feature/fixture',
+ 'expectedHead':{'format':'Sha1','hex':'b'*40},'expectedRemote':BASE['GitOid'],'mode':'Normal',
+ 'taskIntegration':{'taskId':'task-a','expectedTaskRevision':'1','taskWorktreeId':'task-tree',
+  'reviewId':'review-once','reviewedBase':BASE['GitOid'],'reviewedHead':{'format':'Sha1','hex':'c'*40},
+  'taskHead':{'format':'Sha1','hex':'c'*40},'predecessor':BASE['GitOid'],'verification':ART,
+  'focusedChecks':['feature-candidate-tests']}}}
+case('r16-input-git.push-task-integration','git-command-request.r16',publication)
+bad_publication=copy.deepcopy(publication);bad_publication['command']['taskIntegration']['predecessor']={'format':'Sha1','hex':'a'*40}
+if bad_publication['command']['taskIntegration']['predecessor']==publication['command']['expectedRemote']:
+ bad_publication['command']['taskIntegration']['predecessor']['hex']='d'*40
+case('reject-task-integration-with-different-predecessor','git-command-request.r16',bad_publication,False,True)
+legacy_publication=copy.deepcopy(publication);legacy_publication.pop('schemaRevision')
+case('reject-r1-task-integration-evidence','git-command-request',legacy_publication,False,False)
+final_barrier={'protocol':'1.0-draft.1','deliveryId':'delivery-a','rootId':'feature-a','kind':'Feature','revision':'1',
+ 'approvedScopeDigest':'a'*64,'repositories':[{'repositoryId':'repo-a','pullRequestId':'pull-a','baseRef':'refs/heads/main',
+ 'expectedHead':BASE['GitOid'],'observedBase':{'format':'Sha1','hex':'b'*40},'reviewSource':'InAppIndependent',
+ 'mergeMethod':'MergeCommit','evidence':ART,'policyRevision':'1'}],'dependencies':[]}
+final_delivery={'protocol':'1.0-draft.1','schemaRevision':17,'requestKey':'verified-final-delivery','command':{
+ 'kind':'Integrate','deliveryId':'delivery-a','expectedBarrierRevision':'1','repositoryId':'repo-a',
+ 'expectedHead':BASE['GitOid'],'barrier':final_barrier}}
+case('r17-input-git.integrate-with-barrier','git-command-request.r17',final_delivery)
+wrong_barrier=copy.deepcopy(final_delivery);wrong_barrier['command']['barrier']['deliveryId']='other-delivery'
+case('reject-final-merge-with-different-barrier','git-command-request.r17',wrong_barrier,False,True)
+legacy_delivery=copy.deepcopy(final_delivery);legacy_delivery.pop('schemaRevision')
+case('reject-r1-final-delivery-barrier','git-command-request',legacy_delivery,False,False)
 bad=copy.deepcopy(pr);bad['command']['coveredWorkIds']=None
 case('reject-null-group-pr','git-command-request.r2',bad,False,False)
 bad=copy.deepcopy(pr);bad['schemaRevision']=1
@@ -1431,5 +1508,24 @@ claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'s
 for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Schema revision 3 (GitHub sync, DW-40): verified issue links, account diagnostics and resumable poll status.
+for name in ['issues.publish','issues.link']:
+ case('r3-input-'+name,'domain-request.r3',{**request(name,'Command'),'schemaRevision':3})
+ github_issue_link={**sample('GithubIssueLink'),'url':'https://github.com/Acme/kit/issues/42'}
+ case('r3-result-'+name,'operation-result.r3',{'kind':name,'value':github_issue_link})
+ case('reject-r1-result-'+name+'-issue-link','operation-result',{'kind':name,'value':github_issue_link},False,False)
+case('r3-input-github.account-query','domain-request.r3',{**request('github.account','Query'),'schemaRevision':3})
+case('r3-input-github.account-command','domain-request.r3',{**request('github.account','Command'),'schemaRevision':3})
+github_account_r3={**sample('GithubAccountState'),'apiHost':'github.com','authorizationState':'Connected','permissionRevision':'2','grantedScopes':['repo'],'failure':'Token expired'}
+case('r3-result-github.account','operation-result.r3',{'kind':'github.account','value':github_account_r3})
+case('reject-r1-result-github.account-diagnostics','operation-result',{'kind':'github.account','value':github_account_r3},False,False)
+case('r3-input-github.poll_status','domain-request.r3',{**request('github.poll_status','Query'),'schemaRevision':3})
+poll_page={**request('github.poll_status','Query'),'schemaRevision':3};poll_page['body']['page']={'limit':50,'cursor':'cursor-a'}
+case('r3-input-github.poll_status-page','domain-request.r3',poll_page)
+poll_page_r1=request('github.poll_status','Query');poll_page_r1['body']['page']={'limit':50}
+case('reject-r1-input-github.poll_status-page','domain-request',poll_page_r1,False,False)
+github_poll_view={**sample('GithubPollStatusView'),'endpoints':[sample('GithubPollEndpoint')],'intake':{'items':[{**sample('GithubIssueIntakeView'),'url':'https://github.com/Acme/kit/issues/42'}],'hasMore':False}}
+case('r3-result-github.poll_status','operation-result.r3',{'kind':'github.poll_status','value':github_poll_view})
+case('reject-r1-result-github.poll_status-view','operation-result',{'kind':'github.poll_status','value':github_poll_view},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

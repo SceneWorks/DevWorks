@@ -4,6 +4,8 @@
 //! completes. This fixture runs `/bin/sh`; Windows compiles the service and runs its process
 //! supervisor checks in the platform CI lane.
 #![cfg(unix)]
+#[path = "watch/github.rs"]
+mod github;
 use super::*;
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::services::process::tools::{
@@ -2533,6 +2535,7 @@ fn the_shell_guard_protects_the_bound_github_default_branch_without_origin_head(
                 credential_revision: 1,
                 permission_revision: 1,
                 granted_scopes: vec!["repo".into()],
+granted_scopes_reported: true,
                 observed_at_ms: 1,
                 last_error: None,
             },

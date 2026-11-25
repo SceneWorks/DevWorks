@@ -14,9 +14,11 @@ fn every_store_polling_loop_waits_on_store_commits() {
     assert_eq!(
         loops,
         [
+            "GitHub issue triage",
             "container reconciliation",
             "convention imports",
             "git",
+            "github",
             "help maintenance",
             "project purge",
             "schema view cleanup",

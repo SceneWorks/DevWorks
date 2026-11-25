@@ -201,7 +201,7 @@ pub trait EffectExecutor: Send + Sync {
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
     /// An operation with an established outcome can return to delivery without operator input.
     /// Consumers opt in only when their observation establishes an exact safe continuation.
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         false
     }
 
@@ -1082,7 +1082,7 @@ impl Dispatcher {
                 .await?;
                 for (delivery, delivery_revision, op) in held {
                     let observed = executor.observe(op.clone()).await;
-                    let auto_resume = executor.resumes_after_observation();
+                    let auto_resume = executor.resumes_after_observation(&op);
                     let established =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
                             let Some(current) = tx.operations().operation(&op.id)? else {

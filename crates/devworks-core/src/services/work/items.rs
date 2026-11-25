@@ -155,7 +155,7 @@ pub(crate) fn snapshot_record(
         (None, None)
     };
     let live = live_attempt(read.runs(), w)?;
-    model::record(
+    let mut rec = model::record(
         read.work(),
         w,
         Extras {
@@ -169,7 +169,9 @@ pub(crate) fn snapshot_record(
             pending_readiness,
             detail,
         },
-    )
+    )?;
+    rec.github_issue = github_issue_tracking(read.github(), w, &rec.repository_ids.0)?;
+    Ok(rec)
 }
 /// The wire record of `w` read inside a write transaction.
 pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<WorkRecord> {
@@ -191,7 +193,7 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
     } else {
         None
     };
-    Ok(model::record(
+    let mut rec = model::record(
         tx.work(),
         w,
         Extras {
@@ -201,7 +203,88 @@ pub(crate) fn tx_record(tx: &mut dyn WriteTransaction, w: &StoredWork) -> R<Work
             pending_readiness,
             detail: Detail::Summary,
         },
-    )?)
+    )?;
+    rec.github_issue = github_issue_tracking(tx.github(), w, &rec.repository_ids.0)?;
+    Ok(rec)
+}
+
+fn github_issue_tracking(
+    github: &dyn crate::ports::storage::GithubRead,
+    w: &StoredWork,
+    repo_ids: &[Id],
+) -> Result<Option<crate::protocol::records::GithubIssueTracking>, StorageError> {
+    use crate::ports::storage::GithubScope;
+    use crate::protocol::records::{GithubIssueIntakeState, GithubIssueTracking};
+    use crate::protocol::support::{BoundedText, PositiveCounter, Url};
+    if w.is_feature() {
+        return Ok(None);
+    }
+    let root = RootId(w.id.clone());
+    for repo_id in repo_ids {
+        let Some(binding) = github
+            .github_repository_binding(repo_id)?
+            .filter(|b| b.state == "Active")
+        else {
+            continue;
+        };
+        let Some(intake) = github
+            .github_issues_for_work(&root, &binding.github_repository_id, 1)?
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let key = &intake.key;
+        let scope = GithubScope {
+            project_id: None,
+            repositories: vec![repo_id.clone()],
+        };
+        let obs = github.github_observation(&intake.observation_id, &scope)?;
+        let url = match obs.as_ref().map(|o| o.url.clone()) {
+            Some(url) => url,
+            None => match github.github_discovered_repository(&binding.github_repository_id)? {
+                Some(repo) => format!("{}/issues/{}", repo.url, key.number),
+                None => continue,
+            },
+        };
+        let remote_state = obs
+            .as_ref()
+            .and_then(|o| o.payload["state"].as_str())
+            .unwrap_or("open");
+        let remote_revision = intake.remote_revision.clone();
+        let case = github.github_triage_case(key, &w.project_id)?;
+        let raw_state = if intake.state == "Resolved" {
+            "Resolved"
+        } else if let Some(c) = &case {
+            c.state.as_str()
+        } else {
+            intake.state.as_str()
+        };
+        let intake_state = match raw_state {
+            "Resolved" => GithubIssueIntakeState::Resolved,
+            "Closed" => GithubIssueIntakeState::Closed,
+            "Working" | "Verified" => GithubIssueIntakeState::Working,
+            "AwaitingDecision" => GithubIssueIntakeState::AwaitingDecision,
+            "Triaging" | "NeedsProof" => GithubIssueIntakeState::Triaging,
+            _ => GithubIssueIntakeState::Queued,
+        };
+        let resolution_operation_id = github
+            .github_resolutions(key, None, 1)?
+            .into_iter()
+            .next()
+            .map(|r| r.close_operation_id.0);
+        return Ok(Some(GithubIssueTracking {
+            repository_id: repo_id.clone(),
+            remote_issue_number: PositiveCounter(key.number.to_string()),
+            url: Url(url),
+            remote_revision: BoundedText(remote_revision),
+            remote_state: crate::services::kernel::label(remote_state, "open"),
+            intake_state,
+            next_admission_at: None,
+            resolution_operation_id,
+        }));
+    }
+    Ok(None)
 }
 
 fn position(p: &str) -> Result<WorkPosition, StorageError> {
@@ -254,6 +337,81 @@ fn detail_page(
     })
 }
 
+/// The native Git owner calls this only after the registered remote proved every repository
+/// of the task. Commit workflow and dependency changes in the same transaction as that fact.
+pub(crate) fn finish_integrated_task(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    before: &StoredWork,
+) -> Result<(), StorageError> {
+    let brief = WorkBrief::of(before)?;
+    if brief.acceptance.is_empty() || verified(&brief.acceptance) {
+        complete_verified_work(tx, ctx, before, brief, "WorkIntegrated")?;
+    }
+    Ok(())
+}
+
+/// Final delivery completes only after the Git owner verified every registered repository.
+pub(crate) fn finish_delivered_work(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    before: &StoredWork,
+) -> Result<(), StorageError> {
+    complete_verified_work(
+        tx,
+        ctx,
+        before,
+        WorkBrief::of(before)?,
+        "WorkDeliveryVerified",
+    )
+}
+
+fn complete_verified_work(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    before: &StoredWork,
+    mut brief: WorkBrief,
+    kind: &str,
+) -> Result<(), StorageError> {
+    if before.completion.as_deref() == Some(VERIFIED) {
+        return Ok(());
+    }
+    let statuses = workflow::ensure_workflow(tx, &before.project_id)?;
+    if before
+        .status_id
+        .as_ref()
+        .and_then(|id| workflow::semantic_of(&statuses, id))
+        == Some(workflow::CLOSED)
+    {
+        return Ok(());
+    }
+    let done = statuses
+        .iter()
+        .filter(|status| status.semantic == DONE)
+        .min_by_key(|status| status.sort_order)
+        .ok_or_else(|| StorageError::InvalidRecord("workflow has no Done status".into()))?;
+    let mut after = before.clone();
+    after.status_id = Some(done.id.clone());
+    after.completion = Some(VERIFIED.to_owned());
+    after.revision += 1;
+    after.updated_at_ms = tx.now_ms();
+    after.updated_by = Some(ctx.principal().clone());
+    brief.completed_at_ms = Some(after.updated_at_ms);
+    brief.completed_by = after.updated_by.clone();
+    after.brief = brief.value();
+    tx.work().update_work(&after, before.revision)?;
+    crate::services::notifications::verified_transition(tx, before, &after)?;
+    bump(tx, &before.project_id, &[before.queue()]).map_err(Failure::into_storage)?;
+    super::allocation::invalidate_work(tx, ctx, &before.id)?;
+    event(
+        tx,
+        ctx,
+        &after,
+        kind,
+        json!({"completion":after.completion}),
+    )
+}
+
 /// The completion a card records in a status of `semantic` with `acceptance`.
 pub(crate) fn completion_for(semantic: &str, acceptance: &[AcceptanceCriterion]) -> Option<String> {
     (semantic == DONE).then(|| {
@@ -263,6 +421,29 @@ pub(crate) fn completion_for(semantic: &str, acceptance: &[AcceptanceCriterion])
             MANUAL.to_owned()
         }
     })
+}
+
+pub(crate) fn task_completion(
+    tx: &mut dyn WriteTransaction,
+    task: &StoredWork,
+    semantic: &str,
+    acceptance: &[AcceptanceCriterion],
+) -> Result<Option<String>, StorageError> {
+    let completion = completion_for(semantic, acceptance);
+    // The Git owner may already have verified a code task with no separate acceptance criteria.
+    if completion.as_deref() == Some(VERIFIED)
+        || (semantic == DONE
+            && acceptance.is_empty()
+            && task.completion.as_deref() == Some(VERIFIED))
+    {
+        let completion = if crate::services::git::waits_for_publication(tx, task)? {
+            MANUAL
+        } else {
+            VERIFIED
+        };
+        return Ok(Some(completion.to_owned()));
+    }
+    Ok(completion)
 }
 
 /// Evidence IDs are recorded history links (evidence, review, outcome, Git or pull request
@@ -569,7 +750,7 @@ impl WorkService {
             Some(&c.labels),
             &mut Vec::new(),
         )?;
-        let w = StoredWork {
+        let mut w = StoredWork {
             id: tx.new_id(IdKind::Link),
             project_id: c.project.clone(),
             kind: TASK.into(),
@@ -586,9 +767,17 @@ impl WorkService {
             updated_by: Some(ctx.principal().clone()),
             search_key: model::search_key(c.title, c.description),
             caller_ref: c.caller_ref,
-            completion: completion_for(&status.semantic, &brief.acceptance),
+            completion: None,
             brief: brief.value(),
         };
+        // An uncreated card cannot have a recorded publication, even if criteria were imported.
+        w.completion = completion_for(&status.semantic, &brief.acceptance);
+        if w.completion.as_deref() == Some(VERIFIED)
+            && let Some(feature) = c.feature
+            && crate::services::git::requires_local_integration(tx, feature, &repos)?
+        {
+            w.completion = Some(MANUAL.to_owned());
+        }
         tx.work().insert_work(&w)?;
         tx.work().set_work_repositories(&w.id, &repos)?;
         bump(tx, c.project, &[queue])?;
@@ -894,7 +1083,7 @@ impl WorkService {
             .and_then(|s| semantic_of(&statuses, s))
             .unwrap_or("")
             .to_owned();
-        after.completion = completion_for(&semantic, &brief.acceptance);
+        after.completion = task_completion(tx, &before, &semantic, &brief.acceptance)?;
         if statuses_changed.is_some() {
             if semantic == DONE {
                 brief.completed_by = Some(ctx.principal().clone());
@@ -1208,7 +1397,7 @@ impl WorkService {
         let mut brief = WorkBrief::of(&before)?;
         let mut after = before.clone();
         after.status_id = Some(status.id.clone());
-        after.completion = completion_for(&status.semantic, &brief.acceptance);
+        after.completion = task_completion(tx, &before, &status.semantic, &brief.acceptance)?;
         if status.semantic == DONE {
             brief.completed_by = Some(ctx.principal().clone());
             brief.completed_at_ms = Some(tx.now_ms());
@@ -1354,7 +1543,7 @@ impl WorkService {
             .unwrap_or("")
             .to_owned();
         let mut after = before.clone();
-        after.completion = completion_for(&semantic, &brief.acceptance);
+        after.completion = task_completion(tx, &before, &semantic, &brief.acceptance)?;
         if serde_json::to_value(&brief.acceptance).ok()
             == WorkBrief::of(&before)
                 .ok()
@@ -1854,6 +2043,7 @@ fn record_feature_results(
     else {
         return Err(conflict("no_active_plan", &feature.id));
     };
+    let heads = crate::services::git::feature_head_digest(tx, &feature.id)?;
     for r in results {
         let in_acceptance = active.draft.acceptance.0.iter().find(|c| c.id == r.id);
         let in_tests = active
@@ -1873,6 +2063,20 @@ fn record_feature_results(
         }
         id_set(&r.evidence_ids.0, "evidence_ids")?;
         check_evidence(tx, &feature.project_id, &r.evidence_ids.0)?;
+        let prior = list.iter().find(|prior| prior.id == r.id);
+        let key = r.id.as_str();
+        if let Some(heads) = &heads
+            && matches!(r.state, CriterionState::Met)
+            && !r.evidence_ids.0.is_empty()
+            && (brief.acceptance_git_heads.get(key) == Some(heads)
+                || prior.is_none_or(|prior| prior.evidence_ids.0 != r.evidence_ids.0))
+        {
+            brief
+                .acceptance_git_heads
+                .insert(key.to_owned(), heads.clone());
+        } else {
+            brief.acceptance_git_heads.remove(key);
+        }
         list.retain(|x| x.id != r.id);
         list.push(r.clone());
     }

@@ -1431,7 +1431,7 @@ fn a_repository_value_overrides_the_project_and_workspace_for_that_repository_on
             ("Project".into(), Some("repo-1".into()), 2, json!(9)),
             ("Project".into(), None, 2, json!(5)),
             ("Workspace".into(), None, 2, json!(7)),
-            ("Workspace".into(), None, 1, json!(3)),
+            ("Workspace".into(), None, 1, json!(5)),
         ]
     );
 

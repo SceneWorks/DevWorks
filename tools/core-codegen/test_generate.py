@@ -38,6 +38,9 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual({n for n, s in carried.items() if s}, {
             'help.search', 'help.read', 'help.topic_for_screen', 'help.package_guides',
             'router.decision_models', 'router.decide',
+            'git.integrate', 'git.push',
+            'reviews.request', 'reviews.list', 'reviews.findings', 'reviews.readiness',
+            'reviews.respond', 'reviews.adjudicate', 'reviews.inspect',
             'repositories.nodes', 'code.search', 'code.architecture', 'code.dependency',
             'code.impact', 'code.source', 'code.traverse', 'code.graph_scope_status', 'code.overview',
             'code.nodes_by_file', 'code.node_detail', 'code.set_trust', 'code.file_impact',
@@ -77,6 +80,7 @@ class SchemaRevisionRules(unittest.TestCase):
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
             'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
+            'github.account', 'github.poll_status', 'issues.link', 'issues.publish',
             'browser.upload', 'browser.console', 'browser.network',
             'desktop.inspect', 'desktop.capture', 'desktop.request_control',
             'desktop.input', 'desktop.release_control',
@@ -111,8 +115,9 @@ class SchemaRevisionRules(unittest.TestCase):
             self.assertEqual(carried[name], {9})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
-        for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel',
-                     'schemas.code_references', 'settings.read_effective', 'settings.validate',
+        for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):
+            self.assertEqual(carried[name], {8, 9})
+        for name in ('schemas.code_references', 'settings.read_effective', 'settings.validate',
                      'settings.save_revision', 'settings.explain_source'):
             self.assertEqual(carried[name], {8})
         for name in ('projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',

@@ -166,6 +166,9 @@ pub struct GitView {
     pub base: String,
     pub head: String,
     pub patch: Option<String>,
+    pub github: Option<devworks_core::protocol::records::GithubPollStatusView>,
+    pub github_cursor_revision: Option<i64>,
+    pub github_error: Option<String>,
 }
 
 /// What the screens ask their controller to do.
@@ -188,6 +191,8 @@ pub(crate) enum Action {
     SaveDelivery(String, String),
     LoadTexts(String),
     InspectGit(String),
+    InspectGithub(String, Option<String>),
+    SyncGithubIssues(String),
     DiffGit(String),
     RemoveIndex(RepositoryRecord),
     /// Read what deleting the repository's folder removes, for review.
@@ -1324,6 +1329,19 @@ fn repository_detail(
                     r.name.0.clone(),
                 ));
             }
+            let github = r.remote_url.as_ref().and_then(|url| {
+                devworks_core::protocol::helpers::git::Repository::from_remote(&url.0)
+            });
+            if let Some(github) = &github {
+                let full_name = format!("{}/{}", github.owner, github.name);
+                ui.hyperlink_to(&full_name, format!("https://github.com/{full_name}"));
+                if ui.small_button("Read GitHub sync status").clicked() {
+                    actions.push(Action::InspectGithub(r.id.as_str().into(), None));
+                }
+                if ui.small_button("Sync issues now").clicked() {
+                    actions.push(Action::SyncGithubIssues(r.id.as_str().into()));
+                }
+            }
             if ui.small_button("Inspect source control").clicked() {
                 actions.push(Action::InspectGit(r.id.as_str().to_owned()));
             }
@@ -1340,15 +1358,11 @@ fn repository_detail(
                             "Clean checkout"
                         },
                     );
-                    let github = r
-                        .remote_url
+                    let github_url = github
                         .as_ref()
-                        .and_then(|u| {
-                            devworks_core::protocol::helpers::git::Repository::from_remote(&u.0)
-                        })
                         .map(|r| format!("https://github.com/{}/{}", r.owner, r.name));
                     if let Some(branch) = &state.branch {
-                        if let Some(url) = &github {
+                        if let Some(url) = &github_url {
                             ui.hyperlink_to(
                                 &branch.0,
                                 devworks_core::protocol::helpers::git::branch_url(url, &branch.0)
@@ -1358,7 +1372,7 @@ fn repository_detail(
                             ui.label(&branch.0);
                         }
                     }
-                    if let Some(url) = &github {
+                    if let Some(url) = &github_url {
                         ui.hyperlink_to(
                             &state.head.hex,
                             format!("{url}/commit/{}", state.head.hex),
@@ -1366,6 +1380,50 @@ fn repository_detail(
                     } else {
                         ui.monospace(&state.head.hex);
                     }
+                }
+                if let Some(error) = &view.github_error {
+                    chip(ui, error.clone(), Tone::Bad);
+                }
+                if let Some(status) = &view.github {
+                    ui.label(format!(
+                        "Automatic triage interval · {} seconds",
+                        status.interval_seconds.0.as_str()
+                    ));
+                    for endpoint in &status.endpoints.0 {
+                        ui.label(format!("{} · {}", endpoint.endpoint.0, endpoint.state.0));
+                        if let Some(failure) = &endpoint.failure {
+                            chip(ui, failure.0.clone(), Tone::Bad);
+                        }
+                    }
+                    egui::CollapsingHeader::new("Incoming GitHub issues")
+                        .id_salt(("github-issues", r.id.as_str()))
+                        .show(ui, |ui| {
+                            for issue in &status.intake.items.0 {
+                                ui.horizontal_wrapped(|ui| {
+                                    let number = issue.remote_issue_number.0.as_str();
+                                    let identifier = github.as_ref().map_or_else(
+                                        || format!("GitHub issue #{number}"),
+                                        |repo| format!("{}/{} #{number}", repo.owner, repo.name),
+                                    );
+                                    ui.hyperlink_to(identifier, &issue.url.0);
+                                    ui.label(&issue.state.0);
+                                    if let Some(state) = issue.comment_state {
+                                        ui.label(format!("Resolution comment · {state:?}"));
+                                    }
+                                    if let Some(state) = issue.close_state {
+                                        ui.label(format!("Remote closure · {state:?}"));
+                                    }
+                                });
+                            }
+                            if let Some(cursor) = &status.intake.next_cursor
+                                && ui.small_button("Next issues").clicked()
+                            {
+                                actions.push(Action::InspectGithub(
+                                    r.id.as_str().into(),
+                                    Some(cursor.0.clone()),
+                                ));
+                            }
+                        });
                 }
                 egui::CollapsingHeader::new("Compare commits")
                     .id_salt(("git-diff", r.id.as_str()))

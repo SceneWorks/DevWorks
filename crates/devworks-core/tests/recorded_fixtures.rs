@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2162), 2162);
+    assert_eq!(run("domain-fixtures.json", 2214), 2214);
 }
 
 #[test]
@@ -463,7 +463,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
     // DW-F7 adds 26 bindings: sixteen analysis bindings at revision 3, eight database
     // bindings at revisions 9 and 10, and two package contributions at revision 9.
-    assert_eq!(admitted.len(), 699);
+    // GitHub synchronization and native remote watchers add nine negotiated bindings.
+    // DW-41 negotiates the seven review bindings at revision 15.
+    assert_eq!(admitted.len(), 718);
 }
 
 #[test]
@@ -599,7 +601,9 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "artifact-command-request/workspace",
             "artifact-query-request/tags",
             "artifact-query-request/workspace",
+            "git-command-request/barrier",
             "git-command-request/coveredWorkIds",
+            "git-command-request/taskIntegration",
             "graph-read-request/current",
             "graph-read-request/depth",
             "graph-read-request/internalModule",
