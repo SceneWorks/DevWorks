@@ -155,7 +155,7 @@ jobs:
           ARCHITECTURE: ${{ inputs.architecture || 'x64' }}
           ACCEPTED_DW414: 1ae1be523bd7202900904fb9d1b173d1caa07996
           ACCEPTED_DW417: b52af93099e00ff1e9131996cf78a0d3c66450d0
-          APPROVED_LOCAL_TEST: 317c5d639eed8ef415c879fb93c11462ead857f3
+          APPROVED_LOCAL_TEST: 0418d15a7401fe254a4a7434325f12e79a3ec6a9
           ACCEPTED_DW62: 23751f08d9c7f2a1d8bb793ef9463b9faa4599bc
         run: |
           set -euo pipefail
