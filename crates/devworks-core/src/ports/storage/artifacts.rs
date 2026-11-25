@@ -116,6 +116,22 @@ impl ArtifactScope {
     }
 }
 
+/// A database cell can only be reopened within the original authority and the same rules.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DatabaseArtifactAccess {
+    pub connection: Id,
+    pub revision: i64,
+    pub configuration: i64,
+    pub global_policy: i64,
+    pub source_policy: i64,
+    pub scope_policy: i64,
+    pub restore_epoch: i64,
+    pub capability: String,
+    pub fences: Vec<crate::ports::AuthorityFence>,
+    pub grants: Vec<(Id, i64)>,
+}
+
 /// How long an artifact is kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArtifactRetention {
@@ -343,6 +359,21 @@ pub trait ArtifactRead {
     /// repository (not deleted) one of whose published views binds the artifact as its README
     /// or structural summary text, in ID order.
     fn repository_text_readers(&self, artifact: &Id) -> Result<Vec<ProjectId>, StorageError>;
+    /// Whether a host analysis artifact still binds a readable exact run in its original scope.
+    fn analysis_artifact_available(
+        &self,
+        artifact: &Id,
+        run: &Id,
+        project: Option<&ProjectId>,
+        worktree: Option<(&Id, i64)>,
+        restore_epoch: i64,
+    ) -> Result<bool, StorageError>;
+    fn database_artifact_available(
+        &self,
+        access: &DatabaseArtifactAccess,
+        owner: &ActorId,
+        project: Option<&ProjectId>,
+    ) -> Result<bool, StorageError>;
     /// Links of every version of `artifact`.
     fn links(&self, artifact: &Id) -> Result<Vec<ArtifactLink>, StorageError>;
     /// Links pointing at `subject` (navigation from work to its artifacts), at most 500.

@@ -1351,6 +1351,72 @@ pub fn effective_setting(
     Ok(effective_entries(read, scope, &[key])?.remove(0))
 }
 
+/// Resolved delivery review settings, including the revisions that produced the policy.
+pub struct ReviewSettings {
+    pub final_review_required: bool,
+    pub cap: u8,
+    pub wait_seconds: i64,
+    pub github_bot_id: Option<u64>,
+    pub digest: String,
+}
+
+pub fn review_settings(
+    read: &dyn ConfigurationRead,
+    project: &ProjectId,
+    repository: &Id,
+) -> Result<ReviewSettings, StorageError> {
+    let entries = effective_entries(
+        read,
+        &ConfigScope::Repository {
+            project: project.clone(),
+            repository: repository.clone(),
+        },
+        &[
+            "delivery.finalPullRequestReview",
+            "delivery.maxReviewFixCycles",
+            "reviews.automationWaitSeconds",
+            "reviews.githubBotId",
+        ],
+    )
+    .map_err(|error| match error {
+        Failure::Storage(error) => error,
+        Failure::Refused(_) => StorageError::ScopeDenied,
+    })?;
+    let invalid = || StorageError::InvalidRecord("review policy setting".into());
+    let [required, cap, wait, bot]: [SettingEntry; 4] =
+        entries.try_into().map_err(|_| invalid())?;
+    let digest = crate::fingerprint::canonical_digest(
+        &serde_json::to_value((&required, &cap, &wait, &bot)).map_err(|_| invalid())?,
+    )
+    .map_err(|_| invalid())?;
+    Ok(ReviewSettings {
+        final_review_required: required.value.value.0.as_bool().ok_or_else(invalid)?,
+        cap: cap
+            .value
+            .value
+            .0
+            .as_u64()
+            .and_then(|cap| u8::try_from(cap).ok())
+            .filter(|cap| *cap > 0)
+            .ok_or_else(invalid)?,
+        wait_seconds: wait
+            .value
+            .value
+            .0
+            .as_i64()
+            .filter(|wait| *wait > 0)
+            .ok_or_else(invalid)?,
+        github_bot_id: bot
+            .value
+            .value
+            .0
+            .as_u64()
+            .map(|bot| (bot > 0).then_some(bot))
+            .ok_or_else(invalid)?,
+        digest,
+    })
+}
+
 /// The current inherited allowance for one feature/issue's children. Host schedulers share the
 /// same descriptor, defaults and revisioned configuration chain as Settings UI and tools.
 pub fn max_subagents(

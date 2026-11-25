@@ -1,13 +1,9 @@
 //! Bounded GitHub.com PR client, over the shared no-redirect HTTP and OS-secret ports.
 //! Transport credentials remain Git's concern; API authorization uses github.credential.
-use crate::authority::redact::SecretRef;
 use crate::ports::http::{HttpRequest, HttpTransport, Method};
 use crate::ports::secrets::{Secret, SecretResolver};
-use crate::ports::storage::{ApplicationStore, ConfigScope, ReadOptions, read_snapshot};
-use crate::settings::{
-    catalog::descriptor,
-    model::{chain, current_layer},
-};
+use crate::ports::storage::{ApplicationStore, ReadOptions, read_snapshot};
+use crate::services::github::credentials;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -120,24 +116,59 @@ fn parse(repository: &Repository, value: &Value) -> Result<PullRequest, Fault> {
 }
 impl GitHubClient {
     pub(crate) fn token(&self, store: &dyn ApplicationStore) -> Result<Secret, Fault> {
-        let reference = read_snapshot(store, &ReadOptions::default(), |s| {
-            let layer = current_layer(s.configuration(), &ConfigScope::Workspace)?;
-            let d = descriptor("github.credential").expect("catalog credential");
-            let entries = chain(d, &[layer]).map_err(|_| {
-                crate::ports::storage::StorageError::InvalidRecord(
-                    "GitHub credential configuration".into(),
-                )
-            })?;
-            Ok(entries
-                .into_iter()
-                .next()
-                .and_then(|e| SecretRef::from_setting(&e.value.value.0)))
+        self.resolve_token(store, false)
+    }
+
+    /// The explicit workspace sign-in check must be able to verify a replacement credential.
+    pub(crate) fn sign_in_token(&self, store: &dyn ApplicationStore) -> Result<Secret, Fault> {
+        self.resolve_token(store, true)
+    }
+
+    fn resolve_token(&self, store: &dyn ApplicationStore, sign_in: bool) -> Result<Secret, Fault> {
+        let reference = read_snapshot(store, &ReadOptions::default(), |snapshot| {
+            let verified = if sign_in {
+                None
+            } else {
+                match snapshot.github().github_account()? {
+                    Some(account) if account.state == "Connected" => {
+                        Some(account.credential_revision)
+                    }
+                    Some(_) => return Ok(None),
+                    None => None,
+                }
+            };
+            credentials::current(snapshot.configuration(), verified)
         })
         .map_err(|_| Fault::Unavailable)?
         .ok_or(Fault::CredentialsRequired)?;
+        self.resolve_reference(&reference)
+    }
+
+    pub(crate) fn token_for_account(
+        &self,
+        store: &dyn ApplicationStore,
+        expected: &crate::ports::storage::StoredGithubAccount,
+    ) -> Result<Secret, Fault> {
+        let reference = read_snapshot(store, &ReadOptions::default(), |snapshot| {
+            if expected.state != "Connected"
+                || snapshot.github().github_account()?.as_ref() != Some(expected)
+            {
+                return Ok(None);
+            }
+            credentials::current(snapshot.configuration(), Some(expected.credential_revision))
+        })
+        .map_err(|_| Fault::Unavailable)?
+        .ok_or(Fault::CredentialsRequired)?;
+        self.resolve_reference(&reference)
+    }
+
+    fn resolve_reference(
+        &self,
+        reference: &crate::authority::redact::SecretRef,
+    ) -> Result<Secret, Fault> {
         let value = self
             .secrets
-            .resolve(&reference)
+            .resolve(reference)
             .map_err(|_| Fault::CredentialsRequired)?;
         Ok(Secret::new(format!("Bearer {}", value.expose())))
     }
@@ -188,6 +219,42 @@ impl GitHubClient {
             .ok_or(Fault::InvalidResponse)
     }
 
+    pub(crate) fn branch_head(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        head: &str,
+    ) -> Result<String, Fault> {
+        let mut url = url::Url::parse(&format!(
+            "https://api.github.com/repos/{}/{}/git/ref/heads",
+            repository.owner, repository.name
+        ))
+        .map_err(|_| Fault::InvalidResponse)?;
+        if head
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        {
+            return Err(Fault::InvalidResponse);
+        }
+        url.path_segments_mut()
+            .map_err(|_| Fault::InvalidResponse)?
+            .extend(head.split('/'));
+        let value = self.request(store, Method::Get, url.into(), None)?;
+        if value["ref"] != format!("refs/heads/{head}") || value["object"]["type"] != "commit" {
+            return Err(Fault::InvalidResponse);
+        }
+        value["object"]["sha"]
+            .as_str()
+            .filter(|sha| {
+                sha.len() == 40
+                    && sha
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .map(str::to_owned)
+            .ok_or(Fault::InvalidResponse)
+    }
+
     /// Look up all open PRs of this exact repository/head, independently of the old base so
     /// linking an issue to a feature can retarget its existing PR without duplicating it.
     pub fn find(
@@ -196,11 +263,30 @@ impl GitHubClient {
         repository: &Repository,
         head: &str,
     ) -> Result<Option<PullRequest>, Fault> {
+        self.find_by_head(store, repository, head, "open")
+    }
+
+    pub(crate) fn find_feature(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        head: &str,
+    ) -> Result<Option<PullRequest>, Fault> {
+        self.find_by_head(store, repository, head, "all")
+    }
+
+    fn find_by_head(
+        &self,
+        store: &dyn ApplicationStore,
+        repository: &Repository,
+        head: &str,
+        state: &str,
+    ) -> Result<Option<PullRequest>, Fault> {
         let mut found = None;
         for page in 1..=100 {
             let mut url = url::Url::parse(&repository.api()).expect("fixed API origin");
             url.query_pairs_mut()
-                .append_pair("state", "open")
+                .append_pair("state", state)
                 .append_pair("head", &format!("{}:{head}", repository.owner))
                 .append_pair("per_page", "100")
                 .append_pair("page", &page.to_string());

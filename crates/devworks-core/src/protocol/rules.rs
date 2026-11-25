@@ -548,6 +548,20 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
             "a process PID must be positive",
         )?;
     }
+    if name == "WatchGithubTarget" {
+        require(
+            present(v, "workflowRunId") != present(v, "pullRequestNumber"),
+            "a GitHub watcher names one workflow run or pull request",
+        )?;
+        require(
+            ["workflowRunId", "pullRequestNumber"]
+                .iter()
+                .filter_map(|name| v[*name].as_str())
+                .all(|id| id.parse::<i64>().is_ok_and(|id| id > 0)),
+            "GitHub workflow run and pull request IDs must be positive",
+        )?;
+    }
+
     if name == "WatchTimer" {
         require(
             present(v, "atMs") != present(v, "afterMs"),
@@ -901,14 +915,41 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 "nonzero findings cannot claim zero-findings completion",
             )?;
         }
+        "LocalReviewTarget" => {
+            let diffs = v["diffs"]
+                .as_array()
+                .ok_or("local review requires exact diffs")?;
+            let mut repositories = std::collections::HashSet::new();
+            require(
+                diffs.iter().any(|diff| diff["base"] != diff["head"])
+                    && diffs.iter().all(|diff| {
+                        diff["repositoryId"]
+                            .as_str()
+                            .is_some_and(|id| repositories.insert(id))
+                            && diff["base"]["format"] == diff["head"]["format"]
+                    }),
+                "local review needs one exact base/head per repository and at least one changed repository",
+            )?;
+        }
+        "LocalReviewEvidence" if v["state"] == "Completed" => {
+            require(
+                present(v, "reviewerActorId")
+                    && present(v, "reviewerSessionId")
+                    && present(v, "completedAt")
+                    && present(v, "report"),
+                "local review completion needs the independent session and its report",
+            )?;
+        }
         "ReviewRecord" if v["state"] == "Ready" => {
             require(
-                v["sources"].as_array().is_some_and(|sources| {
-                    sources
-                        .iter()
-                        .any(|s| s["state"] == "Completed" && s["headDigest"] == v["headDigest"])
-                }),
-                "ready review needs current-head completed source evidence",
+                v["localReview"]["state"] == "Completed"
+                    || v["sources"].as_array().is_some_and(|sources| {
+                        sources.iter().any(|source| {
+                            source["state"] == "Completed"
+                                && source["headDigest"] == v["headDigest"]
+                        })
+                    }),
+                "ready review needs completed source evidence for the exact diff or head",
             )?;
         }
         "RequirementItem" => require(
@@ -1074,6 +1115,20 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
+    if matches!(op, "reviews.request" | "reviews.readiness") {
+        let choices = ["barrier", "localTarget", "candidateRepair"];
+        require(
+            choices.iter().filter(|key| present(v, key)).count() == 1,
+            "review needs exactly one delivery barrier, local target or candidate repair",
+        )?;
+    }
+    if op == "reviews.adjudicate" && present(v, "resolution") {
+        require(
+            v["actionable"].as_bool() == Some(v["resolution"]["kind"] != "NotActionable"),
+            "review disposition must agree with whether the finding is actionable",
+        )?;
+    }
+
     if op == "projects.purge" {
         require(
             v["confirm"] == true,
@@ -1227,6 +1282,7 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             "probe",
             "timer",
             "file",
+            "github",
             "attachedProcess",
             "assignmentId",
         ]
@@ -1238,6 +1294,7 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             !present(v, "maxLifetimeMs")
                 || present(v, "probe")
                 || present(v, "file")
+                || present(v, "github")
                 || present(v, "attachedProcess"),
             "only a polling watcher takes a maximum lifetime",
         )?;
@@ -1253,8 +1310,9 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             !present(v, "tailBytes")
                 || (!present(v, "timer")
                     && !present(v, "attachedProcess")
-                    && !present(v, "assignmentId")),
-            "timer, attached process and assignment watchers have no output tail",
+                    && !present(v, "assignmentId")
+                    && !present(v, "github")),
+            "timer, attached process assignment and GitHub watchers have no output tail",
         )?;
     }
     if op == "indexing.status" {

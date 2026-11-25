@@ -121,7 +121,7 @@ fn seed_auto(f: &Fx, managed: bool) {
     });
 }
 
-fn seed_systemone(f: &Fx) {
+pub(super) fn seed_systemone(f: &Fx) {
     f.tx(|_, tx| {
         let mut con = tx.router().connection(&id("watch-connection"))?.unwrap();
         con.id = id("decision-connection");
@@ -153,36 +153,40 @@ fn seed_systemone(f: &Fx) {
 }
 
 fn auto_ports(f: &Fx, wire: Arc<AutoWire>, systemone: bool) -> Composition {
-    let mut ports = workspace_ports(f, wire);
     if systemone {
-        ports.config.providers = Some(
-            ports
-                .config
-                .providers
-                .take()
-                .unwrap()
-                .with_systemone_validator(Arc::new(
-                    devworks_adapters::packages::JsonSchemaValidator,
-                )),
-        );
-        let credential = devworks_core::services::router::connections::auth::Credential::ApiKey(
-            Secret::new("systemone-test-key"),
-        );
-        ports
-            .application
-            .connections
-            .as_ref()
-            .unwrap()
-            .secrets
-            .put(
-                &SecretKey::new(
-                    f.store.info().store_id.0.as_str(),
-                    id("decision-credential"),
-                ),
-                &credential.to_secret(),
-            )
-            .unwrap();
+        systemone_ports(f, wire)
+    } else {
+        workspace_ports(f, wire)
     }
+}
+
+pub(super) fn systemone_ports(f: &Fx, wire: Arc<dyn StreamingHttp>) -> Composition {
+    let mut ports = workspace_ports(f, wire);
+    ports.config.providers = Some(
+        ports
+            .config
+            .providers
+            .take()
+            .unwrap()
+            .with_systemone_validator(Arc::new(devworks_adapters::packages::JsonSchemaValidator)),
+    );
+    let credential = devworks_core::services::router::connections::auth::Credential::ApiKey(
+        Secret::new("systemone-test-key"),
+    );
+    ports
+        .application
+        .connections
+        .as_ref()
+        .unwrap()
+        .secrets
+        .put(
+            &SecretKey::new(
+                f.store.info().store_id.0.as_str(),
+                id("decision-credential"),
+            ),
+            &credential.to_secret(),
+        )
+        .unwrap();
     ports
 }
 
@@ -223,7 +227,9 @@ fn systemone_checks_later_candidates_before_direct_low_and_reuses_the_chosen_tie
     seed_systemone(&f);
     let wire = Arc::new(AutoWire::default());
     runtime().block_on(async {
-        let app = boot(auto_ports(&f, wire.clone(), true)).await.unwrap();
+        let mut ports = auto_ports(&f, wire.clone(), true);
+        ports.config.dispatcher.max_in_flight = 1;
+        let app = boot(ports).await.unwrap();
         let first = open_home(&f, &app);
         send_auto(
             &f,

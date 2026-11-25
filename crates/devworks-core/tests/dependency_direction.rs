@@ -366,6 +366,16 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "monotonic deadline of the bounded container shutdown",
     ),
     (
+        "services/database/mutation.rs",
+        [0, 0, 1, 0],
+        "monotonic timeout for a guarded native database mutation",
+    ),
+    (
+        "services/database/read.rs",
+        [0, 0, 1, 0],
+        "monotonic timeout for a bounded native database read",
+    ),
+    (
         "services/diagnostics/mod.rs",
         [0, 0, 3, 0],
         "monotonic elapsed time and export-claim wait deadline",
@@ -386,9 +396,34 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "monotonic start of a query's time budget",
     ),
     (
+        "services/graph/repository_analysis/deterministic.rs",
+        [0, 0, 1, 0],
+        "monotonic start of the deterministic analysis phase budget",
+    ),
+    (
+        "services/graph/repository_analysis/paid.rs",
+        [0, 0, 1, 0],
+        "monotonic deadline of bounded analysis prompt preparation",
+    ),
+    (
+        "services/graph/repository_analysis/security/advisories.rs",
+        [0, 0, 2, 0],
+        "monotonic bounds for advisory response reads and individual requests",
+    ),
+    (
+        "services/graph/repository_analysis/vitals/report.rs",
+        [0, 0, 1, 0],
+        "monotonic deadline shared by all Git history reads in one report",
+    ),
+    (
         "services/graph/service.rs",
         [0, 0, 1, 0],
         "monotonic start of a query's time budget",
+    ),
+    (
+        "services/indexing/assigned.rs",
+        [0, 0, 1, 0],
+        "monotonic time limit for an assigned graph read waiting on its overlay",
     ),
     (
         "services/mcp/content.rs",

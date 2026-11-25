@@ -1,0 +1,530 @@
+name: DevWorks Windows test installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact qualified commit listed by this workflow
+        required: true
+        type: string
+      architecture:
+        description: Windows installer architecture
+        type: choice
+        options: [x64, arm64]
+        default: x64
+  pull_request:
+    paths:
+      - '.github/workflows/windows-test-installer.yml'
+      - 'packaging/windows/devworks-test.wxs'
+      - 'packaging/windows/devworks-test-launcher.rs'
+      - 'tools/ci/windows-test-installer.ps1'
+      - 'tools/ci/test-installed-devworks.ps1'
+
+permissions: {}
+
+jobs:
+  recipe:
+    name: Validate the Windows test installer recipe
+    if: github.event_name == 'pull_request'
+    runs-on: windows-2025
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: c80ce75ff0e88d94c2e31303f1ef0b363f14b526 # recipe for the original signed MSI
+          path: previous
+          persist-credentials: false
+      - name: Parse the installed acceptance script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $script = (Resolve-Path 'tools/ci/test-installed-devworks.ps1').Path
+          $null = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw ($errors -join [Environment]::NewLine) }
+      - name: Seed the original MSI registration and test profile
+        shell: pwsh
+        run: |
+          $previous = Join-Path $env:GITHUB_WORKSPACE 'previous'
+          . "$previous/tools/ci/windows-test-installer.ps1"
+          $payload = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'previous-payload')
+          foreach ($name in $script:payloadNames.Where({ $_.EndsWith('.exe') })) {
+            Copy-Item -LiteralPath "$env:SystemRoot\System32\where.exe" -Destination (Join-Path $payload.FullName $name)
+          }
+          'Fixture notices' | Set-Content -LiteralPath (Join-Path $payload.FullName 'pdf-notices.zip')
+          $fixture = Join-Path $env:RUNNER_TEMP 'previous.msi'
+          $null = New-TestInstaller $previous $payload.FullName $fixture
+          $layout = Get-TestInstallLayout
+          Invoke-TestMsi $fixture '/i' (Join-Path $env:RUNNER_TEMP 'previous-install.log')
+          $null = Confirm-TestInstallScope $fixture $layout
+          New-Item -ItemType Directory -Path $layout.profile | Out-Null
+          'profile before update' | Set-Content -LiteralPath (Join-Path $layout.profile 'retain.txt')
+      - name: Upgrade the fixture MSI, run its Start shortcut and uninstall
+        shell: pwsh
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'fixture')
+          New-TestLauncher $env:GITHUB_WORKSPACE $payload.FullName
+          $probeBuild = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'probe-build')
+          $probe = Join-Path $probeBuild.FullName 'launcher_probe.rs'
+          $probeExe = Join-Path $probeBuild.FullName 'devworks-desktop.exe'
+          $desktop = Join-Path $payload.FullName 'devworks-desktop.exe'
+          $worker = Join-Path $payload.FullName 'devworks-pdf-worker.exe'
+          @'
+          #[link(name = "kernel32")]
+          unsafe extern "system" { fn GetConsoleWindow() -> isize; }
+          #[link(name = "user32")]
+          unsafe extern "system" { fn IsWindowVisible(window: isize) -> i32; }
+
+          fn main() {
+              let mut args = std::env::args_os().skip(1);
+              assert_eq!(args.next().unwrap(), "--data-dir");
+              let profile = std::path::PathBuf::from(args.next().unwrap());
+              assert!(args.next().is_none());
+              assert_eq!(unsafe { IsWindowVisible(GetConsoleWindow()) }, 0);
+              std::fs::write(profile.join("launcher-probe.txt"), "passed").unwrap();
+          }
+          '@ | Set-Content -LiteralPath $probe -Encoding utf8NoBOM
+          rustc --edition 2024 --target x86_64-pc-windows-msvc -D warnings -O -C strip=symbols $probe -o $probeExe
+          if ($LASTEXITCODE -ne 0 -or (Get-X64PeSubsystem $probeExe) -ne 3) { throw 'Console probe build failed' }
+          Copy-Item -LiteralPath $probeExe -Destination $desktop
+          Copy-Item -LiteralPath "$env:SystemRoot\System32\where.exe" -Destination $worker
+          foreach ($exe in @($desktop, $worker)) {
+            $file = [IO.File]::OpenWrite($exe)
+            try { $file.SetLength(120MB) } finally { $file.Dispose() }
+          }
+          'Fixture notices' | Set-Content -LiteralPath (Join-Path $payload.FullName 'pdf-notices.zip')
+          $package = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'fixture-package')
+          $fixture = Join-Path $package.FullName 'fixture.msi'
+          $cabinets = New-TestInstaller $env:GITHUB_WORKSPACE $payload.FullName $fixture
+          if ($cabinets -lt 2) { throw 'The fixture must exercise multiple embedded cabinets' }
+          Write-Host "Verified $cabinets embedded cabinet streams"
+          Assert-ExactFiles $package.FullName @('fixture.msi')
+          $layout = Get-TestInstallLayout
+          Invoke-TestMsi $fixture '/i' (Join-Path $env:RUNNER_TEMP 'fixture-install.log')
+          $productCode = Confirm-TestInstallScope $fixture $layout
+          $originalProduct = Get-TestProductCode (Join-Path $env:RUNNER_TEMP 'previous.msi')
+          if (@(Get-TestProductContexts $originalProduct).Count -ne 0) { throw 'Original MSI registration survived upgrade' }
+          $receipt = Join-Path $layout.profile 'launcher-probe.txt'
+          Start-Process -FilePath $layout.shortcut
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          while (-not (Test-Path -LiteralPath $receipt) -and $clock.Elapsed.TotalSeconds -lt 20) {
+            Start-Sleep -Milliseconds 200
+          }
+          if ((Get-Content -LiteralPath $receipt -Raw) -cne 'passed') { throw 'Console probe did not pass' }
+          $probeProcess = Get-Process -Name 'devworks-desktop' -ErrorAction SilentlyContinue
+          if ($probeProcess) { $probeProcess | Wait-Process -Timeout 10 }
+          Invoke-TestMsi $fixture '/x' (Join-Path $env:RUNNER_TEMP 'fixture-uninstall.log')
+          Assert-TestInstallRemoved $layout $productCode
+          if ((Get-Content -LiteralPath (Join-Path $layout.profile 'retain.txt')) -cne 'profile before update') {
+            throw 'The MSI upgrade or uninstall changed the existing profile'
+          }
+      - name: Verify the ARM64 MSI metadata on the signing runner image
+        shell: pwsh
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $fixture = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'arm64-recipe')
+          foreach ($name in $script:payloadNames) {
+            'Passive package fixture' | Set-Content -LiteralPath (Join-Path $fixture.FullName $name) -Encoding ascii
+          }
+          $msi = Join-Path $env:RUNNER_TEMP 'arm64-recipe.msi'
+          $null = New-TestInstaller $env:GITHUB_WORKSPACE $fixture.FullName $msi arm64
+
+  preflight:
+    name: Match the requested revision to the approved source
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'SceneWorks/DevWorks' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      source: ${{ steps.source.outputs.source }}
+      schema: ${{ steps.source.outputs.schema }}
+      incoming_mcp: ${{ steps.source.outputs.incoming_mcp }}
+      architecture: ${{ steps.source.outputs.architecture }}
+    steps:
+      - id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ARCHITECTURE: ${{ inputs.architecture || 'x64' }}
+          ACCEPTED_DW414: 1ae1be523bd7202900904fb9d1b173d1caa07996
+          ACCEPTED_DW417: b52af93099e00ff1e9131996cf78a0d3c66450d0
+          ACCEPTED_DW62: 23751f08d9c7f2a1d8bb793ef9463b9faa4599bc
+        run: |
+          set -euo pipefail
+          case "$ARCHITECTURE:$SOURCE_SHA" in
+            "x64:$ACCEPTED_DW414"|"x64:$ACCEPTED_DW417"|"arm64:$ACCEPTED_DW417")
+              branch=feature/dw-f12; schema=76; incoming_mcp=false ;;
+            "x64:$ACCEPTED_DW62") branch=codex/dw-62-composed-analysis; schema=78; incoming_mcp=true ;;
+            *) echo 'The requested source is not approved for this installer.' >&2; exit 1 ;;
+          esac
+          published="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --jq .object.sha)"
+          test "$SOURCE_SHA" = "$published"
+          {
+            printf 'source=%s\n' "$SOURCE_SHA"
+            printf 'schema=%s\n' "$schema"
+            printf 'incoming_mcp=%s\n' "$incoming_mcp"
+            printf 'architecture=%s\n' "$ARCHITECTURE"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build the exact native Windows payload and tests
+    needs: preflight
+    runs-on: ${{ needs.preflight.outputs.architecture == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
+    timeout-minutes: ${{ needs.preflight.outputs.architecture == 'arm64' && 100 || 85 }}
+    permissions:
+      contents: read
+    outputs:
+      payload_id: ${{ steps.payload.outputs.artifact-id }}
+      payload_sha: ${{ steps.archive.outputs.payload_sha }}
+      tests_id: ${{ steps.tests.outputs.artifact-id }}
+      tests_sha: ${{ steps.archive.outputs.tests_sha }}
+    env:
+      DEVWORKS_RELEASE_BUILD: ${{ needs.preflight.outputs.source }}
+      ARCHITECTURE: ${{ needs.preflight.outputs.architecture }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "3"
+      CARGO_PROFILE_RELEASE_STRIP: debuginfo
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.preflight.outputs.source }}
+          path: candidate
+          persist-credentials: false
+      - name: Install the candidate's pinned native ARM64 toolchain
+        if: needs.preflight.outputs.architecture == 'arm64'
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel-aarch64-pc-windows-msvc" --profile minimal
+          printf 'RUSTUP_TOOLCHAIN=%s-aarch64-pc-windows-msvc\n' "$channel" >> "$GITHUB_ENV"
+      - name: Build production executables and stage the approved inputs
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          . "$env:GITHUB_WORKSPACE/trusted/tools/ci/windows-test-installer.ps1"
+          if ((git rev-parse HEAD) -cne $env:DEVWORKS_RELEASE_BUILD) { throw 'Wrong source checkout' }
+          $target = Get-TestInstallerTarget $env:ARCHITECTURE
+          $runtime = [Runtime.InteropServices.RuntimeInformation]
+          if ($runtime::OSArchitecture.ToString() -ine $env:ARCHITECTURE -or
+              $runtime::ProcessArchitecture.ToString() -ine $env:ARCHITECTURE) { throw 'Unexpected native Windows host' }
+          Get-Command 7z.exe,python.exe -ErrorAction Stop | Out-Null
+          $rust = rustc -vV
+          $rust | Write-Host
+          if ($rust -cnotcontains "host: $($target.rust)") { throw 'Unexpected native toolchain' }
+          $payload = Join-Path $env:RUNNER_TEMP 'unsigned-input'
+          New-Item -ItemType Directory -Path $payload | Out-Null
+          New-TestLauncher "$env:GITHUB_WORKSPACE/trusted" $payload $env:ARCHITECTURE
+          cargo build --locked --release -p devworks-desktop --bins
+          if ($LASTEXITCODE -ne 0) { throw 'Windows desktop build failed' }
+          $targetDirectory = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).target_directory
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
+          foreach ($name in @('devworks-desktop.exe','devworks-pdf-worker.exe')) {
+            Copy-Item -LiteralPath (Join-Path $targetDirectory "release\$name") -Destination $payload
+            Assert-UnsignedTestPe (Join-Path $payload $name) $target.machine
+          }
+          @'
+          import runpy
+          import shutil
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          payload = Path(sys.argv[1])
+          notices = payload.parent / "notices"
+          shutil.copytree("packaging/pdf", notices)
+          shutil.copy2("Cargo.lock", notices)
+          runpy.run_path("tools/ci/package-pdf-qualification.py")["dependency_notices"](sys.argv[2], notices)
+          with zipfile.ZipFile(payload / "pdf-notices.zip", "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as output:
+              for path in sorted(notices.rglob("*")):
+                  if path.is_file():
+                      output.write(path, path.relative_to(notices))
+          '@ | python -I - $payload $target.rust
+          if ($LASTEXITCODE -ne 0) { throw 'Building PDF dependency notices failed' }
+          $hashes = [ordered]@{}
+          foreach ($name in $script:payloadNames) { $hashes[$name] = Get-Sha256 (Join-Path $payload $name) }
+          @{ source = $env:DEVWORKS_RELEASE_BUILD; architecture = $env:ARCHITECTURE; sha256 = $hashes } | ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath (Join-Path $payload 'unsigned.json') -Encoding utf8NoBOM
+      - name: Exercise fixture process failures and stage installed-package tests
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          . "$env:GITHUB_WORKSPACE/trusted/tools/ci/windows-test-installer.ps1"
+          $target = Get-TestInstallerTarget $env:ARCHITECTURE
+          $tests = Join-Path $env:RUNNER_TEMP 'installed-tests'
+          New-Item -ItemType Directory -Path $tests | Out-Null
+          $records = cargo test --locked --release -p devworks-desktop --features test-support --no-run --test pdf_worker --test document_extraction --message-format=json
+          if ($LASTEXITCODE -ne 0) { throw 'Native PDF test compilation failed' }
+          $expectedTests = @('pdf_worker','document_extraction')
+          $executables = $records | ForEach-Object { ConvertFrom-Json -InputObject $_ -AsHashtable } |
+            Where-Object { $_.reason -eq 'compiler-artifact' -and $_.target.name -in $expectedTests -and $_.executable }
+          foreach ($name in $expectedTests) {
+            $match = @($executables | Where-Object { $_.target.name -ceq $name })
+            if ($match.Count -ne 1) { throw "No unique compiled test for $name" }
+            $null = Get-TestPeSubsystem $match[0].executable $target.machine
+            Copy-Item -LiteralPath $match[0].executable -Destination (Join-Path $tests "$name.exe")
+          }
+          & (Join-Path $tests 'pdf_worker.exe') native_crash_timeout_and_cancel_reap_the_worker --exact --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated worker failure tests failed' }
+      - name: Encrypt build transfers
+        shell: pwsh
+        env:
+          DW421_ARCHIVE_KEY: ${{ secrets.DW421_ARCHIVE_KEY }}
+        run: |
+          . ./trusted/tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'unsigned.7z'
+          $tests = Join-Path $env:RUNNER_TEMP 'tests.7z'
+          Protect-TestArtifact (Join-Path $env:RUNNER_TEMP 'unsigned-input') $payload ($script:payloadNames + 'unsigned.json')
+          Protect-TestArtifact (Join-Path $env:RUNNER_TEMP 'installed-tests') $tests @('pdf_worker.exe','document_extraction.exe')
+      - name: Identify both encrypted transfers
+        id: archive
+        shell: pwsh
+        run: |
+          . ./trusted/tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'unsigned.7z'
+          $tests = Join-Path $env:RUNNER_TEMP 'tests.7z'
+          "payload_sha=$(Get-Sha256 $payload)" >> $env:GITHUB_OUTPUT
+          "tests_sha=$(Get-Sha256 $tests)" >> $env:GITHUB_OUTPUT
+      - id: payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw421-unsigned-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/unsigned.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - id: tests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw421-tests-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tests.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  sign:
+    name: Sign the executables and the reviewed MSI
+    needs: [preflight, build]
+    runs-on: windows-2025
+    environment: windows-signing
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARCHITECTURE: ${{ needs.preflight.outputs.architecture }}
+      MSI_NAME: DevWorks-Test-windows-${{ needs.preflight.outputs.architecture }}.msi
+    outputs:
+      signed_id: ${{ steps.signed.outputs.artifact-id }}
+      signed_sha: ${{ steps.archive.outputs.sha256 }}
+    steps:
+      # Candidate files are passive inputs. Only protected main code runs in this job.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.payload_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/transport
+      - name: Validate the exact build payload before using the signer
+        shell: pwsh
+        env:
+          DW421_ARCHIVE_KEY: ${{ secrets.DW421_ARCHIVE_KEY }}
+          PAYLOAD_SHA: ${{ needs.build.outputs.payload_sha }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          $transfer = Join-Path $env:RUNNER_TEMP 'transport/unsigned.7z'
+          Expand-TestArtifact $transfer $env:PAYLOAD_SHA $payload ($script:payloadNames + 'unsigned.json')
+          $receiptPath = Join-Path $payload 'unsigned.json'
+          if ((Get-Item -LiteralPath $receiptPath).Length -gt 4096) { throw 'Oversized build receipt' }
+          $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json -AsHashtable
+          if ($receipt.source -cne $env:SOURCE_SHA -or $receipt.architecture -cne $env:ARCHITECTURE -or
+              $receipt.sha256.Count -ne $script:payloadNames.Count) {
+            throw 'Unexpected source SHA, architecture or payload inventory'
+          }
+          $target = Get-TestInstallerTarget $env:ARCHITECTURE
+          foreach ($name in $script:payloadNames) {
+            $path = Join-Path $payload $name
+            if ((Get-Sha256 $path) -cne $receipt.sha256[$name]) { throw "Unsigned payload digest failed for $name" }
+            if ($name.EndsWith('.exe')) { Assert-UnsignedTestPe $path $target.machine }
+          }
+          Remove-Item -LiteralPath $receiptPath
+      - name: Sign in to the approved Azure environment
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Sign the launcher, desktop and PDF worker
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          files: |
+            ${{ runner.temp }}\payload\devworks-desktop.exe
+            ${{ runner.temp }}\payload\devworks-test-launcher.exe
+            ${{ runner.temp }}\payload\devworks-pdf-worker.exe
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: sceneworks-signing
+          certificate-profile-name: sceneworks-public
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Build the MSI from the pinned recipe
+        shell: pwsh
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          foreach ($name in $script:payloadNames.Where({ $_.EndsWith('.exe') })) {
+            Get-VerifiedTestSignature (Join-Path $payload $name) | Out-Null
+          }
+          $package = Join-Path $env:RUNNER_TEMP 'package'
+          New-Item -ItemType Directory -Path $package | Out-Null
+          $cabinets = New-TestInstaller $env:GITHUB_WORKSPACE $payload (Join-Path $package $env:MSI_NAME) $env:ARCHITECTURE
+          Write-Host "Verified $cabinets embedded cabinet streams"
+      - name: Sign MSI
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          files: ${{ runner.temp }}\package\${{ env.MSI_NAME }}
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: sceneworks-signing
+          certificate-profile-name: sceneworks-public
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Verify signatures and encrypt the exact MSI for native testing
+        id: archive
+        shell: pwsh
+        env:
+          DW421_ARCHIVE_KEY: ${{ secrets.DW421_ARCHIVE_KEY }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $payload = Join-Path $env:RUNNER_TEMP 'payload'
+          $package = Join-Path $env:RUNNER_TEMP 'package'
+          $msi = $env:MSI_NAME
+          $receipts = [ordered]@{}
+          foreach ($name in $script:payloadNames) {
+            $path = Join-Path $payload $name
+            $receipts[$name] = if ($name.EndsWith('.exe')) {
+              Get-VerifiedTestSignature $path
+            } else {
+              @{ sha256 = Get-Sha256 $path }
+            }
+          }
+          @{
+            source = $env:SOURCE_SHA
+            architecture = $env:ARCHITECTURE
+            workflowRevision = $env:GITHUB_SHA
+            payload = $receipts
+            installer = Get-VerifiedTestSignature (Join-Path $package $msi)
+          } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $package 'signed.json') -Encoding utf8NoBOM
+          $encrypted = Join-Path $env:RUNNER_TEMP 'signed.7z'
+          Protect-TestArtifact $package $encrypted @($msi,'signed.json')
+          "sha256=$(Get-Sha256 $encrypted)" >> $env:GITHUB_OUTPUT
+      - id: signed
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw421-signed-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/signed.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  smoke:
+    name: Verify signed Windows MSI, Start shortcut, PDF and uninstall
+    needs: [preflight, build, sign]
+    runs-on: ${{ needs.preflight.outputs.architecture == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      ARCHITECTURE: ${{ needs.preflight.outputs.architecture }}
+      MSI_NAME: DevWorks-Test-windows-${{ needs.preflight.outputs.architecture }}.msi
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.tests_id }},${{ needs.sign.outputs.signed_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/transport
+      - name: Validate and decrypt the same-run MSI and test harnesses
+        shell: pwsh
+        env:
+          DW421_ARCHIVE_KEY: ${{ secrets.DW421_ARCHIVE_KEY }}
+          SIGNED_SHA: ${{ needs.sign.outputs.signed_sha }}
+          TESTS_SHA: ${{ needs.build.outputs.tests_sha }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $temp = $env:RUNNER_TEMP
+          Expand-TestArtifact (Join-Path $temp 'transport/signed.7z') $env:SIGNED_SHA (Join-Path $temp 'package') @($env:MSI_NAME,'signed.json')
+          Expand-TestArtifact (Join-Path $temp 'transport/tests.7z') $env:TESTS_SHA (Join-Path $temp 'tests') @('pdf_worker.exe','document_extraction.exe')
+      - name: Clean-install and run the real desktop and PDF worker
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source }}
+          EXPECTED_SCHEMA: ${{ needs.preflight.outputs.schema }}
+          PROBE_INCOMING_MCP: ${{ needs.preflight.outputs.incoming_mcp }}
+        run: |
+          $arguments = @{
+            Package = Join-Path $env:RUNNER_TEMP 'package'
+            Tests = Join-Path $env:RUNNER_TEMP 'tests'
+            Output = Join-Path $env:RUNNER_TEMP 'verified'
+            Source = $env:SOURCE_SHA
+            ExpectedSchema = [int]$env:EXPECTED_SCHEMA
+            Architecture = $env:ARCHITECTURE
+            ProbeIncomingMcp = $env:PROBE_INCOMING_MCP -ceq 'true'
+          }
+          ./tools/ci/test-installed-devworks.ps1 @arguments
+      - name: Encrypt the qualified installer for the owner
+        shell: pwsh
+        env:
+          DW421_ARCHIVE_KEY: ${{ secrets.DW421_ARCHIVE_KEY }}
+        run: |
+          . ./tools/ci/windows-test-installer.ps1
+          $temp = $env:RUNNER_TEMP
+          Protect-TestArtifact (Join-Path $temp 'verified') (Join-Path $temp 'verified.7z') @($env:MSI_NAME,'SHA256SUMS.txt','qualification.json')
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dw421-verified-windows-${{ env.ARCHITECTURE }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/verified.7z
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

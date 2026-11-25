@@ -359,6 +359,16 @@ fn source_label(w: &WatcherRecord) -> String {
             || "Attached process".to_owned(),
             |pid| format!("Attached process {pid}"),
         ),
+        WatchSourceKind::GitHub => match &w.github {
+            Some(source) => match &source.workflow_run_id {
+                Some(run) => format!("GitHub Actions run {}", run.get()),
+                None => source.pull_request_number.as_ref().map_or_else(
+                    || "GitHub checks".to_owned(),
+                    |pull| format!("GitHub checks for PR #{}", pull.get()),
+                ),
+            },
+            None => "GitHub".to_owned(),
+        },
     };
     if let Some(matches) = &w.matches {
         label.push_str(&format!(" · {} matches", matches.get()));

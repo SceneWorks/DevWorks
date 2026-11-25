@@ -61,13 +61,16 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
 /// routing source linked to its owning session. The linked input artifact follows the ordinary
 /// project artifact ownership and the operation journal follows its existing scope.
-/// Migration 67 adds the PID and birth token of an attached process to its watcher row.
-/// Those scalars add no ownership edge and the existing project and session policy still applies.
-/// Migration 68 records the observed child assignment and its session on the watcher. The
-/// direct child belongs to the same root and project as the parent that created the watcher.
-/// Both IDs are observations. The existing project and session ownership still applies.
+/// Migration 67 adds analysis_runs and its four indexes. Project runs follow their recorded
+/// scope key. Workspace runs and ordinary repository index views keep their independent ownership.
+/// Migration 68 adds database_sensitive_policies. Rules follow the workspace or shared schema
+/// source. Project purge removes only the project's existing access to that shared source.
+/// Migration 69 rebuilds watchers to bind a GitHub source and preserves their existing project
+/// and session owners. The source is an observation selector and adds no ownership reference.
+/// Migration 70 gives watchers external process and direct child identities. The owning
+/// project and session are retained unchanged.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "7509f9432e82b866c1928c4e1fe9ad652fda1e50dafb2ade57b444955a61980e";
+    "4abb22743c4140692045d267233a953f3e717a91f6507d5044bf1c554b7addd0";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

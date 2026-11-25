@@ -8739,6 +8739,8 @@ mod keep_working;
 
 #[path = "runs/auto_routing.rs"]
 mod auto_routing;
+#[path = "runs/systemone_tools.rs"]
+mod systemone_tools;
 #[path = "runs/workspace_reply.rs"]
 mod workspace_reply;
 
@@ -8825,7 +8827,13 @@ mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
 
+#[path = "runs/code_review.rs"]
+mod code_review_tests;
 #[path = "runs/plan_review.rs"]
 mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
 mod review_capacity_tests;
+
+#[cfg(unix)]
+#[path = "runs/feature_delivery.rs"]
+mod feature_delivery_tests;

@@ -1150,3 +1150,93 @@ fn a_table_named_in_more_files_than_one_page_keeps_every_use() {
     }
     assert_eq!(seen.len(), FILES, "every file's use is returned");
 }
+
+#[test]
+fn native_repository_analysis_opens_the_measured_capture() {
+    use devworks_core::protocol::{
+        OperationState,
+        data::{DataScope, ViewSelection},
+        results::OperationResult,
+    };
+    let f = Fx::new("graph-native-analysis");
+    f.index(false);
+    let backend = f.engine.backend();
+    let scope = DataScope::Workspace;
+    let views = ViewSelection::Published {
+        repository_ids: vec![f.record.id.clone()],
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        use devworks_desktop::analysis_screen::Query;
+        let frame = Query::Status.frame(
+            &*backend,
+            Some(scope.clone()),
+            Some(views.clone()),
+            None,
+            None,
+        );
+        if matches!(ops::query_result(backend.query("analysis.status", &frame)),
+            Ok((OperationResult::AnalysisStatus { value }, _))
+                if value.state == OperationState::ObservedComplete && value.report.is_some())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "automatic repository analysis did not settle"
+        );
+        f.root.write_progress();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut h = f.ui(backend);
+    click(&mut h, Role::Button, "Analysis");
+    step_until_progressing(
+        &mut h,
+        "measured repository health",
+        || f.root.write_progress(),
+        |s| {
+            matches!(&s.graph.analysis.result, Some(OperationResult::AnalysisHealth { value })
+            if value.observation.as_ref().is_some_and(|data| data.base_score.is_some()))
+        },
+    );
+    assert!(has_text(&h, "Health history"));
+    assert!(has_text(&h, "Insufficient history"));
+    click(&mut h, Role::Button, "Security");
+    step_until_progressing(
+        &mut h,
+        "measured security evidence",
+        || f.root.write_progress(),
+        |s| matches!(&s.graph.analysis.result, Some(OperationResult::AnalysisSecurity { value }) if value.report.is_some()),
+    );
+    click(&mut h, Role::Button, "Hotspots");
+    step_until_progressing(
+        &mut h,
+        "measured hotspots",
+        || f.root.write_progress(),
+        |s| {
+            matches!(
+                &s.graph.analysis.result,
+                Some(OperationResult::AnalysisHotspots { .. })
+            )
+        },
+    );
+    click(&mut h, Role::Link, "src/lib.rs");
+    step_until_progressing(
+        &mut h,
+        "source of the measured file",
+        || f.root.write_progress(),
+        |s| {
+            s.graph
+                .read
+                .as_ref()
+                .is_some_and(|read| read.operation == "code.source" && read.page.is_some())
+        },
+    );
+    assert_eq!(
+        h.state().graph.pin.as_ref().unwrap().views[0]
+            .snapshot
+            .repository_id,
+        f.record.id
+    );
+}

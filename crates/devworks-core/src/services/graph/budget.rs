@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 /// An engineering memory bound, reported as partial coverage when reached. A client can
 /// continue a stable page; exhausting this bound never manufactures an exact total.
-const MAX_RETAINED_BYTES: usize = 16 * 1024 * 1024;
+pub(super) const MAX_RETAINED_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct Budget {
     started: Instant,
@@ -13,6 +13,7 @@ pub(super) struct Budget {
     max_visited: u32,
     pub visited: u32,
     retained_bytes: usize,
+    retention_limit: usize,
     pub exhausted: Option<&'static str>,
     cancellation: Option<Cancellation>,
 }
@@ -25,12 +26,14 @@ impl Budget {
             max_visited: limits.max_visited,
             visited: 0,
             retained_bytes: 0,
+            retention_limit: MAX_RETAINED_BYTES,
             exhausted: None,
             cancellation: None,
         }
     }
 
-    pub fn visit(&mut self) -> bool {
+    /// Check non-visit bounds during bookkeeping that operates on already charged rows.
+    pub fn check(&mut self) -> bool {
         if self.exhausted.is_some() {
             return false;
         }
@@ -44,6 +47,13 @@ impl Budget {
         }
         if self.started.elapsed() >= self.deadline {
             self.exhausted = Some("graph_deadline");
+            return false;
+        }
+        true
+    }
+
+    pub fn visit(&mut self) -> bool {
+        if !self.check() {
             return false;
         }
         if self.visited >= self.max_visited {
@@ -69,6 +79,21 @@ impl Budget {
         (result, partial)
     }
 
+    /// Reserve room for the next query phase. An auxiliary index may have a useful prefix even
+    /// when it cannot fit within its own allocation, so only that phase's memory cap is recoverable.
+    pub fn reserve_retention<T>(&mut self, phase: impl FnOnce(&mut Self) -> T) -> (T, bool) {
+        let limit = self.retention_limit;
+        self.retention_limit = self.retained_bytes + (limit - self.retained_bytes) / 2;
+        let already_exhausted = self.exhausted.is_some();
+        let result = phase(self);
+        self.retention_limit = limit;
+        let partial = !already_exhausted && self.exhausted == Some("graph_memory_limit");
+        if partial {
+            self.exhausted = None;
+        }
+        (result, partial)
+    }
+
     pub fn start_at(&mut self, started: Instant, cancellation: Option<Cancellation>) {
         self.started = started;
         self.cancellation = cancellation;
@@ -87,7 +112,7 @@ impl Budget {
 
     pub fn retain(&mut self, bytes: usize) -> bool {
         match self.retained_bytes.checked_add(bytes) {
-            Some(total) if total <= MAX_RETAINED_BYTES => {
+            Some(total) if total <= self.retention_limit => {
                 self.retained_bytes = total;
                 true
             }

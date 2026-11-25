@@ -1,6 +1,25 @@
 {
   "status": "Architecture candidates, not production or public SDK freeze",
   "types": {
+    "PackageContent": {
+      "kind": "record",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "content_kind": "Label",
+        "manifest_digest": "Digest",
+        "artifact": "ArtifactRef"
+      }
+    },
+    "PackageWorkflowGate": {
+      "kind": "record",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "manifest_digest": "Digest",
+        "reason": "Content"
+      }
+    },
     "LifeState": {
       "kind": "enum",
       "values": [
@@ -892,7 +911,11 @@
         "kind": "Label",
         "state": "OperationState",
         "report": "?ArtifactRef",
-        "coverage": "Coverage"
+        "coverage": "Coverage",
+        "observation": "?AnalysisObservation"
+      },
+      "since": {
+        "observation": 3
       }
     },
     "ClusterRecord": {
@@ -902,7 +925,11 @@
         "view_id": "Id",
         "name": "Label",
         "member_node_ids": "Items<Id>",
-        "score": "Finite"
+        "score": "Finite",
+        "details": "?AnalysisClusterDetails"
+      },
+      "since": {
+        "details": 3
       }
     },
     "MetricRecord": {
@@ -914,6 +941,317 @@
         "source_id": "Id",
         "inferred": "bool"
       }
+    },
+    "AnalysisAvailability": {
+      "kind": "enum",
+      "values": [
+        "Available",
+        "NoData",
+        "Pending",
+        "Stale",
+        "Partial",
+        "Failed",
+        "Unavailable"
+      ]
+    },
+    "AnalysisLinkMode": {
+      "kind": "enum",
+      "values": [
+        "LinksOnly",
+        "LinksAndCommunities"
+      ]
+    },
+    "AnalysisRefreshMode": {
+      "kind": "enum",
+      "values": [
+        "VitalsOnly",
+        "WithProjectAnalysis",
+        "WithSynthesis"
+      ]
+    },
+    "AnalysisClusterProjection": {
+      "kind": "enum",
+      "values": [
+        "Overview",
+        "Graph"
+      ]
+    },
+    "AnalysisViewBinding": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "view_digest": "Digest",
+        "snapshot": "RepositorySnapshot"
+      }
+    },
+    "AnalysisPhaseStatus": {
+      "kind": "record",
+      "fields": {
+        "phase": "Label",
+        "state": "OperationState",
+        "diagnostic": "?Label",
+        "completed_at_ms": "?Counter"
+      }
+    },
+    "AnalysisTrendPoint": {
+      "kind": "record",
+      "fields": {
+        "view": "AnalysisViewBinding",
+        "computed_at_ms": "Counter",
+        "base_score": "Finite",
+        "adjusted_score": "?Finite"
+      }
+    },
+    "AnalysisFileMetrics": {
+      "kind": "record",
+      "fields": {
+        "health": "Finite",
+        "risk": "Finite",
+        "concern": "Finite",
+        "trust": "Finite",
+        "complexity": "Counter",
+        "max_nesting": "Counter",
+        "deep_lines": "Counter",
+        "function_count": "Counter",
+        "longest_function": "Counter",
+        "branches": "Counter",
+        "lines_added_90d": "Counter",
+        "lines_removed_90d": "Counter",
+        "changes_90d": "Counter",
+        "churn_30d": "Finite",
+        "churn_90d": "Finite",
+        "churn_365d": "Finite",
+        "last_change_at_ms": "?Counter",
+        "bug_fix_ratio": "Finite",
+        "recurring_churn": "Finite",
+        "coupling_strength": "Finite",
+        "coupling_partners": "Counter",
+        "truck_factor": "Counter",
+        "lint_errors": "?Counter",
+        "lint_warnings": "?Counter",
+        "role": "Label",
+        "dotnet_project": "?Label"
+      }
+    },
+    "AnalysisHealthSummary": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "dotnet_project": "?Label",
+        "base_score": "Finite",
+        "adjusted_score": "?Finite",
+        "files": "Counter",
+        "hotspots": "Counter",
+        "alerts": "Counter"
+      }
+    },
+    "AnalysisSecuritySummary": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "score": "Finite",
+        "complete": "bool",
+        "critical": "Counter",
+        "high": "Counter",
+        "medium": "Counter",
+        "low": "Counter",
+        "scanned_files": "Counter"
+      }
+    },
+    "AnalysisNarrative": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "project": "?Label",
+        "summary": "Content",
+        "confidence": "Label",
+        "model": "Label",
+        "computed_at_ms": "Counter",
+        "evidence": "ArtifactRef"
+      }
+    },
+    "AnalysisObservation": {
+      "kind": "record",
+      "fields": {
+        "availability": "AnalysisAvailability",
+        "bindings": "Rows<AnalysisViewBinding>",
+        "computed_at_ms": "?Counter",
+        "coverage": "Coverage",
+        "diagnostics": "Items<Label>",
+        "phases": "?Items<AnalysisPhaseStatus>",
+        "base_score": "?Finite",
+        "adjusted_score": "?Finite",
+        "trends": "?Items<AnalysisTrendPoint>",
+        "related_work_ids": "?Items<Id>",
+        "top_hotspots": "?Rows<AnalysisMetricItem>",
+        "health": "?Rows<AnalysisHealthSummary>",
+        "security": "?Rows<AnalysisSecuritySummary>",
+        "next_cursor": "?Cursor",
+        "has_more": "?bool",
+        "missing_repositories": "?Rows<Id>",
+        "indexed_bindings": "?Rows<AnalysisViewBinding>",
+        "narratives": "?Rows<AnalysisNarrative>"
+      }
+    },
+    "AnalysisLinkEndpoint": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "node_id": "Id"
+      }
+    },
+    "AnalysisLinkEvidence": {
+      "kind": "record",
+      "fields": {
+        "relationship": "Label",
+        "source": "AnalysisLinkEndpoint",
+        "target": "?AnalysisLinkEndpoint",
+        "target_label": "?Label",
+        "resolution": "Label",
+        "confidence": "Finite",
+        "matched_by": "Label"
+      }
+    },
+    "AnalysisMetricItem": {
+      "kind": "record",
+      "fields": {
+        "metric": "MetricRecord",
+        "repository_id": "Id",
+        "view_id": "Id",
+        "path": "?RelativePath",
+        "computed_at_ms": "?Counter",
+        "namespace": "?Label",
+        "language": "?Label",
+        "language_indexed": "?bool",
+        "history_coverage": "?Label",
+        "link": "?AnalysisLinkEvidence",
+        "file_metrics": "?AnalysisFileMetrics"
+      }
+    },
+    "AnalysisFleetTotals": {
+      "kind": "record",
+      "fields": {
+        "repository_count": "Counter",
+        "average_health": "?Finite",
+        "hotspot_count": "Counter",
+        "alert_count": "Counter",
+        "below_hotspot": "Counter",
+        "below_alert": "Counter"
+      }
+    },
+    "AnalysisMetricPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<AnalysisMetricItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "observation": "AnalysisObservation",
+        "fleet": "?AnalysisFleetTotals",
+        "found": "?bool",
+        "language": "?Label",
+        "language_indexed": "?bool"
+      }
+    },
+    "AnalysisMetricPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<MetricRecord>",
+      "current": "AnalysisMetricPage",
+      "revision": 3,
+      "projection": "page_field",
+      "itemField": "metric",
+      "earlierName": "Page"
+    },
+    "AnalysisClusterMember": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "view_id": "Id",
+        "name": "Label",
+        "centrality": "Finite",
+        "internal_edges": "Counter",
+        "external_edges": "Counter",
+        "foundational": "?bool",
+        "source_group": "?Label",
+        "language": "?Label",
+        "framework": "?Label",
+        "cluster_id": "?Id"
+      }
+    },
+    "AnalysisClusterConnection": {
+      "kind": "record",
+      "fields": {
+        "cluster_id": "Id",
+        "edge_count": "Counter",
+        "types": "Items<Label>"
+      }
+    },
+    "AnalysisClusterDetails": {
+      "kind": "record",
+      "fields": {
+        "legacy_ordinal": "Counter",
+        "internal_edges": "Counter",
+        "external_edges": "Counter",
+        "density": "Finite",
+        "members": "Rows<AnalysisClusterMember>",
+        "bridges": "Items<Id>",
+        "connections": "Rows<AnalysisClusterConnection>",
+        "next_cursor": "?Cursor",
+        "has_more": "?bool"
+      }
+    },
+    "AnalysisClusterItem": {
+      "kind": "record",
+      "fields": {
+        "cluster": "ClusterRecord"
+      }
+    },
+    "AnalysisClusterRelationshipCount": {
+      "kind": "record",
+      "fields": {
+        "relationship": "Label",
+        "count": "Counter"
+      }
+    },
+    "AnalysisClusterGraphEdge": {
+      "kind": "record",
+      "fields": {
+        "source_repository_id": "Id",
+        "source_view_id": "Id",
+        "target_repository_id": "Id",
+        "target_view_id": "Id",
+        "edge_count": "Counter",
+        "relationship_counts": "Items<AnalysisClusterRelationshipCount>",
+        "cross_cluster": "bool"
+      }
+    },
+    "AnalysisClusterPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<AnalysisClusterItem>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "observation": "AnalysisObservation",
+        "modularity": "?Finite",
+        "total_repositories": "?Counter",
+        "clustered_repositories": "?Counter",
+        "repositories": "?Rows<AnalysisClusterMember>",
+        "links": "?Rows<AnalysisLinkEvidence>",
+        "graph_edges": "?Rows<AnalysisClusterGraphEdge>"
+      }
+    },
+    "AnalysisClusterPageResult": {
+      "kind": "versioned",
+      "legacy": "Page<ClusterRecord>",
+      "current": "AnalysisClusterPage",
+      "revision": 3,
+      "projection": "page_field",
+      "itemField": "cluster",
+      "earlierName": "Page"
     },
     "SchemaConnection": {
       "kind": "record",
@@ -1080,6 +1418,55 @@
         "cells": "Items<DbScalar>"
       }
     },
+    "DatabaseLegacyRows": {
+      "kind": "record",
+      "fields": {
+        "rows": "Rows<DynamicJson>",
+        "row_count": "i32",
+        "columns": "?Items<DbColumn>",
+        "truncated": "?bool"
+      },
+      "since": {"columns": 10, "truncated": 10}
+    },
+    "DatabaseSensitiveColumnRule": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "catalog": "?Label",
+        "schema": "?Label",
+        "table": "?Label",
+        "column": "Label",
+        "allow": "bool",
+        "reason": "?Content"
+      }
+    },
+    "DatabaseSensitiveRuleSet": {
+      "kind": "record",
+      "fields": {
+        "connection_id": "?Id",
+        "revision": "Revision",
+        "rules": "Rows<DatabaseSensitiveColumnRule>"
+      }
+    },
+    "DatabaseSensitiveRuleEdit": {
+      "kind": "union",
+      "variants": {
+        "Upsert": {
+          "rule": "DatabaseSensitiveColumnRule"
+        },
+        "Delete": {
+          "id": "Id"
+        }
+      }
+    },
+    "DatabaseMigrationSource": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "commit": "GitOid",
+        "path": "RelativePath"
+      }
+    },
     "DbReadResult": {
       "kind": "record",
       "fields": {
@@ -1087,8 +1474,10 @@
         "rows": "Rows<DbRow>",
         "truncated": "bool",
         "next_cursor": "?Cursor",
-        "source_revision": "?Revision"
-      }
+        "source_revision": "?Revision",
+        "schema_digest": "?Digest"
+      },
+      "since": {"schema_digest": 9}
     },
     "DbWriteResult": {
       "kind": "record",
@@ -1418,6 +1807,100 @@
         "kinds": "Items<Label>"
       }
     },
+    "CodeReviewSeverity": {
+      "kind": "enum",
+      "values": [
+        "Blocker",
+        "Major",
+        "Minor",
+        "Informational"
+      ]
+    },
+    "CodeReviewResolution": {
+      "kind": "union",
+      "variants": {
+        "FixVerified": {
+          "candidate_head": "GitOid",
+          "focused_check_ids": "Items<Id>"
+        },
+        "NotActionable": {},
+        "Followup": {
+          "bug_id": "Id",
+          "review_thread_reply": "Url"
+        },
+        "NeedsHuman": {
+          "decision_id": "Id"
+        }
+      }
+    },
+    "LocalReviewDiff": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "worktree_id": "Id",
+        "base": "GitOid",
+        "head": "GitOid"
+      }
+    },
+    "LocalReviewTarget": {
+      "kind": "record",
+      "fields": {
+        "task_id": "Id",
+        "diffs": "Items<LocalReviewDiff>"
+      }
+    },
+    "LocalReviewEvidence": {
+      "kind": "record",
+      "fields": {
+        "target": "LocalReviewTarget",
+        "diff_digest": "Digest",
+        "state": "ReviewObservationState",
+        "reviewer_actor_id": "?Id",
+        "reviewer_session_id": "?Id",
+        "completed_at": "?Counter",
+        "finding_count": "Counter",
+        "report": "?ArtifactRef"
+      }
+    },
+    "ReviewCheckDiagnosis": {
+      "kind": "record",
+      "fields": {
+        "failed_check_id": "Id",
+        "diagnosis": "Content"
+      }
+    },
+    "ReviewChangeReason": {
+      "kind": "union",
+      "variants": {
+        "RequiredCheck": {
+          "failed_check_id": "Id"
+        },
+        "Finding": {
+          "finding_id": "Id"
+        }
+      }
+    },
+    "ReviewClassifiedChange": {
+      "kind": "record",
+      "fields": {
+        "change_digest": "Digest",
+        "reason": "ReviewChangeReason"
+      }
+    },
+    "ReviewCandidateRepair": {
+      "kind": "record",
+      "fields": {
+        "original_review_id": "Id",
+        "expected_review_revision": "Revision",
+        "repository_id": "Id",
+        "reviewed_head": "GitOid",
+        "candidate_head": "GitOid",
+        "diagnoses": "Items<ReviewCheckDiagnosis>",
+        "changes": "Rows<ReviewClassifiedChange>",
+        "focused_check_ids": "Items<Id>",
+        "verification_report": "ArtifactRef"
+      }
+    },
     "ReviewRecord": {
       "kind": "record",
       "fields": {
@@ -1428,7 +1911,13 @@
         "barrier": "?ArtifactRef",
         "finding_ids": "Items<Id>",
         "head_digest": "Digest",
-        "sources": "Items<ReviewSourceEvidence>"
+        "sources": "Items<ReviewSourceEvidence>",
+        "local_review": "?LocalReviewEvidence",
+        "candidate_repair": "?ReviewCandidateRepair"
+      },
+      "since": {
+        "local_review": 15,
+        "candidate_repair": 15
       }
     },
     "ReviewFinding": {
@@ -1442,7 +1931,13 @@
         "severity": "Severity",
         "actionable": "bool",
         "response": "?Content",
-        "evidence": "Items<ArtifactRef>"
+        "evidence": "Items<ArtifactRef>",
+        "code_severity": "?CodeReviewSeverity",
+        "resolution": "?CodeReviewResolution"
+      },
+      "since": {
+        "code_severity": 15,
+        "resolution": 15
       }
     },
     "ReviewReadiness": {
@@ -1452,7 +1947,11 @@
         "review_ids": "Items<Id>",
         "blocker_ids": "Items<Id>",
         "head_digest": "Digest",
-        "policy_revision": "Revision"
+        "policy_revision": "Revision",
+        "candidate_repairs": "?Items<ReviewCandidateRepair>"
+      },
+      "since": {
+        "candidate_repairs": 15
       }
     },
     "GitInspection": {
@@ -1525,6 +2024,74 @@
         "state": "ItemState",
         "permission_revision": "Revision"
       }
+    },
+    "GithubIssueLink": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "work_id": "RootId",
+        "remote_repository_id": "Text",
+        "remote_issue_id": "Text",
+        "remote_issue_number": "PositiveCounter",
+        "url": "Url",
+        "source_revision": "Text"
+      }
+    },
+    "GithubIssueLinkResult": {
+      "kind": "versioned",
+      "legacy": "GitLink",
+      "current": "GithubIssueLink",
+      "revision": 3,
+      "projection": "none"
+    },
+    "GithubPollEndpoint": {
+      "kind": "record",
+      "fields": {
+        "endpoint": "Label",
+        "state": "Label",
+        "next_poll_at_ms": "Counter",
+        "last_polled_at_ms": "?Counter",
+        "failure": "?Text"
+      }
+    },
+    "GithubIssueIntakeView": {
+      "kind": "record",
+      "fields": {
+        "remote_issue_number": "PositiveCounter",
+        "source_revision": "Text",
+        "state": "Label",
+        "url": "Url",
+        "work_id": "?RootId",
+        "comment_state": "?OperationState",
+        "close_state": "?OperationState"
+      }
+    },
+    "GithubIssueIntakePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<GithubIssueIntakeView>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool"
+      }
+    },
+    "GithubPollStatusView": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "endpoints": "Items<GithubPollEndpoint>",
+        "intake": "GithubIssueIntakePage",
+        "interval_seconds": "PositiveCounter",
+        "next_admission_at_ms": "Counter",
+        "last_admitted_at_ms": "?Counter"
+      }
+    },
+    "GithubPollStatusResult": {
+      "kind": "versioned",
+      "legacy": "Page<GithubObservation>",
+      "current": "GithubPollStatusView",
+      "revision": 3,
+      "projection": "none",
+      "earlierName": "Page"
     },
     "GithubObservation": {
       "kind": "record",
@@ -2921,8 +3488,14 @@
       "fields": {
         "account": "?GithubAccount",
         "auth_flow_id": "?Id",
-        "state": "ItemState"
-      }
+        "state": "ItemState",
+        "api_host": "?Label",
+        "authorization_state": "?Label",
+        "permission_revision": "?Revision",
+        "granted_scopes": "?Items<Label>",
+        "failure": "?Text"
+      },
+      "since": {"api_host": 3, "authorization_state": 3, "permission_revision": 3, "granted_scopes": 3, "failure": 3}
     },
     "EvidenceKind": {
       "kind": "enum",
@@ -6600,11 +7173,41 @@
         "Probe",
         "Timer",
         "File",
+        "GitHub",
         "AttachedProcess",
         "Assignment"
       ],
-      "introducedVariants": {"AttachedProcess": 9, "Assignment": 10},
-      "fallbackVariants": {"AttachedProcess": "Process"}
+      "introducedVariants": {
+        "GitHub": 9,
+        "AttachedProcess": 18,
+        "Assignment": 18
+      },
+      "fallbackVariants": {
+        "AttachedProcess": "Process"
+      }
+    },
+    "WatchAssignmentSource": {
+      "kind": "record",
+      "fields": {
+        "assignment_id": "AssignmentId",
+        "session_id": "Id"
+      }
+    },
+    "WatchAttachedProcess": {
+      "kind": "record",
+      "fields": {
+        "pid": "u32",
+        "birth_token": "Label"
+      }
+    },
+    "WatchGithubTarget": {
+      "kind": "record",
+      "fields": {
+        "repository_id": "Id",
+        "workflow_run_id": "?Counter",
+        "pull_request_number": "?Counter"
+      },
+      "exactlyOne": ["workflow_run_id", "pull_request_number"]
     },
     "WatchOutcomeKind": {
       "kind": "enum",
@@ -6618,21 +7221,11 @@
         "Uncertain",
         "Exited"
       ],
-      "introducedVariants": {"Exited": 9},
-      "fallbackVariants": {"Exited": "Uncertain"}
-    },
-    "WatchAttachedProcess": {
-      "kind": "record",
-      "fields": {
-        "pid": "u32",
-        "birth_token": "Label"
-      }
-    },
-    "WatchAssignmentSource": {
-      "kind": "record",
-      "fields": {
-        "assignment_id": "AssignmentId",
-        "session_id": "Id"
+      "introducedVariants": {
+        "Exited": 18
+      },
+      "fallbackVariants": {
+        "Exited": "Uncertain"
       }
     },
     "WatchOutcome": {
@@ -6743,8 +7336,7 @@
         "state": "WatcherState",
         "source_kind": "WatchSourceKind",
         "process": "?WatchProcessSource",
-        "attached_pid": "?u32",
-        "assignment": "?WatchAssignmentSource",
+        "github": "?WatchGithubTarget",
         "probe": "?WatchProbeStatus",
         "due_at_ms": "?Counter",
         "expires_at_ms": "?Counter",
@@ -6761,9 +7353,15 @@
         "output_tail": "?Content",
         "output_truncated": "bool",
         "stop_requested": "bool",
-        "event": "?WatchEvent"
+        "event": "?WatchEvent",
+        "attached_pid": "?u32",
+        "assignment": "?WatchAssignmentSource"
       },
-      "since": {"attached_pid": 9, "assignment": 10}
+      "since": {
+        "github": 9,
+        "attached_pid": 18,
+        "assignment": 18
+      }
     }
   },
   "operations": {
@@ -7156,10 +7754,10 @@
         "repository_id": "Id",
         "expected_remote_revision": "?Text"
       },
-      "result": "GitLink",
+      "result": "GithubIssueLinkResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Reconcile saved remote identity after an uncertain create; no duplicate publish."
+      "rules": "Reconcile saved remote identity after an uncertain create without duplicate publication. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "issues.link": {
       "operation": "issues.link",
@@ -7170,10 +7768,10 @@
         "repository_id": "Id",
         "remote_issue_number": "PositiveCounter"
       },
-      "result": "GitLink",
+      "result": "GithubIssueLinkResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": ""
+      "rules": "Link an existing authenticated issue to this local work and preserve both identities. The native operation requires revision 3 for the exact issue URL and issue identity. Revision 1 retains the recorded legacy result shape and refuses native mutation before recording or dispatching an effect."
     },
     "tasks.move": {
       "operation": "tasks.move",
@@ -7852,12 +8450,18 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "top_hotspots": "?Limit",
+        "run_id": "?Id"
       },
       "result": "AnalysisRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "top_hotspots": 3,
+        "run_id": 3
+      }
     },
     "analysis.cross_repo_links": {
       "operation": "analysis.cross_repo_links",
@@ -7868,7 +8472,7 @@
         "page": "PageRequest",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7880,12 +8484,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "run_id": "?Id"
       },
       "result": "AnalysisRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "run_id": 3
+      }
     },
     "analysis.clusters": {
       "operation": "analysis.clusters",
@@ -7894,12 +8502,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "projection": "?AnalysisClusterProjection"
       },
-      "result": "Page<ClusterRecord>",
+      "result": "AnalysisClusterPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "projection": 3
+      }
     },
     "analysis.cluster_detail": {
       "operation": "analysis.cluster_detail",
@@ -7909,12 +8521,16 @@
         "views": "ViewSelection",
         "page": "PageRequest",
         "cluster_id": "Id",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "legacy_ordinal": "?Counter"
       },
       "result": "ClusterRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "legacy_ordinal": 3
+      }
     },
     "analysis.security": {
       "operation": "analysis.security",
@@ -7923,12 +8539,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "run_id": "?Id"
       },
       "result": "AnalysisRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "run_id": 3
+      }
     },
     "analysis.metrics": {
       "operation": "analysis.metrics",
@@ -7937,12 +8557,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "dotnet_project": "?Label"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "dotnet_project": 3
+      }
     },
     "analysis.hotspots": {
       "operation": "analysis.hotspots",
@@ -7953,7 +8577,7 @@
         "page": "PageRequest",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7965,12 +8589,16 @@
         "scope": "DataScope",
         "views": "ViewSelection",
         "page": "PageRequest",
-        "filters": "Items<Label>"
+        "filters": "Items<Label>",
+        "max_health": "?Finite"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
+      "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language.",
+      "since": {
+        "max_health": 3
+      }
     },
     "analysis.archival_candidates": {
       "operation": "analysis.archival_candidates",
@@ -7981,7 +8609,7 @@
         "page": "PageRequest",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -7996,7 +8624,7 @@
         "path": "RelativePath",
         "filters": "Items<Label>"
       },
-      "result": "Page<MetricRecord>",
+      "result": "AnalysisMetricPageResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Exact views and scope precede traversal/ranking; paths bind to selected source view. Kind-specific selectors validated before dispatch, no raw query language."
@@ -8026,12 +8654,16 @@
         "expected_source_revision": "Revision",
         "node_ids": "Items<Id>",
         "batch_limit": "Limit",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "link_mode": "?AnalysisLinkMode"
       },
       "result": "AnalysisRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority."
+      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority.",
+      "since": {
+        "link_mode": 3
+      }
     },
     "analysis.process_batch": {
       "operation": "analysis.process_batch",
@@ -8058,12 +8690,18 @@
         "expected_source_revision": "Revision",
         "node_ids": "Items<Id>",
         "batch_limit": "Limit",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "refresh_mode": "?AnalysisRefreshMode",
+        "include_all_source": "?bool"
       },
       "result": "AnalysisRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority."
+      "rules": "Stage checkpoint and declared structural/semantic coverage. Resume exact saved stage/views; model-assisted purposes use router attribution and ordinary authority.",
+      "since": {
+        "refresh_mode": 3,
+        "include_all_source": 3
+      }
     },
     "analysis.synthesize": {
       "operation": "analysis.synthesize",
@@ -8199,22 +8837,27 @@
       "operation": "database.read",
       "mode": "Query",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "statement": "Content",
         "parameters": "Items<DbParameter>",
         "row_limit": "Limit",
-        "timeout_ms": "PositiveCounter"
+        "timeout_ms": "PositiveCounter",
+        "include_schema_digest": "?bool",
+        "schema_preview": "?Content"
       },
       "result": "DbReadResult",
       "effect": "ExternalRead",
       "authority": "Scoped",
-      "rules": "Parse/check effective read-only operation through qualified adapter; no arbitrary SQL function side effects, sensitive-column policy before materialization. Results not structural graph persistence."
+      "rules": "Parse/check effective read-only operation through qualified adapter; no arbitrary SQL function side effects, sensitive-column policy before materialization. Results not structural graph persistence.",
+      "since": {"scope": 9, "include_schema_digest": 9, "schema_preview": 9}
     },
     "database.execute_write": {
       "operation": "database.execute_write",
       "mode": "Command",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "statement": "Content",
@@ -8225,38 +8868,46 @@
       "result": "DbWriteResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement."
+      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement.",
+      "since": {"scope": 9}
     },
     "database.direct_schema_change": {
       "operation": "database.direct_schema_change",
       "mode": "Command",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "statement": "Content",
         "parameters": "Items<DbParameter>",
         "proposal_id": "?Id",
-        "timeout_ms": "PositiveCounter"
+        "timeout_ms": "PositiveCounter",
+        "expected_schema_digest": "?Digest",
+        "fallback_reason": "?Content"
       },
       "result": "DbWriteResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement."
+      "rules": "Connection writes enabled and current scoped write authority. Exact target/digest approval where required. Transaction/unknown commit reconciled before retry; not authorized by a read entitlement.",
+      "since": {"scope": 9, "expected_schema_digest": 9, "fallback_reason": 9}
     },
     "database.apply_migration": {
       "operation": "database.apply_migration",
       "mode": "Command",
       "fields": {
+        "scope": "?DataScope",
         "connection_id": "Id",
         "expected_connection_revision": "Revision",
         "migration": "ArtifactRef",
         "expected_schema_digest": "Digest",
-        "proposal_id": "?Id"
+        "proposal_id": "?Id",
+        "source": "?DatabaseMigrationSource"
       },
       "result": "DbWriteResult",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Versioned immutable migration; exact target authority independent of artifact read. Unknown application status reconciled through migration evidence."
+      "rules": "Versioned immutable migration; exact target authority independent of artifact read. Unknown application status reconciled through migration evidence.",
+      "since": {"scope": 9, "source": 9}
     },
     "database.configure_sensitive_columns": {
       "operation": "database.configure_sensitive_columns",
@@ -8270,6 +8921,47 @@
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
+    },
+    "database.mysql_readonly_query": {
+      "operation": "database.mysql_readonly_query",
+      "mode": "Query",
+      "introducedRevision": 9,
+      "fields": {
+        "scope": "?DataScope",
+        "source": "Text",
+        "sql": "Content",
+        "limit": "?i32"
+      },
+      "result": "DatabaseLegacyRows",
+      "effect": "ExternalRead",
+      "authority": "Scoped",
+      "rules": "Explicitly exposed read-only MySQL source selected by ID, display name, or unique logical endpoint identity. One bounded statement, 100 rows by default, a 500-row ceiling, and the shared data policy and native read boundary."
+    },
+    "database.sensitive_columns": {
+      "operation": "database.sensitive_columns",
+      "mode": "Query",
+      "introducedRevision": 9,
+      "fields": {
+        "connection_id": "?Id"
+      },
+      "result": "DatabaseSensitiveRuleSet",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "The workspace administrator lists default or source-owned sensitivity definitions."
+    },
+    "database.edit_sensitive_column_rules": {
+      "operation": "database.edit_sensitive_column_rules",
+      "mode": "Command",
+      "introducedRevision": 9,
+      "fields": {
+        "connection_id": "?Id",
+        "expected_revision": "Revision",
+        "edit": "DatabaseSensitiveRuleEdit"
+      },
+      "result": "DatabaseSensitiveRuleSet",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "The workspace administrator makes a compare-and-set rule upsert or delete within the selected scope."
     },
     "knowledge.search": {
       "operation": "knowledge.search",
@@ -9467,13 +10159,24 @@
       "fields": {
         "root_id": "RootId",
         "expected_revision": "Revision",
-        "barrier": "DeliveryBarrier",
-        "policy_revision": "Revision"
+        "barrier": "?DeliveryBarrier",
+        "policy_revision": "Revision",
+        "local_target": "?LocalReviewTarget",
+        "candidate_repair": "?ReviewCandidateRepair"
       },
       "result": "ReviewRecord",
       "effect": "Journaled",
       "authority": "Scoped",
-      "rules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights."
+      "rules": "Use supported repository-configured GitHub source identity/adapter and exact barrier heads/policy. Explicit completed evidence including zero findings is required. Failure/unavailability or finite deadline expiry admits one independent verified-read in-app fallback per repository/PR/head/policy/cycle. Fallback does not waive required checks or branch protection and does not itself spend a fix cycle. Preserve late external actionable findings. No role grants approval/mutation rights. Revision 15 can request a single independent review of an exact local task diff or submit candidate repair evidence to the last completed round. Verifying a candidate does not start a review or change the head attributed to the reviewer.",
+      "exactlyOne": [
+        "barrier",
+        "local_target",
+        "candidate_repair"
+      ],
+      "since": {
+        "local_target": 15,
+        "candidate_repair": 15
+      }
     },
     "reviews.findings": {
       "operation": "reviews.findings",
@@ -9509,25 +10212,37 @@
         "expected_revision": "Revision",
         "actionable": "bool",
         "rationale": "Content",
-        "evidence": "Items<ArtifactRef>"
+        "evidence": "Items<ArtifactRef>",
+        "resolution": "?CodeReviewResolution"
       },
       "result": "ReviewFinding",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Resolve through configured independent review policy; author cannot self-waive required review without explicit policy authority."
+      "rules": "Resolve through configured independent review policy; author cannot self-waive required review without explicit policy authority.",
+      "since": {
+        "resolution": 15
+      }
     },
     "reviews.readiness": {
       "operation": "reviews.readiness",
       "mode": "Query",
       "fields": {
         "root_id": "RootId",
-        "barrier": "DeliveryBarrier",
-        "policy_revision": "Revision"
+        "barrier": "?DeliveryBarrier",
+        "policy_revision": "Revision",
+        "local_target": "?LocalReviewTarget"
       },
       "result": "ReviewReadiness",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source."
+      "rules": "Require current exact-head completed source evidence with complete findings coverage, explicit zero-findings outcome when empty and all actionable findings resolved. Preserve late external findings and policy/head invalidation; absence of comments or unrelated passing checks never qualifies. Fallback replaces only the DevWorks review source. Revision 15 also projects exact local review or qualified post-cap evidence. Final merge still requires current separate delivery gates.",
+      "exactlyOne": [
+        "barrier",
+        "local_target"
+      ],
+      "since": {
+        "local_target": 15
+      }
     },
     "releases.inspect": {
       "operation": "releases.inspect",
@@ -9571,9 +10286,11 @@
       "operation": "github.poll_status",
       "mode": "Query",
       "fields": {
-        "repository_id": "Id"
+        "repository_id": "Id",
+        "page": "?PageRequest"
       },
-      "result": "Page<GithubObservation>",
+      "since": {"page": 3},
+      "result": "GithubPollStatusResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Include persisted issue intake/admission timing and pending/failed resolution observations; scope unrouted incoming reports by repository access. No agent is required to inspect a waiting queue."
@@ -10732,6 +11449,37 @@
       "rules": "Human only. Starts one invocation of an installed, enabled package's tool contribution as the calling person: the package's brokered application and inference calls run as that person under their current authority, narrowed by the version's approved manifest grants. Records one durable package.invoke operation and returns it with its state; the invocation runs once, a result that cannot be established is held for reconciliation and never re-run. expected_digest, when given, must be the active manifest digest. Refused for an agent, for a contribution that is not a tool of the active version, and for a package that is not ready.",
       "introducedRevision": 8
     },
+    "addons.read_content": {
+      "operation": "addons.read_content",
+      "mode": "Command",
+      "fields": {
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "manifest_digest": "Digest"
+      },
+      "result": "PackageContent",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Materializes the exact approved package Skill, Role or Prompt in the caller's artifact scope. Reading content does not adopt instructions or grant tools. Existing instruction-authoring and approval operations adopt any changes.",
+      "introducedRevision": 9
+    },
+    "addons.run_workflow": {
+      "operation": "addons.run_workflow",
+      "mode": "Command",
+      "fields": {
+        "workflow_id": "Id",
+        "package_id": "Id",
+        "contribution_id": "Label",
+        "manifest_digest": "Digest",
+        "input": "ArtifactRef",
+        "required_gates": "Items<PackageWorkflowGate>"
+      },
+      "result": "PackageInvocation",
+      "effect": "Journaled",
+      "authority": "Scoped",
+      "rules": "Queues an approved package workflow step and the exact ordered verification gates selected by the person or authorized agent. Each run pins the immutable scoped input, package manifests and schema contracts before dispatch. Completion requires current passing evidence from every selected gate and preserves all ordinary DevWorks controls.",
+      "introducedRevision": 9
+    },
     "addons.invocation": {
       "operation": "addons.invocation",
       "mode": "Query",
@@ -11537,17 +12285,22 @@
         "probe": "?WatchProbe",
         "timer": "?WatchTimer",
         "file": "?WatchFile",
-        "attached_process": "?WatchAttachedProcess",
-        "assignment_id": "?AssignmentId",
+        "github": "?WatchGithubTarget",
         "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
-        "max_lifetime_ms": "?Counter"
+        "max_lifetime_ms": "?Counter",
+        "attached_process": "?WatchAttachedProcess",
+        "assignment_id": "?AssignmentId"
       },
-      "since": {"attached_process": 9, "assignment_id": 10},
+      "since": {
+        "github": 9,
+        "attached_process": 18,
+        "assignment_id": 18
+      },
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Revision 9 permits read-only observation of an external process given its PID and birth token. An attached process can have a maximum lifetime and reports Exited with a status only when observed. Revision 10 allows an active parent assignment to observe one of its direct children by assignmentId. The outcome links the child session and the evidence of the terminal state. Reviewer roles may create observing watchers and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A GitHub watcher observes an exact bound workflow run or the current pull request head checks, within the shared account polling budget, and resumes on restart. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers and cannot launch a process through a watcher. Revision 18 adds read-only attachment by PID and birth token and watches for a direct delegated assignment.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -11562,7 +12315,7 @@
       "result": "WatcherPage",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "An agent lists its own session's watchers; a person or the host lists the watchers visible in their scope (every project's at workspace scope), optionally only those of one session or of one feature's sessions. Newest first. Assignment watchers are visible starting at revision 10.",
+      "rules": "An agent lists its own session's watchers; a person or the host lists the watchers visible in their scope (every project's at workspace scope), optionally only those of one session or of one feature's sessions. Newest first.",
       "introducedRevision": 8
     },
     "watch.inspect": {
@@ -11574,7 +12327,7 @@
       "result": "WatcherRecord",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "State, source, elapsed time, outcome and the redacted output tail (live while the process runs). Assignment watchers are visible starting at revision 10.",
+      "rules": "State, source, elapsed time, outcome and the redacted output tail (live while the process runs).",
       "introducedRevision": 8
     },
     "watch.cancel": {
@@ -11669,6 +12422,34 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "reviews.list": [1, 15],
+    "reviews.inspect": [1, 15],
+    "reviews.request": [1, 15],
+    "reviews.findings": [1, 15],
+    "reviews.respond": [1, 15],
+    "reviews.adjudicate": [1, 15],
+    "reviews.readiness": [1, 15],
+    "issues.publish": [1, 3],
+    "issues.link": [1, 3],
+    "github.account": [1, 3],
+    "github.poll_status": [1, 3],
+    "analysis.health": [1, 3],
+    "analysis.cross_repo_links": [1, 3],
+    "analysis.status": [1, 3],
+    "analysis.clusters": [1, 3],
+    "analysis.cluster_detail": [1, 3],
+    "analysis.security": [1, 3],
+    "analysis.metrics": [1, 3],
+    "analysis.hotspots": [1, 3],
+    "analysis.fleet_health": [1, 3],
+    "analysis.archival_candidates": [1, 3],
+    "analysis.file_hotspot": [1, 3],
+    "analysis.community_analysis": [1, 3],
+    "analysis.link_and_detect": [1, 3],
+    "analysis.process_batch": [1, 3],
+    "analysis.reanalyze": [1, 3],
+    "analysis.synthesize": [1, 3],
+
     "artifacts.save": [
       1,
       2,
@@ -11811,6 +12592,12 @@
     ],
     "addons.invoke": [
       8
+    ],
+    "addons.read_content": [
+      9
+    ],
+    "addons.run_workflow": [
+      9
     ],
     "addons.invocation": [
       8
@@ -12243,9 +13030,14 @@
       1,
       3
     ],
+    "git.push": [
+      1,
+      16
+    ],
     "git.pull_request": [
       1,
-      2
+      2,
+      16
     ],
     "browser.sessions": [
       1,
@@ -12571,6 +13363,28 @@
       1,
       5
     ],
+    "database.read": [
+      1,
+      9
+    ],
+    "database.apply_migration": [
+      1,
+      9
+    ],
+    "database.direct_schema_change": [
+      1,
+      9
+    ],
+    "database.execute_write": [
+      1,
+      9
+    ],
+    "database.mysql_readonly_query": [
+      9,
+      10
+    ],
+    "database.sensitive_columns": [9],
+    "database.edit_sensitive_column_rules": [9],
     "database.configure_sensitive_columns": [
       1,
       5
@@ -12629,22 +13443,22 @@
     "watch.create": [
       8,
       9,
-      10
+      18
     ],
     "watch.list": [
       8,
       9,
-      10
+      18
     ],
     "watch.inspect": [
       8,
       9,
-      10
+      18
     ],
     "watch.cancel": [
       8,
       9,
-      10
+      18
     ]
   },
   "familyRules": {
@@ -12839,6 +13653,9 @@
     "database.apply_migration": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "database.direct_schema_change": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "database.configure_sensitive_columns": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "database.mysql_readonly_query": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "database.sensitive_columns": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "database.edit_sensitive_column_rules": {"assignmentScope": "administration", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "knowledge.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "knowledge.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "knowledge.record": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
@@ -12930,7 +13747,7 @@
     "git.diff": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "git.commit": {"assignmentScope": "assignment", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.push": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
-    "git.pull_request": {"assignmentScope": "assignment", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "git.pull_request": {"assignmentScope": "assignment", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.integrate": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "git.cleanup": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "reviews.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
@@ -13033,6 +13850,8 @@
     "addons.logs": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "addons.rollback": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.uninstall": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "addons.read_content": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "addons.run_workflow": {"assignmentScope": "coordinator", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "addons.invoke": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": true},
     "addons.invocation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "help.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

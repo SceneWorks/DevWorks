@@ -25,7 +25,9 @@ use devworks_extension_protocol::frame::{self, FrameError, MAX_FRAME_BYTES};
 use devworks_extension_protocol::package::{
     ContributionEvent, HostRequest, PackageNotification, PackageRequest, RpcError, RpcErrorClass,
     RpcErrorData, RpcFailure, RpcFailureId, RpcResponse, RpcResult, RpcSuccess, RpcVersion,
+    StreamCredit,
 };
+use devworks_extension_protocol::scalars as wire;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -38,6 +40,8 @@ use std::time::{Duration, Instant};
 pub const PROGRESS_KEPT: usize = 64;
 /// Most produced events kept per invocation (later ones are dropped and counted).
 pub const EVENTS_KEPT: usize = 256;
+/// Most credit streams an invocation can open over its lifetime.
+const MAX_CREDIT_STREAMS: usize = 64;
 /// Most bytes queued for a helper that has not read them yet (the session fails beyond it).
 pub const OUTBOX_BYTES: usize = 4 * MAX_FRAME_BYTES;
 
@@ -84,9 +88,74 @@ pub struct SlotState {
     pub events: Vec<ContributionEvent>,
     /// Events dropped beyond [`EVENTS_KEPT`].
     pub dropped_events: i64,
+    // Filled by the broker only after the store returned a committed processing receipt.
+    event_receipt: Option<EventReceipt>,
+    event_receipt_echoed: bool,
+    artifact_credit: Option<ArtifactCredit>,
     pub terminal: Option<Reply>,
     pub cancel_acknowledged: bool,
 }
+struct EventReceipt {
+    subscription_id: wire::Id,
+    event_id: wire::EventId,
+    receipt_id: wire::Id,
+}
+
+struct ArtifactCredit {
+    limit: usize,
+    streams: HashMap<String, StreamWindow>,
+}
+
+#[derive(Default)]
+struct StreamWindow {
+    sequence: u64,
+    remaining: usize,
+}
+
+impl ArtifactCredit {
+    fn grant(&mut self, grant: StreamCredit) {
+        let Ok(sequence) = String::from(grant.sequence).parse::<u64>() else {
+            return;
+        };
+        let stream_id = grant.stream_id.as_str();
+        let bytes = grant.grant_bytes as usize;
+        if bytes > self.limit
+            || (!self.streams.contains_key(stream_id) && self.streams.len() >= MAX_CREDIT_STREAMS)
+        {
+            return;
+        }
+        let window = self.streams.entry(stream_id.to_owned()).or_default();
+        if sequence == window.sequence + 1 && bytes <= self.limit - window.remaining {
+            window.sequence = sequence;
+            window.remaining += bytes;
+        }
+    }
+}
+
+impl SlotState {
+    fn accept_event(&mut self, event: &ContributionEvent) -> bool {
+        let ContributionEvent::EventProcessed {
+            subscription_id,
+            event_id,
+            processing_receipt,
+        } = event
+        else {
+            return true;
+        };
+        if self.event_receipt_echoed
+            || !self.event_receipt.as_ref().is_some_and(|receipt| {
+                receipt.subscription_id.as_str() == subscription_id.as_str()
+                    && receipt.event_id.0.as_str() == event_id.0.as_str()
+                    && receipt.receipt_id.as_str() == processing_receipt.as_str()
+            })
+        {
+            return false;
+        }
+        self.event_receipt_echoed = true;
+        true
+    }
+}
+
 impl Slot {
     /// Serialize revocation with broker mutations already executing in a store transaction (a
     /// brokered call holds the state lock only for its final decision, never its preparation).
@@ -95,6 +164,58 @@ impl Slot {
         self.revoked.store(true, Ordering::SeqCst);
         self.cancellation.cancel();
     }
+    pub(super) fn record_event_receipt(
+        &self,
+        subscription_id: wire::Id,
+        event_id: wire::EventId,
+        receipt_id: wire::Id,
+    ) {
+        self.state
+            .locked()
+            .event_receipt
+            .get_or_insert(EventReceipt {
+                subscription_id,
+                event_id,
+                receipt_id,
+            });
+    }
+
+    pub(super) fn enable_artifact_credit(&self, limit: u32) {
+        self.state.locked().artifact_credit = Some(ArtifactCredit {
+            limit: limit as usize,
+            streams: HashMap::new(),
+        });
+    }
+
+    /// Checks revocation and consumes the bytes that an artifact result will send.
+    pub(super) fn take_artifact_credit(
+        &self,
+        stream: &str,
+        bytes: usize,
+    ) -> Result<usize, RpcError> {
+        let mut state = self.state.locked();
+        if self.revoked.load(Ordering::SeqCst) {
+            return Err(rpc_error(
+                RpcErrorClass::PermissionDenied,
+                "the invocation is revoked",
+            ));
+        }
+        let Some(credit) = &mut state.artifact_credit else {
+            return Ok(bytes);
+        };
+        if bytes == 0 {
+            return Ok(0);
+        }
+        let window = credit
+            .streams
+            .get_mut(stream)
+            .filter(|w| w.remaining > 0)
+            .ok_or_else(|| rpc_error(RpcErrorClass::Busy, "the artifact stream has no credit"))?;
+        let granted = bytes.min(window.remaining);
+        window.remaining -= granted;
+        Ok(granted)
+    }
+
     pub fn terminal(&self) -> Option<Reply> {
         self.state.locked().terminal.clone()
     }
@@ -170,6 +291,7 @@ pub struct Session {
     closed_cv: Condvar,
     closed_mx: Mutex<()>,
     max_frame: usize,
+    pub(super) artifact_read_credit: AtomicBool,
 }
 
 impl Session {
@@ -194,6 +316,7 @@ impl Session {
             closed_cv: Condvar::new(),
             closed_mx: Mutex::new(()),
             max_frame: MAX_FRAME_BYTES,
+            artifact_read_credit: AtomicBool::new(false),
         });
         let (tx, rx) = mpsc::sync_channel::<(String, PackageRequest)>(queue_capacity.max(1));
         let worker = session.clone();
@@ -588,14 +711,35 @@ impl Session {
                     return;
                 };
                 let mut s = slot.state.locked();
+                if slot.revoked.load(Ordering::SeqCst) {
+                    return;
+                }
+                if !s.accept_event(&params.event) {
+                    return;
+                }
                 if s.events.len() < EVENTS_KEPT {
                     s.events.push(params.event);
                 } else {
                     s.dropped_events += 1;
                 }
             }
-            // No host stream grants credit yet; a credit grant is validated and ignored.
-            PackageNotification::Credit { .. } => {}
+            PackageNotification::Credit { params, .. } => {
+                if params.process_session_id.as_str() != self.id {
+                    return;
+                }
+                let Some(slot) = self.slot(
+                    params.invocation_id.as_str(),
+                    params.invocation_token.as_str(),
+                ) else {
+                    return;
+                };
+                let mut state = slot.state.locked();
+                if !slot.revoked.load(Ordering::SeqCst)
+                    && let Some(credit) = &mut state.artifact_credit
+                {
+                    credit.grant(params);
+                }
+            }
         }
     }
 

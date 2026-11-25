@@ -424,33 +424,11 @@ impl SchemaService {
         };
         let (source, ca_certificate) =
             self.metadata_write(op, &job, cancel, |tx, source, _ctx| {
-                let material = tx.schemas().schema_certificate(&source.connection.id)?;
-                let selected = source
-                    .connection
-                    .config
-                    .as_ref()
-                    .and_then(|c| c.ca_certificate.as_ref());
-                let certificate = match (selected, material) {
-                    (None, None) => None,
-                    (Some(reference), Some(material))
-                        if serde_json::to_value(reference).ok()
-                            == serde_json::to_value(&material.reference).ok() =>
-                    {
-                        Some(material.pem)
-                    }
-                    _ => return Err(StorageError::ScopeDenied),
-                };
+                let certificate = super::certificates::for_source(tx.schemas(), &source)?;
                 Ok((source, certificate))
             })?;
         let config = source.connection.config.clone().ok_or_else(invalid)?;
-        let password = if let Some(handle) = &config.credential_ref {
-            let owner = self.credentials.as_ref().ok_or(StorageError::ScopeDenied)?;
-            owner
-                .password(handle)
-                .map_err(|_| StorageError::ScopeDenied)?
-        } else {
-            None
-        };
+        let password = self.target_password(config.credential_ref.as_ref())?;
         let request = MetadataRequest {
             connection_id: job.connection_id.clone(),
             config,

@@ -89,6 +89,48 @@ for name,d in OPS.items():
  for mode in ([d['mode']] if d['mode']!='Hybrid' else ['Query','Command']):case('input-'+name+'-'+mode,'domain-request'+('.r'+str(d['introducedRevision'])if d.get('introducedRevision',1)>1 else ''),request(name,mode))
 for name,t in ({n:d['result'] for n,d in OPS.items()}|LEGACY_RESULTS).items():
  case('result-'+name,'operation-result'+('.r'+str(OPS[name]['introducedRevision'])if OPS.get(name,{}).get('introducedRevision',1)>1 else ''),result(name,t))
+# DW-37 uses successor revisions, preserving the published revision-1 and revision-2 schemas.
+_db_read=copy.deepcopy(POS['input-database.read-Query'])
+_db_read.update(schemaRevision=9)
+_db_read['body'].update(scope={'kind':'Project','projectId':'project-a'},statement='SELECT 1',
+ includeSchemaDigest=True,schemaPreview='ALTER TABLE contacts ADD label TEXT')
+case('input-database.read-scoped-schema-preview','domain-request.r9',_db_read)
+_db_legacy=copy.deepcopy(_db_read)
+_db_legacy.pop('schemaRevision')
+case('reject-database.read-revision-one-preview','domain-request',_db_legacy,False,False)
+_db_write=copy.deepcopy(POS['input-database.execute_write-Command'])
+_db_write.update(schemaRevision=9)
+_db_write['body'].update(scope={'kind':'Project','projectId':'project-a'},
+ statement='UPDATE fixture SET label = :label',parameters=[{'name':'label','value':{'kind':'Text','value':'fixture'}}])
+case('input-database.execute_write-scoped','domain-request.r9',_db_write)
+_db_direct=copy.deepcopy(POS['input-database.direct_schema_change-Command'])
+_db_direct.update(schemaRevision=9)
+_db_direct['body'].update(expectedSchemaDigest='a'*64,fallbackReason='Approved emergency repair')
+case('input-database.direct_schema_change-exact-fallback','domain-request.r9',_db_direct)
+_db_migration=copy.deepcopy(POS['input-database.apply_migration-Command'])
+_db_migration.update(schemaRevision=9)
+_db_migration['body']['source']={'repositoryId':'repo-a','commit':{'format':'Sha1','hex':'a'*40},
+ 'path':'migrations/001.sql'}
+case('input-database.apply_migration-git-source','domain-request.r9',_db_migration)
+_db_read_result=result('database.read','DbReadResult')
+_db_read_result['value']['schemaDigest']='a'*64
+case('result-database.read-with-schema-digest','operation-result.r9',_db_read_result)
+case('reject-database.read-result-before-schema-digest','operation-result.r2',_db_read_result,False,False)
+for _name in ['database.execute_write','database.direct_schema_change','database.apply_migration']:
+ case('r9-result-'+_name,'operation-result.r9',result(_name,'DbWriteResult'))
+_mysql=copy.deepcopy(POS['input-database.mysql_readonly_query-Query'])
+_mysql['body'].update(source='fixture',sql='SELECT 1 AS item',limit=1)
+case('input-database.mysql_readonly_query-current','domain-request.r9',{**_mysql,'schemaRevision':10})
+case('reject-database.mysql_readonly_query-before-introduction','domain-request.r2',
+ {**_mysql,'schemaRevision':2},False,False)
+_mysql_value={'kind':'database.mysql_readonly_query','value':{
+ 'rows':[{'payload':'AQI='}],'rowCount':1}}
+case('result-database.mysql_readonly_query-retained-binary','operation-result.r9',_mysql_value)
+_mysql_current=copy.deepcopy(_mysql_value)
+_mysql_current['value'].update(rows=[{'payload':ART}],columns=[{'name':'payload','dataType':'blob','sensitive':False}],truncated=True)
+case('result-database.mysql_readonly_query-current-binary','operation-result.r10',_mysql_current)
+case('reject-database.mysql_readonly_query-current-before-revision','operation-result.r9',
+ _mysql_current,False,False)
 # Watcher sources (DW-96): exactly one of a process, a probe and a timer; only a probe takes a
 # maximum lifetime, a timer keeps no output tail, and a probe runs at most once a second.
 _watch=request('watch.create','Command')
@@ -101,10 +143,10 @@ case('input-watch.create-timer-after','domain-request.r8',_watch_body(timer={'af
 case('input-watch.create-timer-at','domain-request.r8',_watch_body(timer={'atMs':'1700000000000'}))
 def _assignment_watch(revision, **members):
  frame=_watch_body(assignmentId='child-a',**members); frame['schemaRevision']=revision; return frame
-case('input-watch.create-assignment','domain-request.r10',_assignment_watch(10))
+case('input-watch.create-assignment','domain-request.r18',_assignment_watch(18))
 case('reject-watch.create-assignment-legacy','domain-request.r9',_assignment_watch(9),False,False)
-case('reject-watch.create-assignment-and-process','domain-request.r10',_assignment_watch(10,process=_proc),False,True)
-case('reject-watch.create-assignment-output','domain-request.r10',_assignment_watch(10,tailBytes=64),False,True)
+case('reject-watch.create-assignment-and-process','domain-request.r18',_assignment_watch(18,process=_proc),False,True)
+case('reject-watch.create-assignment-output','domain-request.r18',_assignment_watch(18,tailBytes=64),False,True)
 case('reject-watch.create-two-sources','domain-request.r8',_watch_body(process=_proc,timer={'afterMs':'5000'}),False,True)
 case('reject-watch.create-no-source','domain-request.r8',_watch_body(),False,True)
 case('reject-watch.create-process-lifetime','domain-request.r8',_watch_body(process=_proc,maxLifetimeMs='60000'),False,True)
@@ -133,6 +175,23 @@ case('input-watch.create-file-match','domain-request.r8',_watch_body(file=_file,
 case('reject-watch.create-file-without-match','domain-request.r8',_watch_body(file=_file),False,True)
 case('reject-watch.create-timer-match','domain-request.r8',_watch_body(timer={'afterMs':'5000'},matching=_match),False,True)
 case('reject-watch.create-match-too-often','domain-request.r8',_watch_body(process=_proc,matching={**_match,'minIntervalMs':'99'}),False,True)
+_github_run={'repositoryId':'github-repository','workflowRunId':'45402362601'}
+_github_pr={'repositoryId':'github-repository','pullRequestNumber':'263'}
+def _github_watch(target,revision=9,**extra):
+ frame=_watch_body(github=target,**extra); frame['schemaRevision']=revision; return frame
+case('input-watch.create-github-run','domain-request.r9',_github_watch(_github_run,maxLifetimeMs='60000'))
+case('input-watch.create-github-pr','domain-request.r9',_github_watch(_github_pr))
+case('reject-watch.create-github-r8','domain-request.r8',_github_watch(_github_run,revision=8),False,False)
+case('reject-watch.create-github-two-targets','domain-request.r9',_github_watch({**_github_run,**_github_pr}),False,False)
+case('reject-watch.create-github-zero','domain-request.r9',_github_watch({**_github_run,'workflowRunId':'0'}),False,True)
+case('reject-watch.create-github-tail','domain-request.r9',_github_watch(_github_run,tailBytes=64),False,True)
+_github_watcher=result('watch.inspect','WatcherRecord')
+_github_watcher['value']['sourceKind']='GitHub'
+_github_watcher['value']['github']=_github_run
+case('result-watch.inspect-github','operation-result.r9',_github_watcher)
+for op in ('watch.list','watch.inspect','watch.cancel'):
+ frame=request(op,OPS[op]['mode']); frame['schemaRevision']=9
+ case('input-'+op+'-r9','domain-request.r9',frame)
 # Stable handwritten assertions cover wrong mode, authority/provenance injection,
 # dangerous ambiguity, partial/unknown effects and cross-operation substitution.
 def mutate(id,base,path,value,typed=False,schema=False,entry=None):
@@ -153,6 +212,39 @@ mutate('reject-eval-rate-without-denominator','result-evals.grade',['value','cov
 mutate('eval-text-proxy-predicate','input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'},typed=True,schema=True)
 mutate('reject-eval-false-enforced-rule','input-evals.grade-Command',['body','suite','checks',0,'measurement'],'EnforcedRule',typed=False,schema=True)
 mutate('eval-valid-text-proxy','input-evals.grade-Command',['body','suite','checks',0],{'id':'check-a','ruleRef':'RULE-1','measurement':'Proxy','predicate':{'kind':'TranscriptContains','entryKind':'UserMessage','text':'hello'}},typed=True,schema=True)
+
+# Exact local task reviews use no PR identity. Candidate evidence uses its original final review
+# plus a complete classified diff, and is a separate selected write within the request operation.
+_review_root={'rootId':'feature-a','expectedRevision':'2','policyRevision':'3'}
+_review_base={'format':'Sha1','hex':'a'*40}
+_review_head={'format':'Sha1','hex':'b'*40}
+_local_review={'taskId':'task-a','diffs':[
+ {'repositoryId':'repo-a','worktreeId':'tree-a','base':_review_base,'head':_review_head}
+]}
+_review_repair={'originalReviewId':'review-a','expectedReviewRevision':'4','repositoryId':'repo-a',
+ 'reviewedHead':_review_base,'candidateHead':_review_head,
+ 'diagnoses':[{'failedCheckId':'failed-a','diagnosis':'Repair the failing CI environment'}],
+ 'changes':[{'changeDigest':'a'*64,'reason':{'kind':'RequiredCheck','failedCheckId':'failed-a'}}],
+ 'focusedCheckIds':['focused-a'],'verificationReport':copy.deepcopy(ART)}
+def _review_request(revision=15, **members):
+ return {'mode':'Command','protocol':'1.0-draft.1','schemaRevision':revision,
+  'requestKey':'review-request','body':{'kind':'reviews.request',**_review_root,**members}}
+case('input-reviews.request-local','domain-request.r15',_review_request(localTarget=_local_review))
+case('input-reviews.request-candidate','domain-request.r15',_review_request(candidateRepair=_review_repair))
+case('reject-reviews.request-local-legacy','domain-request',_review_request(revision=1,localTarget=_local_review),False,False)
+case('reject-reviews.request-two-targets','domain-request.r15',_review_request(localTarget=_local_review,candidateRepair=_review_repair),False,False)
+case('reject-reviews.request-duplicate-local-repo','domain-request.r15',
+     _review_request(localTarget={**_local_review,'diffs':_local_review['diffs']*2}),False,True)
+case('input-reviews.readiness-local','domain-request.r15',{'mode':'Query','protocol':'1.0-draft.1',
+ 'schemaRevision':15,'queryId':'review-query','body':{'kind':'reviews.readiness','rootId':'feature-a',
+ 'policyRevision':'3','localTarget':_local_review}})
+for name in ('list','inspect','findings','respond','adjudicate'):
+ op='reviews.'+name
+ frame=request(op,OPS[op]['mode'])
+ frame['schemaRevision']=15
+ case('input-'+op+'-r15','domain-request.r15',frame)
+
+
 
 for source in TYPES['EvalRecordSource']['values']:
  mutate('eval-record-field-'+source,'input-evals.grade-Command',['body','suite','checks',0,'predicate'],{'kind':'RecordFieldEquals','source':source,'pointer':'/state','expected':{'observed':True}},typed=True,schema=True)
@@ -936,6 +1028,20 @@ case('reject-model-supplied-browser-source','domain-request.r3',forged,False,Fal
 pr={'protocol':'1.0-draft.1','schemaRevision':2,'requestKey':'group-pr','command':{'kind':'OpenPullRequest','repositoryId':'repo-a','headRef':'refs/heads/task-a','baseRef':'refs/heads/feature-a','expectedHead':BASE['GitOid'],'description':ART,'coveredWorkIds':['task-a','task-b']}}
 case('r2-input-git.pull_request','git-command-request.r2',pr)
 case('r2-result-git.pull_request','operation-result.r2',result('git.pull_request',LEGACY_RESULTS['git.pull_request']))
+publication={'protocol':'1.0-draft.1','schemaRevision':16,'requestKey':'feature-task-publication','command':{
+ 'kind':'Push','worktreeId':'feature-tree','remoteId':'origin','targetRef':'refs/heads/feature/fixture',
+ 'expectedHead':{'format':'Sha1','hex':'b'*40},'expectedRemote':BASE['GitOid'],'mode':'Normal',
+ 'taskIntegration':{'taskId':'task-a','expectedTaskRevision':'1','taskWorktreeId':'task-tree',
+  'reviewId':'review-once','reviewedBase':BASE['GitOid'],'reviewedHead':{'format':'Sha1','hex':'c'*40},
+  'taskHead':{'format':'Sha1','hex':'c'*40},'predecessor':BASE['GitOid'],'verification':ART,
+  'focusedChecks':['feature-candidate-tests']}}}
+case('r16-input-git.push-task-integration','git-command-request.r16',publication)
+bad_publication=copy.deepcopy(publication);bad_publication['command']['taskIntegration']['predecessor']={'format':'Sha1','hex':'a'*40}
+if bad_publication['command']['taskIntegration']['predecessor']==publication['command']['expectedRemote']:
+ bad_publication['command']['taskIntegration']['predecessor']['hex']='d'*40
+case('reject-task-integration-with-different-predecessor','git-command-request.r16',bad_publication,False,True)
+legacy_publication=copy.deepcopy(publication);legacy_publication.pop('schemaRevision')
+case('reject-r1-task-integration-evidence','git-command-request',legacy_publication,False,False)
 bad=copy.deepcopy(pr);bad['command']['coveredWorkIds']=None
 case('reject-null-group-pr','git-command-request.r2',bad,False,False)
 bad=copy.deepcopy(pr);bad['schemaRevision']=1
@@ -1395,5 +1501,24 @@ claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'s
 for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Schema revision 3 (GitHub sync, DW-40): verified issue links, account diagnostics and resumable poll status.
+for name in ['issues.publish','issues.link']:
+ case('r3-input-'+name,'domain-request.r3',{**request(name,'Command'),'schemaRevision':3})
+ github_issue_link={**sample('GithubIssueLink'),'url':'https://github.com/Acme/kit/issues/42'}
+ case('r3-result-'+name,'operation-result.r3',{'kind':name,'value':github_issue_link})
+ case('reject-r1-result-'+name+'-issue-link','operation-result',{'kind':name,'value':github_issue_link},False,False)
+case('r3-input-github.account-query','domain-request.r3',{**request('github.account','Query'),'schemaRevision':3})
+case('r3-input-github.account-command','domain-request.r3',{**request('github.account','Command'),'schemaRevision':3})
+github_account_r3={**sample('GithubAccountState'),'apiHost':'github.com','authorizationState':'Connected','permissionRevision':'2','grantedScopes':['repo'],'failure':'Token expired'}
+case('r3-result-github.account','operation-result.r3',{'kind':'github.account','value':github_account_r3})
+case('reject-r1-result-github.account-diagnostics','operation-result',{'kind':'github.account','value':github_account_r3},False,False)
+case('r3-input-github.poll_status','domain-request.r3',{**request('github.poll_status','Query'),'schemaRevision':3})
+poll_page={**request('github.poll_status','Query'),'schemaRevision':3};poll_page['body']['page']={'limit':50,'cursor':'cursor-a'}
+case('r3-input-github.poll_status-page','domain-request.r3',poll_page)
+poll_page_r1=request('github.poll_status','Query');poll_page_r1['body']['page']={'limit':50}
+case('reject-r1-input-github.poll_status-page','domain-request',poll_page_r1,False,False)
+github_poll_view={**sample('GithubPollStatusView'),'endpoints':[sample('GithubPollEndpoint')],'intake':{'items':[{**sample('GithubIssueIntakeView'),'url':'https://github.com/Acme/kit/issues/42'}],'hasMore':False}}
+case('r3-result-github.poll_status','operation-result.r3',{'kind':'github.poll_status','value':github_poll_view})
+case('reject-r1-result-github.poll_status-view','operation-result',{'kind':'github.poll_status','value':github_poll_view},False,False)
 (D/'domain-fixtures.json').write_text(json.dumps(CASES,indent=2)+'\n')
 print(json.dumps({'fixtures':len(CASES),'positive':sum(c['typedValid'] for c in CASES),'negative':sum(not c['typedValid'] for c in CASES),'inputOperationModes':sum(2 if d['mode']=='Hybrid' else 1 for d in OPS.values()),'resultOperations':len(OPS)+len(LEGACY_RESULTS)}))

@@ -1867,12 +1867,15 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::Prepared { .. }
                         | TaskOutput::SettingSecret { .. }
                         | TaskOutput::PackagePrepared { .. }
+                        | TaskOutput::PackageViews { .. }
+                        | TaskOutput::PackageViewData(_)
                         | TaskOutput::Refreshed
                         | TaskOutput::TextPreview(_)
                         | TaskOutput::WorkspaceReplyStatus(_)
                         | TaskOutput::Convention(_)
                         | TaskOutput::Instruction(_)
                         | TaskOutput::McpContent(_)
+                        | TaskOutput::AnalysisEvidence(_)
                         | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
                         | TaskOutput::RepositoryDeleted(_),
@@ -1940,12 +1943,15 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::Prepared { .. }
                             | TaskOutput::SettingSecret { .. }
                             | TaskOutput::PackagePrepared { .. }
+                            | TaskOutput::PackageViews { .. }
+                            | TaskOutput::PackageViewData(_)
                             | TaskOutput::Refreshed
                             | TaskOutput::TextPreview(_)
                             | TaskOutput::WorkspaceReplyStatus(_)
                             | TaskOutput::Convention(_)
                             | TaskOutput::Instruction(_)
                             | TaskOutput::McpContent(_)
+                            | TaskOutput::AnalysisEvidence(_)
                             | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
                             | TaskOutput::RepositoryDeleted(_),

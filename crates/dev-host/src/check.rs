@@ -1,13 +1,18 @@
-//! `dev-host check`: the root is set, sits on its own volume, and carries the marker.
+//! `dev-host check`: the root is set, sits on its own volume, and carries the marker; this
+//! host's folder `hosts/<host>/` exists; and every `required_mount` in `dev-host.conf` is
+//! mounted.
 //!
-//! Nothing here creates the root or any folder above it. A failure names the volume that
-//! should be mounted, so a missing drive reads as a missing drive rather than a build error.
+//! Nothing here creates the root or any folder above it; only `dev-host init-host` creates the
+//! host's folder ([`init_host`]). A failure names the volume or folder that is missing, so a
+//! missing drive reads as a missing drive rather than a build error.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::config::{self, CONFIG_FILE, REQUIRED_MOUNT};
+use crate::host::{self, Host};
 use crate::{ROOT_VAR, Vars};
 
 /// The marker file written once when a root is set up.
@@ -21,6 +26,9 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 pub trait VolumeProbe: Send + Sync {
     /// Returns `Err(reason)` when `root` (which exists) is on the wrong volume.
     fn verify(&self, root: &Path) -> Result<(), String>;
+
+    /// Returns `Err(reason)` when `path`, a `required_mount`, is not a mounted volume.
+    fn verify_mount(&self, path: &Path) -> Result<(), String>;
 }
 
 /// The real probe for this platform.
@@ -51,6 +59,33 @@ impl VolumeProbe for SystemVolumeProbe {
         } else {
             Ok(())
         }
+    }
+
+    fn verify_mount(&self, path: &Path) -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path).map_err(|e| format!("cannot stat it: {e}"))?;
+        if !meta.is_dir() {
+            return Err("it is not a folder".to_owned());
+        }
+        let system_dev = std::fs::metadata("/")
+            .map_err(|e| format!("cannot stat /: {e}"))?
+            .dev();
+        if meta.dev() == system_dev {
+            return Err("it is on the system volume (same device as /)".to_owned());
+        }
+        // A mount point sits on another device than the folder holding it; a plain folder on
+        // some other mounted volume does not.
+        let parent = path.parent().unwrap_or(path);
+        let parent_dev = std::fs::metadata(parent)
+            .map_err(|e| format!("cannot stat {}: {e}", parent.display()))?
+            .dev();
+        if parent != path && meta.dev() == parent_dev {
+            return Err(format!(
+                "it is a folder on the volume of {}, not a mount point",
+                parent.display()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -99,6 +134,57 @@ impl VolumeProbe for SystemVolumeProbe {
         } else {
             Err(format!(
                 "drive {drive}: is not a mounted fixed volume (drive type {kind})"
+            ))
+        }
+    }
+
+    fn verify_mount(&self, path: &Path) -> Result<(), String> {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetDriveTypeW(root_path_name: *const u16) -> u32;
+            fn GetVolumePathNameW(file_name: *const u16, volume_path: *mut u16, len: u32) -> i32;
+        }
+        // winbase.h: DRIVE_FIXED, DRIVE_REMOTE.
+        const DRIVE_FIXED: u32 = 3;
+        const DRIVE_REMOTE: u32 = 4;
+
+        let meta = std::fs::metadata(path).map_err(|e| format!("cannot open it: {e}"))?;
+        if !meta.is_dir() {
+            return Err("it is not a folder".to_owned());
+        }
+        // Ask for the volume of the plain spelling (`M:\x`, `\\server\share`): the drive type
+        // of a verbatim `\\?\` volume path is not reliable.
+        let text = path.as_os_str().to_string_lossy();
+        let plain = match text.strip_prefix(r"\\?\UNC\") {
+            Some(rest) => format!(r"\\{rest}"),
+            None => text.strip_prefix(r"\\?\").unwrap_or(&*text).to_owned(),
+        };
+        let wide: Vec<u16> = std::ffi::OsStr::new(&plain)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut volume = vec![0u16; 1024];
+        // SAFETY: `wide` is NUL-terminated and `volume` is writable for its full length.
+        let ok =
+            unsafe { GetVolumePathNameW(wide.as_ptr(), volume.as_mut_ptr(), volume.len() as u32) };
+        if ok == 0 {
+            return Err(format!(
+                "cannot find its volume: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let end = volume.iter().position(|&c| c == 0).unwrap_or(volume.len());
+        let shown = std::ffi::OsString::from_wide(&volume[..end]);
+        // SAFETY: `volume` is NUL-terminated (GetVolumePathNameW succeeded).
+        let kind = unsafe { GetDriveTypeW(volume.as_ptr()) };
+        if kind == DRIVE_FIXED || kind == DRIVE_REMOTE {
+            Ok(())
+        } else {
+            Err(format!(
+                "its volume {} is not a mounted fixed or remote volume (drive type {kind})",
+                shown.to_string_lossy()
             ))
         }
     }
@@ -187,8 +273,25 @@ fn wrong_volume_hint(root: &Path) -> String {
     }
 }
 
-/// Verifies the root named by `DEV_HOST_ROOT` and returns it.
-pub fn check(vars: &Vars, probe: &dyn VolumeProbe) -> Result<PathBuf, String> {
+/// The path a check is probing, so a timeout can name the volume that hung.
+#[derive(Default)]
+struct Probing(Mutex<Option<PathBuf>>);
+
+impl Probing {
+    fn at(&self, path: &Path) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = Some(path.to_path_buf());
+        }
+    }
+
+    fn current(&self) -> Option<PathBuf> {
+        self.0.lock().ok().and_then(|current| current.clone())
+    }
+}
+
+/// The root checks: `DEV_HOST_ROOT` is set, names a folder on the intended volume, and holds
+/// the marker.
+fn verify_root(vars: &Vars, probe: &dyn VolumeProbe, probing: &Probing) -> Result<PathBuf, String> {
     let Some(raw) = vars.get(ROOT_VAR) else {
         return Err(format!(
             "{ROOT_VAR} is not set; set it to this host's root on its dev volume \
@@ -199,6 +302,7 @@ pub fn check(vars: &Vars, probe: &dyn VolumeProbe) -> Result<PathBuf, String> {
     if !root.is_absolute() {
         return Err(format!("{ROOT_VAR}={raw} is not an absolute path"));
     }
+    probing.at(&root);
     match std::fs::metadata(&root) {
         Ok(meta) if meta.is_dir() => {}
         Ok(_) => return Err(format!("{ROOT_VAR}={raw} is not a folder")),
@@ -223,31 +327,133 @@ pub fn check(vars: &Vars, probe: &dyn VolumeProbe) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// Runs [`check`] on a worker thread and gives up after `timeout`, so a hung mount fails the
-/// check instead of hanging the caller.
-pub fn check_within(
+/// One problem per `required_mount` in `<root>/dev-host.conf` that is not mounted.
+fn missing_mounts(
+    root: &Path,
+    probe: &dyn VolumeProbe,
+    probing: &Probing,
+) -> Result<Vec<String>, String> {
+    let config = config::read(root)?;
+    let mut missing = Vec::new();
+    for mount in &config.required_mounts {
+        probing.at(mount);
+        if let Err(reason) = probe.verify_mount(mount) {
+            missing.push(format!(
+                "{REQUIRED_MOUNT} {} is not mounted ({reason}); mount it, or remove the line \
+                 from {}",
+                mount.display(),
+                root.join(CONFIG_FILE).display()
+            ));
+        }
+    }
+    Ok(missing)
+}
+
+fn joined(problems: Vec<String>) -> Result<(), String> {
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("; "))
+    }
+}
+
+fn root_with(vars: &Vars, probe: &dyn VolumeProbe, probing: &Probing) -> Result<PathBuf, String> {
+    let root = verify_root(vars, probe, probing)?;
+    joined(missing_mounts(&root, probe, probing)?)?;
+    Ok(root)
+}
+
+fn host_with(
     vars: &Vars,
-    probe: Arc<dyn VolumeProbe>,
+    probe: &dyn VolumeProbe,
+    host_name: &str,
+    probing: &Probing,
+) -> Result<Host, String> {
+    let root = verify_root(vars, probe, probing)?;
+    let host = Host::new(root, host_name)?;
+    let mut problems = Vec::new();
+    let dir = host.dir();
+    probing.at(&dir);
+    if let Err(e) = crate::confine(&dir, host.root(), host.root()) {
+        problems.push(e);
+    } else if !dir.is_dir() {
+        problems.push(format!(
+            "this host's folder {} is missing; create it once with `dev-host init-host`",
+            dir.display()
+        ));
+    }
+    problems.extend(missing_mounts(host.root(), probe, probing)?);
+    joined(problems)?;
+    Ok(host)
+}
+
+/// The root checks plus every `required_mount`, without this host's folder: what
+/// `dev-host init-host` needs before it creates that folder. Returns the root.
+pub fn check_root(vars: &Vars, probe: &dyn VolumeProbe) -> Result<PathBuf, String> {
+    root_with(vars, probe, &Probing::default())
+}
+
+/// The full check `dev-host check` runs: the root (set, on its own volume, marked), this host's
+/// folder `hosts/<host_name>/` (a real folder, not a link), and every `required_mount`. A
+/// failure names each missing piece.
+pub fn check(vars: &Vars, probe: &dyn VolumeProbe, host_name: &str) -> Result<Host, String> {
+    host_with(vars, probe, host_name, &Probing::default())
+}
+
+/// Runs `run` on a worker thread and gives up after `timeout`, so a hung mount fails the check
+/// instead of hanging the caller. The error names the path being probed when time ran out.
+fn check_within<T: Send + 'static>(
+    vars: &Vars,
     timeout: Duration,
-) -> Result<PathBuf, String> {
+    run: impl FnOnce(&Vars, &Probing) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     let (tx, rx) = mpsc::channel();
     let owned = vars.clone();
+    let probing = Arc::new(Probing::default());
+    let worker = Arc::clone(&probing);
     std::thread::spawn(move || {
-        let _ = tx.send(check(&owned, probe.as_ref()));
+        let _ = tx.send(run(&owned, &worker));
     });
     rx.recv_timeout(timeout).unwrap_or_else(|_| {
-        let root = vars.get(ROOT_VAR).unwrap_or_default();
+        let path = probing
+            .current()
+            .unwrap_or_else(|| PathBuf::from(vars.get(ROOT_VAR).unwrap_or_default()));
         Err(format!(
-            "{ROOT_VAR}={root} did not respond within {}s: its volume is hung or {}",
+            "{} did not respond within {}s: its volume is hung or {}",
+            path.display(),
             timeout.as_secs(),
-            missing_mount(Path::new(root))
+            missing_mount(&path)
         ))
     })
 }
 
-/// Runs the real check with the standard timeout.
-pub fn check_host(vars: &Vars) -> Result<PathBuf, String> {
-    check_within(vars, Arc::new(SystemVolumeProbe), CHECK_TIMEOUT)
+/// Runs the real [`check`] for this machine, with its OS-reported host name and the standard
+/// timeout.
+pub fn check_host(vars: &Vars) -> Result<Host, String> {
+    check_within(vars, CHECK_TIMEOUT, |vars, probing| {
+        let name = host::local_name()?;
+        host_with(vars, &SystemVolumeProbe, &name, probing)
+    })
+}
+
+/// Runs the real [`check_root`] with the standard timeout and pairs the root with this
+/// machine's host name, for `dev-host init-host`.
+pub fn check_host_root(vars: &Vars) -> Result<Host, String> {
+    check_within(vars, CHECK_TIMEOUT, |vars, probing| {
+        let root = root_with(vars, &SystemVolumeProbe, probing)?;
+        Host::new(root, &host::local_name()?)
+    })
+}
+
+/// `dev-host init-host`: creates this host's folder and its `locks/` under a root that passes
+/// [`check_root`]. Creates nothing else, and nothing above the host's folder except `hosts/`
+/// itself; refuses a symlink at any level. Returns the host folder.
+pub fn init_host(host: &Host) -> Result<PathBuf, String> {
+    let locks = host.locks();
+    crate::confine(&locks, host.root(), host.root())?;
+    std::fs::create_dir_all(&locks)
+        .map_err(|e| format!("cannot create {}: {e}", locks.display()))?;
+    Ok(host.dir())
 }
 
 #[cfg(test)]
@@ -255,6 +461,10 @@ mod tests {
     use super::*;
     use crate::testutil::Scratch;
 
+    const HOST: &str = "mac-a";
+
+    /// Accepts or rejects the root; treats a required mount as mounted when its folder name
+    /// starts with `mounted`.
     struct Fake(bool);
     impl VolumeProbe for Fake {
         fn verify(&self, _root: &Path) -> Result<(), String> {
@@ -264,12 +474,31 @@ mod tests {
                 Err("simulated system volume".into())
             }
         }
+
+        fn verify_mount(&self, path: &Path) -> Result<(), String> {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if name.starts_with("mounted") {
+                Ok(())
+            } else {
+                Err("simulated unmounted share".into())
+            }
+        }
     }
 
-    struct Hang;
+    /// Hangs on the root (`Hang(false)`) or on a required mount (`Hang(true)`).
+    struct Hang(bool);
     impl VolumeProbe for Hang {
         fn verify(&self, _root: &Path) -> Result<(), String> {
-            std::thread::sleep(Duration::from_secs(5));
+            if !self.0 {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+            Ok(())
+        }
+
+        fn verify_mount(&self, _path: &Path) -> Result<(), String> {
+            if self.0 {
+                std::thread::sleep(Duration::from_secs(5));
+            }
             Ok(())
         }
     }
@@ -280,9 +509,10 @@ mod tests {
             .collect()
     }
 
+    /// A marked root with [`HOST`]'s folder.
     fn marked_root(scratch: &Scratch) -> PathBuf {
         let root = scratch.path().join("dev-host");
-        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("hosts").join(HOST)).unwrap();
         std::fs::write(root.join(MARKER), "dev-host-root v1\n").unwrap();
         root
     }
@@ -291,12 +521,123 @@ mod tests {
     fn passes_on_marked_root_on_another_volume() {
         let scratch = Scratch::new("pass");
         let root = marked_root(&scratch);
-        assert_eq!(check(&vars_for(&root), &Fake(true)), Ok(root));
+        let host = check(&vars_for(&root), &Fake(true), HOST).unwrap();
+        assert_eq!(host.root(), root);
+        assert_eq!(host.dir(), root.join("hosts").join(HOST));
+    }
+
+    #[test]
+    fn fails_naming_a_missing_host_folder_without_creating_it() {
+        let scratch = Scratch::new("nohost");
+        let root = marked_root(&scratch);
+        let err = check(&vars_for(&root), &Fake(true), "mac-b").unwrap_err();
+        let missing = root.join("hosts").join("mac-b");
+        assert!(err.contains(&missing.display().to_string()), "{err}");
+        assert!(err.contains("dev-host init-host"), "{err}");
+        assert!(!missing.exists());
+        // The root alone still passes: that is what init-host needs.
+        assert_eq!(check_root(&vars_for(&root), &Fake(true)), Ok(root));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlinked_host_folder() {
+        let scratch = Scratch::new("hostlink");
+        let root = marked_root(&scratch);
+        let outside = scratch.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("hosts/mac-b")).unwrap();
+        let err = check(&vars_for(&root), &Fake(true), "mac-b").unwrap_err();
+        assert!(err.contains("is a symlink"), "{err}");
+        let host = Host::new(root.clone(), "mac-b").unwrap();
+        assert!(init_host(&host).unwrap_err().contains("is a symlink"));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn fails_naming_every_unmounted_required_mount() {
+        let scratch = Scratch::new("mounts");
+        let root = marked_root(&scratch);
+        let up = scratch.path().join("mounted-models");
+        let down = scratch.path().join("models");
+        let gone = scratch.path().join("work");
+        std::fs::write(
+            root.join(CONFIG_FILE),
+            format!(
+                "required_mount = {}\nrequired_mount = {}\nrequired_mount = {}\n",
+                up.display(),
+                down.display(),
+                gone.display()
+            ),
+        )
+        .unwrap();
+        let err = check(&vars_for(&root), &Fake(true), "mac-b").unwrap_err();
+        for named in [root.join("hosts/mac-b"), down.clone(), gone.clone()] {
+            assert!(err.contains(&named.display().to_string()), "{err}");
+        }
+        assert!(!err.contains(&up.display().to_string()), "{err}");
+        assert!(check_root(&vars_for(&root), &Fake(true)).is_err());
+        std::fs::write(
+            root.join(CONFIG_FILE),
+            format!("required_mount = {}\n", up.display()),
+        )
+        .unwrap();
+        assert!(check(&vars_for(&root), &Fake(true), HOST).is_ok());
+    }
+
+    #[test]
+    fn init_host_creates_only_the_host_folder_and_its_locks() {
+        let scratch = Scratch::new("init");
+        let root = marked_root(&scratch);
+        let host = Host::new(root.clone(), "mac-b").unwrap();
+        assert_eq!(init_host(&host), Ok(root.join("hosts/mac-b")));
+        assert!(root.join("hosts/mac-b/locks").is_dir());
+        let made: Vec<_> = std::fs::read_dir(root.join("hosts/mac-b"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(made, vec![std::ffi::OsString::from("locks")]);
+        // Idempotent, and the full check now passes for that host.
+        assert!(init_host(&host).is_ok());
+        assert!(check(&vars_for(&root), &Fake(true), "mac-b").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_mount_probe_rejects_folders_that_are_not_mount_points() {
+        let scratch = Scratch::new("realmount");
+        let plain = scratch.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        // A folder inside the scratch folder shares its parent's device whatever volume holds
+        // it, so it is never a mount point.
+        assert!(SystemVolumeProbe.verify_mount(&plain).is_err());
+        assert!(
+            SystemVolumeProbe
+                .verify_mount(&scratch.path().join("absent"))
+                .is_err()
+        );
+        assert!(SystemVolumeProbe.verify_mount(Path::new("/")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_mount_probe_accepts_a_fixed_drive_and_refuses_a_missing_folder() {
+        let scratch = Scratch::new("realmount");
+        assert_eq!(SystemVolumeProbe.verify_mount(scratch.path()), Ok(()));
+        assert_eq!(
+            SystemVolumeProbe.verify_mount(&std::env::temp_dir()),
+            Ok(())
+        );
+        assert!(
+            SystemVolumeProbe
+                .verify_mount(&scratch.path().join("absent"))
+                .is_err()
+        );
     }
 
     #[test]
     fn fails_when_unset() {
-        let err = check(&Vars::default(), &Fake(true)).unwrap_err();
+        let err = check(&Vars::default(), &Fake(true), HOST).unwrap_err();
         assert!(err.contains("DEV_HOST_ROOT is not set"), "{err}");
     }
 
@@ -304,7 +645,7 @@ mod tests {
     fn fails_on_system_volume_naming_the_mount() {
         let scratch = Scratch::new("sysvol");
         let root = marked_root(&scratch);
-        let err = check(&vars_for(&root), &Fake(false)).unwrap_err();
+        let err = check(&vars_for(&root), &Fake(false), HOST).unwrap_err();
         assert!(err.contains("simulated system volume"), "{err}");
         // The wording depends on where the scratch folder lives (TMPDIR under /Volumes, a
         // tmpfs, a Windows drive), so compare with the hint for this root.
@@ -320,7 +661,7 @@ mod tests {
         let scratch = Scratch::new("nomarker");
         let root = scratch.path().join("dev-host");
         std::fs::create_dir_all(&root).unwrap();
-        let err = check(&vars_for(&root), &Fake(true)).unwrap_err();
+        let err = check(&vars_for(&root), &Fake(true), HOST).unwrap_err();
         assert!(err.contains(MARKER), "{err}");
         assert!(!root.join(MARKER).exists());
     }
@@ -329,7 +670,7 @@ mod tests {
     fn fails_on_missing_root_without_creating_it() {
         let scratch = Scratch::new("missing");
         let root = scratch.path().join("absent");
-        let err = check(&vars_for(&root), &Fake(true)).unwrap_err();
+        let err = check(&vars_for(&root), &Fake(true), HOST).unwrap_err();
         assert!(err.ends_with(&unavailable_hint(&root)), "{err}");
         if cfg!(windows) {
             assert!(err.ends_with("the folder itself is missing"), "{err}");
@@ -341,11 +682,25 @@ mod tests {
     fn hung_probe_times_out() {
         let scratch = Scratch::new("hang");
         let root = marked_root(&scratch);
-        let started = std::time::Instant::now();
-        let err =
-            check_within(&vars_for(&root), Arc::new(Hang), Duration::from_millis(100)).unwrap_err();
-        assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(err.contains("did not respond"), "{err}");
+        let mount = scratch.path().join("models");
+        std::fs::write(
+            root.join(CONFIG_FILE),
+            format!("required_mount = {}\n", mount.display()),
+        )
+        .unwrap();
+        for (hang_on_mount, named) in [(false, &root), (true, &mount)] {
+            let started = std::time::Instant::now();
+            let err = check_within(&vars_for(&root), Duration::from_millis(100), move |v, p| {
+                host_with(v, &Hang(hang_on_mount), HOST, p)
+            })
+            .unwrap_err();
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(err.contains("did not respond"), "{err}");
+            assert!(
+                err.starts_with(&named.display().to_string()),
+                "names what hung: {err}"
+            );
+        }
     }
 
     #[test]

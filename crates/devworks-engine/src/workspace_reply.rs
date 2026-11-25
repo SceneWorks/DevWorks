@@ -1,8 +1,8 @@
 //! Native workspace chat consumes one saved message at a time, shared by Home and its sidebar.
 use crate::agent_turns::ToolWindowSweep;
 use crate::dispatch::{
-    Consumer, Delivery, DeliveryHandler, EffectExecutor, EffectFuture, EffectResult, Outcome,
-    RetryPolicy,
+    Consumer, Delivery, DeliveryHandler, EffectCapacity, EffectExecutor, EffectFuture,
+    EffectResult, Outcome, RetryPolicy, ScopedEffectFuture,
 };
 use crate::providers::sink::ProviderResult;
 use crate::turn_engine::TurnEngine;
@@ -162,18 +162,37 @@ impl DeliveryHandler for WorkspaceReplies {
 
 struct ReplyEffects(Arc<WorkspaceReplies>);
 
-impl EffectExecutor for ReplyEffects {
-    fn execute(&self, operation: OperationRecord) -> EffectFuture {
+impl ReplyEffects {
+    fn run<'a>(
+        &self,
+        operation: OperationRecord,
+        capacity: Option<EffectCapacity<'a>>,
+    ) -> ScopedEffectFuture<'a> {
         let worker = self.0.clone();
         Box::pin(async move {
             match worker.engine.get().and_then(Weak::upgrade) {
-                Some(engine) => run(&engine, operation, &worker.stopping).await,
+                Some(engine) => run(&engine, operation, &worker.stopping, capacity).await,
                 None => EffectResult::NotApplied("Workspace reply engine is opening.".into()),
             }
         })
     }
+}
 
-    fn resumes_after_observation(&self) -> bool {
+impl EffectExecutor for ReplyEffects {
+    fn execute(&self, operation: OperationRecord) -> EffectFuture {
+        self.run(operation, None)
+    }
+
+    fn execute_with_capacity<'a>(
+        &self,
+        operation: OperationRecord,
+        _: Cancellation,
+        capacity: EffectCapacity<'a>,
+    ) -> ScopedEffectFuture<'a> {
+        self.run(operation, Some(capacity))
+    }
+
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         true
     }
 
@@ -519,6 +538,7 @@ async fn run(
     engine: &TurnEngine,
     operation: OperationRecord,
     stopping: &Cancellation,
+    mut capacity: Option<EffectCapacity<'_>>,
 ) -> EffectResult {
     let (intent, attempt_no) = match (&operation.capability[..], operation.latest_attempt()) {
         (CAPABILITY, Some(attempt)) if operation.state == OperationState::Dispatching => {
@@ -565,7 +585,7 @@ async fn run(
             Ok(sweep) => sweep,
             Err(outcome) => return outcome,
         };
-    let mut generation = match prepare(engine, &ctx, &intent, stopping).await {
+    let mut generation = match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
         Ok(value) => value,
         Err(error) => {
             if stopping.is_cancelled() {
@@ -588,12 +608,20 @@ async fn run(
         )
         .await
         {
-            Ok(CompactionStep::Published) => match prepare(engine, &ctx, &intent, stopping).await {
-                Ok(next) => generation = next,
-                Err(error) => {
-                    return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
+            Ok(CompactionStep::Published) => {
+                match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
+                    Ok(next) => generation = next,
+                    Err(_) if stopping.is_cancelled() => {
+                        return EffectResult::Unknown(
+                            "Workspace reply paused for shutdown.".into(),
+                        );
+                    }
+                    Err(error) => {
+                        return settled(engine, &operation.id, attempt_no, unavailable(error))
+                            .await;
+                    }
                 }
-            },
+            }
             Ok(CompactionStep::NotNeeded) => {}
             Ok(CompactionStep::Unavailable(detail)) => {
                 return settled(engine, &operation.id, attempt_no, unavailable(detail)).await;
@@ -687,8 +715,11 @@ async fn run(
                 .await;
             }
         }
-        match prepare(engine, &ctx, &intent, stopping).await {
+        match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
             Ok(next) => generation = next,
+            Err(_) if stopping.is_cancelled() => {
+                return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
+            }
             Err(error) => {
                 return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
             }
@@ -953,6 +984,7 @@ fn finish_compaction(
         },
         result,
         &mut None,
+        None,
     )
 }
 
@@ -1052,17 +1084,31 @@ async fn prepare(
     ctx: &InvocationContext,
     intent: &ReplyIntent,
     cancel: &Cancellation,
+    mut capacity: Option<&mut EffectCapacity<'_>>,
 ) -> Result<WorkspaceGeneration, String> {
     if crate::auto_routing::needs_assignment(engine, ctx).map_err(|e| e.to_string())? {
         let (origin, material) =
             first_auto_input(engine, ctx, intent).map_err(|e| e.to_string())?;
-        crate::auto_routing::assign(engine, ctx, origin, material, cancel)
-            .await
-            .map_err(|error| format!("{error:?}"))?;
-    }
-    crate::agent_turns::wait_for_running_mcp_calls(engine, ctx, &intent.session_id, cancel)
+        crate::auto_routing::assign(
+            engine,
+            ctx,
+            origin,
+            material,
+            cancel,
+            capacity.as_deref_mut(),
+        )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error:?}"))?;
+    }
+    crate::agent_turns::wait_for_running_tool_results(
+        engine,
+        ctx,
+        &intent.session_id,
+        cancel,
+        capacity,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
     loop {
         let (worker, ctx, intent) = (engine.clone(), ctx.clone(), intent.clone());
         let result = tokio::task::spawn_blocking(move || prepare_prompt(&worker, &ctx, &intent))
@@ -1199,7 +1245,8 @@ fn prepare_prompt(
         tool_count > 0,
         images,
     )?;
-    let (binding, headroom) = crate::agent_turns::initial_route_binding(engine, session, &route)?;
+    let (binding, headroom, _) =
+        crate::agent_turns::initial_route_binding(engine, session, &route)?;
     let mut instructions: Vec<_> = (!role.text.is_empty())
         .then_some(TextBlock {
             text: role.text,

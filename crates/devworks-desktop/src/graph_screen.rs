@@ -23,6 +23,7 @@ pub struct Read {
     pub title: String,
     /// What the read asks for; `None` when the screen's input did not convert into a request.
     pub query: Option<Query>,
+    pub view_override: Option<ViewSelection>,
     pub cursors: Vec<Option<String>>,
     pub page: Option<GraphPage>,
     pub module_pages: Vec<(Option<String>, GraphPage)>,
@@ -33,6 +34,7 @@ pub struct Breadcrumb {
     pub repository: String,
     pub name: String,
     pub selected: Option<CodeNode>,
+    pub pin: Option<ResolvedViewSet>,
     pub tab: usize,
 }
 impl Read {
@@ -41,13 +43,14 @@ impl Read {
             operation,
             title: title.into(),
             query,
+            view_override: None,
             cursors: vec![None],
             page: None,
             module_pages: Vec::new(),
         }
     }
     /// A `code.*` read of `query`.
-    fn code(operation: &'static str, title: &str, query: Option<GraphQuery>) -> Self {
+    pub(crate) fn code(operation: &'static str, title: &str, query: Option<GraphQuery>) -> Self {
         Self::new(operation, title, query.map(Query::Code))
     }
     /// A repository's overview.
@@ -106,7 +109,12 @@ fn dependencies(repository: &str) -> Option<GraphQuery> {
     })
 }
 /// A read of lines `start..=end` of one file (`0..=0` reads the whole file).
-fn file_source(repository_id: Id, path: RelativePath, start: i64, end: i64) -> Option<GraphQuery> {
+pub(crate) fn file_source(
+    repository_id: Id,
+    path: RelativePath,
+    start: i64,
+    end: i64,
+) -> Option<GraphQuery> {
     Some(GraphQuery::Source {
         node_id: None,
         max_lines: None,
@@ -157,6 +165,8 @@ pub struct GraphScreen {
     pub edge_kind: String,
     pub tab: usize,
     pub expand_containers: Option<bool>,
+    pub analysis: crate::analysis_screen::AnalysisScreen,
+    pub analysis_fleet: bool,
 }
 
 #[derive(Clone)]
@@ -180,6 +190,7 @@ pub enum Action {
     Trust(CodeNode, bool),
     /// Opens Databases searching for a table a node uses.
     FindTable(String),
+    Analysis(crate::analysis_screen::Action),
     Registration,
     Indexing,
 }
@@ -260,6 +271,7 @@ impl GraphScreen {
         self.opened = false;
         self.sequence = self.sequence.wrapping_add(1);
         self.loading = false;
+        self.analysis.invalidate();
     }
     /// The view the reads name: `Some(None)` is the current view, and `None` is a selection
     /// that does not convert into a request.
@@ -566,7 +578,11 @@ impl GraphScreen {
             widgets::Header {
                 title: &title,
                 summary: "Explore the indexed repository and its relationships.",
-                tabs: &["Overview", "Nodes", "Graph", "Health", "Reviews"],
+                tabs: if self.analysis_fleet {
+                    &["Fleet analysis"]
+                } else {
+                    &["Overview", "Nodes", "Graph", "Analysis", "Reviews"]
+                },
                 tab: self.tab,
             },
             &mut (self, actions),
@@ -583,20 +599,30 @@ impl GraphScreen {
             |ui, (state, actions), tab| {
                 egui::ScrollArea::vertical().id_salt("repository-graph-body").show(ui, |ui| {
 
+                if state.analysis_fleet {
+                    actions.extend(state.analysis.ui(ui, online, false).into_iter().map(Action::Analysis));
+                    return;
+                }
                 if tab != state.tab {
                     state.tab = tab;
                     match tab {
                         0=>actions.push(Action::Read(Read::overview(&state.repository))),
                         1=>actions.push(Action::Read(state.nodes())),
                         2=>actions.push(Action::Read(Read::dependencies(&state.repository))),
+                        3=>actions.push(Action::Analysis(crate::analysis_screen::Action::Read(
+                            crate::analysis_screen::Query::Health, None,
+                        ))),
                         _=>{}
                     }
                 }
                 state.controls(ui, online, actions);
-                if tab >= 3 {
+                if tab == 3 {
+                    actions.extend(state.analysis.ui(ui, online, true).into_iter().map(Action::Analysis));
+                    return;
+                }
+                if tab == 4 {
                     widgets::chip(ui, "Unavailable", Tone::Attention);
-                    ui.label(if tab==3{"Health measurements are not available from the current repository \
-                        services."}else{"Review history is not available from the current repository services."});
+                    ui.label("Review history is not available from the current repository services.");
                     return;
                 }
                 if let Some((tone, text)) = &state.notice {
@@ -841,6 +867,16 @@ impl GraphScreen {
                     && let Some(source) = &node.source
                 {
                     self.file = source.unit_key.0.clone();
+                }
+                if let Some(source) = &node.source
+                    && ui
+                        .add_enabled(online, egui::Button::new("File hotspot"))
+                        .clicked()
+                {
+                    actions.push(Action::Analysis(crate::analysis_screen::Action::Read(
+                        crate::analysis_screen::Query::File(source.unit_key.0.clone()),
+                        None,
+                    )));
                 }
                 for (label, whole) in [("Read node source", false), ("Read whole file", true)] {
                     if ui

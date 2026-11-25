@@ -17,7 +17,7 @@ pub(super) fn count(
     {
         return Ok(None);
     }
-    if reader.gaps.contains(&"graph_visited_limit") {
+    if reader.index_limited() {
         reader.gaps.push("unmapped_counts_incomplete");
         return Ok(None);
     }

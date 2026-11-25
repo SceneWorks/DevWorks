@@ -1488,6 +1488,17 @@ impl GraphRepository for Unit<'_> {
         ))?;
         Ok(())
     }
+    fn invalidate_graph_pins_for_overlay(&mut self, overlay: &Id) -> Result<(), StorageError> {
+        db(self.conn.execute(
+            "DELETE FROM graph_read_pins WHERE id IN (
+                SELECT pins.pin_id FROM graph_read_pin_views pins
+                JOIN index_views views ON views.id=pins.view_id
+                WHERE json_extract(views.coverage_json,'$.overlayId')=?1
+            )",
+            [overlay.as_str()],
+        ))?;
+        Ok(())
+    }
     fn insert_graph_source_capture(
         &mut self,
         record: &StoredGraphSourceCapture,

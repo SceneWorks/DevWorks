@@ -1,0 +1,14 @@
+{
+  "schema": 68,
+  "policy": "dw37-database-sensitive-policies-v1",
+  "additionalTables": [
+    {
+      "table": "database_sensitive_policies",
+      "class": "global_schema_sources",
+      "disposition": "preserve_independent",
+      "purpose": "Workspace defaults have no project owner. Each connection-specific policy follows its shared schema source by foreign key. Purging a project removes its access to the source and leaves its workspace or connection policy in place."
+    }
+  ],
+  "readerFloor": 66,
+  "writerFloor": 68
+}

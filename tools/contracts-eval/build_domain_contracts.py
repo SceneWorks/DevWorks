@@ -4,7 +4,7 @@ import json,re,subprocess
 from domain_spec import TYPES,OPS,LEGACY_RESULTS,FAMILY_RULES
 from input_alternatives import alternatives
 from versioned_result import generate as gen_versioned
-from variant_revision import containing as variant_types, method as variant_method, calls as variant_calls, enum_members, enum_projection
+from variant_revision import containing as variant_types, enum_variants, method as variant_method, calls as variant_calls
 ROOT=Path(__file__).resolve().parents[2]; OUT=ROOT/'tools/contracts-eval/src/domain_generated.rs'
 def pascal(s): return ''.join(p[:1].upper()+p[1:] for p in re.split('[._-]',s))
 def rust(t):
@@ -77,8 +77,8 @@ for name,d in TYPES.items():
   lines += [REC+record_attrs(d)+f'pub struct {name} {{',fields(d['fields'],since=d.get('since'),one=d.get('exactlyOne',())),'}',f'impl Check for {name} {{ fn check(&self)->Result<(),String>{{',checkfields(d['fields']),f'    super::domain_rules::record("{name}", &serde_json::to_value(self).map_err(|e|e.to_string())?)?;', '    Ok(()) } }','']
   if name in RC:lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,revision:u32){{',*retain(d['fields'],d.get('since',{}),'self.'),'}',variant_method(d,variant_types(TYPES)),'}','']
  elif d['kind']=='enum':
-  lines += [ATTR+f'pub enum {name} {{',*enum_members(d,pascal),'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']
-  if projection:=enum_projection(name,d,variant_types(TYPES)):lines += [projection,'']
+  lines += [ATTR+f'pub enum {name} {{',*enum_variants(d,pascal),'}',f'impl Check for {name} {{fn check(&self)->Result<(),String>{{Ok(())}}}}','']
+  if name in RC:lines += [f'impl Revisioned for {name} {{fn retain_revision(&mut self,_revision:u32){{}}',variant_method(d,variant_types(TYPES)),'}','']
  elif d['kind']=='versioned':
   lines += [gen_versioned(name,d,TYPES),'']
  else:

@@ -1,38 +1,14 @@
 //! Truthful wire projections of captured graph facts; no current checkout or catalog lookups.
 use super::{properties, scan};
+pub(super) use crate::kernel::graph_view::{snapshot, text, unrepresentable, wire};
 use crate::ports::storage::*;
-use crate::protocol::data::{
-    Citation, CitationSource, GitOid, Locator, ObjectFormat, RepositorySnapshot,
-};
+use crate::protocol::data::{Citation, CitationSource, Locator};
 use crate::protocol::records::{CodeEdge, CodeNode, CodeSourceLocation};
 use crate::protocol::support::{BoundedList, BoundedText, GraphUnitKey};
 use crate::protocol::{Counter, DomainErrorCode, Id};
 use crate::services::indexing::views::{self, ViewLayers};
 use crate::services::kernel::{Failure, Refusal, rev};
-use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-
-pub(super) fn unrepresentable() -> Failure {
-    Refusal::new(
-        DomainErrorCode::ViewUnavailable,
-        "graph_value_unrepresentable",
-        None,
-    )
-    .into()
-}
-
-/// Validates a stored JSON document as the wire type `T`. Use it only where the input really is
-/// a stored document; typed values go through [`text`], [`list`] and [`count`].
-pub(super) fn wire<T: DeserializeOwned>(value: Value) -> Result<T, Failure> {
-    serde_json::from_value(value).map_err(|_| unrepresentable())
-}
-
-/// A wire scalar (bounded text, identifier, digest, kind name) built from typed text under the
-/// same validation as the wire type's reader, with no JSON document in between.
-pub(super) fn text<T: DeserializeOwned>(value: &str) -> Result<T, Failure> {
-    T::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(value))
-        .map_err(|_| unrepresentable())
-}
 
 /// A wire list, refused outside its length contract exactly as the wire reader refuses it.
 pub(super) fn list<T, const MIN: usize, const MAX: usize>(
@@ -49,57 +25,6 @@ pub(super) fn count(value: u64) -> Result<Counter, Failure> {
         .ok()
         .and_then(|value| Counter::new(value).ok())
         .ok_or_else(unrepresentable)
-}
-
-fn oid(text: &str) -> Result<GitOid, Failure> {
-    let oid = GitOid {
-        format: if text.len() == 64 {
-            ObjectFormat::Sha256
-        } else {
-            ObjectFormat::Sha1
-        },
-        hex: text.into(),
-    };
-    oid.validate()
-        .map_err(|_| Refusal::new(DomainErrorCode::ViewUnavailable, "graph_snapshot", None))?;
-    Ok(oid)
-}
-
-pub(super) fn snapshot(view: &StoredView) -> Result<RepositorySnapshot, Failure> {
-    let base = view
-        .coverage
-        .get("base")
-        .or_else(|| view.coverage.get("commit"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            Refusal::new(
-                DomainErrorCode::ViewUnavailable,
-                "graph_snapshot",
-                Some(view.view_id.clone()),
-            )
-        })?;
-    let head = view
-        .coverage
-        .get("head")
-        .and_then(Value::as_str)
-        .unwrap_or(base);
-    Ok(RepositorySnapshot {
-        repository_id: view.repository_id.clone(),
-        base: oid(base)?,
-        head: oid(head)?,
-        worktree_id: view
-            .coverage
-            .get("worktreeId")
-            .filter(|v| !v.is_null())
-            .map(|v| wire(v.clone()))
-            .transpose()?,
-        capture_digest: view
-            .coverage
-            .get("captureDigest")
-            .filter(|v| !v.is_null())
-            .map(|v| wire(v.clone()))
-            .transpose()?,
-    })
 }
 
 pub(super) fn capture(

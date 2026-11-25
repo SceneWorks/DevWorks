@@ -207,9 +207,11 @@
 pub mod agent_inbox;
 pub mod agent_supervisor;
 pub mod agent_turns;
+mod analysis_tools;
 pub mod approvals;
 mod auto_routing;
 pub mod browser;
+mod code_review;
 mod compaction;
 mod context_epoch;
 pub mod conventions;
@@ -220,6 +222,9 @@ pub mod dispatch;
 pub mod effect_consumer;
 pub mod evals;
 pub mod git;
+pub mod github;
+pub mod github_triage;
+pub mod github_verify;
 pub mod help;
 pub mod indexing;
 mod instruction_guard;
@@ -277,5 +282,6 @@ pub mod conventions_import;
 
 pub mod schemas;
 
+mod repository_analysis;
 mod workspace_reply;
 pub use workspace_reply::WorkspaceReplyStatus;

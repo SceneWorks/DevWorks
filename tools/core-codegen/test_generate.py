@@ -76,7 +76,10 @@ class SchemaRevisionRules(unittest.TestCase):
             # A prioritization's bounded placement (one move, any bucket size).
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
-            'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
+            'artifacts.read', 'git.pull_request', 'git.push', 'browser.sessions', 'browser.input',
+            'reviews.list', 'reviews.inspect', 'reviews.request', 'reviews.findings',
+            'reviews.respond', 'reviews.adjudicate', 'reviews.readiness',
+            'github.account', 'github.poll_status', 'issues.link', 'issues.publish',
             'browser.upload', 'browser.console', 'browser.network',
             'desktop.inspect', 'desktop.capture', 'desktop.request_control',
             'desktop.input', 'desktop.release_control',
@@ -87,22 +90,32 @@ class SchemaRevisionRules(unittest.TestCase):
             'conventions.resources', 'conventions.version',
             'schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
             'schemas.configure', 'database.configure_sensitive_columns', 'schemas.code_references',
+            'database.read', 'database.execute_write', 'database.apply_migration',
+            'database.direct_schema_change', 'database.mysql_readonly_query',
+            'database.sensitive_columns', 'database.edit_sensitive_column_rules',
+            'analysis.health', 'analysis.cross_repo_links', 'analysis.community_analysis',
+            'analysis.status', 'analysis.clusters', 'analysis.cluster_detail', 'analysis.link_and_detect',
+            'analysis.process_batch', 'analysis.security', 'analysis.metrics', 'analysis.hotspots',
+            'analysis.reanalyze', 'analysis.synthesize', 'analysis.fleet_health',
+            'analysis.archival_candidates', 'analysis.file_hotspot',
             'projects.prepare_purge', 'projects.purge_manifest', 'projects.purge',
             'projects.purge_status', 'history.command_receipt', 'agents.post', 'agents.receive', 'agents.ack',
             'agents.history', 'agents.events', 'skills.resources', *MCP,
             'watch.create', 'watch.list', 'watch.inspect', 'watch.cancel', 'containers.create',
             'process.install_project_dependencies', 'skills.set_enabled',
-            'addons.invoke', 'addons.invocation',
+            'addons.invoke', 'addons.invocation', 'addons.read_content', 'addons.run_workflow',
             'settings.read_effective', 'settings.validate', 'settings.save_revision',
             'settings.explain_source', 'dreaming.instructions', 'skills.discover', 'skills.read',
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
             'roles.history', 'roles.rollback', 'sessions.transcript'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
+        for name in ('addons.read_content', 'addons.run_workflow'):
+            self.assertEqual(carried[name], {9})
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
         for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):
-            self.assertEqual(carried[name], {8, 9, 10})
+            self.assertEqual(carried[name], {8, 9, 18})
         for name in ('schemas.code_references', 'settings.read_effective', 'settings.validate',
                      'settings.save_revision', 'settings.explain_source'):
             self.assertEqual(carried[name], {8})
@@ -112,6 +125,11 @@ class SchemaRevisionRules(unittest.TestCase):
         for name in ('schemas.connections', 'schemas.objects', 'schemas.index', 'schemas.refresh',
                      'schemas.configure', 'database.configure_sensitive_columns'):
             self.assertEqual(carried[name], {5})
+        for name in ('database.read', 'database.execute_write', 'database.apply_migration',
+                     'database.direct_schema_change', 'database.sensitive_columns',
+                     'database.edit_sensitive_column_rules'):
+            self.assertEqual(carried[name], {9})
+        self.assertEqual(carried['database.mysql_readonly_query'], {9, 10})
         self.assertEqual(carried['features.edit'], {2, 3})
         self.assertEqual(carried['resources.renew'], {2})
         for name in ('desktop.inspect', 'desktop.capture', 'desktop.request_control',

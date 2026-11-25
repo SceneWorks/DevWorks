@@ -15,3 +15,8 @@ Finding-specific human risk acceptance records rationale and exact scope/revisio
 ## Membership and controls
 
 Linking an existing issue preserves its identity, history, worker, session, branches, and workspaces. The coordinator takes responsibility for integration. Unlinking creates a durable pause; relinking cannot clear it. A transfer reconciles at a quiescent boundary and preserves independent holds. Workflow status is separate from pause/wait state. See [Issues](help:issues), [Approvals](help:approvals), [Workflow and allocation](help:workflow), and [Work controls](help:work-controls).
+
+
+## Code reviews
+
+Open **Code reviews** in the work detail to inspect each reviewed commit or local diff, its source, findings, and responses. Record a response or explain why a finding is not actionable. DevWorks keeps the original reviewed head in history when it verifies a repair. A new head or changed policy can require additional evidence before delivery.

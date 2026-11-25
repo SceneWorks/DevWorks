@@ -923,7 +923,11 @@ pub(crate) fn controls(
                         }
                         for link in &recovery.links.0 {
                             if let Some(url) = &link.url {
-                                ui.hyperlink_to(&link.kind.0, &url.0);
+                                let label = widgets::github_link_label(&url.0).map_or_else(
+                                    || link.kind.0.clone(),
+                                    |repo| format!("{} · {repo}", link.kind.0),
+                                );
+                                ui.hyperlink_to(label, &url.0);
                             }
                             if let Some(target) = &link.target_id {
                                 widgets::caption(

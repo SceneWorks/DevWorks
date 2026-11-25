@@ -217,57 +217,91 @@ fn parallel_migrations_preserve_keep_working_claims_and_systemone_rotation() {
 }
 
 #[test]
-fn parallel_migration_preserves_attached_watchers() {
-    let h = Harness::new();
-    let mut branch = through(63);
-    branch.push(crate::storage::sqlite::Migration {
-        version: 64,
-        minimum_reader: 64,
-        minimum_writer: 64,
-        ..MIGRATIONS[66]
-    });
-    drop(seeded_with(&h, &branch));
-    let conn = h.raw();
-    conn.execute_batch(
-        "INSERT INTO conversations(id, created_at) VALUES ('watch-chat', 0);
-         INSERT INTO sessions(id, conversation_id, agent_id, context_epoch, revision)
-             VALUES ('watch-session', 'watch-chat', 'host', 0, 1);
-         INSERT INTO watchers(id, revision, phase, source_kind, session_id, actor_id, tail_bytes,
-             output_truncated, stop_requested, created_at, updated_at, attached_pid, attached_birth)
-             VALUES ('attached', 1, 'Active', 'AttachedProcess', 'watch-session', 'host', 0,
-                     0, 0, 0, 0, 1234, 'process-identity');",
-    )
-    .unwrap();
-    let original = super::super::migrations::ledger(&conn)
-        .unwrap()
-        .pop()
-        .unwrap();
-    drop(conn);
-    let s = h.store();
-    assert!(s.integrity_check().unwrap().problems.is_empty());
-    let watcher = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
-        snapshot.watchers().watcher(&id("attached"))
-    })
-    .unwrap()
-    .unwrap();
-    assert_eq!(watcher.source_kind, "AttachedProcess");
-    drop(s);
-    let conn = h.raw();
-    let entries = super::super::migrations::ledger(&conn).unwrap();
-    for (entry, migration) in entries.iter().zip(MIGRATIONS) {
-        assert_eq!(entry.version, migration.version);
-        assert_eq!(entry.checksum, migration.checksum());
+fn published_watcher_migrations_preserve_attached_and_delegated_sources() {
+    for (prefix, has_assignment) in [(63, false), (66, false), (66, true)] {
+        let h = Harness::new();
+        let mut branch = through(prefix);
+        let version = (prefix + 1) as i64;
+        branch.push(crate::storage::sqlite::Migration {
+            version,
+            minimum_reader: version,
+            minimum_writer: version,
+            sql: include_str!("../migrations/0067_external_process_watchers.sql"),
+            expected_sha256: "a23ddfe3134f16970b55a18a91f6582fd3e3fe9f087a3ed5224e04288211b8e2",
+            rebuilds_tables: true,
+        });
+        if has_assignment {
+            branch.push(crate::storage::sqlite::Migration {
+                version: 68,
+                minimum_reader: 68,
+                minimum_writer: 68,
+                sql: include_str!("../migrations/0068_assignment_watchers.sql"),
+                expected_sha256: "b2432a633eec00d44bc5f9bcd7cb23161e4f6dd303755fad5d27e245afdc50b1",
+                rebuilds_tables: true,
+            });
+        }
+        drop(seeded_with(&h, &branch));
+        let conn = h.raw();
+        conn.execute_batch(
+            "INSERT INTO conversations(id, created_at) VALUES ('watch-chat', 0);
+             INSERT INTO sessions(id, conversation_id, agent_id, context_epoch, revision)
+                VALUES ('watch-session', 'watch-chat', 'host', 0, 1);
+             INSERT INTO watchers(id, revision, phase, source_kind, session_id, actor_id, tail_bytes,
+                outcome_kind,output_truncated,stop_requested,created_at,updated_at,settled_at,
+                attached_pid,attached_birth)
+                VALUES ('attached',2,'Settled','AttachedProcess','watch-session','host',0,
+                    'Exited',0,0,0,0,0,1234,'process-identity');
+             INSERT INTO watcher_events(id,watcher_id,session_id,state,payload_json,created_at)
+                VALUES ('watch-durable-event','attached','watch-session','Pending','{}',0);"
+        ).unwrap();
+        if has_assignment {
+            conn.execute_batch(
+                "INSERT INTO watchers(id, revision, phase, source_kind,session_id,actor_id,
+                    tail_bytes,output_truncated,stop_requested,created_at,updated_at,
+                    assignment_id,child_session_id)
+                    VALUES ('delegated',1,'Active','Assignment','watch-session','host',0,0,0,0,0,
+                        'child-assignment','watch-session');",
+            )
+            .unwrap();
+        }
+        drop(conn);
+        for _ in 0..2 {
+            let store = h.store();
+            assert!(store.integrity_check().unwrap().problems.is_empty());
+            read_snapshot(&store, &ReadOptions::default(), |snapshot| {
+                let attached = snapshot.watchers().watcher(&id("attached"))?.unwrap();
+                let identity = attached.attached_process.unwrap();
+                assert_eq!(
+                    (identity.pid, identity.birth.as_str()),
+                    (1234, "process-identity")
+                );
+                assert!(
+                    snapshot
+                        .watchers()
+                        .watch_event(&id("watch-durable-event"))?
+                        .is_some()
+                );
+                let delegated = snapshot.watchers().watcher(&id("delegated"))?;
+                assert_eq!(delegated.is_some(), has_assignment);
+                if let Some(watcher) = delegated {
+                    assert_eq!(
+                        watcher.assignment.unwrap().id.0.as_str(),
+                        "child-assignment"
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+            drop(store);
+        }
+        let conn = h.raw();
+        let entries = super::super::migrations::ledger(&conn).unwrap();
+        assert_eq!(entries.len(), MIGRATIONS.len());
+        for (entry, migration) in entries.iter().zip(MIGRATIONS) {
+            assert_eq!(entry.version, migration.version);
+            assert_eq!(entry.checksum, migration.checksum());
+        }
     }
-    assert_eq!(entries.len(), MIGRATIONS.len());
-    assert_eq!(entries[66].applied_at_ms, original.applied_at_ms);
-    let identity: (i64, String) = conn
-        .query_row(
-            "SELECT attached_pid, attached_birth FROM watchers WHERE id='attached'",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(identity, (1234, "process-identity".into()));
 }
 
 #[test]

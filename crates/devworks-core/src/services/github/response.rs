@@ -15,6 +15,8 @@ pub struct ResponseControl {
     pub links: Vec<String>,
     pub poll_after_ms: i64,
     pub backoff_until_ms: Option<i64>,
+    pub retry_after_supplied: bool,
+    pub server_date_ms: Option<i64>,
     pub remaining: Option<u64>,
     pub resource: Option<String>,
     pub granted_scopes: Option<Vec<String>>,
@@ -137,6 +139,10 @@ impl ResponseControl {
                 .collect(),
             poll_after_ms,
             backoff_until_ms,
+            retry_after_supplied: retry.is_some(),
+            server_date_ms: single(response, "date")?
+                .filter(|value| !value.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|value| crate::providers::limits::retry_after(0, value)),
             remaining,
             resource: single(response, "x-ratelimit-resource")?.map(str::to_owned),
             granted_scopes: scopes,
