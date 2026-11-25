@@ -336,8 +336,19 @@ fn reconcile_remote_closure(
 }
 
 pub fn deliver(tx: &mut dyn WriteTransaction, event: &EventRecord) -> Result<(), StorageError> {
-    let local = field_id(&event.payload, "repositoryId")?;
+    let mut local = field_id(&event.payload, "repositoryId")?;
     let remote = field_id(&event.payload, "githubRepositoryId")?;
+    // Issue links and comment cursors belong to the GitHub repository. A single issue
+    // event reaches every linked project with a current registration for that repository.
+    let registrations = if event.kind == "GithubIssueChanged" {
+        let current = super::references::bound_registrations(tx.github(), &remote)?;
+        if !current.contains(&local) {
+            local = current.first().cloned().ok_or(StorageError::ScopeDenied)?;
+        }
+        current
+    } else {
+        vec![local.clone()]
+    };
     check_source_tx(tx, &local, &remote)?;
     let (roots, url, description) = match event.kind.as_str() {
         "GithubIssueChanged" => {
@@ -351,8 +362,24 @@ pub fn deliver(tx: &mut dyn WriteTransaction, event: &EventRecord) -> Result<(),
             };
             let roots = issue_roots(tx, key.clone())?;
             let url = field(&event.payload, "url")?;
-            record_inbound_clarification_if_needed(tx, &local, &key, event, &roots, url)?;
-            escalate_inbound_conflict_if_needed(tx, &local, &key, event, &roots, url)?;
+            record_inbound_clarification_if_needed(
+                tx,
+                &local,
+                &registrations,
+                &key,
+                event,
+                &roots,
+                url,
+            )?;
+            escalate_inbound_conflict_if_needed(
+                tx,
+                &local,
+                &registrations,
+                &key,
+                event,
+                &roots,
+                url,
+            )?;
             (roots, url, format!("GitHub issue #{number} changed"))
         }
         "GithubPullEvidenceChanged" | "GithubPullRequestChanged" => {
@@ -404,12 +431,7 @@ pub fn deliver(tx: &mut dyn WriteTransaction, event: &EventRecord) -> Result<(),
         let Some(work) = tx.work().work(&root.0)? else {
             continue;
         };
-        if !tx
-            .projects()
-            .project(&work.project_id)?
-            .is_some_and(|project| project.lifecycle == "Active")
-            || !tx.projects().members(&work.project_id)?.contains(&local)
-        {
+        if !project_has_registration(tx, &work.project_id, &registrations)? {
             continue;
         }
         for work in std::iter::once(root).chain(work.parent_feature_id.map(RootId)) {
@@ -442,6 +464,7 @@ pub fn deliver(tx: &mut dyn WriteTransaction, event: &EventRecord) -> Result<(),
 fn record_inbound_clarification_if_needed(
     tx: &mut dyn WriteTransaction,
     local: &Id,
+    registrations: &[Id],
     key: &GithubIssueKey,
     event: &EventRecord,
     roots: &[RootId],
@@ -522,12 +545,7 @@ fn record_inbound_clarification_if_needed(
         let Some(mut work) = tx.work().work(&root.0)? else {
             continue;
         };
-        if !tx
-            .projects()
-            .project(&work.project_id)?
-            .is_some_and(|project| project.lifecycle == "Active")
-            || !tx.projects().members(&work.project_id)?.contains(local)
-        {
+        if !project_has_registration(tx, &work.project_id, registrations)? {
             continue;
         }
         // Preserve work.revision while container reproduction is in flight for NeedsProof cases.
@@ -569,6 +587,7 @@ fn record_inbound_clarification_if_needed(
 fn escalate_inbound_conflict_if_needed(
     tx: &mut dyn WriteTransaction,
     local: &Id,
+    registrations: &[Id],
     key: &GithubIssueKey,
     event: &EventRecord,
     roots: &[RootId],
@@ -627,12 +646,7 @@ fn escalate_inbound_conflict_if_needed(
         let Some(work) = tx.work().work(&root.0)? else {
             continue;
         };
-        if !tx
-            .projects()
-            .project(&work.project_id)?
-            .is_some_and(|project| project.lifecycle == "Active")
-            || !tx.projects().members(&work.project_id)?.contains(local)
-        {
+        if !project_has_registration(tx, &work.project_id, registrations)? {
             continue;
         }
         let approval_id = Id::new(format!(
@@ -703,6 +717,22 @@ fn escalate_inbound_conflict_if_needed(
         )?;
     }
     Ok(())
+}
+
+fn project_has_registration(
+    tx: &mut dyn WriteTransaction,
+    project: &ProjectId,
+    registrations: &[Id],
+) -> Result<bool, StorageError> {
+    Ok(tx
+        .projects()
+        .project(project)?
+        .is_some_and(|row| row.lifecycle == "Active")
+        && tx
+            .projects()
+            .members(project)?
+            .iter()
+            .any(|id| registrations.contains(id)))
 }
 
 fn check_source_snapshot(

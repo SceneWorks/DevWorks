@@ -5,8 +5,8 @@ use super::{GitHubService, repositories};
 use crate::fingerprint::sha256_hex;
 use crate::ports::IdKind;
 use crate::ports::storage::{
-    NewEvent, NewQueueEntry, ReadOptions, StorageError, StoredGithubPollCursor, WriteOptions,
-    WriteTransaction, read_snapshot, run_write,
+    GithubRead, NewEvent, NewQueueEntry, ReadOptions, StorageError, StoredGithubPollCursor,
+    WriteOptions, WriteTransaction, read_snapshot, run_write,
 };
 use crate::protocol::{EventId, Id};
 use crate::services::git::github::Fault;
@@ -251,43 +251,50 @@ fn enqueue_change(
         "head": after,
         "headUrl": format!("{}/commit/{after}", repo.url),
     });
-    let mut after = None;
+    for local in &bound_registrations(tx.github(), &repo.id)? {
+        let mut local_payload = payload.clone();
+        local_payload["repositoryId"] = json!(local);
+        // One queue entry per consumer and event. Each native registration has its own
+        // event while the authenticated ref cursor remains shared by the remote.
+        let event = EventId(tx.new_id(IdKind::Event));
+        let actor = tx.store().host_actor.clone();
+        tx.history().append(NewEvent {
+            id: event.clone(),
+            actor,
+            project_id: None,
+            root_id: None,
+            operation_id: None,
+            aggregate_kind: "github_ref".into(),
+            aggregate_id: format!(
+                "{}:{}:{}",
+                repo.id.as_str(),
+                local.as_str(),
+                endpoint_key(branch)
+            ),
+            aggregate_revision: revision,
+            kind: "GithubRefChanged".into(),
+            payload: local_payload.clone(),
+        })?;
+        enqueue(tx, &event, local, NOTICE_CONSUMER, local_payload.clone())?;
+        enqueue(tx, &event, local, INDEX_CONSUMER, local_payload)?;
+    }
+    Ok(())
+}
+
+/// Active native registrations reached by one canonical GitHub observation.
+pub(super) fn bound_registrations(
+    github: &dyn GithubRead,
+    canonical: &Id,
+) -> Result<Vec<Id>, StorageError> {
     const PAGE: u16 = 128;
+    let mut registrations = Vec::new();
     loop {
-        let registrations =
-            tx.github()
-                .github_bound_registrations(&repo.id, after.as_ref(), PAGE)?;
-        for local in &registrations {
-            let mut local_payload = payload.clone();
-            local_payload["repositoryId"] = json!(local);
-            // One queue entry per consumer and event. Each native registration has its own
-            // event while the authenticated ref cursor remains shared by the remote.
-            let event = EventId(tx.new_id(IdKind::Event));
-            let actor = tx.store().host_actor.clone();
-            tx.history().append(NewEvent {
-                id: event.clone(),
-                actor,
-                project_id: None,
-                root_id: None,
-                operation_id: None,
-                aggregate_kind: "github_ref".into(),
-                aggregate_id: format!(
-                    "{}:{}:{}",
-                    repo.id.as_str(),
-                    local.as_str(),
-                    endpoint_key(branch)
-                ),
-                aggregate_revision: revision,
-                kind: "GithubRefChanged".into(),
-                payload: local_payload.clone(),
-            })?;
-            enqueue(tx, &event, local, NOTICE_CONSUMER, local_payload.clone())?;
-            enqueue(tx, &event, local, INDEX_CONSUMER, local_payload)?;
+        let page = github.github_bound_registrations(canonical, registrations.last(), PAGE)?;
+        let more = page.len() == usize::from(PAGE);
+        registrations.extend(page);
+        if !more {
+            return Ok(registrations);
         }
-        if registrations.len() < usize::from(PAGE) {
-            return Ok(());
-        }
-        after = registrations.last().cloned();
     }
 }
 

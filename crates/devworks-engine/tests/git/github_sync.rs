@@ -2432,7 +2432,24 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
     let host_actor = store.info().host_actor;
     let key_seed = key_60.clone();
     let remote_rev = intake_60.remote_revision.clone();
+    let mirror_location = h
+        .root
+        .join("second-linked-checkout")
+        .to_string_lossy()
+        .into_owned();
     write(store.as_ref(), move |tx| {
+        let mut mirror = tx.projects().repository(&id("github-sync-repo"))?.unwrap();
+        mirror.id = id("github-sync-mirror");
+        mirror.location = mirror_location;
+        mirror.primary = false;
+        tx.projects().insert_repository(&mirror)?;
+        tx.github().put_github_repository_binding(
+            &StoredGithubRepositoryBinding {
+                repository_id: mirror.id,
+                ..binding
+            },
+            None,
+        )?;
         for pid in ["proj-unrepro", "proj-started", "proj-feature"] {
             let p = ProjectId(id(pid));
             tx.projects().insert_project(&StoredProject {
@@ -2449,7 +2466,12 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
                 archive_epoch: 0,
                 archive_stop_pending: false,
             })?;
-            tx.projects().set_members(&p, &[id("github-sync-repo")])?;
+            let local = if pid == "proj-started" {
+                "github-sync-mirror"
+            } else {
+                "github-sync-repo"
+            };
+            tx.projects().set_members(&p, &[id(local)])?;
             workflow::ensure_workflow(tx, &p)?;
         }
 
@@ -2625,10 +2647,19 @@ fn remote_closure_reopening_and_inbound_conflict_escalation_preserve_local_autho
 
     github.poll_issue_comments(&repo, 60).unwrap();
     runtime().block_on(notice_outbox.run_until_idle()).unwrap();
-    let commented = read(store.as_ref(), |s| s.work().work(&id("work-started"))).unwrap();
-    let brief = commented.brief.to_string();
-    assert!(brief.contains("New comment after linking"), "{brief}");
-    assert!(!brief.contains("Old comment before linking"), "{brief}");
+    for work in ["work-started", "work-feature-req"] {
+        let commented = read(store.as_ref(), |s| s.work().work(&id(work))).unwrap();
+        let brief = commented.brief.to_string();
+        assert_eq!(
+            brief.matches("New comment after linking").count(),
+            1,
+            "{work}: {brief}"
+        );
+        assert!(
+            !brief.contains("Old comment before linking"),
+            "{work}: {brief}"
+        );
+    }
 
     // 2. Poll remote reopening of #60 (with appended clarifying text):
     //    Verify GH-06: human pause on work-started is preserved!
