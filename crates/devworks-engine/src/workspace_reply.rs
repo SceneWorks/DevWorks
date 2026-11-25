@@ -413,6 +413,18 @@ fn release_carry(
     Ok(())
 }
 
+fn settlement_outcome(watcher: bool, value: Value) -> EffectResult {
+    if watcher && value["kind"] == "WorkspaceReplyUnavailable" {
+        return EffectResult::NotApplied(
+            value["detail"]
+                .as_str()
+                .unwrap_or("The watcher reply did not finish")
+                .to_owned(),
+        );
+    }
+    EffectResult::Completed(value)
+}
+
 async fn recover_settlement(
     engine: &TurnEngine,
     id: &OperationId,
@@ -421,7 +433,8 @@ async fn recover_settlement(
 ) -> Result<EffectResult, StorageError> {
     let id = id.clone();
     let completed = value["kind"] == "WorkspaceReplyCompleted";
-    crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
+    let recovered = value.clone();
+    let watcher = crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
         let operation = tx
             .operations()
             .operation(&id)?
@@ -432,10 +445,16 @@ async fn recover_settlement(
                         .is_some_and(|attempt| attempt.attempt_no == attempt_no)
             })
             .ok_or(StorageError::ScopeDenied)?;
-        release_carry(tx, &operation, completed)
+        release_carry(tx, &operation, completed)?;
+        let watcher = operation.payload["watcherSource"].is_string();
+        if watcher && !completed {
+            tx.operations()
+                .observe(&id, attempt_no, json!({"replySettlement":recovered}))?;
+        }
+        Ok(watcher)
     })
     .await?;
-    Ok(EffectResult::Completed(value))
+    Ok(settlement_outcome(watcher, value))
 }
 
 /// A durable provider result can finish local publication during observation. A tool dispatch
@@ -453,7 +472,10 @@ async fn settle_from_evidence(
         .rev()
         .find_map(|value| value.get("replySettlement").cloned())
     {
-        return Ok(EffectResult::Completed(saved));
+        return Ok(settlement_outcome(
+            operation.payload["watcherSource"].is_string(),
+            saved,
+        ));
     }
     let Some(prepared) = prepared_reply(attempt)? else {
         return Ok(EffectResult::NotApplied(
@@ -767,8 +789,18 @@ async fn resume_recorded_turn(
     let unknown = |error: StorageError| EffectResult::Unknown(error.to_string());
     let mut previous = None;
     for attempt in operation.attempts.iter().rev().skip(1) {
-        if let Some(prepared) = prepared_reply(attempt).map_err(unknown)? {
-            previous = Some(prepared);
+        let prepared = prepared_reply(attempt).map_err(unknown)?;
+        if intent.watcher_source.is_some()
+            && attempt.observations.iter().any(|observation| {
+                observation["replySettlement"]["kind"] == "WorkspaceReplyUnavailable"
+            })
+        {
+            // The exact failed request was reconciled and its carry released. Earlier
+            // provider contexts may have been superseded by interruption recovery.
+            return Ok(prepared.map_or_else(ToolWindowSweep::default, |reply| reply.sweep));
+        }
+        if prepared.is_some() {
+            previous = prepared;
             break;
         }
     }
@@ -782,6 +814,16 @@ async fn resume_recorded_turn(
     else {
         return Ok(sweep);
     };
+    if intent.watcher_source.is_some()
+        && matches!(
+            recorded.provider.outcome,
+            Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete)
+        )
+    {
+        // Its exact provider request has a recorded terminal failure. Start the next
+        // bounded queue attempt with a fresh request and the same durable watcher input.
+        return Ok(sweep);
+    }
     save_prepared(engine, &operation.id, attempt_no, &prepared)
         .await
         .map_err(unknown)?;
@@ -869,6 +911,7 @@ async fn save_prepared(
             "compactionSource": prepared.compaction_source, "toolWindowSweep": prepared.sweep.checkpoint()}),
     )
     .await
+    .map(|_| ())
 }
 
 enum CompactionStep {
@@ -1033,7 +1076,7 @@ async fn settled(
     value: Value,
 ) -> EffectResult {
     match observe(engine, operation, attempt, json!({"replySettlement":value})).await {
-        Ok(()) => EffectResult::Completed(value),
+        Ok(watcher) => settlement_outcome(watcher, value),
         Err(error) => EffectResult::Unknown(error.to_string()),
     }
 }
@@ -1043,7 +1086,7 @@ async fn observe(
     operation: &OperationId,
     attempt: i64,
     value: Value,
-) -> Result<(), StorageError> {
+) -> Result<bool, StorageError> {
     let operation = operation.clone();
     crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
         let current = tx
@@ -1067,7 +1110,8 @@ async fn observe(
                 settlement["kind"] == "WorkspaceReplyCompleted",
             )?;
         }
-        tx.operations().observe(&operation, attempt, value)
+        tx.operations().observe(&operation, attempt, value)?;
+        Ok(current.payload["watcherSource"].is_string())
     })
     .await
 }

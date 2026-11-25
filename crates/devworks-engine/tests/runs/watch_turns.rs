@@ -11,7 +11,13 @@ const INTERRUPTED: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content
 
 struct Request {
     body: Value,
-    respond: mpsc::Sender<Option<String>>,
+    respond: mpsc::Sender<ScriptedResponse>,
+}
+
+enum ScriptedResponse {
+    Body(String),
+    Rejected,
+    Crash,
 }
 
 impl Request {
@@ -29,11 +35,17 @@ impl Request {
     }
 
     fn answer(self, body: impl Into<String>) {
-        self.respond.send(Some(body.into())).unwrap();
+        self.respond
+            .send(ScriptedResponse::Body(body.into()))
+            .unwrap();
     }
 
     fn crash(self) {
-        self.respond.send(None).unwrap();
+        self.respond.send(ScriptedResponse::Crash).unwrap();
+    }
+
+    fn reject(self) {
+        self.respond.send(ScriptedResponse::Rejected).unwrap();
     }
 
     fn call_watch_inspect(self, watcher: &Id, call: &str) {
@@ -83,10 +95,16 @@ impl StreamingHttp for ScriptedWire {
             phase: SendPhase::AfterSend,
             kind: TransportFailure::IdleTimeout,
         })?;
-        Ok(Box::new(crate::approval_wait::Body(Some(
-            body.expect("the host stopped before the response arrived")
-                .into_bytes(),
-        ))))
+        match body {
+            ScriptedResponse::Body(body) => Ok(Box::new(crate::approval_wait::Body(Some(
+                body.into_bytes(),
+            )))),
+            ScriptedResponse::Rejected => Err(TransportError {
+                phase: SendPhase::NotSent,
+                kind: TransportFailure::Protocol,
+            }),
+            ScriptedResponse::Crash => panic!("the host stopped before the response arrived"),
+        }
     }
 }
 
@@ -310,7 +328,10 @@ fn real_process_exit_wakes_the_idle_agent_with_its_output() {
         assert_eq!(wake.event_count(&delivered.id), 1);
         assert_eq!(delivered.state, WatchEventState::Delivered);
         assert_ne!(turn_id(&fx, session).unwrap(), first_turn);
-        assert!(wake.body["messages"].to_string().contains("DW-104 exit marker"));
+        let messages = wake.body["messages"].to_string();
+        assert!(messages.contains("DW-104 exit marker") && messages.contains("exit code 3"));
+        assert_eq!(messages.matches("watch_create_command").count(), 1);
+        assert!(!messages.contains("watch_inspect_query") && !messages.contains("watch_list_query"));
         let result = inspect(&app, &ctx, watcher.as_str());
         assert_eq!(result["outcome"]["kind"], "Failed");
         assert_eq!(result["outcome"]["exitCode"], 3);
@@ -408,7 +429,7 @@ fn a_thousand_log_matches_per_second_are_coalesced_into_agent_wakes() {
             &app,
             &ctx,
             "watch.cancel",
-            json!({"watcherId":row.id,"expectedRevision":current["revision"]}),
+            json!({"watcherId":row.id,"expectedRevision":current["revision"],"stopProcess":false}),
             "stop-fast-log",
         );
         assert_completed(finished(task).await);
@@ -739,6 +760,82 @@ fn home_wakes_for_watchers_without_consuming_later_human_input() {
 }
 
 #[test]
+fn home_retries_a_failed_watcher_reply_with_the_same_event() {
+    use crate::workspace_reply::{open_home, send_workspace, wait_for_replies, workspace_ports};
+
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    seed_local_route(&fx);
+    let (send, mut receive) = unbounded_channel();
+    let mut ports = workspace_ports(&fx, Arc::new(ScriptedWire(send)));
+    let (native, _) = watch_composition(&fx, &fx.h.root.canonicalize().unwrap());
+    ports.config.process_tools = native.config.process_tools;
+    ports.config.watch_interval = Duration::from_secs(3600);
+    runtime().block_on(async {
+        let app = boot(ports).await.unwrap();
+        let session = open_home(&fx, &app);
+        let owner = read(fx.store.as_ref(), |snapshot| {
+            snapshot.sessions().session(&session)
+        })
+        .unwrap();
+        let ctx = HostIngress::new(fx.store.as_ref())
+            .context(
+                owner.agent_id,
+                PrincipalKind::Agent,
+                id("retry-home"),
+                id("retry-home"),
+                Counter::new(fx.store.info().restore_epoch).unwrap(),
+                Revision::new(1).unwrap(),
+            )
+            .with_session(session.clone());
+        select_watch_tools(&fx, &ctx);
+        send_workspace(
+            &fx,
+            &app,
+            &session,
+            "create-retry-timer",
+            "Start one timer",
+            "watch-model",
+        );
+        request(&mut receive).await.call(
+            "watch_create_command",
+            "create-timer-for-retry",
+            json!({"timer":{"afterMs":"5000"}}),
+        );
+        request(&mut receive).await.answer(COMPLETED);
+        wait_for_replies(&fx, 1).await;
+        let watcher = read(fx.store.as_ref(), |snapshot| {
+            snapshot
+                .watchers()
+                .watchers(&WatcherFilter::Session(session.clone()), &[], None, 10)
+        })
+        .pop()
+        .unwrap()
+        .id;
+        fx.h.advance(5000);
+        assert_eq!(app.watchers().unwrap().tick().unwrap().delivered, 1);
+        let failed = request(&mut receive).await;
+        let notice = event(&fx, &watcher);
+        assert_eq!(failed.event_count(&notice.id), 1);
+        failed.reject();
+        fx.h.advance(2000);
+        let replay = request(&mut receive).await;
+        assert_eq!(event(&fx, &watcher).state, WatchEventState::Delivered);
+        assert_eq!(notices(&fx, &session).len(), 1);
+        assert_eq!(replay.event_count(&notice.id), 1);
+        replay.answer(COMPLETED);
+        wait_for_replies(&fx, 2).await;
+        let acknowledged = event(&fx, &watcher);
+        assert_eq!(
+            (acknowledged.id, acknowledged.state),
+            (notice.id, WatchEventState::Acknowledged)
+        );
+        assert_eq!(notices(&fx, &session).len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
 fn a_failed_provider_turn_redelivers_the_same_watcher_event() {
     let _native_case = native_runtime_case();
     let fx = Fx::new();
@@ -1002,6 +1099,51 @@ fn completed_delegated_assignment_wakes_its_idle_parent_with_session_and_evidenc
         assert!(notices(&fx, &child.session_id).is_empty());
         app.shutdown().await;
     });
+}
+
+#[test]
+fn a_delegated_watcher_expires_without_cancelling_its_live_child() {
+    for backup in [false, true] {
+        let _native_case = native_runtime_case();
+        let fx = Fx::new();
+        runtime().block_on(async {
+            let (app, _) = scenario(&fx).await;
+            let (parent, _) = agent_context(&fx);
+            let child = delegate(&fx, &parent);
+            let source = command_at(
+                &app,
+                &parent,
+                "watch.create",
+                json!({"assignmentId":child.id,"maxLifetimeMs":"5000"}),
+                "expiring-delegated-watch",
+                18,
+            );
+            let watcher = id(source["id"].as_str().unwrap());
+            let supervisor = app.watchers().unwrap();
+            assert!(supervisor.backup_if_due().unwrap().is_none());
+            fx.h.advance(4_999);
+            assert_eq!(supervisor.settle().unwrap(), 0);
+            fx.h.advance(if backup { 900_000 - 4_999 } else { 1 });
+            if backup {
+                assert_eq!(supervisor.backup_if_due().unwrap().unwrap().caught, 1);
+            } else {
+                assert_eq!(supervisor.tick().unwrap().delivered, 1);
+            }
+            let timed_out = event(&fx, &watcher);
+            assert_eq!(timed_out.payload["outcome"]["kind"], "TimedOut");
+            assert_eq!(supervisor.tick().unwrap().delivered, 0);
+            assert_eq!(event(&fx, &watcher).id, timed_out.id);
+            let current = read(fx.store.as_ref(), |snapshot| {
+                snapshot.runs().assignment(&child.id)
+            })
+            .unwrap();
+            assert_eq!(
+                (current.state, current.revision),
+                (child.state, child.revision)
+            );
+            app.shutdown().await;
+        });
+    }
 }
 
 #[test]

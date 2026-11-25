@@ -1104,6 +1104,11 @@ impl WatchService {
                 Ok(source) => source,
                 Err(error) => return decided(tx, Err(error)),
             };
+            let lifetime = match input.max_lifetime_ms.as_ref() {
+                Some(ms) => ms.get(),
+                None => max_lifetime_default(tx.configuration(), ctx.project_id())?,
+            };
+            watcher.expires_at_ms = Some(now.saturating_add(lifetime));
             watcher.source_kind = "Assignment".into();
             watcher.tail_bytes = 0;
             watcher.assignment = Some(source);

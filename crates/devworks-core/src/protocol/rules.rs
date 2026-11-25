@@ -1295,7 +1295,8 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
                 || present(v, "probe")
                 || present(v, "file")
                 || present(v, "github")
-                || present(v, "attachedProcess"),
+                || present(v, "attachedProcess")
+                || present(v, "assignmentId"),
             "only a polling watcher takes a maximum lifetime",
         )?;
         require(

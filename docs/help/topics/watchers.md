@@ -9,8 +9,8 @@ The outcome is only what was observed: Succeeded (exit code 0), Failed (another 
 A watcher takes exactly one source:
 
 - **Process.** The behavior described above.
-- **Attached process.** In schema revision 9, pass `attachedProcess` with the running process's `pid` and `birthToken`. DevWorks resumes watching that identity after restart and reports Exited with an exit code when available, or Exited with unknown status. You can cancel the watcher and leave the process running.
-- **Delegated assignment.** In schema revision 10, pass `assignmentId` for one of your direct child assignments. When it finishes, the parent receives the outcome, the child session ID and the recorded evidence. Cancelling the watcher leaves the child running.
+- **Attached process.** In schema revision 18, pass `attachedProcess` with the running process's `pid` and `birthToken`. DevWorks resumes watching that identity after restart and reports Exited with an exit code when available, or Exited with unknown status. You can cancel the watcher and leave the process running.
+- **Delegated assignment.** In schema revision 18, pass `assignmentId` for one of your direct child assignments. When it finishes, the parent receives the outcome, the child session ID and the recorded evidence. Cancelling the watcher leaves the child running.
 - **Probe.** DevWorks runs a command, then runs it again after an interval, waiting twice as long after each failed run up to eight intervals, until a run meets the condition: an exit code (0 by default) and, optionally, an output pattern. The watcher then reports Succeeded with the number of runs. A run that cannot start, or is lost or uncertain, ends the watcher with that outcome.
 - **Timer.** It fires at a time or after a delay and reports Succeeded. A timer starts nothing, so every role can create and cancel one.
 - **File.** DevWorks reads the lines of one regular file inside a registered root and looks for a pattern. The file may not exist yet.
@@ -20,7 +20,7 @@ An attached process's birth token identifies the PID's specific lifetime. On mac
 
 A process or file watcher can also count matches of a regular expression. Without `each`, the first match completes the watcher. With `each`, matches are reported together, at most once per minimum interval (30 seconds by default), and each report carries its count. The final outcome includes any matches not yet reported, so none is lost. A file watcher ends at its maximum lifetime or when you cancel it.
 
-A probe, file, attached-process or GitHub watcher has a maximum lifetime set on the watcher or inherited from `watch.maxLifetimeMs` (24 hours by default, workspace or project). When it passes, the watcher reports TimedOut. A probe also stops its running command.
+A probe, file, attached-process, delegated-assignment or GitHub watcher has a maximum lifetime set on the watcher or inherited from `watch.maxLifetimeMs` (24 hours by default, workspace or project). When it passes, the watcher reports TimedOut. A probe also stops its running command. A delegated watcher’s timeout leaves the child assignment running.
 
 A watcher follows its owner. If the owning session ends, or the project is archived or deleted, the watcher is cancelled, any process it launched is stopped, and nothing is delivered. While the owner is paused or held, events wait and arrive in order after Continue. At shutdown, a process DevWorks stopped is reported Interrupted. A probe runs again after you reopen the app and continue, and a timer that came due while the app was closed fires once.
 
