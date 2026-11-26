@@ -2962,6 +2962,18 @@ fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
         has_text(&h, "Paused:"),
         "Refresh reads the root's run state again"
     );
+    // Stop stays offered on work with no live activation; the service decides what it stops.
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Stop")
+            .accesskit_node()
+            .is_disabled()
+    );
+    click(&mut h, Role::Button, "Stop");
+    let status = h.state().status().unwrap_or_default().to_owned();
+    assert!(
+        status.contains("Stop accepted") || status.contains("is stopped"),
+        "{status}"
+    );
 }
 
 /// A redirect draft edited while its send is in flight is kept when the send finishes.

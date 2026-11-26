@@ -112,10 +112,9 @@ fn run_controls(
         {
             actions.push(Action::Run("runs.continue", w.clone()));
         }
-        if ui
-            .add_enabled(enabled && running, egui::Button::new("Stop"))
-            .clicked()
-        {
+        // Work can run outside the root's activation (its processes, a linked task), so Stop is
+        // always offered and the service decides what there is to stop.
+        if ui.add_enabled(enabled, egui::Button::new("Stop")).clicked() {
             actions.push(Action::Stop(w.clone()));
         }
     });
