@@ -670,6 +670,27 @@
         "Unknown"
       ]
     },
+    "AgentPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<AgentSummary>",
+        "next_cursor": "?Cursor"
+      }
+    },
+    "AgentSummary": {
+      "kind": "record",
+      "fields": {
+        "assignment_id": "AssignmentId",
+        "root_id": "RootId",
+        "work_id": "RootId",
+        "parent_id": "?AssignmentId",
+        "role_id": "Id",
+        "state": "OperationState",
+        "session_id": "Id",
+        "revision": "Revision",
+        "created_at_ms": "Counter"
+      }
+    },
     "AgentRecord": {
       "kind": "record",
       "fields": {
@@ -8017,6 +8038,20 @@
       "authority": "Scoped",
       "rules": "Cancel/quiesce owned work under root fencing; uncertain effects remain held until reconciled. No manual child control."
     },
+    "agents.list": {
+      "operation": "agents.list",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "live_only": "bool",
+        "page": "PageRequest"
+      },
+      "result": "AgentPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "A person or the host lists one project's coordinator and worker assignments, only the live ones (ready, active or waiting) on request, in assignment ID order, with each one's work item, parent, role, state and session.",
+      "introducedRevision": 21
+    },
     "agents.inspect": {
       "operation": "agents.inspect",
       "mode": "Query",
@@ -12428,6 +12463,9 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "agents.list": [
+      21
+    ],
     "git.integrate": [1, 17],
     "reviews.list": [1, 15],
     "reviews.inspect": [1, 15],
@@ -13578,6 +13616,7 @@
     "runs.inspect": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "runs.stop": {"assignmentScope": "coordinator", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "runs.eligibility": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "agents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.inspect": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.delegate": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.messages": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

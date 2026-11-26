@@ -1375,6 +1375,58 @@ impl Check for ActorAttribution {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPage {
+    pub items: Rows<AgentSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for AgentPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "AgentPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSummary {
+    pub assignment_id: AssignmentId,
+    pub root_id: RootId,
+    pub work_id: RootId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<AssignmentId>,
+    pub role_id: Id,
+    pub state: OperationState,
+    pub session_id: Id,
+    pub revision: Revision,
+    pub created_at_ms: Counter,
+}
+impl Check for AgentSummary {
+    fn check(&self) -> Result<(), String> {
+        self.assignment_id.check()?;
+        self.root_id.check()?;
+        self.work_id.check()?;
+        self.parent_id.check()?;
+        self.role_id.check()?;
+        self.state.check()?;
+        self.session_id.check()?;
+        self.revision.check()?;
+        self.created_at_ms.check()?;
+        crate::protocol::rules::record(
+            "AgentSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentRecord {
     pub assignment_id: AssignmentId,
     pub root_id: RootId,

@@ -2,8 +2,13 @@
 
 The Agents & sessions destination is the place for coordinator/worker assignment visibility. A registered operation is not a running agent: an operation moves records, and an agent runs only while the host holds an activation for its root. Check the actual run, not the screen, to see what is live.
 
+## The Agents & sessions screen
+
+Select a project to see its coordinators and workers. Active lists the ones that are ready, working or waiting; Finished lists every assignment, including finished, failed and superseded ones. Each row names whether it is the coordinator or a worker, its role, the work item it is for, its state and its root's current step (not started, starting, claimed by a runner, running, stopping or stopped). Select a row to see the assignment's messages in both directions, and choose Open transcript to read its session in Chat.
+
 ## Agent operations
 
+- `agents.list` lists one project's coordinator and worker assignments, optionally only the live ones, with each one's work item, parent, role, state and session. Only a person or the host can list them.
 - `agents.inspect` shows one assignment: its root, role, state, blockers and latest checkpoint.
 - `agents.delegate` asks for a child assignment under a root. It names the root and the root's control revision, the tasks, the role, an instruction, and optionally a checkpoint to continue from. It only records the intent. The host starts the child session, and an agent cannot start itself.
 - `agents.messages` sends a message to an assignment. A message has a class: instruction, status, question or evidence. `agents.inbox` reads an assignment's messages, and `agents.acknowledge` marks one read. Reading never marks a message read.

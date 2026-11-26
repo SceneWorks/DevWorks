@@ -322,6 +322,26 @@ impl Revisioned for CheckpointInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `agents.list` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListInput {
+    pub project_id: ProjectId,
+    pub live_only: bool,
+    pub page: PageRequest,
+}
+impl Check for ListInput {
+    fn check(&self) -> Result<(), String> {
+        self.project_id.check()?;
+        self.live_only.check()?;
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ListInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `agents` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -347,6 +367,8 @@ pub enum Input {
     Acknowledge(AcknowledgeInput),
     /// `agents.checkpoint` (Command).
     Checkpoint(CheckpointInput),
+    /// `agents.list` (Query).
+    List(ListInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -362,6 +384,7 @@ impl Input {
             Self::Inbox(_) => "agents.inbox",
             Self::Acknowledge(_) => "agents.acknowledge",
             Self::Checkpoint(_) => "agents.checkpoint",
+            Self::List(_) => "agents.list",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -377,6 +400,7 @@ impl Input {
             Self::Inbox(_) => Mode::Query,
             Self::Acknowledge(_) => Mode::Command,
             Self::Checkpoint(_) => Mode::Command,
+            Self::List(_) => Mode::Query,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -393,6 +417,7 @@ impl Input {
             Self::Inbox(i) => serde_json::to_value(i),
             Self::Acknowledge(i) => serde_json::to_value(i),
             Self::Checkpoint(i) => serde_json::to_value(i),
+            Self::List(i) => serde_json::to_value(i),
         }
     }
 }

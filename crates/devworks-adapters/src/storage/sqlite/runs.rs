@@ -939,6 +939,26 @@ macro_rules! run_reads {
                     params![root.0.as_str(), after.map_or("", |a| a.0.as_str()), n],
                 )
             }
+            fn project_assignments(
+                &self,
+                project: &ProjectId,
+                live_only: bool,
+                after: Option<&AssignmentId>,
+                n: u16,
+            ) -> Result<Vec<StoredAssignment>, StorageError> {
+                let n = page_limit(n)?;
+                let live = if live_only { LIVE_ASSIGNMENT } else { "1=1" };
+                // agent_assignment_context(project_id, assignment_id) indexes the membership.
+                assignments(
+                    self.conn,
+                    &format!(
+                        "id IN (SELECT assignment_id FROM agent_assignment_context \
+                         WHERE project_id=?1 AND assignment_id>?2) AND {live} \
+                         ORDER BY id LIMIT ?3"
+                    ),
+                    params![project.0.as_str(), after.map_or("", |a| a.0.as_str()), n],
+                )
+            }
             fn child_assignments_with_role(
                 &self,
                 root: &RootId,

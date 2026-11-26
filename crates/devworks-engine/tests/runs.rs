@@ -1107,6 +1107,30 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
         fx.query(&stale_agent, "agents.inspect", inspect("inspect-stale")),
         DomainQueryReply::Rejected { .. }
     ));
+    // agents.list (schema revision 21) admits the host through the real authority and lists the
+    // coordinator; an agent caller is refused by the service.
+    let list = |query_id: &str| {
+        json!({"mode":"Query","protocol":PROTOCOL,"schemaRevision":21,"queryId":query_id,
+            "body":{"kind":"agents.list","projectId":"project-a","liveOnly":true,
+                "page":{"limit":50}}})
+    };
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let listed =
+        serde_json::to_value(result(&fx.query(&host, "agents.list", list("list-host")))).unwrap();
+    let items = listed["items"].as_array().cloned().unwrap_or_default();
+    assert!(
+        items
+            .iter()
+            .any(|a| a["assignmentId"] == json!(first.assignment_id) && a["parentId"].is_null()),
+        "{listed}"
+    );
+    assert!(
+        !matches!(
+            fx.query(&agent, "agents.list", list("list-agent")),
+            DomainQueryReply::Result { .. }
+        ),
+        "an agent cannot list the project's agents"
+    );
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-i"),
         expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),

@@ -30,6 +30,7 @@ pub enum ScreenId {
     Conventions,
     Artifacts,
     Resources,
+    Agents,
     Browser,
     /// All projects and Repositories.
     Projects,
@@ -64,6 +65,7 @@ impl ScreenId {
             Self::Conventions => "conventions",
             Self::Artifacts => "artifacts",
             Self::Resources => "resources",
+            Self::Agents => "agents",
             Self::Browser => "browser",
             Self::Projects => "projects",
             Self::Indexing => "indexing",
