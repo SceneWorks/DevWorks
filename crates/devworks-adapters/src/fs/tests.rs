@@ -706,6 +706,77 @@ fn writes_with_missing_parents_under_a_linked_protected_root_are_refused() {
     }
 }
 
+/// A `find` action that runs rm/rmdir/unlink/shred deletes its own operands as well as the found
+/// paths: an inner operand naming the primary repository is refused like a plain `rm` of it.
+#[test]
+fn find_exec_removal_of_a_protected_path_is_refused() {
+    use devworks_core::authority::shell::{CommandVerdict, preflight_command};
+    let t = tree("find-exec");
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let repo = t.s.p("repo").replace('\\', "/");
+    let verdict = |argv: &[&str]| {
+        let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+        preflight_command(&fs, &t.roots, &argv, Some(&cwd), &[])
+    };
+    for action in ["-exec", "-execdir", "-ok", "-okdir"] {
+        for end in [";", "+"] {
+            let argv = [
+                "find",
+                ".",
+                "-maxdepth",
+                "0",
+                action,
+                "rm",
+                "-rf",
+                &repo,
+                end,
+            ];
+            assert!(
+                matches!(verdict(&argv), CommandVerdict::Blocked { .. }),
+                "{argv:?}"
+            );
+        }
+    }
+    let argv = [
+        "find",
+        ".",
+        "-maxdepth",
+        "0",
+        "-exec",
+        "rm",
+        "-rf",
+        "{}",
+        &repo,
+        "+",
+    ];
+    assert!(
+        matches!(verdict(&argv), CommandVerdict::Blocked { .. }),
+        "{argv:?}"
+    );
+    // Through a shell, as an agent would send it.
+    let script = format!("find . -maxdepth 0 -exec rm -rf {} \\;", sh_quote(&repo));
+    assert!(
+        matches!(
+            verdict(&["bash", "-c", &script]),
+            CommandVerdict::Blocked { .. }
+        ),
+        "{script}"
+    );
+}
+
+/// A `nice` operand whose first character is multi-byte is read as a command, not sliced mid-char.
+#[test]
+fn nice_with_a_multibyte_first_operand_gets_a_verdict() {
+    use devworks_core::authority::shell::preflight_command;
+    let t = tree("nice-utf8");
+    let fs = NativeFilesystem::new();
+    let cwd = t.s.p("outside");
+    let argv = ["nice", "é1", "true"].map(str::to_owned);
+    // Reaching a verdict at all is the contract: before the fix this panicked.
+    let _verdict = preflight_command(&fs, &t.roots, &argv, Some(&cwd), &[]);
+}
+
 /// Appending redirections and PowerShell file and folder writers write their target like `>`:
 /// refused inside every protected root, allowed outside them.
 #[test]

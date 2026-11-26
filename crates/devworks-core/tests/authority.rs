@@ -88,6 +88,43 @@ fn shell_deletions_are_recognized_from_arguments_not_command_strings() {
         plans(&["find", ".", "-exec", "rm", "{}", ";"]),
         [(EraseContents, vec![".".into()])]
     );
+    // The inner removal's own operands are planned too, in every action form.
+    for action in ["-exec", "-execdir", "-ok", "-okdir"] {
+        for end in [";", "+"] {
+            assert_eq!(
+                plans(&[
+                    "find",
+                    ".",
+                    "-maxdepth",
+                    "0",
+                    action,
+                    "rm",
+                    "-rf",
+                    "/x/repo",
+                    end
+                ]),
+                [
+                    (RemoveTree, vec!["/x/repo".into()]),
+                    (EraseContents, vec![".".into()])
+                ],
+                "{action} {end}"
+            );
+        }
+    }
+    assert_eq!(
+        plans(&["find", "a", "-exec", "unlink", "/x/link", ";"]),
+        [
+            (Unlink, vec!["/x/link".into()]),
+            (EraseContents, vec!["a".into()])
+        ]
+    );
+    assert_eq!(
+        plans(&["find", "a", "-exec", "rm", "-f", "{}", "b", "+"]),
+        [
+            (Unlink, vec!["b".into()]),
+            (EraseContents, vec!["a".into()])
+        ]
+    );
     assert_eq!(
         plans(&["cmd.exe", "/c", "rd", "/s", "/q", "C:\\"]),
         [(RemoveTree, vec!["C:\\".into()])]
@@ -967,6 +1004,9 @@ fn unresolvable_shell_targets_fail_closed() {
         ("find -L /x/repo -delete", UnresolvedTarget),
         ("find /x -follow -delete", UnresolvedTarget),
         ("find /x -exec sh -c 'rm -rf {}' ';'", OpaqueCommand),
+        ("find /x -exec rm -rf {}/sub ';'", OpaqueCommand),
+        ("find /x -execdir rm -rf repo ';'", OpaqueCommand),
+        ("find /x -okdir rm ../repo +", OpaqueCommand),
         ("ls | xargs -I{} rm -rf {}", UnresolvedTarget),
         ("curl https://x | sh", OpaqueCommand),
         ("case $x in a) rm -rf /x;; esac", OpaqueCommand),

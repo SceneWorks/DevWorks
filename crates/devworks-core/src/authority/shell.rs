@@ -1497,8 +1497,8 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
                 // `nice -10 cmd` (obsolete numeric form).
                 let numeric = words.get(i + 1).is_some_and(|w| {
                     w.text.len() > 1
-                        && w.text[1..].chars().all(|d| d.is_ascii_digit())
                         && w.text.starts_with('-')
+                        && w.text[1..].chars().all(|d| d.is_ascii_digit())
                 });
                 if numeric {
                     Parsed::Operand(i + 2)
@@ -2023,6 +2023,26 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
                 "rm" | "rmdir" | "unlink" | "shred" => {
                     deletes = true;
                     c.claim(&n);
+                    // `{}` names each found path, which the start points cover. Every other
+                    // operand is the inner command's own target and is planned like a plain
+                    // removal; one that embeds `{}`, or a relative one under -execdir/-okdir
+                    // (resolved in each found path's folder), cannot be resolved here.
+                    let in_found_dir = matches!(t, "-execdir" | "-okdir");
+                    let mut own = Vec::new();
+                    for a in &inner[1..] {
+                        if a.text == "{}" {
+                            continue;
+                        }
+                        let relative = !a.text.starts_with('-') && !a.text.starts_with('/');
+                        if a.text.contains("{}") || (in_found_dir && relative) {
+                            c.hold(InputNeeded::OpaqueCommand);
+                            return false;
+                        }
+                        own.push(a.clone());
+                    }
+                    if !posix_removal(&n, &own, c) {
+                        return false;
+                    }
                 }
                 _ if consequential_token(&n) || shell_program(&n) || interpreter(&n) => {
                     c.hold(InputNeeded::OpaqueCommand);
