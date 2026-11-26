@@ -1461,23 +1461,8 @@ fn wire_redirects(
 ) -> Result<Items<RedirectRecord>, StorageError> {
     use crate::ports::storage::InstructionStage;
     use crate::protocol::support::BoundedText;
-    let mut latest: std::collections::VecDeque<StoredInstruction> = Default::default();
-    let mut after = 0;
-    loop {
-        let page = runs.instructions(root, after, 500)?;
-        let Some(last) = page.last() else { break };
-        after = last.seq;
-        let full = page.len() == 500;
-        for i in page {
-            if latest.len() == LISTED_REDIRECTS {
-                latest.pop_front();
-            }
-            latest.push_back(i);
-        }
-        if !full {
-            break;
-        }
-    }
+    // Only the displayed tail is read, however long the root's redirect history is.
+    let latest = runs.latest_instructions(root, LISTED_REDIRECTS as u16)?;
     let text = |t: &str| BoundedText(t.chars().take(65536).collect());
     Ok(BoundedList(
         latest

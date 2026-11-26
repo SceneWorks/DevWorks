@@ -131,6 +131,8 @@ fn run_controls(
     let pending = redirects
         .iter()
         .any(|r| !matches!(r.stage, RedirectStage::Incorporated));
+    // One redirect is sent at a time: a second click waits for the first reply.
+    let sending = work.redirect_sent.contains_key(w.id.as_str());
     egui::CollapsingHeader::new(format!("Redirect ({})", redirects.len()))
         .id_salt(("redirect", w.id.as_str()))
         .default_open(pending)
@@ -147,8 +149,12 @@ fn run_controls(
             });
             if ui
                 .add_enabled(
-                    enabled && !draft.trim().is_empty(),
-                    egui::Button::new("Send redirect"),
+                    enabled && !sending && !draft.trim().is_empty(),
+                    egui::Button::new(if sending {
+                        "Sending redirect…"
+                    } else {
+                        "Send redirect"
+                    }),
                 )
                 .clicked()
             {

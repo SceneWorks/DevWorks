@@ -3004,6 +3004,16 @@ fn a_redirect_draft_edited_during_its_send_is_kept() {
     h.get_by_role_and_label(Role::Button, "Send redirect")
         .click();
     step_until(&mut h, "the redirect is in flight", |_| gate.has_waiter());
+    // While it is in flight a second send is not offered.
+    h.step();
+    assert!(
+        h.get_by_label("Sending redirect…")
+            .accesskit_node()
+            .is_disabled(),
+        "Send is disabled while a redirect is in flight"
+    );
+    h.get_by_label("Sending redirect…").click();
+    h.step();
     h.get_by_role_and_label(Role::TextInput, "Redirect message")
         .focus();
     h.step();
@@ -3024,4 +3034,11 @@ fn a_redirect_draft_edited_during_its_send_is_kept() {
         Some("Ship the CLI first, then the GUI"),
         "the newer draft is kept"
     );
+    // Exactly one redirect was recorded.
+    let checkout = list(&*backend, "features.list", project.id.0.as_str()).remove(0);
+    let redirects = snapshot(&*backend, checkout.id.as_str())
+        .redirects
+        .map(|r| r.0.len())
+        .unwrap_or_default();
+    assert_eq!(redirects, 1);
 }

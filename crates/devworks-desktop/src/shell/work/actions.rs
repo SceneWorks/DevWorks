@@ -402,17 +402,22 @@ impl WorkCtl<'_, '_> {
                         .get(&id)
                         .map(|m| m.trim().to_owned())
                         .unwrap_or_default();
-                    if message.is_empty() {
+                    // A redirect already in flight for this root is never sent twice.
+                    if message.is_empty() || self.work.redirect_sent.contains_key(&id) {
                         continue;
                     }
                     self.work.redirect_sent.insert(id.clone(), message.clone());
                     let root = id.clone();
-                    self.command(
-                        WorkSlot::WorkRedirect(id),
+                    let sent = self.command(
+                        WorkSlot::WorkRedirect(id.clone()),
                         "Sending a redirect",
                         "runs.redirect",
                         move |be| wops::run_redirect(be, &root, &snapshot, &message),
                     );
+                    // Nothing was submitted (offline or closing): nothing is in flight.
+                    if !sent {
+                        self.work.redirect_sent.remove(&id);
+                    }
                 }
                 Action::Stop(w) => {
                     let id = w.id.as_str().to_owned();

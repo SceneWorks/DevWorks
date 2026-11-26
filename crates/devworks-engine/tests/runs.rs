@@ -8936,3 +8936,29 @@ fn revision_20_shows_each_redirect_stage() {
         (json!("Incorporated"), json!("CLI moved ahead of the GUI"))
     );
 }
+
+/// A snapshot lists only the newest 20 redirects, oldest first, however long the history.
+#[test]
+fn revision_20_lists_only_the_newest_redirects() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    fx.assign("root-f", "root-f", None, None);
+    for i in 1..=25 {
+        applied(&fx.redirect(&fx.user, "root-f", &format!("Redirect {i}")));
+    }
+    let v = result(&fx.query(
+        &fx.user,
+        "runs.inspect",
+        json!({"protocol": PROTOCOL, "schemaRevision": 20, "queryId": fx.key(),
+            "query": {"kind": "runs.inspect", "rootId": "root-f"}}),
+    ));
+    let messages: Vec<&str> = v["redirects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["message"].as_str().unwrap())
+        .collect();
+    let expected: Vec<String> = (6..=25).map(|i| format!("Redirect {i}")).collect();
+    assert_eq!(messages, expected);
+}
