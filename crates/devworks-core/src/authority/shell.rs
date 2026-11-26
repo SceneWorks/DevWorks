@@ -2042,9 +2042,7 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
                         Some((kind, operands)) => {
                             let mut own = Vec::new();
                             for a in operands.iter().filter(|a| a.text != "{}") {
-                                if a.text.contains("{}")
-                                    || (in_found_dir && !a.text.starts_with('/'))
-                                {
+                                if a.text.contains("{}") || (in_found_dir && !absolute(&a.text)) {
                                     c.hold(InputNeeded::OpaqueCommand);
                                     modeled = false;
                                 } else {

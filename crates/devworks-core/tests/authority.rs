@@ -111,6 +111,14 @@ fn shell_deletions_are_recognized_from_arguments_not_command_strings() {
             );
         }
     }
+    // A Windows absolute operand under -execdir is planned, not held as relative.
+    assert_eq!(
+        plans(&["find", "a", "-execdir", "rm", "-rf", "C:/x/repo", ";"]),
+        [
+            (RemoveTree, vec!["C:/x/repo".into()]),
+            (EraseContents, vec!["a".into()])
+        ]
+    );
     assert_eq!(
         plans(&["find", "a", "-exec", "unlink", "/x/link", ";"]),
         [
@@ -1007,6 +1015,7 @@ fn unresolvable_shell_targets_fail_closed() {
         ("find /x -exec rm -rf {}/sub ';'", OpaqueCommand),
         ("find /x -execdir rm -rf repo ';'", OpaqueCommand),
         ("find /x -okdir rm ../repo +", OpaqueCommand),
+        ("find /x -execdir rm -rf C: ';'", OpaqueCommand),
         ("ls | xargs -I{} rm -rf {}", UnresolvedTarget),
         ("curl https://x | sh", OpaqueCommand),
         ("case $x in a) rm -rf /x;; esac", OpaqueCommand),
