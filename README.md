@@ -20,7 +20,7 @@ Not implemented yet: operations with no registered handler. Of the registry's 37
 - [Architecture sources, diagrams and validation](docs/architecture/README.md)
 - [Visual architecture of the implemented code](docs/architecture/visual/README.md)
 - [Requirements](docs/planning/devworks-requirements.html)
-- [Editable requirements](docs/planning/devworks-requirements.docx)
+- [Requirements as Markdown](docs/planning/devworks-requirements.md)
 - [Requirements interview decisions](docs/planning/requirements-interview.json)
 - [Interactive UI prototype](docs/planning/harness-workbench.html)
 - [Screen gallery](docs/planning/mockup-gallery.html)
