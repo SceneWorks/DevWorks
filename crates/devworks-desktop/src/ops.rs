@@ -855,6 +855,62 @@ pub fn artifacts(outcome: QueryOutcome) -> Result<Page<ArtifactRecord>, Failure>
         (other, _) => Err(unexpected("artifacts.list", &other)),
     }
 }
+/// One page of `agents.list`: the project's coordinator and worker assignments (schema
+/// revision 21), only the live ones when `live_only`.
+pub fn agents_list(
+    backend: &dyn Backend,
+    project: &str,
+    live_only: bool,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    use devworks_core::operations::agents;
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Agents(agents::Input::List(agents::ListInput {
+            project_id: ProjectId(frame::id(project)?),
+            live_only,
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
+        })))
+    })
+}
+pub fn agents_page(
+    outcome: QueryOutcome,
+) -> Result<Page<devworks_core::protocol::records::AgentSummary>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::AgentsList { value }, _) => page_of(
+            "agents.list",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (other, _) => Err(unexpected("agents.list", &other)),
+    }
+}
+/// One page of `agents.inbox` of an assignment: its messages in both directions.
+pub fn agent_messages(backend: &dyn Backend, assignment: &str, cursor: Option<&str>) -> Vec<u8> {
+    use devworks_core::operations::agents;
+    use devworks_core::protocol::records::MessageDirection;
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Agents(agents::Input::Inbox(agents::InboxInput {
+            assignment_id: devworks_core::protocol::AssignmentId(frame::id(assignment)?),
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
+            unacknowledged_only: false,
+            direction: MessageDirection::Both,
+        })))
+    })
+}
+pub fn agent_messages_page(
+    outcome: QueryOutcome,
+) -> Result<Page<devworks_core::protocol::records::AgentMessage>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::AgentsInbox { value }, _) => page_of(
+            "agents.inbox",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (other, _) => Err(unexpected("agents.inbox", &other)),
+    }
+}
 pub fn resources_list(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Initial, || {
         Some(In::Resources(resources::Input::List(

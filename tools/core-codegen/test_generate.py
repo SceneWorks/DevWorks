@@ -110,7 +110,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'settings.read_effective', 'settings.validate', 'settings.save_revision',
             'settings.explain_source', 'dreaming.instructions', 'skills.discover', 'skills.read',
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
-            'roles.history', 'roles.rollback', 'sessions.transcript'})
+            'roles.history', 'roles.rollback', 'sessions.transcript',
+            # DW-183: a project's agent assignments, introduced at revision 21.
+            'agents.list'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('addons.read_content', 'addons.run_workflow'):

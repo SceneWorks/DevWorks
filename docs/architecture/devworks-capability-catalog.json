@@ -127,7 +127,8 @@
         "events",
         "inbox",
         "acknowledge",
-        "checkpoint"
+        "checkpoint",
+        "list"
       ],
       "effectAndAuthority": "Read and scoped control; parent ownership and root subagent allowance",
       "status": "Proposed; exact command/tool schemas require review"

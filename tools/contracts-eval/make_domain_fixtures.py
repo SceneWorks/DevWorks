@@ -1078,6 +1078,13 @@ for kind in ['Text','Binary']:
  value['testedRepository']=source
  case('r4-result-artifacts.read-'+kind,'operation-result.r4',{'kind':'artifacts.read','value':value})
  case('reject-r3-artifact-read-source-'+kind,'operation-result.r3',{'kind':'artifacts.read','value':value},False,False)
+# DW-183 revision 21: a project's coordinator and worker assignments.
+summary={'assignmentId':'assignment-a','rootId':'root-a','workId':'root-a','roleId':'coordinator','state':'Dispatching','sessionId':'session-a','revision':'2','createdAtMs':'1000'}
+worker={**summary,'assignmentId':'assignment-b','workId':'task-a','parentId':'assignment-a','roleId':'worker','sessionId':'session-b'}
+case('r21-result-agents.list','operation-result.r21',{'kind':'agents.list','value':{'items':[summary,worker],'hasMore':False}})
+case('reject-r20-result-agents.list','operation-result.r20',{'kind':'agents.list','value':{'items':[summary],'hasMore':False}},False,False)
+bad={**summary};del bad['sessionId']
+case('reject-r21-result-agents.list-without-session','operation-result.r21',{'kind':'agents.list','value':{'items':[bad],'hasMore':False}},False,False)
 # DW13/109: metadata is additive; allocation outcomes have an explicit legacy adapter.
 status3={**sample('StatusRecord'),'category':'Ready','workflowRevision':'4','affectedWorkDigest':'b'*64,'affectedWorkCount':'2'}
 claim3={**sample('AllocationClaimRecord'),'state':'Held','workKind':'Feature','workRevision':'3','projectId':'project-a','rootId':'root-a','ownerSessionId':'session-a','queueRevision':'5'}

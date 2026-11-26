@@ -8181,7 +8181,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page4"
+              "$ref": "#/$defs/Page5"
             }
           },
           "required": [
@@ -8232,7 +8232,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page5"
+              "$ref": "#/$defs/Page6"
             }
           },
           "required": [
@@ -8266,7 +8266,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page6"
+              "$ref": "#/$defs/Page7"
             }
           },
           "required": [
@@ -8283,7 +8283,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page6"
+              "$ref": "#/$defs/Page7"
             }
           },
           "required": [
@@ -8351,7 +8351,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page7"
+              "$ref": "#/$defs/Page8"
             }
           },
           "required": [
@@ -8368,7 +8368,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page8"
+              "$ref": "#/$defs/Page9"
             }
           },
           "required": [
@@ -8385,7 +8385,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page9"
+              "$ref": "#/$defs/Page10"
             }
           },
           "required": [
@@ -8402,7 +8402,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page10"
+              "$ref": "#/$defs/Page11"
             }
           },
           "required": [
@@ -8419,7 +8419,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -8504,7 +8504,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page12"
+              "$ref": "#/$defs/Page13"
             }
           },
           "required": [
@@ -8555,7 +8555,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -8589,7 +8589,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page14"
+              "$ref": "#/$defs/Page15"
             }
           },
           "required": [
@@ -8640,7 +8640,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -8657,7 +8657,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -8674,7 +8674,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -8691,7 +8691,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -8708,7 +8708,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page13"
+              "$ref": "#/$defs/Page14"
             }
           },
           "required": [
@@ -8810,7 +8810,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page15"
+              "$ref": "#/$defs/Page16"
             }
           },
           "required": [
@@ -8827,7 +8827,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page16"
+              "$ref": "#/$defs/Page17"
             }
           },
           "required": [
@@ -8844,7 +8844,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page17"
+              "$ref": "#/$defs/Page18"
             }
           },
           "required": [
@@ -9014,7 +9014,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page18"
+              "$ref": "#/$defs/Page19"
             }
           },
           "required": [
@@ -9184,7 +9184,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -9405,7 +9405,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page18"
+              "$ref": "#/$defs/Page19"
             }
           },
           "required": [
@@ -9439,7 +9439,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page20"
+              "$ref": "#/$defs/Page21"
             }
           },
           "required": [
@@ -9490,7 +9490,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -9575,7 +9575,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page22"
+              "$ref": "#/$defs/Page23"
             }
           },
           "required": [
@@ -9626,7 +9626,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -9643,7 +9643,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -9660,7 +9660,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -9694,7 +9694,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -9898,7 +9898,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -9983,7 +9983,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -10017,7 +10017,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page21"
+              "$ref": "#/$defs/Page22"
             }
           },
           "required": [
@@ -10034,7 +10034,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page23"
+              "$ref": "#/$defs/Page24"
             }
           },
           "required": [
@@ -10051,7 +10051,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page24"
+              "$ref": "#/$defs/Page25"
             }
           },
           "required": [
@@ -10119,7 +10119,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page25"
+              "$ref": "#/$defs/Page26"
             }
           },
           "required": [
@@ -10221,7 +10221,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page23"
+              "$ref": "#/$defs/Page24"
             }
           },
           "required": [
@@ -10238,7 +10238,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page26"
+              "$ref": "#/$defs/Page27"
             }
           },
           "required": [
@@ -10289,7 +10289,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page27"
+              "$ref": "#/$defs/Page28"
             }
           },
           "required": [
@@ -10391,7 +10391,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -10408,7 +10408,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page28"
+              "$ref": "#/$defs/Page29"
             }
           },
           "required": [
@@ -10442,7 +10442,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page28"
+              "$ref": "#/$defs/Page29"
             }
           },
           "required": [
@@ -10459,7 +10459,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page28"
+              "$ref": "#/$defs/Page29"
             }
           },
           "required": [
@@ -10476,7 +10476,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page29"
+              "$ref": "#/$defs/Page30"
             }
           },
           "required": [
@@ -10544,7 +10544,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page30"
+              "$ref": "#/$defs/Page31"
             }
           },
           "required": [
@@ -10561,7 +10561,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page30"
+              "$ref": "#/$defs/Page31"
             }
           },
           "required": [
@@ -10578,7 +10578,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page31"
+              "$ref": "#/$defs/Page32"
             }
           },
           "required": [
@@ -10680,7 +10680,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page32"
+              "$ref": "#/$defs/Page33"
             }
           },
           "required": [
@@ -10697,7 +10697,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page32"
+              "$ref": "#/$defs/Page33"
             }
           },
           "required": [
@@ -10884,7 +10884,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page33"
+              "$ref": "#/$defs/Page34"
             }
           },
           "required": [
@@ -10918,7 +10918,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page34"
+              "$ref": "#/$defs/Page35"
             }
           },
           "required": [
@@ -11071,7 +11071,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page35"
+              "$ref": "#/$defs/Page36"
             }
           },
           "required": [
@@ -11224,7 +11224,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page37"
             }
           },
           "required": [
@@ -11258,7 +11258,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page37"
             }
           },
           "required": [
@@ -11275,7 +11275,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page36"
+              "$ref": "#/$defs/Page37"
             }
           },
           "required": [
@@ -11292,7 +11292,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page37"
+              "$ref": "#/$defs/Page38"
             }
           },
           "required": [
@@ -11309,7 +11309,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page38"
+              "$ref": "#/$defs/Page39"
             }
           },
           "required": [
@@ -11411,7 +11411,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page39"
+              "$ref": "#/$defs/Page40"
             }
           },
           "required": [
@@ -11479,7 +11479,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page40"
+              "$ref": "#/$defs/Page41"
             }
           },
           "required": [
@@ -11513,7 +11513,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page41"
+              "$ref": "#/$defs/Page42"
             }
           },
           "required": [
@@ -11564,7 +11564,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page42"
+              "$ref": "#/$defs/Page43"
             }
           },
           "required": [
@@ -11598,7 +11598,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page43"
+              "$ref": "#/$defs/Page44"
             }
           },
           "required": [
@@ -11615,7 +11615,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page44"
+              "$ref": "#/$defs/Page45"
             }
           },
           "required": [
@@ -11632,7 +11632,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page42"
+              "$ref": "#/$defs/Page43"
             }
           },
           "required": [
@@ -11649,7 +11649,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page45"
+              "$ref": "#/$defs/Page46"
             }
           },
           "required": [
@@ -11700,7 +11700,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page19"
+              "$ref": "#/$defs/Page20"
             }
           },
           "required": [
@@ -11717,7 +11717,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page47"
             }
           },
           "required": [
@@ -11751,7 +11751,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page47"
             }
           },
           "required": [
@@ -11768,7 +11768,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page46"
+              "$ref": "#/$defs/Page47"
             }
           },
           "required": [
@@ -11904,7 +11904,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page47"
+              "$ref": "#/$defs/Page48"
             }
           },
           "required": [
@@ -11938,7 +11938,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -12040,7 +12040,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page11"
+              "$ref": "#/$defs/Page12"
             }
           },
           "required": [
@@ -12057,7 +12057,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page48"
+              "$ref": "#/$defs/Page49"
             }
           },
           "required": [
@@ -12193,7 +12193,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page49"
+              "$ref": "#/$defs/Page50"
             }
           },
           "required": [
@@ -12346,7 +12346,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page50"
+              "$ref": "#/$defs/Page51"
             }
           },
           "required": [
@@ -12584,7 +12584,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page51"
+              "$ref": "#/$defs/Page52"
             }
           },
           "required": [
@@ -12907,7 +12907,7 @@
               "type": "string"
             },
             "value": {
-              "$ref": "#/$defs/Page52"
+              "$ref": "#/$defs/Page53"
             }
           },
           "required": [
@@ -13864,6 +13864,37 @@
       "properties": {
         "checkpoint": {
           "$ref": "#/$defs/Text1To4096",
+          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
+          "x-since": 2
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_EvidenceLink_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "Page11": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "$ref": "#/$defs/Text1To4096",
           "x-since": 2
         },
         "hasMore": {
@@ -13897,7 +13928,7 @@
       ],
       "type": "object"
     },
-    "Page11": {
+    "Page12": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -13923,7 +13954,7 @@
       ],
       "type": "object"
     },
-    "Page12": {
+    "Page13": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -13949,7 +13980,7 @@
       ],
       "type": "object"
     },
-    "Page13": {
+    "Page14": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -13975,7 +14006,7 @@
       ],
       "type": "object"
     },
-    "Page14": {
+    "Page15": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -14001,7 +14032,7 @@
       ],
       "type": "object"
     },
-    "Page15": {
+    "Page16": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -14027,7 +14058,7 @@
       ],
       "type": "object"
     },
-    "Page16": {
+    "Page17": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -14053,7 +14084,7 @@
       ],
       "type": "object"
     },
-    "Page17": {
+    "Page18": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -14079,32 +14110,6 @@
       ],
       "type": "object"
     },
-    "Page18": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_KnowledgeClaim_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
     "Page19": {
       "additionalProperties": false,
       "properties": {
@@ -14112,7 +14117,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_Diagnostic_0_500"
+          "$ref": "#/$defs/List_KnowledgeClaim_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14164,7 +14169,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DreamRun_0_500"
+          "$ref": "#/$defs/List_Diagnostic_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14190,7 +14195,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_InstructionRecord_0_500"
+          "$ref": "#/$defs/List_DreamRun_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14216,7 +14221,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DocumentRecord_0_500"
+          "$ref": "#/$defs/List_InstructionRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14242,7 +14247,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ArtifactRef_0_500"
+          "$ref": "#/$defs/List_DocumentRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14268,7 +14273,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ProposalRecord_0_500"
+          "$ref": "#/$defs/List_ArtifactRef_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14294,7 +14299,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_NotificationRecord_0_500"
+          "$ref": "#/$defs/List_ProposalRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14320,7 +14325,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ReviewRecord_0_500"
+          "$ref": "#/$defs/List_NotificationRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14346,7 +14351,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ReviewFinding_0_500"
+          "$ref": "#/$defs/List_ReviewRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14372,7 +14377,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_GithubObservation_0_500"
+          "$ref": "#/$defs/List_ReviewFinding_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14398,7 +14403,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ResourceRecord_0_500"
+          "$ref": "#/$defs/List_GithubObservation_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14450,7 +14455,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_LeaseRecord_0_500"
+          "$ref": "#/$defs/List_ResourceRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14476,7 +14481,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_BrowserSession_0_500"
+          "$ref": "#/$defs/List_LeaseRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14502,7 +14507,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_BrowserObservation_0_500"
+          "$ref": "#/$defs/List_BrowserSession_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14528,7 +14533,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_WebResult_0_500"
+          "$ref": "#/$defs/List_BrowserObservation_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14554,7 +14559,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ContainerCapability_0_500"
+          "$ref": "#/$defs/List_WebResult_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14580,7 +14585,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_JobRecord_0_500"
+          "$ref": "#/$defs/List_ContainerCapability_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14606,7 +14611,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SettingEntry_0_500"
+          "$ref": "#/$defs/List_JobRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14632,7 +14637,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_RouteModel_0_500"
+          "$ref": "#/$defs/List_SettingEntry_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14658,7 +14663,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ConnectionRecord_0_500"
+          "$ref": "#/$defs/List_RouteModel_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14684,33 +14689,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ModelPriceStatus_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page4": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_AgentMessage_0_500"
+          "$ref": "#/$defs/List_ConnectionRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14736,7 +14715,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_DecisionModel_0_500"
+          "$ref": "#/$defs/List_ModelPriceStatus_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14762,7 +14741,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpServer_0_500"
+          "$ref": "#/$defs/List_DecisionModel_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14788,7 +14767,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpCapability_0_500"
+          "$ref": "#/$defs/List_McpServer_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14814,7 +14793,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpResource_0_500"
+          "$ref": "#/$defs/List_McpCapability_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14840,7 +14819,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpPrompt_0_500"
+          "$ref": "#/$defs/List_McpResource_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14866,7 +14845,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_PackageRecord_0_500"
+          "$ref": "#/$defs/List_McpPrompt_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14892,7 +14871,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_HelpTopic_0_500"
+          "$ref": "#/$defs/List_PackageRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14918,7 +14897,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_UpdateRecord_0_500"
+          "$ref": "#/$defs/List_HelpTopic_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14944,7 +14923,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_QueueDelivery_0_500"
+          "$ref": "#/$defs/List_UpdateRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14970,7 +14949,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ImportRun_0_500"
+          "$ref": "#/$defs/List_QueueDelivery_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -14996,7 +14975,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_SessionRecord_0_500"
+          "$ref": "#/$defs/List_AgentMessage_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -15022,7 +15001,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_McpClientAccess_0_500"
+          "$ref": "#/$defs/List_ImportRun_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -15042,6 +15021,32 @@
       "type": "object"
     },
     "Page51": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_McpClientAccess_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
+      ],
+      "type": "object"
+    },
+    "Page52": {
       "additionalProperties": false,
       "properties": {
         "checkpoint": {
@@ -15072,7 +15077,7 @@
       ],
       "type": "object"
     },
-    "Page52": {
+    "Page53": {
       "additionalProperties": false,
       "properties": {
         "hasMore": {
@@ -15105,7 +15110,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_ContextSource_0_500"
+          "$ref": "#/$defs/List_SessionRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -15127,16 +15132,11 @@
     "Page7": {
       "additionalProperties": false,
       "properties": {
-        "checkpoint": {
-          "$ref": "#/$defs/Text1To4096",
-          "description": "Schema revision 2: the continuation checkpoint (present on every revision-2 page).",
-          "x-since": 2
-        },
         "hasMore": {
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_LineageRecord_0_500"
+          "$ref": "#/$defs/List_ContextSource_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -15167,7 +15167,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_AttributedGitLink_0_500"
+          "$ref": "#/$defs/List_LineageRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -15198,7 +15198,7 @@
           "type": "boolean"
         },
         "items": {
-          "$ref": "#/$defs/List_EvidenceLink_0_500"
+          "$ref": "#/$defs/List_AttributedGitLink_0_500"
         },
         "nextCursor": {
           "anyOf": [
