@@ -1006,3 +1006,136 @@ fn prompt_picker_loads_and_selects_beyond_the_first_page_in_each_scope() {
         assert!(!selected.enabled);
     }
 }
+
+/// A consumer the runtime does not dispatch, so only the test and the screen move its delivery.
+const SEEDED_CONSUMER: &str = "seeded-consumer";
+
+/// Claims the seeded consumer's ready delivery and fails it terminally with `cause`.
+fn fail_seeded(engine: &devworks_desktop::host::Engine, cause: &'static str) {
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::fixture(),
+        move |tx| {
+            let owner = tx.new_id(devworks_core::ports::IdKind::QueueEntry);
+            let claimed = tx.queue().claim_ready(&ClaimRequest {
+                consumer: SEEDED_CONSUMER.into(),
+                owner: owner.clone(),
+                lease_ms: 600_000,
+                limit: 1,
+            })?;
+            let entry = claimed.into_iter().next().expect("the ready delivery");
+            tx.queue().fail(
+                &entry.id,
+                &QueueFence {
+                    owner,
+                    generation: entry.generation,
+                },
+                cause,
+                FailureDisposition::Terminal,
+            )?;
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+fn seeded_entry(engine: &devworks_desktop::host::Engine, delivery: &Id) -> QueueEntry {
+    let id = delivery.clone();
+    read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        move |s| s.queue().entry(&id),
+    )
+    .unwrap()
+    .expect("the delivery")
+}
+
+#[test]
+fn a_failed_delivery_is_listed_retried_and_dismissed_from_the_deliveries_view() {
+    let root = Root::new("jobs-deliveries");
+    let engine = start(&root);
+    let delivery = run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::fixture(),
+        |tx| {
+            let event =
+                devworks_core::protocol::EventId(tx.new_id(devworks_core::ports::IdKind::Event));
+            let actor = tx.store().host_actor.clone();
+            tx.history().append(NewEvent {
+                id: event.clone(),
+                actor,
+                project_id: None,
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: "fixture".into(),
+                aggregate_id: "seeded".into(),
+                aggregate_revision: 1,
+                kind: "Changed".into(),
+                payload: json!({}),
+            })?;
+            let id = tx.new_id(devworks_core::ports::IdKind::QueueEntry);
+            tx.queue().enqueue(NewQueueEntry {
+                id,
+                consumer: SEEDED_CONSUMER.into(),
+                event_id: event,
+                root_id: None,
+                operation_id: None,
+                partition: None,
+                priority: 0,
+                ready_at_ms: 0,
+                payload: json!({}),
+            })
+        },
+    )
+    .unwrap()
+    .id;
+    fail_seeded(&engine, "payload schema is not supported");
+    assert_eq!(seeded_entry(&engine, &delivery).state, QueueState::Failed);
+
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    click(&mut h, Role::Button, "Deliveries");
+    settle(&mut h);
+    // queue.inspect lists it with its consumer, state, attempt and last error.
+    assert!(has_text(&h, SEEDED_CONSUMER));
+    assert!(has_text(&h, "Failed"));
+    assert!(has_text(&h, "attempt 1"));
+    assert!(has_text(&h, "Last error: payload schema is not supported"));
+
+    // Retry (queue.retry) makes it ready again with a fresh budget.
+    click(&mut h, Role::Button, "Retry");
+    settle(&mut h);
+    let retried = seeded_entry(&engine, &delivery);
+    assert_eq!(retried.state, QueueState::Ready);
+    assert_eq!(retried.attempt_count, 0);
+    assert!(has_text(&h, "Queued"), "the list was read again");
+
+    // Its next attempt fails again; Dismiss (queue.resolve) asks first, then settles it.
+    fail_seeded(&engine, "payload schema is still not supported");
+    click(&mut h, Role::Button, "Refresh");
+    settle(&mut h);
+    assert!(has_text(
+        &h,
+        "Last error: payload schema is still not supported"
+    ));
+    click(&mut h, Role::Button, "Dismiss…");
+    assert!(has_text(&h, "It is never delivered again"));
+    click(&mut h, Role::Button, "Keep");
+    assert_eq!(seeded_entry(&engine, &delivery).state, QueueState::Failed);
+    click(&mut h, Role::Button, "Dismiss…");
+    h.get_by_role_and_label(Role::TextInput, "Reason").focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Reason")
+        .type_text("the producer no longer exists");
+    h.step();
+    click(&mut h, Role::Button, "Dismiss");
+    settle(&mut h);
+    assert_eq!(
+        seeded_entry(&engine, &delivery).state,
+        QueueState::Dismissed
+    );
+    assert!(has_text(&h, "The seeded-consumer delivery was dismissed."));
+    // A dismissed delivery is no longer listed.
+    assert!(!has_text(&h, &format!("Delivery {}", delivery.as_str())));
+}

@@ -2,11 +2,15 @@
 //! project's, with a right inner sidebar for the selected job (schedule, next and last run, hold
 //! and authorization, the active run) and its controls (Run now, Enable, Disable, Edit, Delete,
 //! Cancel the active run); the Runs subview pages the selected job's run history with each run's
-//! status, trigger, occurrence and reason. The create/edit form builds the same `jobs.create` /
+//! status, trigger, occurrence and reason; the Deliveries subview lists every consumer's failed,
+//! held, running and queued deliveries (`queue.inspect`: consumer, state, attempt and last error)
+//! and resolves one through the same `queue.*` commands an agent tool submits (OP-01, STORE-02).
+//! The create/edit form builds the same `jobs.create` /
 //! `jobs.edit` input an agent tool submits; nothing here decides what the job service decides
 //! (authorization, occurrences, overlap, holds). A command whose outcome is not known keeps its
 //! exact frame (Confirm outcomes, and the next launch, resubmit it).
 use crate::frame;
+use crate::jobs_ops::DeliveryResolution;
 use crate::ops::JobCommand;
 use crate::paged::{self, Paged};
 use crate::widgets::{self, Tone, chip};
@@ -14,15 +18,17 @@ use devworks_core::protocol::helpers::NativeCapability;
 use devworks_core::protocol::records::SchemaValue;
 use devworks_core::protocol::records::{
     ArtifactRecord, EffortName, JobDefinition, JobHold, JobInspection, JobRecord, JobRun,
-    JobRunStatus, RouteCatalogModel, RouteIntent, Schedule,
+    JobRunStatus, QueueDelivery, RouteCatalogModel, RouteIntent, Schedule,
 };
 use devworks_core::protocol::support::DynamicJson;
-use devworks_core::protocol::{Counter, ProjectId};
+use devworks_core::protocol::{Counter, OperationState, ProjectId};
 use eframe::egui::{self, RichText, Ui};
 use serde_json::{Value, json};
 
 /// The subviews (the screen registry's order).
-pub const TABS: [&str; 2] = ["Schedules", "Runs"];
+pub const TABS: [&str; 3] = ["Schedules", "Runs", "Deliveries"];
+/// The Deliveries subview's index in [`TABS`].
+pub const DELIVERIES_TAB: usize = 2;
 pub(crate) const SCHEDULE_KINDS: [&str; 3] = ["Manual", "Interval", "Calendar (cron)"];
 pub(crate) const TIERS: [&str; 4] = ["Max", "High", "Mid", "Low"];
 /// How an inference task is routed: a tier's pool, one named model, or OpenRouter's own route.
@@ -389,6 +395,13 @@ pub struct JobsUi {
     pub prompt_generation: u64,
     /// A one-line run status of each project's jobs, for the project's own views.
     pub project_status: std::collections::BTreeMap<String, String>,
+    /// Every consumer's running, failed, held and queued deliveries: a refresh keeps the rows
+    /// shown until its reply replaces them.
+    pub deliveries: Paged<QueueDelivery>,
+    /// The outcome of the last delivery resolution.
+    pub delivery_notice: Option<(Tone, String)>,
+    /// A terminal resolution (Dismiss, Cancel) waiting for confirmation, with its reason.
+    pub confirm_resolution: Option<(QueueDelivery, DeliveryResolution, String)>,
 }
 
 impl JobsUi {
@@ -487,6 +500,10 @@ pub enum JobAction {
     MorePrompts(Option<String>),
     RetryPrompts(Option<String>),
     EditJob(JobRecord),
+    ReloadDeliveries,
+    MoreDeliveries,
+    /// A resolution of the delivery as listed, with its reason.
+    Resolve(QueueDelivery, DeliveryResolution, String),
     Save(JobForm),
     Command(JobCommand, JobRecord),
     Cancel(JobRun),
@@ -738,6 +755,147 @@ pub(crate) fn details(ui: &mut Ui, jobs: &mut JobsUi, actions: &mut Vec<JobActio
         ui,
         "Scheduled runs never catch up missed occurrences, and an occurrence while a run is active is skipped.",
     );
+}
+
+/// How a delivery's state reads, and its tone.
+pub fn delivery_state(state: &OperationState) -> (&'static str, Tone) {
+    match state {
+        OperationState::Failed => ("Failed", Tone::Bad),
+        OperationState::OutcomeUnknown => ("Held: outcome not known", Tone::Attention),
+        OperationState::NeedsInput => ("Held: needs a decision", Tone::Attention),
+        OperationState::Dispatching => ("Running", Tone::Accent),
+        OperationState::RetryPending => ("Waiting to retry", Tone::Neutral),
+        OperationState::IntentRecorded | OperationState::Preflighted => ("Queued", Tone::Neutral),
+        OperationState::ObservedComplete => ("Completed", Tone::Good),
+        OperationState::CancelledBeforeDispatch => ("Cancelled", Tone::Neutral),
+    }
+}
+
+/// The resolutions a delivery's state accepts (the queue owner still decides each one).
+pub fn delivery_resolutions(state: &OperationState) -> &'static [DeliveryResolution] {
+    use DeliveryResolution as R;
+    match state {
+        OperationState::Failed => &[R::Retry, R::Dismiss],
+        OperationState::NeedsInput => &[R::Retry, R::Cancel],
+        OperationState::OutcomeUnknown => &[R::Reconcile],
+        OperationState::IntentRecorded
+        | OperationState::Preflighted
+        | OperationState::RetryPending => &[R::Cancel],
+        _ => &[],
+    }
+}
+
+/// The button of a resolution (Dismiss and Cancel ask first).
+pub fn resolution_label(r: DeliveryResolution) -> &'static str {
+    match r {
+        DeliveryResolution::Retry => "Retry",
+        DeliveryResolution::Reconcile => "Reconcile",
+        DeliveryResolution::Dismiss => "Dismiss…",
+        DeliveryResolution::Cancel => "Cancel delivery…",
+    }
+}
+
+/// The Deliveries subview: one row per delivery with its consumer, state, attempt and last
+/// error, and the resolutions its state accepts. `busy` names the deliveries whose resolution is
+/// in flight.
+pub(crate) fn deliveries(
+    ui: &mut Ui,
+    jobs: &mut JobsUi,
+    actions: &mut Vec<JobAction>,
+    busy: &std::collections::BTreeSet<String>,
+) {
+    if let Some((tone, text)) = &jobs.delivery_notice {
+        chip(ui, text.clone(), *tone);
+    }
+    let list = &jobs.deliveries;
+    let (mut reload, mut more) = (false, false);
+    let ready = paged::gate(ui, &Ok(()), list, "deliveries", &mut reload, &mut more);
+    if reload {
+        actions.push(JobAction::ReloadDeliveries);
+    }
+    if more {
+        actions.push(JobAction::MoreDeliveries);
+    }
+    if !ready {
+        return;
+    }
+    if list.items.is_empty() {
+        ui.label(RichText::new("No deliveries need attention").strong());
+        widgets::caption(
+            ui,
+            "Failed, held, running and queued deliveries are listed here; completed ones are not.",
+        );
+        return;
+    }
+    let mut confirm = None;
+    egui::ScrollArea::vertical()
+        .id_salt("job-deliveries")
+        .show(ui, |ui| {
+            for d in &list.items {
+                let (label, tone) = delivery_state(&d.state);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(d.consumer_id.as_str()).strong());
+                    chip(ui, label, tone);
+                    ui.label(format!("attempt {}", d.attempt.get()));
+                });
+                widgets::caption(ui, format!("Delivery {}", d.id.as_str()));
+                if let Some(e) = &d.error {
+                    ui.label(format!("Last error: {}", e.0));
+                }
+                let pending = busy.contains(d.id.as_str());
+                ui.horizontal_wrapped(|ui| {
+                    for r in delivery_resolutions(&d.state) {
+                        if !ui
+                            .add_enabled(!pending, egui::Button::new(resolution_label(*r)))
+                            .clicked()
+                        {
+                            continue;
+                        }
+                        match r {
+                            DeliveryResolution::Retry => actions.push(JobAction::Resolve(
+                                d.clone(),
+                                *r,
+                                "Retried from the desktop.".into(),
+                            )),
+                            DeliveryResolution::Reconcile => actions.push(JobAction::Resolve(
+                                d.clone(),
+                                *r,
+                                "Reconciled from the desktop.".into(),
+                            )),
+                            DeliveryResolution::Dismiss | DeliveryResolution::Cancel => {
+                                confirm = Some((d.clone(), *r, String::new()));
+                            }
+                        }
+                    }
+                    if pending {
+                        ui.spinner();
+                    }
+                });
+                widgets::divider(ui);
+            }
+            let mut more = false;
+            paged::load_more_control(ui, list, &mut more);
+            if more {
+                actions.push(JobAction::MoreDeliveries);
+            }
+        });
+    if confirm.is_some() {
+        jobs.confirm_resolution = confirm;
+    }
+}
+
+/// The Deliveries subview's sidebar: what each resolution does.
+pub(crate) fn delivery_help(ui: &mut Ui) {
+    ui.label(RichText::new("Deliveries").strong());
+    for line in [
+        "Retry makes a failed or held delivery ready again with a fresh retry budget.",
+        "Reconcile redelivers a held delivery once its operation's outcome is known, so the outcome is recorded rather than repeated.",
+        "Dismiss settles a failure that can never succeed; the deliveries after it continue.",
+        "Cancel stops queued work before it is dispatched.",
+        "A receipt's reply is never cancelled, and it is dismissed only when it can never be delivered; retry it instead.",
+    ] {
+        widgets::caption(ui, line);
+    }
 }
 
 /// A labelled text input (the label is its accessible name).
