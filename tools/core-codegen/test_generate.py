@@ -156,7 +156,8 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(carried['web.fetch'], {2})
         self.assertEqual(carried['indexing.runs'], {2})
         self.assertEqual(carried['indexing.refresh_overlay'], {2})
-        self.assertEqual(carried['artifacts.save'], {2, 3, 4})
+        # Revision 19 adds the artifact, reference and live-version identities tag and delete expect.
+        self.assertEqual(carried['artifacts.save'], {2, 3, 4, 19})
         self.assertEqual(carried['artifacts.read'], {4})
         self.assertEqual(carried['git.pull_request'], {2})
         self.assertEqual(carried['browser.sessions'], {3})

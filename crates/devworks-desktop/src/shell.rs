@@ -51,6 +51,10 @@ pub trait Dialogs {
     fn save_file(&mut self, _name: &str) -> Option<PathBuf> {
         None
     }
+    /// Where to export an artifact named `name`.
+    fn save_artifact(&mut self, name: &str) -> Option<PathBuf> {
+        self.save_file(name)
+    }
     /// One portable convention manifest selected by a human.
     fn pick_convention(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -67,6 +71,12 @@ impl Dialogs for NativeDialogs {
     fn save_file(&mut self, name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Save convention source")
+            .set_file_name(name)
+            .save_file()
+    }
+    fn save_artifact(&mut self, name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Export artifact")
             .set_file_name(name)
             .save_file()
     }

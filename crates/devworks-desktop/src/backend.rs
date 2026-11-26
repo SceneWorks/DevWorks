@@ -468,6 +468,10 @@ pub enum TaskOutput {
     Instruction(crate::instructions_ops::TaskResult),
     /// Native host state was refreshed or updated.
     Refreshed,
+    /// An artifact's preview for the Artifacts screen.
+    ArtifactPreview(crate::artifacts_screen::PreviewView),
+    /// An artifact's verified bytes were written to the named file.
+    ArtifactExported(std::path::PathBuf),
     PackageViews {
         views: devworks_engine::package_host::native_ui::NativeViews,
         images: std::collections::BTreeMap<String, eframe::egui::ColorImage>,

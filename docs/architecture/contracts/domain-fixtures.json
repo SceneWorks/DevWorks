@@ -10577,6 +10577,48 @@
     "schemaValid": false
   },
   {
+    "id": "r19-result-artifacts.save",
+    "entry": "operation-result.r19",
+    "raw": "{\"kind\":\"artifacts.save\",\"value\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\",\"testedRepository\":{\"repositoryId\":\"id-a\",\"worktreeId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"dirty\":true,\"ownershipRevision\":\"1\",\"observedAtMs\":\"0\",\"repositoryUrl\":\"https://github.com/owner/repo\"},\"revision\":\"3\",\"referenceRevision\":\"2\",\"versionsDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r4-result-artifacts.save-revisions",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"artifacts.save\",\"value\":{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\",\"testedRepository\":{\"repositoryId\":\"id-a\",\"worktreeId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"dirty\":true,\"ownershipRevision\":\"1\",\"observedAtMs\":\"0\",\"repositoryUrl\":\"https://github.com/owner/repo\"},\"revision\":\"3\",\"referenceRevision\":\"2\",\"versionsDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r19-result-artifacts.list",
+    "entry": "operation-result.r19",
+    "raw": "{\"kind\":\"artifacts.list\",\"value\":{\"items\":[{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\",\"testedRepository\":{\"repositoryId\":\"id-a\",\"worktreeId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"dirty\":true,\"ownershipRevision\":\"1\",\"observedAtMs\":\"0\",\"repositoryUrl\":\"https://github.com/owner/repo\"},\"revision\":\"3\",\"referenceRevision\":\"2\",\"versionsDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r4-result-artifacts.list-revisions",
+    "entry": "operation-result.r4",
+    "raw": "{\"kind\":\"artifacts.list\",\"value\":{\"items\":[{\"artifact\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"name\":\"fixture\",\"createdAtMs\":\"0\",\"scope\":{\"kind\":\"Workspace\"},\"referenceCount\":\"0\",\"testedRepository\":{\"repositoryId\":\"id-a\",\"worktreeId\":\"id-a\",\"head\":{\"format\":\"Sha1\",\"hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"dirty\":true,\"ownershipRevision\":\"1\",\"observedAtMs\":\"0\",\"repositoryUrl\":\"https://github.com/owner/repo\"},\"revision\":\"3\",\"referenceRevision\":\"2\",\"versionsDigest\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r19-input-artifacts.save",
+    "entry": "artifact-command-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Save\",\"title\":\"Report\",\"mediaType\":\"text/plain\",\"source\":{\"kind\":\"Upload\",\"ticketId\":\"upload-a\"},\"expectedDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"expectedBytes\":\"8\",\"tags\":[\"evidence\"],\"workspace\":true},\"schemaRevision\":19}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r19-input-artifacts.list",
+    "entry": "artifact-query-request.r3",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":19,\"queryId\":\"query-a\",\"query\":{\"kind\":\"List\",\"workspace\":true},\"limit\":20}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "dw13-r3-status-workflows.list",
     "entry": "operation-result.r3",
     "raw": "{\"kind\":\"workflows.list\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"label\":\"fixture\",\"category\":\"Ready\",\"rank\":\"0\",\"workflowRevision\":\"4\",\"affectedWorkDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"affectedWorkCount\":\"2\"}],\"hasMore\":false}}",

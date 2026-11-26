@@ -1870,6 +1870,8 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::PackageViews { .. }
                         | TaskOutput::PackageViewData(_)
                         | TaskOutput::Refreshed
+                        | TaskOutput::ArtifactPreview(_)
+                        | TaskOutput::ArtifactExported(_)
                         | TaskOutput::TextPreview(_)
                         | TaskOutput::WorkspaceReplyStatus(_)
                         | TaskOutput::Convention(_)
@@ -1946,6 +1948,8 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::PackageViews { .. }
                             | TaskOutput::PackageViewData(_)
                             | TaskOutput::Refreshed
+                            | TaskOutput::ArtifactPreview(_)
+                            | TaskOutput::ArtifactExported(_)
                             | TaskOutput::TextPreview(_)
                             | TaskOutput::WorkspaceReplyStatus(_)
                             | TaskOutput::Convention(_)
