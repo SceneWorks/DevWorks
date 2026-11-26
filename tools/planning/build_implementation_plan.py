@@ -117,7 +117,9 @@ overrides = {**{f'MCP-{n:02}':'mcp_server mcp_server_access authority graph work
  'EVAL-11':'eval_ui eval_acceptance',
  'EVAL-12':'eval_ui eval_acceptance',
  'EVAL-13':'eval_suites eval_ui eval_acceptance',
- 'EVAL-14':'eval_recorded eval_comparisons eval_mcp_records eval_acceptance'}
+ 'EVAL-14':'eval_recorded eval_comparisons eval_mcp_records eval_acceptance',
+ 'EVAL-15':'eval_comparisons eval_acceptance',
+ 'EVAL-16':'eval_skill_delivery eval_acceptance'}
 requirements = []
 for r in read('devworks-requirements-traceability.json')['requirements']:
     keys = overrides.get(r['requirement'], reqowners[r['requirement'].rsplit('-', 1)[0]]).split()
