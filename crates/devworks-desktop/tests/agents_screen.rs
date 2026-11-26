@@ -230,6 +230,16 @@ fn staffed(
     (pid, issue, agents)
 }
 
+/// Clicks the row whose label starts with `prefix`, read afresh (its step can change).
+fn click_row(h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, prefix: &str) {
+    settle(h);
+    let label = rows(h)
+        .into_iter()
+        .find(|r| r.starts_with(prefix))
+        .unwrap_or_else(|| panic!("a row {prefix}: {:?}", rows(h)));
+    click(h, Role::Button, &label);
+}
+
 fn rows(h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) -> Vec<String> {
     h.query_all_by_label_contains("  ·  ")
         .filter_map(|n| n.accesskit_node().label())
@@ -259,23 +269,21 @@ fn agent_messages_page_through_load_more_and_show_a_failed_read() {
         1000.0,
     );
     settle(&mut h);
-    h.state_mut().select_project(Some(pid));
+    h.state_mut().select_project(Some(pid.clone()));
     h.state_mut().navigate(Route::Agents);
     settle(&mut h);
-    let worker = rows(&h)
-        .into_iter()
-        .find(|r| r.starts_with("Worker  ·  worker"))
-        .unwrap();
     // The first read is refused: its failure is shown, not a spinner.
-    click(&mut h, Role::Button, &worker);
+    click_row(&mut h, "Worker  ·  worker  ·  ");
     assert!(has_text(&h, "Messages could not be read"));
+    h.state_mut().on_exit();
     drop(h);
 
     let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1000.0);
     settle(&mut h);
+    h.state_mut().select_project(Some(pid));
     h.state_mut().navigate(Route::Agents);
     settle(&mut h);
-    click(&mut h, Role::Button, &worker);
+    click_row(&mut h, "Worker  ·  worker  ·  ");
     assert!(
         h.query_by_role_and_label(Role::Button, "Load more")
             .is_some(),
