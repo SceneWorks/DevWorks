@@ -329,8 +329,8 @@ All 385 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2, 3, 4 ([revision 4 input](contracts/artifact-command-request.r3.schema.json)) | `ArtifactRecord` |
-| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2, 3, 4 ([revision 4 input](contracts/artifact-query-request.r3.schema.json)) | `Page<ArtifactRecord>` |
+| `artifacts.save` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Save'}<br><br>**Schema revisions** 1, 2, 3, 4, 19 ([revision 19 input](contracts/artifact-command-request.r3.schema.json)) | `ArtifactRecord` |
+| `artifacts.list` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'List'}<br><br>**Schema revisions** 1, 2, 3, 4, 19 ([revision 19 input](contracts/artifact-query-request.r3.schema.json)) | `Page<ArtifactRecord>` |
 | `artifacts.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'}<br><br>**Schema revisions** 1, 4 ([revision 4 input](contracts/artifact-query-request.r3.schema.json)) | `ArtifactReadContent` |
 | `artifacts.preview` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Preview'} | `ArtifactPreview` |
 | `artifacts.export` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Export'} | `ArtifactExport` |
@@ -3584,6 +3584,9 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `referenceCount` | `Counter` |
 | `tags` | `?ArtifactTags` · *revision 2+* |
 | `testedRepository` | `?TestedRepositoryRevision` · *revision 4+* |
+| `revision` | `?Revision` · *revision 19+* |
+| `referenceRevision` | `?Revision` · *revision 19+* |
+| `versionsDigest` | `?Digest` · *revision 19+* |
 
 ### ArtifactReadContent
 

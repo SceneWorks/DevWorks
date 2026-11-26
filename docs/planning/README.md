@@ -5,7 +5,7 @@ This directory is the canonical local home for the requirements, interview recor
 The [architectural design baseline](../architecture/devworks-architecture.html) and its [sources, diagrams and validation records](../architecture/README.md) live alongside this directory. Requirements retain their existing confirmation status; architecture baseline 1.1 is adopted and production acceptance remains pending.
 
 - `devworks-requirements.html`: searchable review document with stable requirement IDs.
-- `devworks-requirements.docx`: editable Word edition of the same requirements.
+- `devworks-requirements.md`: the same requirements as Markdown, which diffs in review.
 - `requirements-interview.json`: confirmed decisions, remaining questions and source findings.
 - `requirements-content.json`: generated structured requirement records for later migration into CodeGraph.
 - `harness-workbench.html`, `workbench.js`, `workbench.css`: interactive design reference.
@@ -13,7 +13,7 @@ The [architectural design baseline](../architecture/devworks-architecture.html) 
 - `design-coverage.json`: source-to-screen coverage notes and prototype limitations.
 - `requirements-assets/` and `revised-*.png`: document figures; older reviewed figures are retained as design history.
 
-Edit the requirement sources in `tools/planning/` and the interview record here, then regenerate both document editions. Do not edit generated HTML, Word or requirement JSON independently. Manual corrections to the Word edition need to be reconciled into the authoring source before rebuilding. See the authoring guide for commands.
+Edit the requirement sources in `tools/planning/` and the interview record here, then regenerate both document editions. Do not edit the generated HTML, Markdown or requirement JSON: every rebuild overwrites them. See the authoring guide for commands.
 
 To serve the prototype from the repository root:
 

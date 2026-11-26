@@ -3,7 +3,7 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "52259e8fb9de7412da3dd11c018ced079ea00adc199353f35113d1734bd8481f",
+  "sourceSha256": "10c476e22e16c26fbde018559179c8ca1a0483be2e4b0316f1b473823fe7db72",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
