@@ -3110,3 +3110,128 @@ fn every_redirect_stage_is_shown_with_its_outcome() {
         assert!(has_text(&h, text), "{text}");
     }
 }
+
+/// Each kind of hold reads as its own cause with its recorded reason: a real paused root's
+/// eligibility read supplies the record, and every other gate the runtime reports (engine test
+/// `revision_20_lists_the_gate_and_reason_of_every_hold`) is rendered from that same wire shape.
+#[test]
+fn every_hold_cause_is_named_with_its_reason() {
+    use devworks_core::protocol::Cause;
+    use devworks_core::protocol::records::{HoldCondition, HoldGate};
+    use devworks_core::protocol::support::{BoundedList, BoundedText};
+    let root = Root::new("work-hold-causes");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let feature =
+        features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]).remove(0);
+    let id = feature.id.as_str().to_owned();
+    let s = snapshot(&*backend, &id);
+    wops::run_changed(backend.command(
+        "runs.pause",
+        &wops::run_control(&*backend, "runs.pause", &feature, &s),
+    ))
+    .unwrap();
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    assert!(
+        has_text(&h, "Paused:"),
+        "the runtime's own pause record is shown"
+    );
+    let real = h.state().work.eligibility[&id].clone();
+    let hold = |n: &str, gate, cause, rate_limited, reason: &str| HoldCondition {
+        hold_id: devworks_core::protocol::HoldId(devworks_core::protocol::Id::new(n).unwrap()),
+        gate,
+        cause,
+        rate_limited,
+        reason: BoundedText(reason.into()),
+    };
+    let causes = [
+        (
+            hold(
+                "h1",
+                HoldGate::Pause,
+                Cause::HumanPause,
+                false,
+                "Paused by you",
+            ),
+            "Paused: Paused by you",
+        ),
+        (
+            hold(
+                "h2",
+                HoldGate::Prerequisite,
+                Cause::Dependency,
+                false,
+                "Search is not accepted",
+            ),
+            "Waiting for a prerequisite: Search is not accepted",
+        ),
+        (
+            hold(
+                "h3",
+                HoldGate::Plan,
+                Cause::Approval,
+                false,
+                "No approved plan",
+            ),
+            "Needs an approved plan: No approved plan",
+        ),
+        (
+            hold(
+                "h4",
+                HoldGate::Readiness,
+                Cause::Policy,
+                false,
+                "Readiness is stale",
+            ),
+            "Readiness not current: Readiness is stale",
+        ),
+        (
+            hold(
+                "h5",
+                HoldGate::Hold,
+                Cause::Capacity,
+                false,
+                "No worker slot",
+            ),
+            "Waiting for capacity: No worker slot",
+        ),
+        (
+            hold(
+                "h6",
+                HoldGate::Hold,
+                Cause::Capacity,
+                true,
+                "Provider limit until 12:00",
+            ),
+            "Rate limited: Provider limit until 12:00",
+        ),
+        (
+            hold(
+                "h7",
+                HoldGate::Question,
+                Cause::Dependency,
+                false,
+                "Which payment provider?",
+            ),
+            "Waiting for your answer: Which payment provider?",
+        ),
+    ];
+    let mut shown = real;
+    shown.conditions = Some(BoundedList(causes.iter().map(|(c, _)| c.clone()).collect()));
+    h.state_mut().work.eligibility.insert(id.clone(), shown);
+    h.step();
+    h.step();
+    for (_, text) in &causes {
+        assert!(has_text(&h, text), "{text}");
+    }
+}
