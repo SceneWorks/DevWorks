@@ -1895,6 +1895,47 @@ fn neighbour_work(files: usize, calls: usize) -> (Vec<(&'static str, StoreWork)>
     (work, edges)
 }
 
+/// The store work a request is measured with is its own: a reader on another thread that opened
+/// its snapshot before the measurement (as a task the runtime's bounded shutdown abandoned can)
+/// adds no snapshot, step or page to it.
+#[test]
+fn counted_work_excludes_a_background_reader_on_the_same_store() {
+    let h = Harness::new();
+    let counted = h.open_counted();
+    let store = counted.store.clone();
+    let stats = |s: &dyn ReadSnapshot| s.diagnostics().diagnostic_stats();
+    let (_, alone) = counted.count(|| read(&*store, stats));
+    let (opened, opened_rx) = std::sync::mpsc::channel();
+    let (start, start_rx) = std::sync::mpsc::channel::<()>();
+    let (done, done_rx) = std::sync::mpsc::channel();
+    let background = {
+        let store = store.clone();
+        std::thread::spawn(move || {
+            read(&*store, move |s| {
+                opened.send(()).unwrap();
+                start_rx.recv().unwrap();
+                for _ in 0..200 {
+                    s.diagnostics().diagnostic_stats()?;
+                }
+                done.send(()).unwrap();
+                Ok(())
+            })
+        })
+    };
+    opened_rx.recv().unwrap();
+    let (_, shared) = counted.count(|| {
+        start.send(()).unwrap();
+        done_rx.recv().unwrap();
+        read(&*store, stats)
+    });
+    background.join().unwrap();
+    assert_eq!(
+        (shared.snapshots, shared.read_steps, shared.read_pages),
+        (alone.snapshots, alone.read_steps, alone.read_pages),
+        "{alone:?} {shared:?}"
+    );
+}
+
 #[test]
 fn node_detail_and_neighbour_walks_read_only_the_edges_of_the_nodes_they_reach() {
     let _case = native_runtime_case();
