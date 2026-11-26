@@ -1137,6 +1137,13 @@
       "decision": "The DW-F13 proposal-gate item delivers SKILL-08\u2019s validation hook and depends on DW-34; DW-34 gets no dependency on DW-F13, which would create a cycle. Corrects the earlier statement that DW-34 depends on DW-F13."
     },
     {
+      "id": "eval_harness2_review_20261126",
+      "date": "2026-11-26",
+      "source": "User reviewed a comparison of DevWorks with Harness2 (arXiv 2610.14224, github.com/google-research/harness2) and chose \u201cAll five\u201d of the proposed changes on 26 November 2026.",
+      "status": "Requirement text added to EVAL-03, EVAL-04 and EVAL-08, and EVAL-15 and EVAL-16 added, all Proposed; native behavior unimplemented",
+      "decision": "Judges compare outputs blind to the arm that produced them (EVAL-03). The agent under trial cannot read expected answers, graders, rubrics or exceptions, and a run that reached one is contaminated evidence (EVAL-04). Improvements drafted from failures split into a general fix and a project-specific fix, and the general fix is validated outside the motivating project where cases exist (EVAL-08). A proposal without an applicable suite may carry a paired contrast linked to transcript steps that informs, but never replaces, the EVAL-05 gate (EVAL-15). Production grading reports unreachable and unused skills and always-on instruction size per role (EVAL-16). Harness2\u2019s unattended adoption of harness edits was not adopted; agent-authored changes keep the EVAL-05 approval gate."
+    },
+    {
       "id": "rule_origin_approval_20261103",
       "date": "2026-11-03",
       "source": "User found that many CodeGraph review-queue approvals did not need them, including a UI change they had approved in chat that came back as an agent decision to acknowledge, and chose the origin-based policy (\"Yes, by origin\") on 3 November 2026. They then chose automatic promotion of recurring agent lessons: \"The less I have to interact and approve the better ... Autonomy is the goal.\"",
