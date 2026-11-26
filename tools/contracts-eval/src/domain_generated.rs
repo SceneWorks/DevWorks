@@ -1371,6 +1371,58 @@ impl Check for ActorAttribution {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPage {
+    pub items: Rows<AgentSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for AgentPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "AgentPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSummary {
+    pub assignment_id: AssignmentId,
+    pub root_id: RootId,
+    pub work_id: RootId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<AssignmentId>,
+    pub role_id: Id,
+    pub state: OperationState,
+    pub session_id: Id,
+    pub revision: Revision,
+    pub created_at_ms: Counter,
+}
+impl Check for AgentSummary {
+    fn check(&self) -> Result<(), String> {
+        self.assignment_id.check()?;
+        self.root_id.check()?;
+        self.work_id.check()?;
+        self.parent_id.check()?;
+        self.role_id.check()?;
+        self.state.check()?;
+        self.session_id.check()?;
+        self.revision.check()?;
+        self.created_at_ms.check()?;
+        super::domain_rules::record(
+            "AgentSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentRecord {
     pub assignment_id: AssignmentId,
     pub root_id: RootId,
@@ -20761,6 +20813,13 @@ pub enum DomainQuery {
     },
     #[serde(rename = "next_work.inspect_claim")]
     NextWorkInspectClaim { claim_id: Id },
+    #[schemars(extend("x-since" = 21))]
+    #[serde(rename = "agents.list")]
+    AgentsList {
+        project_id: ProjectId,
+        live_only: bool,
+        page: PageRequest,
+    },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { assignment_id: AssignmentId },
     #[schemars(extend("x-since" = 7))]
@@ -22239,6 +22298,7 @@ impl DomainQuery {
             Self::TasksGet { .. } => "tasks.get",
             Self::WorkflowsList { .. } => "workflows.list",
             Self::NextWorkInspectClaim { .. } => "next_work.inspect_claim",
+            Self::AgentsList { .. } => "agents.list",
             Self::AgentsInspect { .. } => "agents.inspect",
             Self::AgentsHistory { .. } => "agents.history",
             Self::AgentsEvents { .. } => "agents.events",
@@ -22477,6 +22537,15 @@ impl Check for DomainQuery {
             }
             Self::NextWorkInspectClaim { claim_id } => {
                 claim_id.check()?;
+            }
+            Self::AgentsList {
+                project_id,
+                live_only,
+                page,
+            } => {
+                project_id.check()?;
+                live_only.check()?;
+                page.check()?;
             }
             Self::AgentsInspect { assignment_id } => {
                 assignment_id.check()?;
@@ -24139,6 +24208,9 @@ impl Revisioned for DomainQuery {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsList { .. } if revision < 21 => {
+                Err("operation predates its introduction".into())
+            }
             Self::AgentsHistory { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
@@ -29257,6 +29329,9 @@ pub enum OperationResult {
     RunsRedirect { value: MutationSummary },
     #[serde(rename = "runs.stop")]
     RunsStop { value: OperationRef },
+    #[schemars(extend("x-since" = 21))]
+    #[serde(rename = "agents.list")]
+    AgentsList { value: AgentPage },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { value: AgentRecord },
     #[serde(rename = "agents.delegate")]
@@ -30019,6 +30094,7 @@ impl OperationResult {
             Self::NextWorkReleaseClaim { .. } => "next_work.release_claim",
             Self::RunsRedirect { .. } => "runs.redirect",
             Self::RunsStop { .. } => "runs.stop",
+            Self::AgentsList { .. } => "agents.list",
             Self::AgentsInspect { .. } => "agents.inspect",
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
@@ -30414,6 +30490,7 @@ impl Check for OperationResult {
             Self::NextWorkReleaseClaim { value } => value.check()?,
             Self::RunsRedirect { value } => value.check()?,
             Self::RunsStop { value } => value.check()?,
+            Self::AgentsList { value } => value.check()?,
             Self::AgentsInspect { value } => value.check()?,
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
@@ -30996,6 +31073,9 @@ impl Revisioned for OperationResult {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsList { .. } if revision < 21 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::AgentsPost { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }

@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 385 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 386 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -127,6 +127,7 @@ All 385 qualified operations have typed input/result candidates. Existing input 
 | `agents.inbox` | **Query**<br>`assignmentId`: `AssignmentId`<br>`page`: `PageRequest`<br>`unacknowledgedOnly`: `bool`<br>`direction`: `MessageDirection` | `Page<AgentMessage>` |
 | `agents.acknowledge` | **Command**<br>`assignmentId`: `AssignmentId`<br>`messageId`: `Id`<br>`expectedRevision`: `Revision` | `AgentMessage` |
 | `agents.checkpoint` | **Command**<br>`assignmentId`: `AssignmentId`<br>`expectedRevision`: `Revision`<br>`transcriptSequence`: `Counter`<br>`content`: `ArtifactRef` | `CheckpointRecord` |
+| `agents.list` | **Query**<br>`projectId`: `ProjectId`<br>`liveOnly`: `bool`<br>`page`: `PageRequest`<br><br>**Schema revisions** 21 ([revision 21 input](contracts/domain-request.r21.schema.json)) | `AgentPage` |
 
 ### Sessions
 
@@ -1149,6 +1150,27 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 ### ActorAttribution
 
 `Recorded`, `Unknown`.
+
+### AgentPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<AgentSummary>` |
+| `nextCursor` | `?Cursor` |
+
+### AgentSummary
+
+| Field | Type |
+| --- | --- |
+| `assignmentId` | `AssignmentId` |
+| `rootId` | `RootId` |
+| `workId` | `RootId` |
+| `parentId` | `?AssignmentId` |
+| `roleId` | `Id` |
+| `state` | `OperationState` |
+| `sessionId` | `Id` |
+| `revision` | `Revision` |
+| `createdAtMs` | `Counter` |
 
 ### AgentRecord
 

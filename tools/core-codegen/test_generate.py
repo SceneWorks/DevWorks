@@ -112,7 +112,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
             'roles.history', 'roles.rollback', 'sessions.transcript',
             # DW-182: the hold conditions of a root at revision 20.
-            'runs.start', 'runs.pause', 'runs.continue', 'runs.inspect', 'runs.eligibility'})
+            'runs.start', 'runs.pause', 'runs.continue', 'runs.inspect', 'runs.eligibility',
+            # DW-183: a project's agent assignments, introduced at revision 21.
+            'agents.list'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('addons.read_content', 'addons.run_workflow'):

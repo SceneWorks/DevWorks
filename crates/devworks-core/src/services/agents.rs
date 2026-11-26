@@ -259,6 +259,17 @@ fn fenced(error: Fenced) -> Failure {
     Refusal::new(code, "assignment", None).into()
 }
 
+/// The wire state of a stored assignment state.
+fn operation_state(state: AssignmentState) -> OperationState {
+    match state {
+        AssignmentState::Ready => OperationState::IntentRecorded,
+        AssignmentState::Active => OperationState::Dispatching,
+        AssignmentState::Waiting => OperationState::NeedsInput,
+        AssignmentState::Completed => OperationState::ObservedComplete,
+        AssignmentState::Failed => OperationState::Failed,
+        AssignmentState::Superseded => OperationState::CancelledBeforeDispatch,
+    }
+}
 fn agent_record(
     read: &dyn RunRead,
     assignment: &StoredAssignment,
@@ -275,14 +286,7 @@ fn agent_record(
                 .map_err(|_| corrupt("assignment checkpoint"))
         })
         .transpose()?;
-    let state = match assignment.state {
-        AssignmentState::Ready => OperationState::IntentRecorded,
-        AssignmentState::Active => OperationState::Dispatching,
-        AssignmentState::Waiting => OperationState::NeedsInput,
-        AssignmentState::Completed => OperationState::ObservedComplete,
-        AssignmentState::Failed => OperationState::Failed,
-        AssignmentState::Superseded => OperationState::CancelledBeforeDispatch,
-    };
+    let state = operation_state(assignment.state);
     let mut blockers =
         runs::active_blockers(read, &BlockerFilter::RootLevel(assignment.root_id.clone()))?;
     blockers.extend(runs::active_blockers(
@@ -1168,6 +1172,79 @@ impl AgentService {
 
 /// The revision-one assignment inbox read: one page of the assignment's thread. An agent caller
 /// is proved against the same active-assignment rule the commands enforce.
+/// `agents.list`: the project's coordinator and worker assignments (schema revision 21), for a
+/// person or the host only. Any other principal (an agent, package, MCP client or schedule) is
+/// refused here: admission lets the host through, so the restriction is the service's.
+pub fn list_project_agents(
+    snapshot: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    input: &ops::ListInput,
+) -> Result<(crate::protocol::records::AgentPage, i64), Failure> {
+    if !matches!(
+        ctx.principal_kind(),
+        PrincipalKind::Human | PrincipalKind::Host
+    ) || ctx.project_id().is_some_and(|p| p != &input.project_id)
+    {
+        return Err(denied("project").into());
+    }
+    let project = snapshot
+        .projects()
+        .project(&input.project_id)?
+        .ok_or_else(|| missing("project", &input.project_id.0))?;
+    let binding = CursorBinding::new(
+        ctx,
+        "agents.list",
+        &[
+            input.project_id.0.as_str(),
+            if input.live_only { "live" } else { "all" },
+        ],
+        project.scope_revision,
+    );
+    let rows = cursor::page(
+        &binding,
+        &input.page,
+        |after, n| {
+            let after = after
+                .map(|s| {
+                    crate::protocol::Id::new(s)
+                        .map(AssignmentId)
+                        .map_err(|_| StorageError::CursorExpired)
+                })
+                .transpose()?;
+            snapshot.runs().project_assignments(
+                &input.project_id,
+                input.live_only,
+                after.as_ref(),
+                n,
+            )
+        },
+        |a| a.id.0.as_str().to_owned(),
+    )?;
+    let mut items = Vec::with_capacity(rows.items.len());
+    for a in &rows.items {
+        let context = snapshot
+            .runs()
+            .agent_assignment_context(&a.id)?
+            .ok_or_else(|| corrupt("assignment context"))?;
+        items.push(crate::protocol::records::AgentSummary {
+            assignment_id: a.id.clone(),
+            root_id: a.root_id.clone(),
+            work_id: a.work_id.clone(),
+            parent_id: a.parent_id.clone(),
+            role_id: context.role_id,
+            state: operation_state(a.state),
+            session_id: a.session_id.clone(),
+            revision: rev(a.revision),
+            created_at_ms: crate::services::kernel::counter(a.created_at_ms),
+        });
+    }
+    let page = crate::protocol::records::AgentPage {
+        items: BoundedList(items),
+        next_cursor: rows.next_cursor,
+    };
+    Ok((page, project.scope_revision))
+}
+
 pub fn inbox_assignment(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
@@ -2126,6 +2203,10 @@ impl QueryHandler for AgentService {
             OperationInput::Agents(ops::Input::Inspect(input)) => self
                 .inspect(snapshot, ctx, input)
                 .map(|(value, scope)| (OperationResult::AgentsInspect { value }, scope)),
+            OperationInput::Agents(ops::Input::List(input)) => {
+                list_project_agents(snapshot, ctx, input)
+                    .map(|(value, scope)| (OperationResult::AgentsList { value }, scope))
+            }
             OperationInput::Agents(ops::Input::History(input)) => {
                 retained_history(snapshot, ctx, input)
                     .map(|(value, scope)| (OperationResult::AgentsHistory { value }, scope))

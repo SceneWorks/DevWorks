@@ -1087,6 +1087,13 @@ for name in ['artifacts.save','artifacts.list']:
 saved19=copy.deepcopy(POS['r3-save-workspace']);saved19['schemaRevision']=19
 case('r19-input-artifacts.save','artifact-command-request.r3',saved19)
 case('r19-input-artifacts.list','artifact-query-request.r3',{'protocol':'1.0-draft.1','schemaRevision':19,'queryId':'query-a','query':{'kind':'List','workspace':True},'limit':20})
+# DW-183 revision 21: a project's coordinator and worker assignments.
+summary={'assignmentId':'assignment-a','rootId':'root-a','workId':'root-a','roleId':'coordinator','state':'Dispatching','sessionId':'session-a','revision':'2','createdAtMs':'1000'}
+worker={**summary,'assignmentId':'assignment-b','workId':'task-a','parentId':'assignment-a','roleId':'worker','sessionId':'session-b'}
+case('r21-result-agents.list','operation-result.r21',{'kind':'agents.list','value':{'items':[summary,worker],'nextCursor':'cursor-a'}})
+case('reject-r20-result-agents.list','operation-result.r20',{'kind':'agents.list','value':{'items':[summary]}},False,False)
+bad={**summary};del bad['sessionId']
+case('reject-r21-result-agents.list-without-session','operation-result.r21',{'kind':'agents.list','value':{'items':[bad]}},False,False)
 # DW-182 revision 20: the gate, cause and reason of every condition holding a root.
 conditions=[{'holdId':'hold-a','gate':'Pause','cause':'HumanPause','rateLimited':False,'reason':'Paused by you'},
  {'holdId':'hold-b','gate':'Hold','cause':'Capacity','rateLimited':True,'reason':'Provider rate limit until 12:00'},

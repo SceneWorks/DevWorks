@@ -3214,6 +3214,15 @@ impl RunRead for Unmodelled {
     ) -> Result<Vec<StoredAssignment>, StorageError> {
         unmodelled()
     }
+    fn project_assignments(
+        &self,
+        _: &ProjectId,
+        _: bool,
+        _: Option<&AssignmentId>,
+        _: u16,
+    ) -> Result<Vec<StoredAssignment>, StorageError> {
+        unmodelled()
+    }
     fn child_assignments_with_role(
         &self,
         _: &RootId,

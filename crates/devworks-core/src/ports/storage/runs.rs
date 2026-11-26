@@ -661,6 +661,15 @@ pub trait RunRead {
         after: Option<&AssignmentId>,
         limit: u16,
     ) -> Result<Vec<StoredAssignment>, StorageError>;
+    /// The project's agent assignments (those with an agent context) in ID order after `after`,
+    /// only live ones when `live_only`.
+    fn project_assignments(
+        &self,
+        project: &ProjectId,
+        live_only: bool,
+        after: Option<&AssignmentId>,
+        limit: u16,
+    ) -> Result<Vec<StoredAssignment>, StorageError>;
     /// Root-owned child assignments with the given stored role, used to account for dedicated slots.
     fn child_assignments_with_role(
         &self,
