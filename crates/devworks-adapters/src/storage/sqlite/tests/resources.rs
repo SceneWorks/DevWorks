@@ -704,6 +704,66 @@ fn acquire_creates_a_project_resource_and_grants_a_fenced_lease() {
 }
 
 #[test]
+fn a_workspace_caller_reads_a_project_resources_leases_by_naming_its_project() {
+    let fx = Fx::new();
+    let a = fx.agent("agent-a", "project-a", "session-a");
+    let c = fx.agent("agent-c", "project-a", "session-c");
+    let held = lease(fx.acquire(&a, "staging-db", json!({"purpose": "Migrate"})));
+    let queued = lease(fx.acquire(&c, "staging-db", json!({"priority": "Low"})));
+    assert_eq!((st(&held), st(&queued)), ("Held", "Waiting"));
+    let person = fx.ctx("user-a", PrincipalKind::Human, None);
+    let leases = |ctx: &InvocationContext, op: &str, body: Value| match result(fx.query_at(
+        ctx,
+        op,
+        body,
+        Some(22),
+    )) {
+        OperationResult::ResourcesHolders { value }
+        | OperationResult::ResourcesWaiters { value } => {
+            value.items.0.into_iter().map(|l| l.id).collect::<Vec<_>>()
+        }
+        other => panic!("{other:?}"),
+    };
+    let named = json!({"resourceId": "staging-db", "projectId": "project-a",
+        "page": {"limit": 10}});
+    assert_eq!(
+        leases(&person, "resources.holders", named.clone()),
+        vec![held.id.clone()]
+    );
+    assert_eq!(
+        leases(&person, "resources.waiters", named.clone()),
+        vec![queued.id.clone()]
+    );
+    // The project's own agents may name their project; without it the name resolves as before.
+    assert_eq!(
+        leases(&a, "resources.holders", named.clone()),
+        vec![held.id.clone()]
+    );
+    // Without the project a workspace caller cannot tell which project's resource it means.
+    let bare = json!({"resourceId": "staging-db", "page": {"limit": 10}});
+    assert_eq!(
+        fault(fx.query_at(&person, "resources.holders", bare, Some(22))).code,
+        DomainErrorCode::NotFound
+    );
+    // Another project's agent cannot name project-a, and an unknown project is not found.
+    let b = fx.agent("agent-b", "project-b", "session-b");
+    assert_eq!(
+        fault(fx.query_at(&b, "resources.waiters", named, Some(22))).code,
+        DomainErrorCode::NotFound
+    );
+    assert_eq!(
+        fault(fx.query_at(
+            &person,
+            "resources.holders",
+            json!({"resourceId": "staging-db", "projectId": "project-z", "page": {"limit": 10}}),
+            Some(22)
+        ))
+        .code,
+        DomainErrorCode::NotFound
+    );
+}
+
+#[test]
 fn waiters_are_granted_by_priority_then_first_come() {
     let fx = Fx::new();
     let holder = fx.agent("agent-a", "project-a", "s-holder");

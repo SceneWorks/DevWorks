@@ -599,6 +599,11 @@ for name in ['resources.renew','resources.release']:
  case('r2-input-'+name,'domain-request.r2',command_at(name))
 for name in ['resources.list','resources.holders','resources.waiters']:
  case('r2-input-'+name,'domain-request.r2',domain(name))
+# DW-184 revision 22: a workspace caller names the project of a project resource.
+for name in ['resources.holders','resources.waiters']:
+ case('r22-input-'+name+'-project','domain-request.r22',domain(name,22,projectId='project-a'))
+ case('r22-input-'+name,'domain-request.r22',domain(name,22))
+ case('reject-r2-input-'+name+'-project','domain-request.r2',domain(name,projectId='project-a'),False,False)
 lease_r2={**sample('LeaseRecord'),'units':1,'purpose':'Run the desktop suite','priority':'High','queuePosition':'1','requestedAtMs':'1793570000000','projectId':'project-a','rootId':'root-a','assignmentId':'assignment-a','sessionId':'session-a'}
 ended={**sample('LeaseRecord'),'state':'Released','units':1,'priority':'Medium','requestedAtMs':'1','grantedAtMs':'2','renewedAtMs':'3','endedAtMs':'4','endReason':'Expired','ownerUnreachableSinceMs':'3'}
 resource_r2={**sample('ResourceRecord'),'scope':'Machine','physical':True,'labels':['desktop'],'used':'1','available':False}
@@ -1087,6 +1092,33 @@ for name in ['artifacts.save','artifacts.list']:
 saved19=copy.deepcopy(POS['r3-save-workspace']);saved19['schemaRevision']=19
 case('r19-input-artifacts.save','artifact-command-request.r3',saved19)
 case('r19-input-artifacts.list','artifact-query-request.r3',{'protocol':'1.0-draft.1','schemaRevision':19,'queryId':'query-a','query':{'kind':'List','workspace':True},'limit':20})
+# DW-183 revision 21: a project's coordinator and worker assignments.
+summary={'assignmentId':'assignment-a','rootId':'root-a','workId':'root-a','roleId':'coordinator','state':'Dispatching','sessionId':'session-a','revision':'2','createdAtMs':'1000'}
+worker={**summary,'assignmentId':'assignment-b','workId':'task-a','parentId':'assignment-a','roleId':'worker','sessionId':'session-b'}
+case('r21-result-agents.list','operation-result.r21',{'kind':'agents.list','value':{'items':[summary,worker],'nextCursor':'cursor-a'}})
+case('reject-r20-result-agents.list','operation-result.r20',{'kind':'agents.list','value':{'items':[summary]}},False,False)
+bad={**summary};del bad['sessionId']
+case('reject-r21-result-agents.list-without-session','operation-result.r21',{'kind':'agents.list','value':{'items':[bad]}},False,False)
+# DW-182 revision 20: the gate, cause and reason of every condition holding a root.
+conditions=[{'holdId':'hold-a','gate':'Pause','cause':'HumanPause','rateLimited':False,'reason':'Paused by you'},
+ {'holdId':'hold-b','gate':'Hold','cause':'Capacity','rateLimited':True,'reason':'Provider rate limit until 12:00'},
+ {'holdId':'drv-a','gate':'Plan','cause':'Approval','rateLimited':False,'reason':'No approved plan covers this work'}]
+redirects=[{'instructionId':'instruction-a','stage':'Incorporated','message':'Ship the CLI first','receivedAtMs':'1000','acknowledgedAtMs':'2000','incorporatedAtMs':'3000','outcome':'Plan revised'},{'instructionId':'instruction-b','stage':'Received','message':'Also cover Windows','receivedAtMs':'4000'}]
+root20={'root':{'rootId':'root-a','revision':'2','desiredState':'Paused'},'blockers':{'items':[],'hasMore':False},'conditions':conditions,'redirects':redirects}
+for name in ['runs.start','runs.pause','runs.continue','runs.inspect']:
+ case('r20-result-'+name,'operation-result.r20',{'kind':name,'value':root20})
+ case('reject-r1-result-'+name+'-conditions','operation-result',{'kind':name,'value':root20},False,False)
+eligibility20={'target':{'kind':'root','id':'root-a'},'purpose':'Resume','eligible':False,'blockers':{'items':[],'hasMore':False},'conditions':conditions}
+case('r20-result-runs.eligibility','operation-result.r20',{'kind':'runs.eligibility','value':eligibility20})
+case('reject-r1-result-runs.eligibility-conditions','operation-result',{'kind':'runs.eligibility','value':eligibility20},False,False)
+bad=copy.deepcopy(eligibility20);bad['conditions'][2]['gate']='Waiting'
+badr=copy.deepcopy(root20);badr['redirects'][1]['stage']='Sent'
+case('reject-r20-result-unknown-redirect-stage','operation-result.r20',{'kind':'runs.inspect','value':badr},False,False)
+case('reject-r20-result-unknown-gate','operation-result.r20',{'kind':'runs.eligibility','value':bad},False,False)
+for kind,command in [('runs.start',{'rootId':'root-a','expectedWorkRevision':'1','expectedControlRevision':'1'}),('runs.pause',{'rootId':'root-a','expectedControlRevision':'1'}),('runs.continue',{'rootId':'root-a','expectedControlRevision':'1','coveredHolds':[{'holdId':'hold-a','revision':'1'}]})]:
+ case('r20-input-'+kind,'command-request',{'protocol':'1.0-draft.1','schemaRevision':20,'requestKey':'key-'+kind.split('.')[1],'command':{'kind':kind,**command}})
+case('r20-input-runs.inspect','query-request',{'protocol':'1.0-draft.1','schemaRevision':20,'queryId':'query-a','query':{'kind':'runs.inspect','rootId':'root-a'}})
+case('r20-input-runs.eligibility','query-request',{'protocol':'1.0-draft.1','schemaRevision':20,'queryId':'query-a','query':{'kind':'runs.eligibility','target':{'kind':'root','id':'root-a'},'purpose':'Resume'}})
 # DW13/109: metadata is additive; allocation outcomes have an explicit legacy adapter.
 status3={**sample('StatusRecord'),'category':'Ready','workflowRevision':'4','affectedWorkDigest':'b'*64,'affectedWorkCount':'2'}
 claim3={**sample('AllocationClaimRecord'),'state':'Held','workKind':'Feature','workRevision':'3','projectId':'project-a','rootId':'root-a','ownerSessionId':'session-a','queueRevision':'5'}

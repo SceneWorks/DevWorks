@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2227), 2227);
+    assert_eq!(run("domain-fixtures.json", 2255), 2255);
 }
 
 #[test]
@@ -467,7 +467,10 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // DW-41 negotiates the seven review bindings at revision 15.
     // DW-F14 negotiates watch.create, .list, .inspect and .cancel at revision 18.
     // DW-181 negotiates artifacts.save and artifacts.list at revision 19.
-    assert_eq!(admitted.len(), 724);
+    // DW-182 negotiates runs.start, .pause, .continue, .inspect and .eligibility at revision 20.
+    // DW-183 introduces agents.list at revision 21.
+    // DW-184 negotiates resources.holders and .waiters at revision 22.
+    assert_eq!(admitted.len(), 732);
 }
 
 #[test]

@@ -6,9 +6,10 @@ use crate::data_delivery::{
 };
 use crate::provider::{ArtifactRef, Digest, SchemaRef, TranscriptPage};
 use crate::{
-    Activation, ActorId, AssignmentId, Blockers, CommandId, CommandReply, CorrelationId, Counter,
-    EligibilityTarget, Event, EventId, Id, OperationId, OperationState, ProjectId, Protocol,
-    Purpose, QueryId, ReadStamp, RequestKey, ResourceId, Revision, RootControl, RootId, StoreId,
+    Activation, ActorId, AssignmentId, Blockers, Cause, CommandId, CommandReply, CorrelationId,
+    Counter, EligibilityTarget, Event, EventId, HoldId, Id, OperationId, OperationState, ProjectId,
+    Protocol, Purpose, QueryId, ReadStamp, RequestKey, ResourceId, Revision, RootControl, RootId,
+    StoreId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1364,6 +1365,58 @@ pub enum ActorAttribution {
 }
 impl Check for ActorAttribution {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPage {
+    pub items: Rows<AgentSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for AgentPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "AgentPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSummary {
+    pub assignment_id: AssignmentId,
+    pub root_id: RootId,
+    pub work_id: RootId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<AssignmentId>,
+    pub role_id: Id,
+    pub state: OperationState,
+    pub session_id: Id,
+    pub revision: Revision,
+    pub created_at_ms: Counter,
+}
+impl Check for AgentSummary {
+    fn check(&self) -> Result<(), String> {
+        self.assignment_id.check()?;
+        self.root_id.check()?;
+        self.work_id.check()?;
+        self.parent_id.check()?;
+        self.role_id.check()?;
+        self.state.check()?;
+        self.session_id.check()?;
+        self.revision.check()?;
+        self.created_at_ms.check()?;
+        super::domain_rules::record(
+            "AgentSummary",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -9604,23 +9657,134 @@ impl Revisioned for RouterConfigAction {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HoldGate {
+    Archived,
+    Pause,
+    Hold,
+    Prerequisite,
+    Question,
+    Plan,
+    Readiness,
+    Assignment,
+}
+impl Check for HoldGate {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HoldCondition {
+    pub hold_id: HoldId,
+    pub gate: HoldGate,
+    pub cause: Cause,
+    pub rate_limited: bool,
+    pub reason: Content,
+}
+impl Check for HoldCondition {
+    fn check(&self) -> Result<(), String> {
+        self.hold_id.check()?;
+        self.gate.check()?;
+        self.cause.check()?;
+        self.rate_limited.check()?;
+        self.reason.check()?;
+        super::domain_rules::record(
+            "HoldCondition",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RedirectStage {
+    Received,
+    Acknowledged,
+    Incorporated,
+}
+impl Check for RedirectStage {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RedirectRecord {
+    pub instruction_id: Id,
+    pub stage: RedirectStage,
+    pub message: Content,
+    pub received_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incorporated_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Content>,
+}
+impl Check for RedirectRecord {
+    fn check(&self) -> Result<(), String> {
+        self.instruction_id.check()?;
+        self.stage.check()?;
+        self.message.check()?;
+        self.received_at_ms.check()?;
+        self.acknowledged_at_ms.check()?;
+        self.incorporated_at_ms.check()?;
+        self.outcome.check()?;
+        super::domain_rules::record(
+            "RedirectRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RootSnapshot {
     pub root: RootControl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation: Option<Activation>,
     pub blockers: Blockers,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<HoldCondition>", extend("x-since" = 20))]
+    pub conditions: Option<Items<HoldCondition>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RedirectRecord>", extend("x-since" = 20))]
+    pub redirects: Option<Items<RedirectRecord>>,
 }
 impl Check for RootSnapshot {
     fn check(&self) -> Result<(), String> {
         self.root.check()?;
         self.activation.check()?;
         self.blockers.check()?;
+        self.conditions.check()?;
+        self.redirects.check()?;
         super::domain_rules::record(
             "RootSnapshot",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RootSnapshot {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 20 {
+            self.conditions = None;
+        }
+        if revision < 20 {
+            self.redirects = None;
+        }
     }
 }
 
@@ -9631,6 +9795,13 @@ pub struct EligibilitySnapshot {
     pub purpose: Purpose,
     pub eligible: bool,
     pub blockers: Blockers,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<HoldCondition>", extend("x-since" = 20))]
+    pub conditions: Option<Items<HoldCondition>>,
 }
 impl Check for EligibilitySnapshot {
     fn check(&self) -> Result<(), String> {
@@ -9638,11 +9809,20 @@ impl Check for EligibilitySnapshot {
         self.purpose.check()?;
         self.eligible.check()?;
         self.blockers.check()?;
+        self.conditions.check()?;
         super::domain_rules::record(
             "EligibilitySnapshot",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for EligibilitySnapshot {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 20 {
+            self.conditions = None;
+        }
     }
 }
 
@@ -20633,6 +20813,13 @@ pub enum DomainQuery {
     },
     #[serde(rename = "next_work.inspect_claim")]
     NextWorkInspectClaim { claim_id: Id },
+    #[schemars(extend("x-since" = 21))]
+    #[serde(rename = "agents.list")]
+    AgentsList {
+        project_id: ProjectId,
+        live_only: bool,
+        page: PageRequest,
+    },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { assignment_id: AssignmentId },
     #[schemars(extend("x-since" = 7))]
@@ -21472,11 +21659,25 @@ pub enum DomainQuery {
     ResourcesHolders {
         resource_id: ResourceId,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 22))]
+        project_id: Option<ProjectId>,
     },
     #[serde(rename = "resources.waiters")]
     ResourcesWaiters {
         resource_id: ResourceId,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 22))]
+        project_id: Option<ProjectId>,
     },
     #[serde(rename = "browser.sessions")]
     BrowserSessions { scope: DataScope, page: PageRequest },
@@ -22111,6 +22312,7 @@ impl DomainQuery {
             Self::TasksGet { .. } => "tasks.get",
             Self::WorkflowsList { .. } => "workflows.list",
             Self::NextWorkInspectClaim { .. } => "next_work.inspect_claim",
+            Self::AgentsList { .. } => "agents.list",
             Self::AgentsInspect { .. } => "agents.inspect",
             Self::AgentsHistory { .. } => "agents.history",
             Self::AgentsEvents { .. } => "agents.events",
@@ -22349,6 +22551,15 @@ impl Check for DomainQuery {
             }
             Self::NextWorkInspectClaim { claim_id } => {
                 claim_id.check()?;
+            }
+            Self::AgentsList {
+                project_id,
+                live_only,
+                page,
+            } => {
+                project_id.check()?;
+                live_only.check()?;
+                page.check()?;
             }
             Self::AgentsInspect { assignment_id } => {
                 assignment_id.check()?;
@@ -23046,13 +23257,23 @@ impl Check for DomainQuery {
                 scope.check()?;
                 page.check()?;
             }
-            Self::ResourcesHolders { resource_id, page } => {
+            Self::ResourcesHolders {
+                resource_id,
+                page,
+                project_id,
+            } => {
                 resource_id.check()?;
                 page.check()?;
+                project_id.check()?;
             }
-            Self::ResourcesWaiters { resource_id, page } => {
+            Self::ResourcesWaiters {
+                resource_id,
+                page,
+                project_id,
+            } => {
                 resource_id.check()?;
                 page.check()?;
+                project_id.check()?;
             }
             Self::BrowserSessions { scope, page } => {
                 scope.check()?;
@@ -23806,6 +24027,16 @@ impl Revisioned for DomainQuery {
                     *page = None;
                 }
             }
+            Self::ResourcesHolders { project_id, .. } => {
+                if revision < 22 {
+                    *project_id = None;
+                }
+            }
+            Self::ResourcesWaiters { project_id, .. } => {
+                if revision < 22 {
+                    *project_id = None;
+                }
+            }
             Self::JobsInspect { history, usage, .. } => {
                 if revision < 2 {
                     *history = None;
@@ -24011,6 +24242,9 @@ impl Revisioned for DomainQuery {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsList { .. } if revision < 21 => {
+                Err("operation predates its introduction".into())
+            }
             Self::AgentsHistory { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
@@ -29129,6 +29363,9 @@ pub enum OperationResult {
     RunsRedirect { value: MutationSummary },
     #[serde(rename = "runs.stop")]
     RunsStop { value: OperationRef },
+    #[schemars(extend("x-since" = 21))]
+    #[serde(rename = "agents.list")]
+    AgentsList { value: AgentPage },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { value: AgentRecord },
     #[serde(rename = "agents.delegate")]
@@ -29891,6 +30128,7 @@ impl OperationResult {
             Self::NextWorkReleaseClaim { .. } => "next_work.release_claim",
             Self::RunsRedirect { .. } => "runs.redirect",
             Self::RunsStop { .. } => "runs.stop",
+            Self::AgentsList { .. } => "agents.list",
             Self::AgentsInspect { .. } => "agents.inspect",
             Self::AgentsDelegate { .. } => "agents.delegate",
             Self::AgentsMessages { .. } => "agents.messages",
@@ -30286,6 +30524,7 @@ impl Check for OperationResult {
             Self::NextWorkReleaseClaim { value } => value.check()?,
             Self::RunsRedirect { value } => value.check()?,
             Self::RunsStop { value } => value.check()?,
+            Self::AgentsList { value } => value.check()?,
             Self::AgentsInspect { value } => value.check()?,
             Self::AgentsDelegate { value } => value.check()?,
             Self::AgentsMessages { value } => value.check()?,
@@ -30827,6 +31066,11 @@ impl Revisioned for OperationResult {
             Self::WatchList { value } => value.retain_revision(revision),
             Self::WatchInspect { value } => value.retain_revision(revision),
             Self::WatchCancel { value } => value.retain_revision(revision),
+            Self::RunsStart { value } => value.retain_revision(revision),
+            Self::RunsPause { value } => value.retain_revision(revision),
+            Self::RunsContinue { value } => value.retain_revision(revision),
+            Self::RunsInspect { value } => value.retain_revision(revision),
+            Self::RunsEligibility { value } => value.retain_revision(revision),
             Self::HistoryCommandReceipt { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
@@ -30863,6 +31107,9 @@ impl Revisioned for OperationResult {
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
+            Self::AgentsList { .. } if revision < 21 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::AgentsPost { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }

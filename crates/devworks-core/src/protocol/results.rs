@@ -161,6 +161,9 @@ pub enum OperationResult {
     AgentsAcknowledge { value: AgentMessage },
     #[serde(rename = "agents.checkpoint")]
     AgentsCheckpoint { value: CheckpointRecord },
+    #[schemars(extend("x-since" = 21))]
+    #[serde(rename = "agents.list")]
+    AgentsList { value: AgentPage },
     #[serde(rename = "sessions.list")]
     SessionsList { value: Page<SessionRecord> },
     #[serde(rename = "sessions.get")]
@@ -890,6 +893,7 @@ impl OperationResult {
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
+            Self::AgentsList { .. } => "agents.list",
             Self::SessionsList { .. } => "sessions.list",
             Self::SessionsGet { .. } => "sessions.get",
             Self::SessionsTranscript { .. } => "sessions.transcript",
@@ -1285,6 +1289,7 @@ impl Check for OperationResult {
             Self::AgentsInbox { value } => value.check()?,
             Self::AgentsAcknowledge { value } => value.check()?,
             Self::AgentsCheckpoint { value } => value.check()?,
+            Self::AgentsList { value } => value.check()?,
             Self::SessionsList { value } => value.check()?,
             Self::SessionsGet { value } => value.check()?,
             Self::SessionsTranscript { value } => value.check()?,
@@ -1645,6 +1650,11 @@ impl Revisioned for OperationResult {
             Self::NextWorkClaimFeatureTask { value } => value.retain_revision(revision),
             Self::NextWorkInspectClaim { value } => value.retain_revision(revision),
             Self::NextWorkReleaseClaim { value } => value.retain_revision(revision),
+            Self::RunsStart { value } => value.retain_revision(revision),
+            Self::RunsPause { value } => value.retain_revision(revision),
+            Self::RunsContinue { value } => value.retain_revision(revision),
+            Self::RunsInspect { value } => value.retain_revision(revision),
+            Self::RunsEligibility { value } => value.retain_revision(revision),
             Self::SessionsList { value } => value.retain_revision(revision),
             Self::SessionsGet { value } => value.retain_revision(revision),
             Self::SessionsTranscript { value } => value.retain_revision(revision),
@@ -1867,6 +1877,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AgentsList { .. } if revision < 21 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SchemasCodeReferences { .. } if revision < 8 => {

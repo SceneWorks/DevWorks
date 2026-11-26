@@ -3,16 +3,16 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "10c476e22e16c26fbde018559179c8ca1a0483be2e4b0316f1b473823fe7db72",
+  "sourceSha256": "86233e685729ed55eefe592ad187a59904a52a7d82645a4a8275ab15fab0ee3f",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
   "resourcePolicy": "Static safe devworks:// templates; object enumeration/read is an authenticated scoped tool/resource projection of these exact queries, preserving the query stamp and citations.",
   "counts": {
-    "catalogOperations": 385,
-    "modeDispositions": 390,
-    "tools": 160,
-    "readTools": 101,
+    "catalogOperations": 386,
+    "modeDispositions": 391,
+    "tools": 161,
+    "readTools": 102,
     "commandTools": 59
   },
   "tools": [
@@ -911,6 +911,27 @@
       "resultSelection": {
         "pointer": "/kind",
         "equals": "agents.inbox"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_agents_list",
+      "operation": "agents.list",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "agents.list"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "agents.list"
       },
       "authority": "Scoped",
       "effect": "Local",
@@ -3767,6 +3788,12 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "agents.list",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
     },
     {
       "operation": "sessions.list",

@@ -122,6 +122,15 @@ pub struct WorkUi {
     pub code_reviews: BTreeMap<String, reviews::ReviewPane>,
     pub git: BTreeMap<String, Paged<devworks_core::protocol::records::AttributedGitLink>>,
     pub runs: BTreeMap<String, RootSnapshot>,
+    /// Every stored and derived condition holding each inspected root (`runs.eligibility`).
+    pub eligibility: BTreeMap<String, devworks_core::protocol::records::EligibilitySnapshot>,
+    /// The redirect message being written for each root.
+    pub redirect_drafts: BTreeMap<String, String>,
+    /// The message each in-flight redirect sent, by root: its reply clears the draft only while
+    /// the draft still holds that text.
+    pub redirect_sent: BTreeMap<String, String>,
+    /// Roots Continue all is inspecting: each is continued once its snapshot shows a manual hold.
+    pub continue_all: BTreeSet<String>,
     pub git_inspections:
         BTreeMap<String, Result<devworks_core::protocol::records::GitInspection, String>>,
     pub github_links: BTreeMap<String, devworks_core::protocol::records::GithubIssueLink>,
@@ -325,6 +334,12 @@ pub(crate) enum Action {
     RequestApproval(WorkRecord),
     Inspect(String),
     Run(&'static str, WorkRecord),
+    /// Sends the root's redirect draft.
+    Redirect(WorkRecord),
+    /// Stops the root's running work.
+    Stop(WorkRecord),
+    /// Continues every listed root that a manual hold keeps paused.
+    ContinueAllHeld,
     SelectCard(Option<String>),
     OpenDetail(String),
     RefreshGit(String),
@@ -392,6 +407,8 @@ impl Screen for WorkUi {
         if !ctl.work_loading() {
             ctl.load_work();
         }
+        // Run state (holds, redirect stages) moves without a work revision.
+        ctl.reinspect_runs();
     }
     fn apply(&mut self, cx: &mut Cx, slot: WorkSlot, reply: Reply) {
         if let Some((slot, reply)) = (WorkCtl { work: self, cx }).apply_work(slot, reply) {

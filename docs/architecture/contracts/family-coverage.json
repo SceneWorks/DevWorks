@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-24",
-  "catalogSha256": "65cbae4c70d2f2b698dd23eccd6e2c63bf473691cb6abfdefc1063d49e51139f",
+  "catalogSha256": "4f063eb85a76dc96c6e5f41e7a91a239d4d8455418bb17b3cb7dba1320b84104",
   "familyCount": 50,
-  "operationCount": 385,
-  "concreteInputCandidates": 385,
+  "operationCount": 386,
+  "concreteInputCandidates": 386,
   "domainInputsPending": 0,
   "families": [
     {
@@ -2734,6 +2734,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 20,
+              "inputSchema": "command-request.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r20.schema.json",
+              "completionSchema": "operation-completion.r20.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2780,6 +2788,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 20,
+              "inputSchema": "command-request.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r20.schema.json",
+              "completionSchema": "operation-completion.r20.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2826,6 +2842,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 20,
+              "inputSchema": "command-request.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r20.schema.json",
+              "completionSchema": "operation-completion.r20.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2918,6 +2942,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 20,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": "domain-query-reply.r20.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -3008,6 +3040,14 @@
               "inputSchema": "query-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 20,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": "domain-query-reply.r20.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -3533,6 +3573,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "",
+          "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 21,
+          "operation": "agents.list",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "agents.list",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "agents.list"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "agents.list"
+          },
+          "resultValueType": "AgentPage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 21,
+              "inputSchema": "domain-request.r21.schema.json",
+              "resultSchema": "operation-result.r21.schema.json",
+              "queryReplySchema": "domain-query-reply.r21.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "A person or the host lists one project's coordinator and worker assignments, only the live ones (ready, active or waiting) on request, in assignment ID order, with each one's work item, parent, role, state and session.",
           "familyRules": "Assignment ownership and parent scope are host-derived. Root cap is ten with no global cap. Inbox observation and acknowledgment confer no approval.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13917,11 +14004,19 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 22,
+              "inputSchema": "domain-request.r22.schema.json",
+              "resultSchema": "operation-result.r21.schema.json",
+              "queryReplySchema": "domain-query-reply.r21.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session.",
+          "semanticRules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session. Schema revision 22: project_id names the project whose resource resource_id is, so a workspace caller can read a project resource; a project-bound caller may name only its own project.",
           "familyRules": "Canonical physical keys and host-owned leases/fences. Uncertain running resources cannot be released as free.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -13971,11 +14066,19 @@
               "queryReplySchema": "domain-query-reply.r2.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 22,
+              "inputSchema": "domain-request.r22.schema.json",
+              "resultSchema": "operation-result.r21.schema.json",
+              "queryReplySchema": "domain-query-reply.r21.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session.",
+          "semanticRules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session. Schema revision 22: project_id names the project whose resource resource_id is, so a workspace caller can read a project resource; a project-bound caller may name only its own project.",
           "familyRules": "Canonical physical keys and host-owned leases/fences. Uncertain running resources cannot be released as free.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

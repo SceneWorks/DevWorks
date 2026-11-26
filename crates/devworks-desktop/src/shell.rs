@@ -183,6 +183,7 @@ pub struct Shell {
     pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: crate::artifacts_screen::ArtifactsScreen,
     pub resources: crate::artifacts_screen::ResourcesScreen,
+    pub agents: crate::agents_screen::AgentsScreen,
     pub browser: crate::artifacts_screen::BrowserScreen,
     pub addons: crate::addons::AddonsScreen,
     /// The project lists of the navigation's project selector, All projects and Repositories
@@ -394,6 +395,7 @@ screens!(
     Conventions => conventions,
     Artifacts => artifacts,
     Resources => resources,
+    Agents => agents,
     Browser => browser,
     Projects => projects.screen,
     Watchers => watchers,
@@ -441,6 +443,7 @@ impl Shell {
             conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: Default::default(),
             resources: Default::default(),
+            agents: Default::default(),
             browser: Default::default(),
             addons: Default::default(),
             projects: Default::default(),
@@ -1028,6 +1031,10 @@ impl Shell {
         // The Project tab follows the selection at once, never showing another project's files.
         if self.route == Route::Artifacts {
             self.with_screen(ScreenId::Artifacts, |s, cx| s.load(cx, Route::Artifacts));
+        }
+        // So does Agents: another project's agents and messages are never shown.
+        if self.route == Route::Agents {
+            self.with_screen(ScreenId::Agents, |s, cx| s.load(cx, Route::Agents));
         }
         if matches!(
             self.route,

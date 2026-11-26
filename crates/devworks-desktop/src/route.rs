@@ -199,12 +199,9 @@ pub static SCREENS: [Screen; 21] = [
         subviews: &["Active", "Finished"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending(
-            "assignments, agent transcripts and run controls",
-            "DW-15, DW-9",
-        ),
+        pending: None,
         link: Some(("Resource reservations", Route::Resources)),
-        owner: ScreenId::Placeholder,
+        owner: ScreenId::Agents,
     },
     Screen {
         route: Route::Artifacts,

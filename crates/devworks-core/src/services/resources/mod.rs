@@ -80,8 +80,8 @@ use crate::protocol::records::{
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::{BoundedList, BoundedText, Limit, PositiveCounter};
 use crate::protocol::{
-    ActorId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ResourceId, RetryAdvice,
-    RevisionDimension, RootId,
+    ActorId, CorrelationId, DomainErrorCode, DomainFault, EventId, Id, ProjectId, ResourceId,
+    RetryAdvice, RevisionDimension, RootId,
 };
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::kernel::{Failure, Refusal, counter, decided, query_fault, rev};
@@ -1143,8 +1143,7 @@ impl ResourceService {
         i: &ops::HoldersInput,
         now: i64,
     ) -> Result<OperationResult, Failure> {
-        let res = resolve(read.resources(), ctx, i.resource_id.0.as_str())?
-            .ok_or_else(|| not_found("resource", &i.resource_id.0))?;
+        let res = resolve_named(read, ctx, &i.resource_id, i.project_id.as_ref())?;
         let binding = CursorBinding::new(
             ctx,
             "resources.holders",
@@ -1180,8 +1179,7 @@ impl ResourceService {
         i: &ops::WaitersInput,
         now: i64,
     ) -> Result<OperationResult, Failure> {
-        let res = resolve(read.resources(), ctx, i.resource_id.0.as_str())?
-            .ok_or_else(|| not_found("resource", &i.resource_id.0))?;
+        let res = resolve_named(read, ctx, &i.resource_id, i.project_id.as_ref())?;
         let binding = CursorBinding::new(
             ctx,
             "resources.waiters",
@@ -1476,6 +1474,30 @@ fn resolve(
         Some(p) => read.resource_by_key(&canonical_key(ResourceScopeKind::Project, Some(p), &name)),
         None => Ok(None),
     }
+}
+/// The resource a lease query names: `resource` resolved as [`resolve`] does, in `project`
+/// when the query names one. A project-bound caller may name only its own project, as
+/// `resources.list` checks its scope.
+fn resolve_named(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+    resource: &ResourceId,
+    project: Option<&ProjectId>,
+) -> Result<StoredResource, Failure> {
+    let found = match project {
+        None => resolve(read.resources(), ctx, resource.0.as_str())?,
+        Some(p) => {
+            if ctx.project_id().is_some_and(|own| own != p) || !read.sessions().project_exists(p)? {
+                return Err(not_found("project", &p.0).into());
+            }
+            resolve(
+                read.resources(),
+                &ctx.in_project(p.clone()),
+                resource.0.as_str(),
+            )?
+        }
+    };
+    found.ok_or_else(|| not_found("resource", &resource.0).into())
 }
 fn visible(ctx: &InvocationContext, res: &StoredResource) -> bool {
     match (&res.project_id, ctx.project_id()) {

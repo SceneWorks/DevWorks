@@ -301,6 +301,13 @@
     "schemaValid": true
   },
   {
+    "id": "input-agents.list-Query",
+    "entry": "domain-request.r21",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"agents.list\",\"projectId\":\"project-a\",\"liveOnly\":false,\"page\":{\"limit\":20}},\"schemaRevision\":21}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-agents.inspect-Query",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"agents.inspect\",\"assignmentId\":\"assignment-a\"}}",
@@ -2621,6 +2628,13 @@
     "id": "result-runs.stop",
     "entry": "operation-result",
     "raw": "{\"kind\":\"runs.stop\",\"value\":{\"operationId\":\"operation-a\",\"state\":\"ObservedComplete\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-agents.list",
+    "entry": "operation-result.r21",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -7385,6 +7399,48 @@
     "schemaValid": true
   },
   {
+    "id": "r22-input-resources.holders-project",
+    "entry": "domain-request.r22",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.holders\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20},\"projectId\":\"project-a\"},\"schemaRevision\":22}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r22-input-resources.holders",
+    "entry": "domain-request.r22",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.holders\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20}},\"schemaRevision\":22}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-input-resources.holders-project",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.holders\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20},\"projectId\":\"project-a\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r22-input-resources.waiters-project",
+    "entry": "domain-request.r22",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.waiters\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20},\"projectId\":\"project-a\"},\"schemaRevision\":22}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r22-input-resources.waiters",
+    "entry": "domain-request.r22",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.waiters\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20}},\"schemaRevision\":22}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r2-input-resources.waiters-project",
+    "entry": "domain-request.r2",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"resources.waiters\",\"resourceId\":\"resource-a\",\"page\":{\"limit\":20},\"projectId\":\"project-a\"},\"schemaRevision\":2}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
     "id": "r2-result-resources.acquire",
     "entry": "operation-result.r2",
     "raw": "{\"kind\":\"resources.acquire\",\"value\":{\"id\":\"id-a\",\"resourceId\":\"resource-a\",\"ownerId\":\"actor-a\",\"fence\":\"0\",\"expiresAtMs\":\"0\",\"state\":\"Waiting\",\"units\":1,\"purpose\":\"Run the desktop suite\",\"priority\":\"High\",\"queuePosition\":\"1\",\"requestedAtMs\":\"1793570000000\",\"projectId\":\"project-a\",\"rootId\":\"root-a\",\"assignmentId\":\"assignment-a\",\"sessionId\":\"session-a\"}}",
@@ -9968,42 +10024,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1424",
+    "id": "r3-preview-source-13-1432",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1424",
+    "id": "r3-delete-source-13-1432",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1426",
+    "id": "r3-preview-source-15-1434",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1426",
+    "id": "r3-delete-source-15-1434",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1428",
+    "id": "r3-preview-source-256-1436",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1428",
+    "id": "r3-delete-source-256-1436",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
@@ -10615,6 +10671,146 @@
     "id": "r19-input-artifacts.list",
     "entry": "artifact-query-request.r3",
     "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":19,\"queryId\":\"query-a\",\"query\":{\"kind\":\"List\",\"workspace\":true},\"limit\":20}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r21-result-agents.list",
+    "entry": "operation-result.r21",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"sessionId\":\"session-a\",\"revision\":\"2\",\"createdAtMs\":\"1000\"},{\"assignmentId\":\"assignment-b\",\"rootId\":\"root-a\",\"workId\":\"task-a\",\"roleId\":\"worker\",\"state\":\"Dispatching\",\"sessionId\":\"session-b\",\"revision\":\"2\",\"createdAtMs\":\"1000\",\"parentId\":\"assignment-a\"}],\"nextCursor\":\"cursor-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r20-result-agents.list",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"sessionId\":\"session-a\",\"revision\":\"2\",\"createdAtMs\":\"1000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r21-result-agents.list-without-session",
+    "entry": "operation-result.r21",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"revision\":\"2\",\"createdAtMs\":\"1000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r20-result-runs.start",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.start\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-runs.start-conditions",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"runs.start\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r20-result-runs.pause",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.pause\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-runs.pause-conditions",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"runs.pause\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r20-result-runs.continue",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.continue\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-runs.continue-conditions",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"runs.continue\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r20-result-runs.inspect",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.inspect\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-runs.inspect-conditions",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"runs.inspect\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Received\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r20-result-runs.eligibility",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.eligibility\",\"value\":{\"target\":{\"kind\":\"root\",\"id\":\"root-a\"},\"purpose\":\"Resume\",\"eligible\":false,\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r1-result-runs.eligibility-conditions",
+    "entry": "operation-result",
+    "raw": "{\"kind\":\"runs.eligibility\",\"value\":{\"target\":{\"kind\":\"root\",\"id\":\"root-a\"},\"purpose\":\"Resume\",\"eligible\":false,\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r20-result-unknown-redirect-stage",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.inspect\",\"value\":{\"root\":{\"rootId\":\"root-a\",\"revision\":\"2\",\"desiredState\":\"Paused\"},\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Plan\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}],\"redirects\":[{\"instructionId\":\"instruction-a\",\"stage\":\"Incorporated\",\"message\":\"Ship the CLI first\",\"receivedAtMs\":\"1000\",\"acknowledgedAtMs\":\"2000\",\"incorporatedAtMs\":\"3000\",\"outcome\":\"Plan revised\"},{\"instructionId\":\"instruction-b\",\"stage\":\"Sent\",\"message\":\"Also cover Windows\",\"receivedAtMs\":\"4000\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r20-result-unknown-gate",
+    "entry": "operation-result.r20",
+    "raw": "{\"kind\":\"runs.eligibility\",\"value\":{\"target\":{\"kind\":\"root\",\"id\":\"root-a\"},\"purpose\":\"Resume\",\"eligible\":false,\"blockers\":{\"items\":[],\"hasMore\":false},\"conditions\":[{\"holdId\":\"hold-a\",\"gate\":\"Pause\",\"cause\":\"HumanPause\",\"rateLimited\":false,\"reason\":\"Paused by you\"},{\"holdId\":\"hold-b\",\"gate\":\"Hold\",\"cause\":\"Capacity\",\"rateLimited\":true,\"reason\":\"Provider rate limit until 12:00\"},{\"holdId\":\"drv-a\",\"gate\":\"Waiting\",\"cause\":\"Approval\",\"rateLimited\":false,\"reason\":\"No approved plan covers this work\"}]}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r20-input-runs.start",
+    "entry": "command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":20,\"requestKey\":\"key-start\",\"command\":{\"kind\":\"runs.start\",\"rootId\":\"root-a\",\"expectedWorkRevision\":\"1\",\"expectedControlRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r20-input-runs.pause",
+    "entry": "command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":20,\"requestKey\":\"key-pause\",\"command\":{\"kind\":\"runs.pause\",\"rootId\":\"root-a\",\"expectedControlRevision\":\"1\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r20-input-runs.continue",
+    "entry": "command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":20,\"requestKey\":\"key-continue\",\"command\":{\"kind\":\"runs.continue\",\"rootId\":\"root-a\",\"expectedControlRevision\":\"1\",\"coveredHolds\":[{\"holdId\":\"hold-a\",\"revision\":\"1\"}]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r20-input-runs.inspect",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":20,\"queryId\":\"query-a\",\"query\":{\"kind\":\"runs.inspect\",\"rootId\":\"root-a\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r20-input-runs.eligibility",
+    "entry": "query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"schemaRevision\":20,\"queryId\":\"query-a\",\"query\":{\"kind\":\"runs.eligibility\",\"target\":{\"kind\":\"root\",\"id\":\"root-a\"},\"purpose\":\"Resume\"}}",
     "typedValid": true,
     "schemaValid": true
   },

@@ -670,6 +670,27 @@
         "Unknown"
       ]
     },
+    "AgentPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<AgentSummary>",
+        "next_cursor": "?Cursor"
+      }
+    },
+    "AgentSummary": {
+      "kind": "record",
+      "fields": {
+        "assignment_id": "AssignmentId",
+        "root_id": "RootId",
+        "work_id": "RootId",
+        "parent_id": "?AssignmentId",
+        "role_id": "Id",
+        "state": "OperationState",
+        "session_id": "Id",
+        "revision": "Revision",
+        "created_at_ms": "Counter"
+      }
+    },
     "AgentRecord": {
       "kind": "record",
       "fields": {
@@ -3361,12 +3382,61 @@
         "ClearEmbeddingSpace": 3
       }
     },
+    "HoldGate": {
+      "kind": "enum",
+      "values": [
+        "Archived",
+        "Pause",
+        "Hold",
+        "Prerequisite",
+        "Question",
+        "Plan",
+        "Readiness",
+        "Assignment"
+      ]
+    },
+    "HoldCondition": {
+      "kind": "record",
+      "fields": {
+        "hold_id": "HoldId",
+        "gate": "HoldGate",
+        "cause": "Cause",
+        "rate_limited": "bool",
+        "reason": "Content"
+      }
+    },
+    "RedirectStage": {
+      "kind": "enum",
+      "values": [
+        "Received",
+        "Acknowledged",
+        "Incorporated"
+      ]
+    },
+    "RedirectRecord": {
+      "kind": "record",
+      "fields": {
+        "instruction_id": "Id",
+        "stage": "RedirectStage",
+        "message": "Content",
+        "received_at_ms": "Counter",
+        "acknowledged_at_ms": "?Counter",
+        "incorporated_at_ms": "?Counter",
+        "outcome": "?Content"
+      }
+    },
     "RootSnapshot": {
       "kind": "record",
       "fields": {
         "root": "RootControl",
         "activation": "?Activation",
-        "blockers": "Blockers"
+        "blockers": "Blockers",
+        "conditions": "?Items<HoldCondition>",
+        "redirects": "?Items<RedirectRecord>"
+      },
+      "since": {
+        "conditions": 20,
+        "redirects": 20
       }
     },
     "EligibilitySnapshot": {
@@ -3375,7 +3445,11 @@
         "target": "EligibilityTarget",
         "purpose": "Purpose",
         "eligible": "bool",
-        "blockers": "Blockers"
+        "blockers": "Blockers",
+        "conditions": "?Items<HoldCondition>"
+      },
+      "since": {
+        "conditions": 20
       }
     },
     "ReceiptObservation": {
@@ -8017,6 +8091,20 @@
       "authority": "Scoped",
       "rules": "Cancel/quiesce owned work under root fencing; uncertain effects remain held until reconciled. No manual child control."
     },
+    "agents.list": {
+      "operation": "agents.list",
+      "mode": "Query",
+      "fields": {
+        "project_id": "ProjectId",
+        "live_only": "bool",
+        "page": "PageRequest"
+      },
+      "result": "AgentPage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "A person or the host lists one project's coordinator and worker assignments, only the live ones (ready, active or waiting) on request, in assignment ID order, with each one's work item, parent, role, state and session.",
+      "introducedRevision": 21
+    },
     "agents.inspect": {
       "operation": "agents.inspect",
       "mode": "Query",
@@ -10408,24 +10496,32 @@
       "mode": "Query",
       "fields": {
         "resource_id": "ResourceId",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "project_id": "?ProjectId"
       },
       "result": "Page<LeaseRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session. Schema revision 22: project_id names the project whose resource resource_id is, so a workspace caller can read a project resource; a project-bound caller may name only its own project.",
+      "since": {
+        "project_id": 22
+      }
     },
     "resources.waiters": {
       "operation": "resources.waiters",
       "mode": "Query",
       "fields": {
         "resource_id": "ResourceId",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "project_id": "?ProjectId"
       },
       "result": "Page<LeaseRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session. Schema revision 22: project_id names the project whose resource resource_id is, so a workspace caller can read a project resource; a project-bound caller may name only its own project.",
+      "since": {
+        "project_id": 22
+      }
     },
     "browser.sessions": {
       "operation": "browser.sessions",
@@ -12428,6 +12524,29 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "agents.list": [
+      21
+    ],
+    "runs.start": [
+      1,
+      20
+    ],
+    "runs.pause": [
+      1,
+      20
+    ],
+    "runs.continue": [
+      1,
+      20
+    ],
+    "runs.inspect": [
+      1,
+      20
+    ],
+    "runs.eligibility": [
+      1,
+      20
+    ],
     "git.integrate": [1, 17],
     "reviews.list": [1, 15],
     "reviews.inspect": [1, 15],
@@ -12520,11 +12639,13 @@
     ],
     "resources.holders": [
       1,
-      2
+      2,
+      22
     ],
     "resources.waiters": [
       1,
-      2
+      2,
+      22
     ],
     "sessions.list": [
       1,
@@ -13578,6 +13699,7 @@
     "runs.inspect": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "runs.stop": {"assignmentScope": "coordinator", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "runs.eligibility": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "agents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.inspect": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.delegate": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.messages": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

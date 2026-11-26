@@ -4,6 +4,7 @@
 mod common;
 use common::*;
 use devworks_desktop::addons_ops::AddonsSlot;
+use devworks_desktop::agents_screen::AgentsSlot;
 use devworks_desktop::artifacts_screen::{ArtifactsSlot, BrowserSlot, ResourcesSlot};
 use devworks_desktop::backend::{CommandDispatch, Slot};
 use devworks_desktop::chat::ChatSlot;
@@ -254,6 +255,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::Conventions, variant_names::<ConventionsSlot>()),
         (ScreenId::Artifacts, variant_names::<ArtifactsSlot>()),
         (ScreenId::Resources, variant_names::<ResourcesSlot>()),
+        (ScreenId::Agents, variant_names::<AgentsSlot>()),
         (ScreenId::Browser, variant_names::<BrowserSlot>()),
         (ScreenId::Projects, variant_names::<ProjectsSlot>()),
         (ScreenId::Indexing, variant_names::<IndexingSlot>()),
@@ -293,6 +295,7 @@ fn reported(slot: &Slot) -> String {
         }
         ScreenId::Artifacts => format!("{:?}", ArtifactsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Resources => format!("{:?}", ResourcesSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Agents => format!("{:?}", AgentsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Browser => format!("{:?}", BrowserSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Projects => format!("{:?}", ProjectsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Indexing => format!("{:?}", IndexingSlot::try_from(slot.clone()).unwrap()),

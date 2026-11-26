@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 385 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 386 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -102,13 +102,13 @@ All 385 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `runs.start` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.start'} | `RootSnapshot` |
-| `runs.pause` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.pause'} | `RootSnapshot` |
-| `runs.continue` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.continue'} | `RootSnapshot` |
+| `runs.start` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.start'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/command-request.schema.json)) | `RootSnapshot` |
+| `runs.pause` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.pause'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/command-request.schema.json)) | `RootSnapshot` |
+| `runs.continue` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.continue'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/command-request.schema.json)) | `RootSnapshot` |
 | `runs.redirect` | **Command**<br>`rootId`: `RootId`<br>`expectedControlRevision`: `Revision`<br>`message`: `Content`<br>`attachments`: `Items<ArtifactRef>` | `MutationSummary` |
-| `runs.inspect` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.inspect'} | `RootSnapshot` |
+| `runs.inspect` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.inspect'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/query-request.r3.schema.json)) | `RootSnapshot` |
 | `runs.stop` | **Command**<br>`rootId`: `RootId`<br>`expectedControlRevision`: `Revision` | `OperationRef` |
-| `runs.eligibility` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.eligibility'} | `EligibilitySnapshot` |
+| `runs.eligibility` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.eligibility'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/query-request.r3.schema.json)) | `EligibilitySnapshot` |
 
 ### Agents
 
@@ -127,6 +127,7 @@ All 385 qualified operations have typed input/result candidates. Existing input 
 | `agents.inbox` | **Query**<br>`assignmentId`: `AssignmentId`<br>`page`: `PageRequest`<br>`unacknowledgedOnly`: `bool`<br>`direction`: `MessageDirection` | `Page<AgentMessage>` |
 | `agents.acknowledge` | **Command**<br>`assignmentId`: `AssignmentId`<br>`messageId`: `Id`<br>`expectedRevision`: `Revision` | `AgentMessage` |
 | `agents.checkpoint` | **Command**<br>`assignmentId`: `AssignmentId`<br>`expectedRevision`: `Revision`<br>`transcriptSequence`: `Counter`<br>`content`: `ArtifactRef` | `CheckpointRecord` |
+| `agents.list` | **Query**<br>`projectId`: `ProjectId`<br>`liveOnly`: `bool`<br>`page`: `PageRequest`<br><br>**Schema revisions** 21 ([revision 21 input](contracts/domain-request.r21.schema.json)) | `AgentPage` |
 
 ### Sessions
 
@@ -472,8 +473,8 @@ All 385 qualified operations have typed input/result candidates. Existing input 
 | `resources.acquire` | **Command**<br>`resourceId`: `ResourceId`<br>`expectedRevision`: `Revision`<br>`units`: `Limit`<br>`leaseMs`: `PositiveCounter`<br>`purpose`: `?Text`<br>`priority`: `?ResourcePriority`<br>`capacity`: `?Limit`<br>`labels`: `?Items<Label>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
 | `resources.renew` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br>`leaseMs`: `PositiveCounter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
 | `resources.release` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
-| `resources.holders` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<LeaseRecord>` |
-| `resources.waiters` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<LeaseRecord>` |
+| `resources.holders` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br>`projectId`: `?ProjectId`<br><br>**Schema revisions** 1, 2, 22 ([revision 22 input](contracts/domain-request.r22.schema.json)) | `Page<LeaseRecord>` |
+| `resources.waiters` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br>`projectId`: `?ProjectId`<br><br>**Schema revisions** 1, 2, 22 ([revision 22 input](contracts/domain-request.r22.schema.json)) | `Page<LeaseRecord>` |
 
 ### Browser
 
@@ -1149,6 +1150,27 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 ### ActorAttribution
 
 `Recorded`, `Unknown`.
+
+### AgentPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<AgentSummary>` |
+| `nextCursor` | `?Cursor` |
+
+### AgentSummary
+
+| Field | Type |
+| --- | --- |
+| `assignmentId` | `AssignmentId` |
+| `rootId` | `RootId` |
+| `workId` | `RootId` |
+| `parentId` | `?AssignmentId` |
+| `roleId` | `Id` |
+| `state` | `OperationState` |
+| `sessionId` | `Id` |
+| `revision` | `Revision` |
+| `createdAtMs` | `Counter` |
 
 ### AgentRecord
 
@@ -3284,6 +3306,36 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `SelectEmbeddingSpace` | `expectedRevision`: `Revision`<br>`expectedSelectionRevision`: `Revision`<br>`candidateId`: `Id` |
 | `ClearEmbeddingSpace` | `expectedSelectionRevision`: `Revision` |
 
+### HoldGate
+
+`Archived`, `Pause`, `Hold`, `Prerequisite`, `Question`, `Plan`, `Readiness`, `Assignment`.
+
+### HoldCondition
+
+| Field | Type |
+| --- | --- |
+| `holdId` | `HoldId` |
+| `gate` | `HoldGate` |
+| `cause` | `Cause` |
+| `rateLimited` | `bool` |
+| `reason` | `Content` |
+
+### RedirectStage
+
+`Received`, `Acknowledged`, `Incorporated`.
+
+### RedirectRecord
+
+| Field | Type |
+| --- | --- |
+| `instructionId` | `Id` |
+| `stage` | `RedirectStage` |
+| `message` | `Content` |
+| `receivedAtMs` | `Counter` |
+| `acknowledgedAtMs` | `?Counter` |
+| `incorporatedAtMs` | `?Counter` |
+| `outcome` | `?Content` |
+
 ### RootSnapshot
 
 | Field | Type |
@@ -3291,6 +3343,8 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `root` | `RootControl` |
 | `activation` | `?Activation` |
 | `blockers` | `Blockers` |
+| `conditions` | `?Items<HoldCondition>` · *revision 20+* |
+| `redirects` | `?Items<RedirectRecord>` · *revision 20+* |
 
 ### EligibilitySnapshot
 
@@ -3300,6 +3354,7 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `purpose` | `Purpose` |
 | `eligible` | `bool` |
 | `blockers` | `Blockers` |
+| `conditions` | `?Items<HoldCondition>` · *revision 20+* |
 
 ### ReceiptObservation
 

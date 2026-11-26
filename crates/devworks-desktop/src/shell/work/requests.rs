@@ -446,6 +446,15 @@ impl WorkCtl<'_, '_> {
         );
     }
 
+    /// Reads every inspected root's run snapshot again (one at a time per root).
+    pub(super) fn reinspect_runs(&mut self) {
+        let roots: Vec<String> = self.work.runs.keys().cloned().collect();
+        for root in roots {
+            if !self.pending(&WorkSlot::WorkInspect(root.clone())) {
+                self.inspect(&root);
+            }
+        }
+    }
     pub(super) fn inspect(&mut self, root: &str) {
         let r = root.to_owned();
         self.query(

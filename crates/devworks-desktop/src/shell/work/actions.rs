@@ -125,6 +125,7 @@ impl WorkCtl<'_, '_> {
                 Action::OpenWork(id) => self.open_work(&id),
                 Action::Reload => {
                     self.load_work();
+                    self.reinspect_runs();
                     self.refresh_history(self.work.activity.item.clone());
                 }
                 Action::Create(form) => {
@@ -390,6 +391,65 @@ impl WorkCtl<'_, '_> {
                     );
                 }
                 Action::Inspect(root) => self.inspect(&root),
+                Action::Redirect(w) => {
+                    let id = w.id.as_str().to_owned();
+                    let Some(snapshot) = self.work.runs.get(&id).cloned() else {
+                        self.inspect(&id);
+                        continue;
+                    };
+                    let message = self
+                        .work
+                        .redirect_drafts
+                        .get(&id)
+                        .map(|m| m.trim().to_owned())
+                        .unwrap_or_default();
+                    // A redirect already in flight for this root is never sent twice.
+                    if message.is_empty() || self.work.redirect_sent.contains_key(&id) {
+                        continue;
+                    }
+                    self.work.redirect_sent.insert(id.clone(), message.clone());
+                    let root = id.clone();
+                    let sent = self.command(
+                        WorkSlot::WorkRedirect(id.clone()),
+                        "Sending a redirect",
+                        "runs.redirect",
+                        move |be| wops::run_redirect(be, &root, &snapshot, &message),
+                    );
+                    // Nothing was submitted (offline or closing): nothing is in flight.
+                    if !sent {
+                        self.work.redirect_sent.remove(&id);
+                    }
+                }
+                Action::Stop(w) => {
+                    let id = w.id.as_str().to_owned();
+                    let Some(snapshot) = self.work.runs.get(&id).cloned() else {
+                        self.inspect(&id);
+                        continue;
+                    };
+                    let root = id.clone();
+                    self.command(
+                        WorkSlot::WorkStop(id),
+                        "Stopping work",
+                        "runs.stop",
+                        move |be| wops::run_stop(be, &root, &snapshot),
+                    );
+                }
+                Action::ContinueAllHeld => {
+                    let roots: Vec<String> = self
+                        .work
+                        .features
+                        .items
+                        .iter()
+                        .chain(self.work.cards.items.iter())
+                        // Linked tasks hold their own pauses, so they are continued too.
+                        .map(|w| w.id.as_str().to_owned())
+                        .collect();
+                    for root in roots {
+                        // Each root is continued from its current snapshot, never a remembered one.
+                        self.work.continue_all.insert(root.clone());
+                        self.inspect(&root);
+                    }
+                }
                 Action::Run(op, w) => {
                     let Some(snapshot) = self.work.runs.get(w.id.as_str()).cloned() else {
                         self.inspect(w.id.as_str());

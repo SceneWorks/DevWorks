@@ -8,9 +8,13 @@ use crate::paged::{Applied, Fetch, ListText, Page, Paged, list_body};
 use crate::route::Route;
 use crate::screen::{Cx, Screen, ScreenContext, ScreenId};
 use crate::widgets::{self, Header, ViewState};
+use devworks_core::gateway::QueryOutcome;
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::provider::ArtifactRef;
-use devworks_core::protocol::records::{ArtifactRecord, BrowserSession, ItemState, ResourceRecord};
+use devworks_core::protocol::records::{
+    ArtifactRecord, BrowserSession, ItemState, LeaseRecord, LeaseState, ResourcePriority,
+    ResourceRecord,
+};
 use eframe::egui::{self, Ui};
 use std::collections::{BTreeMap, HashMap};
 
@@ -32,10 +36,14 @@ pub enum ArtifactsSlot {
 }
 screen_slot!(ArtifactsSlot, Artifacts);
 
-/// The Resources request the screen waits for. The name is persisted.
+/// The Resources requests the screen waits for. The names are persisted.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ResourcesSlot {
     ResourcesList,
+    /// The leases holding one resource (its canonical key).
+    ResourceHolders(String),
+    /// The leases waiting for one resource (its canonical key).
+    ResourceWaiters(String),
 }
 screen_slot!(ResourcesSlot, Resources);
 
@@ -1131,6 +1139,20 @@ impl BrowserScreen {
 #[derive(Default)]
 pub struct ResourcesScreen {
     pub list: Paged<ResourceRecord>,
+    /// The holders and waiters of the selected resource.
+    pub leases: Option<ResourceLeases>,
+}
+
+/// Who holds and who waits for one resource.
+pub struct ResourceLeases {
+    /// The resource's canonical key, unique across projects.
+    pub key: String,
+    /// Its name, which the lease queries send.
+    pub resource: String,
+    /// The project of a project resource, which the lease queries name.
+    pub project: Option<String>,
+    pub holders: Paged<LeaseRecord>,
+    pub waiters: Paged<LeaseRecord>,
 }
 
 impl Screen for ResourcesScreen {
@@ -1143,6 +1165,15 @@ impl Screen for ResourcesScreen {
         if !cx.pending(&ResourcesSlot::ResourcesList) {
             self.load(cx);
         }
+        if let Some(leases) = &mut self.leases {
+            for waiters in [false, true] {
+                let slot = leases.slot(waiters);
+                if !cx.pending(&slot) {
+                    let fetch = leases.list(waiters).refresh();
+                    leases.send(cx, waiters, fetch);
+                }
+            }
+        }
     }
     fn apply(&mut self, cx: &mut Cx, slot: ResourcesSlot, reply: Reply) {
         match (slot, reply) {
@@ -1154,6 +1185,12 @@ impl Screen for ResourcesScreen {
                     self.send(cx, fetch);
                 }
             }
+            (ResourcesSlot::ResourceHolders(key), Reply::Query(q)) => {
+                self.apply_leases(cx, &key, false, q);
+            }
+            (ResourcesSlot::ResourceWaiters(key), Reply::Query(q)) => {
+                self.apply_leases(cx, &key, true, q);
+            }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
     }
@@ -1162,13 +1199,178 @@ impl Screen for ResourcesScreen {
     }
     fn remove_purged(&mut self, _scope: &ProjectPurgeClientScope) {
         self.list = Default::default();
+        self.leases = None;
     }
     fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
         route_context(mem)
     }
 }
 
+impl ResourceLeases {
+    fn new(key: String, resource: String, project: Option<String>) -> Self {
+        Self {
+            key,
+            resource,
+            project,
+            holders: Paged::default(),
+            waiters: Paged::default(),
+        }
+    }
+    fn slot(&self, waiters: bool) -> ResourcesSlot {
+        if waiters {
+            ResourcesSlot::ResourceWaiters(self.key.clone())
+        } else {
+            ResourcesSlot::ResourceHolders(self.key.clone())
+        }
+    }
+    fn list(&mut self, waiters: bool) -> &mut Paged<LeaseRecord> {
+        if waiters {
+            &mut self.waiters
+        } else {
+            &mut self.holders
+        }
+    }
+    fn send(&mut self, cx: &mut Cx, waiters: bool, fetch: Fetch) {
+        let slot = self.slot(waiters);
+        let resource = self.resource.clone();
+        let project = self.project.clone();
+        let (label, op) = if waiters {
+            ("Loading resource waiters", "resources.waiters")
+        } else {
+            ("Loading resource holders", "resources.holders")
+        };
+        cx.paged(
+            self.list(waiters),
+            fetch,
+            slot,
+            label,
+            op,
+            move |b, cursor| {
+                ops::resource_leases(b, waiters, &resource, project.as_deref(), cursor)
+            },
+        );
+    }
+}
+
+/// One lease as the Resources detail shows it: owner, state, purpose, priority, units and
+/// until when it holds or waits.
+fn lease_line(l: &LeaseRecord) -> String {
+    let state = match l.state {
+        LeaseState::Waiting => "waiting",
+        LeaseState::Held => "holding",
+        LeaseState::Releasing => "releasing",
+        LeaseState::Uncertain => "uncertain (its holder stopped answering)",
+        LeaseState::Released => "released",
+    };
+    let priority = match l.priority {
+        Some(ResourcePriority::Low) => "low",
+        Some(ResourcePriority::Medium) | None => "medium",
+        Some(ResourcePriority::High) => "high",
+        Some(ResourcePriority::Critical) => "critical",
+    };
+    let purpose = l
+        .purpose
+        .as_ref()
+        .map_or("no purpose given".to_owned(), |p| format!("for {}", p.0));
+    let units = l.units.as_ref().map_or(1, |u| u.get());
+    let until = if matches!(l.state, LeaseState::Waiting) {
+        "waits until"
+    } else {
+        "expires"
+    };
+    format!(
+        "{}  ·  {state}  ·  {purpose}  ·  {priority} priority  ·  {units} unit{}  ·  {until} {}",
+        l.owner_id.0.as_str(),
+        if units == 1 { "" } else { "s" },
+        widgets::local_time(l.expires_at_ms.get())
+    )
+}
+
+/// The holders and the queue of the selected resource, each with a Load more control.
+fn lease_detail(ui: &mut Ui, leases: &ResourceLeases, more: &mut [bool; 2]) {
+    for (i, (title, list, empty)) in [
+        ("Holders", &leases.holders, "Nobody holds this resource."),
+        (
+            "Waiting",
+            &leases.waiters,
+            "Nobody is waiting for this resource.",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        ui.strong(title);
+        match list.result() {
+            None => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(format!("Loading {}…", title.to_lowercase()));
+                });
+            }
+            Some(Err(e)) => {
+                ui.label(format!("{title} could not be read: {e}"));
+            }
+            Some(Ok(rows)) if rows.is_empty() => {
+                ui.label(empty);
+            }
+            Some(Ok(rows)) => {
+                for l in rows {
+                    ui.label(lease_line(l));
+                }
+            }
+        }
+        crate::paged::load_more_control(ui, list, &mut more[i]);
+        ui.add_space(8.0);
+    }
+}
+
 impl ResourcesScreen {
+    fn apply_leases(&mut self, cx: &mut Cx, key: &str, waiters: bool, q: QueryOutcome) {
+        let Some(leases) = &mut self.leases else {
+            return;
+        };
+        if leases.key != key {
+            return;
+        }
+        let applied = leases
+            .list(waiters)
+            .apply_current(ops::resource_leases_page(q).map_err(|e| e.describe()));
+        if let Applied::Continue(fetch) = applied {
+            leases.send(cx, waiters, fetch);
+        }
+    }
+    /// Reads the holders and waiters of the selected resource (its canonical key) when the
+    /// selection changes and the resource is listed.
+    fn follow_selection(&mut self, cx: &mut Cx, selected: Option<&str>) {
+        let record = selected.and_then(|key| {
+            self.list
+                .result()?
+                .ok()?
+                .iter()
+                .find(|r| r.canonical_key.0 == key)
+        });
+        let Some(r) = record else {
+            if selected.is_none() {
+                self.leases = None;
+            }
+            return;
+        };
+        match &self.leases {
+            Some(l) if l.key == r.canonical_key.0 => {}
+            _ => {
+                let mut leases = ResourceLeases::new(
+                    r.canonical_key.0.clone(),
+                    r.id.0.as_str().to_owned(),
+                    r.project_id.as_ref().map(|p| p.0.as_str().to_owned()),
+                );
+                for waiters in [false, true] {
+                    let fetch = leases.list(waiters).reload();
+                    leases.send(cx, waiters, fetch);
+                }
+                self.leases = Some(leases);
+            }
+        }
+    }
     fn load(&mut self, cx: &mut Cx) {
         let fetch = self.list.reread();
         self.send(cx, fetch);
@@ -1202,10 +1404,18 @@ impl ResourcesScreen {
         let mut reload = false;
         let mut more = false;
         let mut link = false;
+        let mut more_leases = [false, false];
         let mut mem = cx.routes.remove(&Route::Resources).unwrap_or_default();
         let list = &self.list;
+        let leases = &self.leases;
         let scrolls = &mut *cx.scrolls;
-        let mut st = (&mut reload, &mut mem, &mut link, &mut more);
+        let mut st = (
+            &mut reload,
+            &mut mem,
+            &mut link,
+            &mut more,
+            &mut more_leases,
+        );
         widgets::pane(
             ui,
             Header {
@@ -1238,40 +1448,66 @@ impl ResourcesScreen {
                 let RouteMemory {
                     filter, selection, ..
                 } = mem;
-                list_body(
-                    ui,
-                    &online,
-                    list,
-                    ListText {
-                        what: "resources",
-                        empty_title: "No shared resources registered",
-                        empty_body: "Machine resources are registered at boot.",
-                        id_salt: "resources-list",
-                    },
-                    st.0,
-                    st.3,
-                    scrolls,
-                    |r: &ResourceRecord| r.canonical_key.0.clone(),
-                    |r: &ResourceRecord| r.id.0.as_str().to_owned(),
-                    filter,
-                    selection,
-                    |ui, r: &ResourceRecord, selected| {
-                        ui.selectable_label(
-                            selected,
-                            format!(
-                                "{}  ·  capacity {}  ·  {} holding  ·  {} waiting",
-                                r.canonical_key.0,
-                                r.capacity.get(),
-                                r.holders.0.len(),
-                                r.waiters.0.len()
-                            ),
-                        )
-                        .clicked()
-                    },
-                );
+                let more_leases = &mut *st.4;
+                ui.columns(2, |cols| {
+                    list_body(
+                        &mut cols[0],
+                        &online,
+                        list,
+                        ListText {
+                            what: "resources",
+                            empty_title: "No shared resources registered",
+                            empty_body: "Machine resources are registered at boot.",
+                            id_salt: "resources-list",
+                        },
+                        st.0,
+                        st.3,
+                        scrolls,
+                        |r: &ResourceRecord| r.canonical_key.0.clone(),
+                        // Names repeat across projects; the canonical key is unique.
+                        |r: &ResourceRecord| r.canonical_key.0.clone(),
+                        filter,
+                        selection,
+                        |ui, r: &ResourceRecord, selected| {
+                            ui.selectable_label(
+                                selected,
+                                format!(
+                                    "{}  ·  capacity {}  ·  {} holding  ·  {} waiting",
+                                    r.canonical_key.0,
+                                    r.capacity.get(),
+                                    r.holders.0.len(),
+                                    r.waiters.0.len()
+                                ),
+                            )
+                            .clicked()
+                        },
+                    );
+                    let ui = &mut cols[1];
+                    match leases {
+                        Some(leases) => {
+                            egui::ScrollArea::vertical()
+                                .id_salt("resource-leases")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| lease_detail(ui, leases, more_leases));
+                        }
+                        None => widgets::caption(
+                            ui,
+                            "Select a resource to see who holds it and who waits for it.",
+                        ),
+                    }
+                });
             },
         );
+        let selected = mem.selection.clone();
         cx.routes.insert(Route::Resources, mem);
+        self.follow_selection(cx, selected.as_deref());
+        if let Some(leases) = &mut self.leases {
+            for (waiters, wanted) in [(false, more_leases[0]), (true, more_leases[1])] {
+                if wanted && let Some(fetch) = leases.list(waiters).more_page() {
+                    leases.send(cx, waiters, fetch);
+                }
+            }
+        }
         if link && let Some((_, target)) = screen.link {
             cx.navigate(target);
         }

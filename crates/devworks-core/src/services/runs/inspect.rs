@@ -76,7 +76,7 @@ impl RunInspection {
     }
 }
 
-fn wait_kind(b: &StoredBlocker) -> Option<&str> {
+pub(crate) fn wait_kind(b: &StoredBlocker) -> Option<&str> {
     b.clearance.get("kind").and_then(Value::as_str)
 }
 

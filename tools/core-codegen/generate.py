@@ -52,7 +52,7 @@ ASSIGNMENT_SCOPES = {'project': 'Project', 'root': 'Root', 'coordinator': 'Coord
 SHARED = set('Id Revision Counter HoldRef Protocol CommandRequest QueryRequest RootControl Activation Blockers '
              'EligibilityTarget Purpose OperationState ReadStamp Event CommandReply RetryAdvice RootId AssignmentId '
              'OperationId ResourceId HoldId ExecutionId CommandId EventId ActorId StoreId ProjectId AttemptId '
-             'QueryId RequestKey CorrelationId'.split())
+             'QueryId RequestKey CorrelationId Cause'.split())
 PROVIDER = set('Digest ArtifactRef SchemaRef TranscriptPage Attribution'.split())
 DATA = set('DataScope ViewSelection Coverage GitOid GraphPage RetrievalPage DeliveryBarrier DeliverySnapshot '
            'ArtifactTags Citation RepositorySnapshot ResolvedViewSet'.split())
