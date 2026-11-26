@@ -2734,6 +2734,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 20,
+              "inputSchema": "command-request.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r20.schema.json",
+              "completionSchema": "operation-completion.r20.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2780,6 +2788,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 20,
+              "inputSchema": "command-request.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r20.schema.json",
+              "completionSchema": "operation-completion.r20.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2826,6 +2842,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 20,
+              "inputSchema": "command-request.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r20.schema.json",
+              "completionSchema": "operation-completion.r20.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -2918,6 +2942,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 20,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": "domain-query-reply.r20.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Existing host authority contract",
@@ -3008,6 +3040,14 @@
               "inputSchema": "query-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 20,
+              "inputSchema": "query-request.r3.schema.json",
+              "resultSchema": "operation-result.r20.schema.json",
+              "queryReplySchema": "domain-query-reply.r20.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }

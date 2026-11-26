@@ -11,9 +11,9 @@ use crate::protocol::provider::{ArtifactRef, Digest, SchemaRef};
 #[allow(unused_imports)]
 use crate::protocol::support::*;
 use crate::protocol::{
-    Activation, ActorId, AssignmentId, Blockers, CommandId, CorrelationId, Counter,
-    EligibilityTarget, EventId, Id, OperationId, OperationState, ProjectId, Purpose, ReadStamp,
-    RequestKey, ResourceId, Revision, RootControl, RootId,
+    Activation, ActorId, AssignmentId, Blockers, Cause, CommandId, CorrelationId, Counter,
+    EligibilityTarget, EventId, HoldId, Id, OperationId, OperationState, ProjectId, Purpose,
+    ReadStamp, RequestKey, ResourceId, Revision, RootControl, RootId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -9650,23 +9650,134 @@ impl Revisioned for RouterConfigAction {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum HoldGate {
+    Archived,
+    Pause,
+    Hold,
+    Prerequisite,
+    Question,
+    Plan,
+    Readiness,
+    Assignment,
+}
+impl Check for HoldGate {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HoldCondition {
+    pub hold_id: HoldId,
+    pub gate: HoldGate,
+    pub cause: Cause,
+    pub rate_limited: bool,
+    pub reason: Content,
+}
+impl Check for HoldCondition {
+    fn check(&self) -> Result<(), String> {
+        self.hold_id.check()?;
+        self.gate.check()?;
+        self.cause.check()?;
+        self.rate_limited.check()?;
+        self.reason.check()?;
+        crate::protocol::rules::record(
+            "HoldCondition",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum RedirectStage {
+    Received,
+    Acknowledged,
+    Incorporated,
+}
+impl Check for RedirectStage {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RedirectRecord {
+    pub instruction_id: Id,
+    pub stage: RedirectStage,
+    pub message: Content,
+    pub received_at_ms: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incorporated_at_ms: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Content>,
+}
+impl Check for RedirectRecord {
+    fn check(&self) -> Result<(), String> {
+        self.instruction_id.check()?;
+        self.stage.check()?;
+        self.message.check()?;
+        self.received_at_ms.check()?;
+        self.acknowledged_at_ms.check()?;
+        self.incorporated_at_ms.check()?;
+        self.outcome.check()?;
+        crate::protocol::rules::record(
+            "RedirectRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RootSnapshot {
     pub root: RootControl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation: Option<Activation>,
     pub blockers: Blockers,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<HoldCondition>", extend("x-since" = 20))]
+    pub conditions: Option<Items<HoldCondition>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<RedirectRecord>", extend("x-since" = 20))]
+    pub redirects: Option<Items<RedirectRecord>>,
 }
 impl Check for RootSnapshot {
     fn check(&self) -> Result<(), String> {
         self.root.check()?;
         self.activation.check()?;
         self.blockers.check()?;
+        self.conditions.check()?;
+        self.redirects.check()?;
         crate::protocol::rules::record(
             "RootSnapshot",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for RootSnapshot {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 20 {
+            self.conditions = None;
+        }
+        if revision < 20 {
+            self.redirects = None;
+        }
     }
 }
 
@@ -9677,6 +9788,13 @@ pub struct EligibilitySnapshot {
     pub purpose: Purpose,
     pub eligible: bool,
     pub blockers: Blockers,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Items<HoldCondition>", extend("x-since" = 20))]
+    pub conditions: Option<Items<HoldCondition>>,
 }
 impl Check for EligibilitySnapshot {
     fn check(&self) -> Result<(), String> {
@@ -9684,11 +9802,20 @@ impl Check for EligibilitySnapshot {
         self.purpose.check()?;
         self.eligible.check()?;
         self.blockers.check()?;
+        self.conditions.check()?;
         crate::protocol::rules::record(
             "EligibilitySnapshot",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
         Ok(())
+    }
+}
+
+impl Revisioned for EligibilitySnapshot {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 20 {
+            self.conditions = None;
+        }
     }
 }
 

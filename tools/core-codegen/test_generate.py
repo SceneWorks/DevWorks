@@ -111,6 +111,8 @@ class SchemaRevisionRules(unittest.TestCase):
             'settings.explain_source', 'dreaming.instructions', 'skills.discover', 'skills.read',
             'skills.draft', 'skills.history', 'skills.rollback', 'roles.read', 'roles.draft',
             'roles.history', 'roles.rollback', 'sessions.transcript',
+            # DW-182: the hold conditions of a root at revision 20.
+            'runs.start', 'runs.pause', 'runs.continue', 'runs.inspect', 'runs.eligibility',
             # DW-183: a project's agent assignments, introduced at revision 21.
             'agents.list'})
         for name in MCP:
@@ -167,7 +169,8 @@ class SchemaRevisionRules(unittest.TestCase):
         # runs.inspect shares the query envelope and reaches Subject (via blockers), never the
         # command aggregate or project scope of history.events.
         self.assertEqual(carried['history.events'], {2, 3})
-        self.assertEqual(carried['runs.inspect'], set())
+        # runs.inspect carries only its own hold-condition revision 20 (DW-182).
+        self.assertEqual(carried['runs.inspect'], {20})
         self.assertEqual(carried['history.operation_status'], set())
 
     def test_query_record_renames_at_its_declared_revision_without_widening_config_inputs(self):

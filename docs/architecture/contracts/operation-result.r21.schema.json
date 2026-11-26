@@ -7040,6 +7040,10 @@
         "blockers": {
           "$ref": "#/$defs/Blockers"
         },
+        "conditions": {
+          "$ref": "#/$defs/List_HoldCondition_0_128",
+          "x-since": 20
+        },
         "eligible": {
           "type": "boolean"
         },
@@ -9772,6 +9776,47 @@
       ],
       "type": "object"
     },
+    "HoldCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "cause": {
+          "$ref": "#/$defs/Cause"
+        },
+        "gate": {
+          "$ref": "#/$defs/HoldGate"
+        },
+        "holdId": {
+          "$ref": "#/$defs/Id"
+        },
+        "rateLimited": {
+          "type": "boolean"
+        },
+        "reason": {
+          "$ref": "#/$defs/Text0To65536"
+        }
+      },
+      "required": [
+        "holdId",
+        "gate",
+        "cause",
+        "rateLimited",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "HoldGate": {
+      "enum": [
+        "Archived",
+        "Pause",
+        "Hold",
+        "Prerequisite",
+        "Question",
+        "Plan",
+        "Readiness",
+        "Assignment"
+      ],
+      "type": "string"
+    },
     "Id": {
       "maxLength": 128,
       "minLength": 1,
@@ -12131,6 +12176,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_HoldCondition_0_128": {
+      "items": {
+        "$ref": "#/$defs/HoldCondition"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_Id_0_128": {
       "items": {
         "$ref": "#/$defs/Id"
@@ -12534,6 +12587,14 @@
     "List_RecoveryAction_0_128": {
       "items": {
         "$ref": "#/$defs/RecoveryAction"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_RedirectRecord_0_128": {
+      "items": {
+        "$ref": "#/$defs/RedirectRecord"
       },
       "maxItems": 128,
       "minItems": 0,
@@ -17549,6 +17610,68 @@
       ],
       "type": "object"
     },
+    "RedirectRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "acknowledgedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "incorporatedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructionId": {
+          "$ref": "#/$defs/Id"
+        },
+        "message": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receivedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "stage": {
+          "$ref": "#/$defs/RedirectStage"
+        }
+      },
+      "required": [
+        "instructionId",
+        "stage",
+        "message",
+        "receivedAtMs"
+      ],
+      "type": "object"
+    },
+    "RedirectStage": {
+      "enum": [
+        "Received",
+        "Acknowledged",
+        "Incorporated"
+      ],
+      "type": "string"
+    },
     "RegisteredPath": {
       "additionalProperties": false,
       "properties": {
@@ -19062,6 +19185,14 @@
         },
         "blockers": {
           "$ref": "#/$defs/Blockers"
+        },
+        "conditions": {
+          "$ref": "#/$defs/List_HoldCondition_0_128",
+          "x-since": 20
+        },
+        "redirects": {
+          "$ref": "#/$defs/List_RedirectRecord_0_128",
+          "x-since": 20
         },
         "root": {
           "$ref": "#/$defs/RootControl"

@@ -999,6 +999,20 @@ macro_rules! run_reads {
                     params![root.0.as_str(), after_seq, n],
                 )
             }
+            fn latest_instructions(
+                &self,
+                root: &RootId,
+                n: u16,
+            ) -> Result<Vec<StoredInstruction>, StorageError> {
+                let n = page_limit(n)?;
+                let mut tail = instructions(
+                    self.conn,
+                    "root_id=?1 ORDER BY seq DESC LIMIT ?2",
+                    params![root.0.as_str(), n],
+                )?;
+                tail.reverse();
+                Ok(tail)
+            }
             fn session_turn(&self, session: &Id) -> Result<Option<StoredTurn>, StorageError> {
                 Ok(turns(self.conn, "session_id=?1", [session.as_str()])?
                     .into_iter()

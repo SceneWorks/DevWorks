@@ -291,10 +291,66 @@ impl WorkCtl<'_, '_> {
                 }
                 Err(e) => self.announce(format!("The work could not be opened: {}", e.describe())),
             },
-            (WorkSlot::WorkInspect(id), Reply::Query(q)) => {
-                if let Ok(s) = wops::run_snapshot(q) {
-                    self.work.runs.insert(id, s);
+            (WorkSlot::WorkInspect(id), Reply::Query(q)) => match wops::run_snapshot(q) {
+                Ok(s) => {
+                    let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
+                    self.work.runs.insert(id.clone(), s.clone());
+                    // Implementation is gated by every condition (pause, plan, readiness,
+                    // prerequisites, questions, capacity), so it names all that hold the root.
+                    let purpose = devworks_core::protocol::Purpose::Implementation;
+                    let root = id.clone();
+                    self.query(
+                        WorkSlot::WorkEligibility(id.clone()),
+                        "Reading why work is held",
+                        "runs.eligibility",
+                        move |be| wops::run_eligibility(be, &root, purpose),
+                    );
+                    if self.work.continue_all.remove(&id)
+                        && held
+                        && let Some(w) = self.record(&id)
+                    {
+                        self.command(
+                            WorkSlot::WorkRun(id),
+                            "Continuing held work",
+                            "runs.continue",
+                            move |be| wops::run_control(be, "runs.continue", &w, &s),
+                        );
+                    }
                 }
+                Err(_) => {
+                    self.work.continue_all.remove(&id);
+                }
+            },
+            (WorkSlot::WorkEligibility(id), Reply::Query(q)) => {
+                if let Ok(e) = wops::run_eligible(q) {
+                    self.work.eligibility.insert(id, e);
+                }
+            }
+            (WorkSlot::WorkRedirect(id), Reply::Command(c)) => {
+                let sent = self.work.redirect_sent.remove(&id);
+                match wops::run_redirected(c) {
+                    Ok(_) => {
+                        // A draft edited while the send ran is kept.
+                        if sent.is_some_and(|s| {
+                            self.work.redirect_drafts.get(&id).map(|d| d.trim()) == Some(s.as_str())
+                        }) {
+                            self.work.redirect_drafts.remove(&id);
+                        }
+                        self.announce("Redirect sent.");
+                    }
+                    Err(e) => self.work_failure("Redirect", e),
+                }
+                self.inspect(&id);
+            }
+            (WorkSlot::WorkStop(id), Reply::Command(c)) => {
+                match wops::run_stopped(c) {
+                    Ok(wops::Stopped::Applied) => self.announce("The work is stopped."),
+                    Ok(wops::Stopped::Accepted) => {
+                        self.announce("Stop accepted: the work stops at its next safe boundary.")
+                    }
+                    Err(e) => self.work_failure("Stop", e),
+                }
+                self.inspect(&id);
             }
             (WorkSlot::ArchiveCount(p, features), Reply::Query(q)) => {
                 let key = (p.clone(), features);

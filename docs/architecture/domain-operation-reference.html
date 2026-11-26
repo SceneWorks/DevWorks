@@ -322,17 +322,17 @@
 </thead>
 <tbody><tr>
 <td><code>runs.start</code></td>
-<td><strong>Command</strong><br><a href="contracts/command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;runs.start&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;runs.start&#39;}<br><br><strong>Schema revisions</strong> 1, 20 (<a href="contracts/command-request.schema.json">revision 20 input</a>)</td>
 <td><code>RootSnapshot</code></td>
 </tr>
 <tr>
 <td><code>runs.pause</code></td>
-<td><strong>Command</strong><br><a href="contracts/command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;runs.pause&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;runs.pause&#39;}<br><br><strong>Schema revisions</strong> 1, 20 (<a href="contracts/command-request.schema.json">revision 20 input</a>)</td>
 <td><code>RootSnapshot</code></td>
 </tr>
 <tr>
 <td><code>runs.continue</code></td>
-<td><strong>Command</strong><br><a href="contracts/command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;runs.continue&#39;}</td>
+<td><strong>Command</strong><br><a href="contracts/command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;runs.continue&#39;}<br><br><strong>Schema revisions</strong> 1, 20 (<a href="contracts/command-request.schema.json">revision 20 input</a>)</td>
 <td><code>RootSnapshot</code></td>
 </tr>
 <tr>
@@ -342,7 +342,7 @@
 </tr>
 <tr>
 <td><code>runs.inspect</code></td>
-<td><strong>Query</strong><br><a href="contracts/query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;runs.inspect&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;runs.inspect&#39;}<br><br><strong>Schema revisions</strong> 1, 20 (<a href="contracts/query-request.r3.schema.json">revision 20 input</a>)</td>
 <td><code>RootSnapshot</code></td>
 </tr>
 <tr>
@@ -352,7 +352,7 @@
 </tr>
 <tr>
 <td><code>runs.eligibility</code></td>
-<td><strong>Query</strong><br><a href="contracts/query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;runs.eligibility&#39;}</td>
+<td><strong>Query</strong><br><a href="contracts/query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;runs.eligibility&#39;}<br><br><strong>Schema revisions</strong> 1, 20 (<a href="contracts/query-request.r3.schema.json">revision 20 input</a>)</td>
 <td><code>EligibilitySnapshot</code></td>
 </tr>
 </tbody></table>
@@ -9846,6 +9846,76 @@
 <td><code>expectedSelectionRevision</code>: <code>Revision</code></td>
 </tr>
 </tbody></table>
+<h3 id="holdgate">HoldGate</h3>
+<p><code>Archived</code>, <code>Pause</code>, <code>Hold</code>, <code>Prerequisite</code>, <code>Question</code>, <code>Plan</code>, <code>Readiness</code>, <code>Assignment</code>.</p>
+<h3 id="holdcondition">HoldCondition</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>holdId</code></td>
+<td><code>HoldId</code></td>
+</tr>
+<tr>
+<td><code>gate</code></td>
+<td><code>HoldGate</code></td>
+</tr>
+<tr>
+<td><code>cause</code></td>
+<td><code>Cause</code></td>
+</tr>
+<tr>
+<td><code>rateLimited</code></td>
+<td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td><code>Content</code></td>
+</tr>
+</tbody></table>
+<h3 id="redirectstage">RedirectStage</h3>
+<p><code>Received</code>, <code>Acknowledged</code>, <code>Incorporated</code>.</p>
+<h3 id="redirectrecord">RedirectRecord</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>instructionId</code></td>
+<td><code>Id</code></td>
+</tr>
+<tr>
+<td><code>stage</code></td>
+<td><code>RedirectStage</code></td>
+</tr>
+<tr>
+<td><code>message</code></td>
+<td><code>Content</code></td>
+</tr>
+<tr>
+<td><code>receivedAtMs</code></td>
+<td><code>Counter</code></td>
+</tr>
+<tr>
+<td><code>acknowledgedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>incorporatedAtMs</code></td>
+<td><code>?Counter</code></td>
+</tr>
+<tr>
+<td><code>outcome</code></td>
+<td><code>?Content</code></td>
+</tr>
+</tbody></table>
 <h3 id="rootsnapshot">RootSnapshot</h3>
 <table>
 <thead>
@@ -9865,6 +9935,14 @@
 <tr>
 <td><code>blockers</code></td>
 <td><code>Blockers</code></td>
+</tr>
+<tr>
+<td><code>conditions</code></td>
+<td><code>?Items&lt;HoldCondition&gt;</code> · <em>revision 20+</em></td>
+</tr>
+<tr>
+<td><code>redirects</code></td>
+<td><code>?Items&lt;RedirectRecord&gt;</code> · <em>revision 20+</em></td>
 </tr>
 </tbody></table>
 <h3 id="eligibilitysnapshot">EligibilitySnapshot</h3>
@@ -9890,6 +9968,10 @@
 <tr>
 <td><code>blockers</code></td>
 <td><code>Blockers</code></td>
+</tr>
+<tr>
+<td><code>conditions</code></td>
+<td><code>?Items&lt;HoldCondition&gt;</code> · <em>revision 20+</em></td>
 </tr>
 </tbody></table>
 <h3 id="receiptobservation">ReceiptObservation</h3>

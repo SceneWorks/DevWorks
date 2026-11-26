@@ -32,6 +32,8 @@ checked_leaf!(
     RootControl,
     Activation,
     Blockers,
+    HoldId,
+    Cause,
     EligibilityTarget,
     Purpose,
     Event,

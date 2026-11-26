@@ -3242,6 +3242,13 @@ impl RunRead for Unmodelled {
     ) -> Result<Vec<StoredInstruction>, StorageError> {
         unmodelled()
     }
+    fn latest_instructions(
+        &self,
+        _: &RootId,
+        _: u16,
+    ) -> Result<Vec<StoredInstruction>, StorageError> {
+        unmodelled()
+    }
     fn session_turn(&self, _: &Id) -> Result<Option<StoredTurn>, StorageError> {
         unmodelled()
     }

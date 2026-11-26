@@ -2009,7 +2009,8 @@ fn restored_requirement_case(delayed_detail: bool) {
     } else {
         shell(&engine, &root, Script::default())
     };
-    let mut h = harness(shell, 1600.0, 1100.0);
+    // Tall enough to show the run controls, the plan editor and its requirement rows together.
+    let mut h = harness(shell, 1600.0, 1500.0);
     settle(&mut h);
     let feature = initial_approved_plan(&engine, &*backend, &mut h);
     h.state_mut().work.plan.as_mut().unwrap().text = "Revised checkout plan".into();
@@ -2080,7 +2081,16 @@ fn restored_requirement_case(delayed_detail: bool) {
         .insert(feature.id.as_str().to_owned(), approved_drop);
     if delayed_detail {
         h.step();
+        // The run controls sit above the plan: scroll to it as a person would (the held
+        // detail read keeps the shell busy, so frames are stepped, not settled).
+        h.get_by_role_and_label(Role::Button, "Edit plan")
+            .scroll_to_me();
+        h.step();
+        h.step();
         h.get_by_role_and_label(Role::Button, "Edit plan").click();
+        h.step();
+        h.step();
+        h.get_by_label("Dropped requirements").scroll_to_me();
         h.step();
         h.step();
         h.get_by_label("Dropped requirements").click();
@@ -2794,4 +2804,253 @@ fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tas
         h.query_by_role_and_label(Role::Button, "Clear assignment")
             .is_none()
     );
+}
+
+fn snapshot(backend: &dyn Backend, root: &str) -> devworks_core::protocol::records::RootSnapshot {
+    wops::run_snapshot(backend.query("runs.inspect", &wops::run_inspect(backend, root))).unwrap()
+}
+
+/// Run controls: a held root names every cause holding it, a redirect shows its stage, a
+/// started root can be stopped, and after a restart one action continues every paused root.
+#[test]
+fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
+    use devworks_core::protocol::DesiredState;
+    let root = Root::new("work-run-controls");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let mut roots = features_from_screen(&mut h, &*backend, &pid, &["Checkout", "Search"]);
+    // A standalone task paused before it is linked to Checkout keeps its own pause.
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    roots.push(command(
+        &*backend,
+        "tasks.create",
+        json!({"projectId": pid, "title": "Card", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 1}),
+    ));
+    // Pause all three through the same command a person sends.
+    for w in &roots {
+        let s = snapshot(&*backend, w.id.as_str());
+        wops::run_changed(backend.command(
+            "runs.pause",
+            &wops::run_control(&*backend, "runs.pause", w, &s),
+        ))
+        .unwrap();
+    }
+    let card = roots[2].clone();
+    roots[2] = command(
+        &*backend,
+        "tasks.set_feature",
+        json!({"taskId": card.id, "expectedRevision": card.revision, "featureId": roots[0].id,
+            "clearFeature": false}),
+    );
+    assert!(
+        roots[2].parent_id.is_some(),
+        "the task is linked to Checkout"
+    );
+
+    // A held root lists its pause and the derived condition the eligibility read names.
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    click(&mut h, Role::Button, "Refresh");
+    assert!(
+        has_text(&h, "Why this work is waiting"),
+        "{:?}",
+        h.state().work.runs.get(roots[0].id.as_str())
+    );
+    assert!(has_text(&h, "Paused:"), "the pause hold is named");
+    assert!(
+        has_text(&h, "Needs an approved plan:"),
+        "the missing plan is named"
+    );
+
+    // A redirect is sent through the gateway and shows its stage; later stages read the same
+    // way once the coordinator acknowledges and incorporates it.
+    h.get_by_label("Redirect (0)").scroll_to_me();
+    settle(&mut h);
+    h.get_by_label("Redirect (0)").click();
+    settle(&mut h);
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Redirect message",
+        "Ship the CLI first",
+    );
+    click(&mut h, Role::Button, "Send redirect");
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("Redirect sent"))
+    );
+    assert!(
+        has_text(
+            &h,
+            "Redirect “Ship the CLI first”: sent, waiting for the coordinator"
+        ),
+        "{:?}",
+        h.state().status()
+    );
+    click(&mut h, Role::Button, "Refresh");
+
+    // After a restart, one action continues every paused root, the linked task included.
+    h.state_mut().on_exit();
+    drop(h);
+    drop(backend);
+    engine.shutdown().unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    for w in &roots {
+        assert!(matches!(
+            snapshot(&*backend, w.id.as_str()).root.desired_state,
+            DesiredState::Paused
+        ));
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Continue all paused work");
+    for w in &roots {
+        assert!(
+            matches!(
+                snapshot(&*backend, w.id.as_str()).root.desired_state,
+                DesiredState::Enabled
+            ),
+            "{} continues",
+            w.title.0
+        );
+    }
+
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Stop").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    // Stop on running work is recorded: applied at once or accepted to stop at a safe boundary.
+    click(&mut h, Role::Button, "Stop");
+    let status = h.state().status().unwrap_or_default().to_owned();
+    assert!(
+        status.contains("Stop accepted") || status.contains("is stopped"),
+        "{status}"
+    );
+
+    // Run state that changes outside the screen (here a pause sent by another client) is read
+    // again on Refresh, as redirect stages are.
+    click_row(&mut h, "Search  ·");
+    if h.query_by_role_and_label(Role::Button, "Pause").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    assert!(!has_text(&h, "Paused:"), "Search was continued");
+    let s = snapshot(&*backend, roots[1].id.as_str());
+    wops::run_changed(backend.command(
+        "runs.pause",
+        &wops::run_control(&*backend, "runs.pause", &roots[1], &s),
+    ))
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh");
+    assert!(
+        has_text(&h, "Paused:"),
+        "Refresh reads the root's run state again"
+    );
+    // Stop stays offered on work with no live activation; the service decides what it stops.
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Stop")
+            .accesskit_node()
+            .is_disabled()
+    );
+    click(&mut h, Role::Button, "Stop");
+    let status = h.state().status().unwrap_or_default().to_owned();
+    assert!(
+        status.contains("Stop accepted") || status.contains("is stopped"),
+        "{status}"
+    );
+}
+
+/// A redirect draft edited while its send is in flight is kept when the send finishes.
+#[test]
+fn a_redirect_draft_edited_during_its_send_is_kept() {
+    let root = Root::new("work-redirect-draft");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let gate = Gate::new("runs.redirect");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1300.0,
+    );
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]);
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    h.get_by_label("Redirect (0)").click();
+    settle(&mut h);
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Redirect message",
+        "Ship the CLI first",
+    );
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Send redirect")
+        .click();
+    step_until(&mut h, "the redirect is in flight", |_| gate.has_waiter());
+    // While it is in flight a second send is not offered.
+    h.step();
+    assert!(
+        h.get_by_label("Sending redirect…")
+            .accesskit_node()
+            .is_disabled(),
+        "Send is disabled while a redirect is in flight"
+    );
+    h.get_by_label("Sending redirect…").click();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Redirect message")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Redirect message")
+        .type_text(", then the GUI");
+    h.step();
+    gate.open();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("Redirect sent"))
+    );
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, "Redirect message")
+            .value()
+            .as_deref(),
+        Some("Ship the CLI first, then the GUI"),
+        "the newer draft is kept"
+    );
+    // Exactly one redirect was recorded.
+    let checkout = list(&*backend, "features.list", project.id.0.as_str()).remove(0);
+    let redirects = snapshot(&*backend, checkout.id.as_str())
+        .redirects
+        .map(|r| r.0.len())
+        .unwrap_or_default();
+    assert_eq!(redirects, 1);
 }

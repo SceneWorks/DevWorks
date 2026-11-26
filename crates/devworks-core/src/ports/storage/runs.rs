@@ -685,6 +685,13 @@ pub trait RunRead {
         after_seq: i64,
         limit: u16,
     ) -> Result<Vec<StoredInstruction>, StorageError>;
+    /// The root's latest `limit` instructions, oldest first (a bounded tail, however long the
+    /// history).
+    fn latest_instructions(
+        &self,
+        root: &RootId,
+        limit: u16,
+    ) -> Result<Vec<StoredInstruction>, StorageError>;
     fn session_turn(&self, session: &Id) -> Result<Option<StoredTurn>, StorageError>;
     /// Turns recorded by any boot but `boot`.
     fn turns_prior_boots(&self, boot: &Id, limit: u16) -> Result<Vec<StoredTurn>, StorageError>;

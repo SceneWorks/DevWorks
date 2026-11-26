@@ -102,13 +102,13 @@ All 386 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `runs.start` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.start'} | `RootSnapshot` |
-| `runs.pause` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.pause'} | `RootSnapshot` |
-| `runs.continue` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.continue'} | `RootSnapshot` |
+| `runs.start` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.start'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/command-request.schema.json)) | `RootSnapshot` |
+| `runs.pause` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.pause'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/command-request.schema.json)) | `RootSnapshot` |
+| `runs.continue` | **Command**<br>[Existing input schema](contracts/command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'runs.continue'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/command-request.schema.json)) | `RootSnapshot` |
 | `runs.redirect` | **Command**<br>`rootId`: `RootId`<br>`expectedControlRevision`: `Revision`<br>`message`: `Content`<br>`attachments`: `Items<ArtifactRef>` | `MutationSummary` |
-| `runs.inspect` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.inspect'} | `RootSnapshot` |
+| `runs.inspect` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.inspect'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/query-request.r3.schema.json)) | `RootSnapshot` |
 | `runs.stop` | **Command**<br>`rootId`: `RootId`<br>`expectedControlRevision`: `Revision` | `OperationRef` |
-| `runs.eligibility` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.eligibility'} | `EligibilitySnapshot` |
+| `runs.eligibility` | **Query**<br>[Existing input schema](contracts/query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'runs.eligibility'}<br><br>**Schema revisions** 1, 20 ([revision 20 input](contracts/query-request.r3.schema.json)) | `EligibilitySnapshot` |
 
 ### Agents
 
@@ -3306,6 +3306,36 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `SelectEmbeddingSpace` | `expectedRevision`: `Revision`<br>`expectedSelectionRevision`: `Revision`<br>`candidateId`: `Id` |
 | `ClearEmbeddingSpace` | `expectedSelectionRevision`: `Revision` |
 
+### HoldGate
+
+`Archived`, `Pause`, `Hold`, `Prerequisite`, `Question`, `Plan`, `Readiness`, `Assignment`.
+
+### HoldCondition
+
+| Field | Type |
+| --- | --- |
+| `holdId` | `HoldId` |
+| `gate` | `HoldGate` |
+| `cause` | `Cause` |
+| `rateLimited` | `bool` |
+| `reason` | `Content` |
+
+### RedirectStage
+
+`Received`, `Acknowledged`, `Incorporated`.
+
+### RedirectRecord
+
+| Field | Type |
+| --- | --- |
+| `instructionId` | `Id` |
+| `stage` | `RedirectStage` |
+| `message` | `Content` |
+| `receivedAtMs` | `Counter` |
+| `acknowledgedAtMs` | `?Counter` |
+| `incorporatedAtMs` | `?Counter` |
+| `outcome` | `?Content` |
+
 ### RootSnapshot
 
 | Field | Type |
@@ -3313,6 +3343,8 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `root` | `RootControl` |
 | `activation` | `?Activation` |
 | `blockers` | `Blockers` |
+| `conditions` | `?Items<HoldCondition>` · *revision 20+* |
+| `redirects` | `?Items<RedirectRecord>` · *revision 20+* |
 
 ### EligibilitySnapshot
 
@@ -3322,6 +3354,7 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `purpose` | `Purpose` |
 | `eligible` | `bool` |
 | `blockers` | `Blockers` |
+| `conditions` | `?Items<HoldCondition>` · *revision 20+* |
 
 ### ReceiptObservation
 

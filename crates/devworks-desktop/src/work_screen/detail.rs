@@ -18,49 +18,161 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 fn run_controls(
     ui: &mut Ui,
-    work: &WorkUi,
+    work: &mut WorkUi,
     w: &WorkRecord,
     enabled: bool,
     actions: &mut Vec<Action>,
 ) {
-    if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
-        let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
-        widgets::caption(
-            ui,
-            format!(
-                "Execution: {:?}{}",
-                s.root.desired_state,
-                if held {
-                    " · paused until you continue it"
-                } else {
-                    ""
+    use devworks_core::protocol::Phase;
+    use devworks_core::protocol::records::{HoldCondition, HoldGate, RedirectStage};
+    let id = w.id.as_str().to_owned();
+    let Some(s) = work.runs.get(&id).cloned() else {
+        if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
+            actions.push(Action::Inspect(id));
+        }
+        return;
+    };
+    let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
+    let running = s
+        .activation
+        .as_ref()
+        .is_some_and(|a| matches!(a.phase, Phase::Pending | Phase::Claimed | Phase::Running));
+    widgets::caption(
+        ui,
+        format!(
+            "Execution: {:?}{}",
+            s.root.desired_state,
+            if held {
+                " · paused until you continue it"
+            } else if running {
+                " · running"
+            } else {
+                ""
+            }
+        ),
+    );
+    // Every condition holding the root: the eligibility read names derived ones (plan,
+    // readiness, prerequisites, questions) as well as the stored holds the snapshot lists.
+    let mut conditions: Vec<HoldCondition> = Vec::new();
+    let sources = work
+        .eligibility
+        .get(&id)
+        .and_then(|e| e.conditions.as_ref())
+        .into_iter()
+        .chain(s.conditions.as_ref());
+    for c in sources.flat_map(|c| c.0.iter()) {
+        if !conditions.iter().any(|x| x.hold_id.0 == c.hold_id.0) {
+            conditions.push(c.clone());
+        }
+    }
+    if !conditions.is_empty() {
+        ui.label(RichText::new("Why this work is waiting").strong());
+        for c in &conditions {
+            let what = if c.rate_limited {
+                "Rate limited"
+            } else {
+                match c.gate {
+                    HoldGate::Pause => "Paused",
+                    HoldGate::Prerequisite => "Waiting for a prerequisite",
+                    HoldGate::Question => "Waiting for your answer",
+                    HoldGate::Plan => "Needs an approved plan",
+                    HoldGate::Readiness => "Readiness not current",
+                    HoldGate::Archived => "Project archived",
+                    HoldGate::Assignment => "Assignment not current",
+                    HoldGate::Hold => match c.cause {
+                        devworks_core::protocol::Cause::Capacity => "Waiting for capacity",
+                        devworks_core::protocol::Cause::Approval => "Waiting for approval",
+                        devworks_core::protocol::Cause::Credentials => "Needs credentials",
+                        devworks_core::protocol::Cause::RestartContinue => "Held after a restart",
+                        devworks_core::protocol::Cause::BudgetContinue => "Budget reached",
+                        _ => "Held",
+                    },
                 }
-            ),
-        );
-        ui.horizontal(|ui| {
-            if w.parent_id.is_none()
-                && ui
-                    .add_enabled(enabled, egui::Button::new("Start"))
-                    .clicked()
-            {
-                actions.push(Action::Run("runs.start", w.clone()));
-            }
+            };
+            widgets::caption(ui, format!("{what}: {}", c.reason.0));
+        }
+    }
+    ui.horizontal(|ui| {
+        if w.parent_id.is_none()
+            && ui
+                .add_enabled(enabled, egui::Button::new("Start"))
+                .clicked()
+        {
+            actions.push(Action::Run("runs.start", w.clone()));
+        }
+        if ui
+            .add_enabled(enabled, egui::Button::new("Pause"))
+            .clicked()
+        {
+            actions.push(Action::Run("runs.pause", w.clone()));
+        }
+        if ui
+            .add_enabled(enabled && held, egui::Button::new("Continue"))
+            .clicked()
+        {
+            actions.push(Action::Run("runs.continue", w.clone()));
+        }
+        // Work can run outside the root's activation (its processes, a linked task), so Stop is
+        // always offered and the service decides what there is to stop.
+        if ui.add_enabled(enabled, egui::Button::new("Stop")).clicked() {
+            actions.push(Action::Stop(w.clone()));
+        }
+    });
+    if w.parent_id.is_some() {
+        return;
+    }
+    let redirects = s
+        .redirects
+        .as_ref()
+        .map(|r| r.0.as_slice())
+        .unwrap_or_default();
+    // Collapsed by default so the detail stays compact; open while a redirect is in progress.
+    let pending = redirects
+        .iter()
+        .any(|r| !matches!(r.stage, RedirectStage::Incorporated));
+    // One redirect is sent at a time: a second click waits for the first reply.
+    let sending = work.redirect_sent.contains_key(w.id.as_str());
+    egui::CollapsingHeader::new(format!("Redirect ({})", redirects.len()))
+        .id_salt(("redirect", w.id.as_str()))
+        .default_open(pending)
+        .show(ui, |ui| {
+            let draft = work.redirect_drafts.entry(id).or_default();
+            let input = ui.add(
+                egui::TextEdit::multiline(draft)
+                    .hint_text("Tell the coordinator what to change")
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY),
+            );
+            input.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, "Redirect message")
+            });
             if ui
-                .add_enabled(enabled, egui::Button::new("Pause"))
+                .add_enabled(
+                    enabled && !sending && !draft.trim().is_empty(),
+                    egui::Button::new(if sending {
+                        "Sending redirect…"
+                    } else {
+                        "Send redirect"
+                    }),
+                )
                 .clicked()
             {
-                actions.push(Action::Run("runs.pause", w.clone()));
+                actions.push(Action::Redirect(w.clone()));
             }
-            if ui
-                .add_enabled(enabled && held, egui::Button::new("Continue"))
-                .clicked()
-            {
-                actions.push(Action::Run("runs.continue", w.clone()));
+            for r in redirects.iter().rev() {
+                let stage = match r.stage {
+                    RedirectStage::Received => "sent, waiting for the coordinator",
+                    RedirectStage::Acknowledged => "acknowledged by the coordinator",
+                    RedirectStage::Incorporated => "incorporated",
+                };
+                let outcome = r
+                    .outcome
+                    .as_ref()
+                    .map(|o| format!(" · {}", o.0))
+                    .unwrap_or_default();
+                widgets::caption(ui, format!("Redirect “{}”: {stage}{outcome}", r.message.0));
             }
         });
-    } else if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
-        actions.push(Action::Inspect(w.id.as_str().to_owned()));
-    }
 }
 
 /// Feature list tabs and Issues tabs.
