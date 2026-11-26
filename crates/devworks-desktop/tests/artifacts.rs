@@ -448,4 +448,87 @@ fn thirty_two_tags_can_be_saved_at_the_minimum_window_size() {
         h.state().status()
     );
     assert_eq!(listed(&*b, &project)[0].tags.as_ref().unwrap().0.len(), 31);
+    // Delete, its confirmation and Keep artifact are all reachable at this size.
+    click(&mut h, Role::Button, "Delete");
+    click(&mut h, Role::Button, "Keep artifact");
+    assert_eq!(
+        listed(&*b, &project).len(),
+        1,
+        "keeping cancels the deletion"
+    );
+    click(&mut h, Role::Button, "Delete");
+    click(&mut h, Role::Button, "Confirm delete");
+    assert!(listed(&*b, &project).is_empty(), "{:?}", h.state().status());
+}
+
+/// Editing the same draft while its save is in flight keeps the edits, and the next save goes
+/// through from the revision the first save produced.
+#[test]
+fn a_draft_edited_during_its_own_save_saves_again() {
+    let root = Root::new("project-artifacts-same-draft");
+    let engine = start(&root);
+    let real = engine.backend();
+    let project = ops::project_changed(real.command(
+        "projects.create",
+        &ops::project_create(&*real, "Same draft", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    save(
+        &*real,
+        &root,
+        &project,
+        "notes.md",
+        "text/markdown",
+        b"# Notes\n",
+    );
+    let gate = Gate::new("artifacts.tag");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1400.0,
+        1100.0,
+    );
+    settle(&mut h);
+    h.state_mut()
+        .select_project(Some(project.0.as_str().into()));
+    h.state_mut().navigate(Route::Artifacts);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Project");
+    select(&mut h, "notes.md");
+    click(&mut h, Role::Button, "Edit tags");
+    click(&mut h, Role::Button, "Add tag");
+    type_into(&mut h, "Tag 1", "first");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save tags").click();
+    step_until(&mut h, "the save is in flight", |_| gate.has_waiter());
+    h.get_by_role_and_label(Role::Button, "Add tag").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    h.get_by_role_and_label(Role::TextInput, "Tag 2").focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Tag 2")
+        .type_text("second");
+    h.step();
+    gate.open();
+    settle(&mut h);
+    assert_eq!(
+        listed(&*real, &project)[0].tags.as_ref().unwrap().0,
+        ["first".to_owned()]
+    );
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Tag 2")
+            .is_some(),
+        "the edit is kept"
+    );
+    click(&mut h, Role::Button, "Save tags");
+    assert!(
+        h.state().status().is_some_and(|s| s.contains("Tags saved")),
+        "{:?}",
+        h.state().status()
+    );
+    assert_eq!(
+        listed(&*real, &project)[0].tags.as_ref().unwrap().0,
+        ["first".to_owned(), "second".to_owned()]
+    );
 }

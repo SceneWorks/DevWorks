@@ -113,7 +113,9 @@ pub struct ArtifactsScreen {
     tag_draft: Option<(ArtifactRecord, Vec<String>)>,
     /// The tag entries each in-flight save submitted, by artifact ID: a reply closes the editor
     /// only while it still shows exactly those entries for that artifact.
-    tag_submitted: HashMap<String, Vec<String>>,
+    /// With them, the revision the save expected, so a draft kept after its own save moves to
+    /// the revision that save produced.
+    tag_submitted: HashMap<String, (String, Vec<String>)>,
     /// The record whose deletion waits for a second click, as it was when Delete was clicked:
     /// its identities bind the deletion, so a version or reference added since is refused.
     confirm_delete: Option<ArtifactRecord>,
@@ -187,13 +189,22 @@ impl Screen for ArtifactsScreen {
             (ArtifactsSlot::ArtifactTag(id), Reply::Command(c)) => {
                 let submitted = self.tag_submitted.remove(&id);
                 match ops::artifact_tagged(c) {
-                    Ok(_) => {
-                        // A draft opened for another artifact, or edited since, is kept.
-                        if let (Some((opened, entries)), Some(submitted)) =
-                            (&self.tag_draft, &submitted)
+                    Ok(summary) => {
+                        // A draft opened for another artifact, or edited since, is kept; one that
+                        // still derives from this save continues from the revision it produced.
+                        let mut close = false;
+                        if let (Some((opened, entries)), Some((base, sent))) =
+                            (&mut self.tag_draft, &submitted)
                             && opened.artifact.artifact_id.as_str() == id
-                            && entries == submitted
+                            && opened.revision.as_ref().map(|r| r.as_str()) == Some(base.as_str())
                         {
+                            if entries == sent {
+                                close = true;
+                            } else {
+                                opened.revision = Some(summary.revision.clone());
+                            }
+                        }
+                        if close {
                             self.tag_draft = None;
                         }
                         cx.announce("Tags saved.");
@@ -370,7 +381,8 @@ impl ArtifactsScreen {
                 }
                 let id = record.artifact.artifact_id.as_str().to_owned();
                 let artifact = id.clone();
-                self.tag_submitted.insert(id.clone(), submitted);
+                self.tag_submitted
+                    .insert(id.clone(), (revision.clone(), submitted));
                 cx.command(
                     ArtifactsSlot::ArtifactTag(id),
                     "Saving tags",
@@ -605,7 +617,11 @@ fn detail(
             record.reference_count.get()
         ),
     );
-    ui.horizontal(|ui| {
+    let confirming = confirm_delete
+        .as_ref()
+        .is_some_and(|r| r.artifact.artifact_id.as_str() == id);
+    // The actions wrap within the column; the deletion confirmation has a row of its own.
+    ui.horizontal_wrapped(|ui| {
         if widgets::secondary_button(ui, "Preview").clicked() {
             *action = Some(Action::Preview(record.clone()));
         }
@@ -615,28 +631,23 @@ fn detail(
         if widgets::secondary_button(ui, "Edit tags").clicked() {
             *action = Some(Action::EditTags(record.clone()));
         }
-        let confirming = confirm_delete
-            .as_ref()
-            .is_some_and(|r| r.artifact.artifact_id.as_str() == id);
-        if confirming {
+        if !confirming && widgets::secondary_button(ui, "Delete").clicked() {
+            *action = Some(Action::Delete(record.clone()));
+        }
+    });
+    if confirming {
+        widgets::caption(
+            ui,
+            "Deleting removes every version of this artifact. A deleted version is never restored.",
+        );
+        ui.horizontal_wrapped(|ui| {
             if widgets::secondary_button(ui, "Confirm delete").clicked() {
                 *action = Some(Action::ConfirmDelete);
             }
             if widgets::secondary_button(ui, "Keep artifact").clicked() {
                 *action = Some(Action::CancelDelete);
             }
-        } else if widgets::secondary_button(ui, "Delete").clicked() {
-            *action = Some(Action::Delete(record.clone()));
-        }
-    });
-    if confirm_delete
-        .as_ref()
-        .is_some_and(|r| r.artifact.artifact_id.as_str() == id)
-    {
-        widgets::caption(
-            ui,
-            "Deleting removes every version of this artifact. A deleted version is never restored.",
-        );
+        });
     }
     // One field per tag: a tag is an opaque label (commas and spaces are kept as written).
     if let Some((opened, entries)) = tag_draft
@@ -669,7 +680,7 @@ fn detail(
         if let Some(i) = remove {
             entries.remove(i);
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if widgets::secondary_button(ui, "Add tag").clicked() {
                 entries.push(String::new());
             }
