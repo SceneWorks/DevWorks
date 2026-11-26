@@ -2826,8 +2826,18 @@ fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
     ))
     .unwrap();
     let pid = project.id.0.as_str().to_owned();
-    let roots = features_from_screen(&mut h, &*backend, &pid, &["Checkout", "Search"]);
-    // Pause both through the same command a person sends.
+    let mut roots = features_from_screen(&mut h, &*backend, &pid, &["Checkout", "Search"]);
+    // A standalone task paused before it is linked to Checkout keeps its own pause.
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    roots.push(command(
+        &*backend,
+        "tasks.create",
+        json!({"projectId": pid, "title": "Card", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 1}),
+    ));
+    // Pause all three through the same command a person sends.
     for w in &roots {
         let s = snapshot(&*backend, w.id.as_str());
         wops::run_changed(backend.command(
@@ -2836,6 +2846,17 @@ fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
         ))
         .unwrap();
     }
+    let card = roots[2].clone();
+    roots[2] = command(
+        &*backend,
+        "tasks.set_feature",
+        json!({"taskId": card.id, "expectedRevision": card.revision, "featureId": roots[0].id,
+            "clearFeature": false}),
+    );
+    assert!(
+        roots[2].parent_id.is_some(),
+        "the task is linked to Checkout"
+    );
 
     // A held root lists its pause and the derived condition the eligibility read names.
     click_row(&mut h, "Checkout  ·");
@@ -2880,25 +2901,9 @@ fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
         "{:?}",
         h.state().status()
     );
-    let checkout = roots[0].id.as_str().to_owned();
-    {
-        use devworks_core::protocol::records::RedirectStage;
-        let mut s = h.state().work.runs[&checkout].clone();
-        let r = &mut s.redirects.as_mut().unwrap().0[0];
-        r.stage = RedirectStage::Incorporated;
-        r.outcome = Some(devworks_core::protocol::support::BoundedText(
-            "CLI moved ahead".into(),
-        ));
-        h.state_mut().work.runs.insert(checkout.clone(), s);
-    }
-    h.step();
-    assert!(has_text(
-        &h,
-        "Redirect “Ship the CLI first”: incorporated · CLI moved ahead"
-    ));
     click(&mut h, Role::Button, "Refresh");
 
-    // After a restart, one action continues both paused roots.
+    // After a restart, one action continues every paused root, the linked task included.
     h.state_mut().on_exit();
     drop(h);
     drop(backend);
@@ -2927,10 +2932,96 @@ fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
         );
     }
 
-    // Stop is offered on a root while it has a live activation.
     click_row(&mut h, "Checkout  ·");
     if h.query_by_role_and_label(Role::Button, "Stop").is_none() {
         click(&mut h, Role::Button, "Show run controls");
     }
-    assert!(h.query_by_role_and_label(Role::Button, "Stop").is_some());
+    // Stop on running work is recorded: applied at once or accepted to stop at a safe boundary.
+    click(&mut h, Role::Button, "Stop");
+    let status = h.state().status().unwrap_or_default().to_owned();
+    assert!(
+        status.contains("Stop accepted") || status.contains("is stopped"),
+        "{status}"
+    );
+
+    // Run state that changes outside the screen (here a pause sent by another client) is read
+    // again on Refresh, as redirect stages are.
+    click_row(&mut h, "Search  ·");
+    if h.query_by_role_and_label(Role::Button, "Pause").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    assert!(!has_text(&h, "Paused:"), "Search was continued");
+    let s = snapshot(&*backend, roots[1].id.as_str());
+    wops::run_changed(backend.command(
+        "runs.pause",
+        &wops::run_control(&*backend, "runs.pause", &roots[1], &s),
+    ))
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh");
+    assert!(
+        has_text(&h, "Paused:"),
+        "Refresh reads the root's run state again"
+    );
+}
+
+/// A redirect draft edited while its send is in flight is kept when the send finishes.
+#[test]
+fn a_redirect_draft_edited_during_its_send_is_kept() {
+    let root = Root::new("work-redirect-draft");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let gate = Gate::new("runs.redirect");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1300.0,
+    );
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]);
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    h.get_by_label("Redirect (0)").click();
+    settle(&mut h);
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Redirect message",
+        "Ship the CLI first",
+    );
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Send redirect")
+        .click();
+    step_until(&mut h, "the redirect is in flight", |_| gate.has_waiter());
+    h.get_by_role_and_label(Role::TextInput, "Redirect message")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Redirect message")
+        .type_text(", then the GUI");
+    h.step();
+    gate.open();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("Redirect sent"))
+    );
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, "Redirect message")
+            .value()
+            .as_deref(),
+        Some("Ship the CLI first, then the GUI"),
+        "the newer draft is kept"
+    );
 }

@@ -327,9 +327,15 @@ impl WorkCtl<'_, '_> {
                 }
             }
             (WorkSlot::WorkRedirect(id), Reply::Command(c)) => {
+                let sent = self.work.redirect_sent.remove(&id);
                 match wops::run_redirected(c) {
                     Ok(_) => {
-                        self.work.redirect_drafts.remove(&id);
+                        // A draft edited while the send ran is kept.
+                        if sent.is_some_and(|s| {
+                            self.work.redirect_drafts.get(&id).map(|d| d.trim()) == Some(s.as_str())
+                        }) {
+                            self.work.redirect_drafts.remove(&id);
+                        }
                         self.announce("Redirect sent.");
                     }
                     Err(e) => self.work_failure("Redirect", e),
@@ -338,7 +344,10 @@ impl WorkCtl<'_, '_> {
             }
             (WorkSlot::WorkStop(id), Reply::Command(c)) => {
                 match wops::run_stopped(c) {
-                    Ok(_) => self.announce("Stopping the work."),
+                    Ok(wops::Stopped::Applied) => self.announce("The work is stopped."),
+                    Ok(wops::Stopped::Accepted) => {
+                        self.announce("Stop accepted: the work stops at its next safe boundary.")
+                    }
                     Err(e) => self.work_failure("Stop", e),
                 }
                 self.inspect(&id);

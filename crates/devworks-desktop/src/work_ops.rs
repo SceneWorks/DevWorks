@@ -459,11 +459,22 @@ pub fn run_stop(backend: &dyn Backend, root: &str, snapshot: &RootSnapshot) -> V
         })))
     })
 }
-pub fn run_stopped(
-    outcome: CommandOutcome,
-) -> Result<devworks_core::protocol::records::OperationRef, Failure> {
+/// What a stop answered: applied at once, or accepted as an operation that stops the work once
+/// it reaches a safe boundary (both are a recorded stop).
+pub enum Stopped {
+    Applied,
+    Accepted,
+}
+pub fn run_stopped(outcome: CommandOutcome) -> Result<Stopped, Failure> {
+    use devworks_core::protocol::CommandReply;
+    use devworks_core::protocol::results::DomainDecision;
+    if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
+        && matches!(receipt.decision, DomainDecision::Accepted { .. })
+    {
+        return Ok(Stopped::Accepted);
+    }
     match command_result(outcome)? {
-        OperationResult::RunsStop { value } => Ok(value),
+        OperationResult::RunsStop { .. } => Ok(Stopped::Applied),
         other => Err(unexpected("runs.stop", &other)),
     }
 }

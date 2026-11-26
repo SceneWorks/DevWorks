@@ -125,6 +125,7 @@ impl WorkCtl<'_, '_> {
                 Action::OpenWork(id) => self.open_work(&id),
                 Action::Reload => {
                     self.load_work();
+                    self.reinspect_runs();
                     self.refresh_history(self.work.activity.item.clone());
                 }
                 Action::Create(form) => {
@@ -404,6 +405,7 @@ impl WorkCtl<'_, '_> {
                     if message.is_empty() {
                         continue;
                     }
+                    self.work.redirect_sent.insert(id.clone(), message.clone());
                     let root = id.clone();
                     self.command(
                         WorkSlot::WorkRedirect(id),
@@ -433,7 +435,7 @@ impl WorkCtl<'_, '_> {
                         .items
                         .iter()
                         .chain(self.work.cards.items.iter())
-                        .filter(|w| w.parent_id.is_none())
+                        // Linked tasks hold their own pauses, so they are continued too.
                         .map(|w| w.id.as_str().to_owned())
                         .collect();
                     for root in roots {
