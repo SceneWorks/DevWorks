@@ -76,7 +76,12 @@ impl HttpTransport for RecordedWorkflow {
 }
 
 fn qualify(fx: &Fx, client: Arc<GitHubClient>, remote: &'static str) {
-    let location = fx.h.root.to_string_lossy().into_owned();
+    let location =
+        fx.h.root
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
     fx.tx(move |_, tx| {
         let schema = |key| devworks_core::settings::catalog::descriptor(key).unwrap().schema_ref();
         tx.configuration().append_revision(
@@ -141,7 +146,16 @@ fn qualify(fx: &Fx, client: Arc<GitHubClient>, remote: &'static str) {
 }
 
 async fn app_with_github(fx: &Fx, client: Arc<GitHubClient>) -> Runtime {
-    let (mut composed, _) = watch_composition(fx, &fx.h.root);
+    github_watch_runtime(fx, client, false).await.0
+}
+
+async fn github_watch_runtime(
+    fx: &Fx,
+    client: Arc<GitHubClient>,
+    with_agent: bool,
+) -> (Runtime, Wired) {
+    let (mut composed, wired) = watch_composition(fx, &fx.h.root);
+    composed.application.sessions = Some(devworks_engine::SessionPorts::default());
     composed.git = Some(devworks_engine::git::GitComposition {
         config: devworks_core::services::git::GitConfig {
             github: Some(client),
@@ -149,7 +163,20 @@ async fn app_with_github(fx: &Fx, client: Arc<GitHubClient>) -> Runtime {
         },
         github_http: None,
     });
-    devworks_engine::boot(composed).await.unwrap()
+    if with_agent {
+        composed.indexing = Some(devworks_engine::IndexComposition {
+            parser: Arc::new(devworks_adapters::index::treesitter::TreeSitterParser::new()),
+            source: Arc::new(devworks_adapters::index::NativeSourceTree::new()),
+            fs: Arc::new(NativeFilesystem::new()),
+            settings: Default::default(),
+            config: devworks_engine::IndexingConfig {
+                discover_at_boot: false,
+                ..Default::default()
+            },
+            enrichers: Vec::new(),
+        });
+    }
+    (devworks_engine::boot(composed).await.unwrap(), wired)
 }
 
 fn create_github_watch(app: &Runtime, ctx: &InvocationContext, run_id: &str, key: &str) -> Id {
@@ -417,7 +444,8 @@ fn a_live_github_run_reaches_the_saved_watcher_after_a_runtime_restart() {
         let app = app_with_github(&fx, client.clone()).await;
         let (ctx, _) = agent_context(&fx);
         let watcher = create_github_watch(&app, &ctx, &run, "live-github-watch");
-        let event = || {
+        let session = ctx.session_id().unwrap().clone();
+        let event = |fx: &Fx| {
             read(&*fx.store, |snapshot| {
                 snapshot.watchers().watch_event_for_watcher(&watcher)
             })
@@ -431,14 +459,20 @@ fn a_live_github_run_reaches_the_saved_watcher_after_a_runtime_restart() {
             wire.last_status.lock().unwrap().as_deref(),
             Some("in_progress")
         );
-        assert!(event().is_none(), "work cannot settle before restart");
+        assert!(event(&fx).is_none(), "work cannot settle before restart");
         app.shutdown().await;
         drop(app);
-        let app = app_with_github(&fx, client).await;
+        let (harness, store) = fx.into_parts();
+        drop(store);
+        harness.wait_released();
+        let store = harness.open();
+        let fx = Fx::over(harness, store);
+        let (app, wired) = github_watch_runtime(&fx, client, true).await;
+        let app = Arc::new(app);
         let limit = std::time::Instant::now() + Duration::from_secs(40 * 60);
         let completed = loop {
             app.watchers().unwrap().settle().unwrap();
-            if let Some(done) = event() {
+            if let Some(done) = event(&fx) {
                 break done;
             }
             assert!(std::time::Instant::now() < limit, "live run did not settle");
@@ -450,13 +484,112 @@ fn a_live_github_run_reaches_the_saved_watcher_after_a_runtime_restart() {
         assert!(detail.contains(&format!(
             "https://github.com/SceneWorks/DevWorks/actions/runs/{run}"
         )));
-        applied(&fx.resume(&fx.user, "root-i"));
-        app.watchers().unwrap().deliver().unwrap();
-        assert!(matches!(
-            event().unwrap().state,
-            WatchEventState::Delivered | WatchEventState::Acknowledged
-        ));
+        acknowledge_github_notice(&fx, &app, &wired, &watcher, &session, &completed.id).await;
         println!("{}", detail);
+        app.shutdown().await;
+    });
+}
+
+async fn acknowledge_github_notice(
+    fx: &Fx,
+    app: &Arc<Runtime>,
+    wired: &Wired,
+    watcher: &Id,
+    session: &Id,
+    event_id: &Id,
+) {
+    let event = || {
+        read(&*fx.store, |snapshot| {
+            snapshot.watchers().watch_event_for_watcher(watcher)
+        })
+    };
+    applied(&fx.resume(&fx.user, "root-i"));
+    let (ctx, primary) = bind(fx, "watch-after-live-github-restart");
+    assert_eq!(ctx.session_id(), Some(session));
+    *wired.session.lock().unwrap() = Some(session.clone());
+    let supervisor = app.watchers().unwrap();
+    assert_eq!(supervisor.deliver().unwrap(), 1);
+    assert_eq!(event().unwrap().state, WatchEventState::Delivered);
+    let (_stop_tx, stop) = tokio::sync::watch::channel(false);
+    let end = tokio::time::timeout(
+        Duration::from_secs(120),
+        NativeAgentTurnExecutor::new(app).run(ctx, primary, stop),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(
+            end,
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                ..
+            }
+        ),
+        "{end:?}"
+    );
+    let recorded = event().unwrap();
+    assert_eq!(
+        (recorded.id, recorded.state),
+        (event_id.clone(), WatchEventState::Acknowledged)
+    );
+    assert_eq!(supervisor.deliver().unwrap(), 0);
+    let marker = format!("Watcher event {}:", event_id.as_str());
+    assert_eq!(
+        wired
+            .bodies
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|body| body.matches(&marker).count())
+            .sum::<usize>(),
+        1
+    );
+    assert_eq!(
+        notices(fx, session)
+            .iter()
+            .filter(|notice| notice["source"] == event_id.as_str())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn github_restart_composes_the_native_carrying_turn() {
+    let _native_case = native_runtime_case();
+    runtime().block_on(async {
+        let fx = Fx::new();
+        let client = Arc::new(GitHubClient {
+            http: Arc::new(RecordedWorkflow::default()),
+            secrets: Arc::new(Credentials),
+        });
+        qualify(&fx, client.clone(), "Acme/watch");
+        let app = app_with_github(&fx, client.clone()).await;
+        let (ctx, _) = agent_context(&fx);
+        let session = ctx.session_id().unwrap().clone();
+        let watcher = create_github_watch(&app, &ctx, "42", "scripted-github-restart");
+        assert_eq!(app.watchers().unwrap().settle().unwrap(), 0);
+        app.shutdown().await;
+        drop(app);
+        let (harness, store) = fx.into_parts();
+        drop(store);
+        harness.wait_released();
+        let store = harness.open();
+        let fx = Fx::over(harness, store);
+        let (app, wired) = github_watch_runtime(&fx, client, true).await;
+        let app = Arc::new(app);
+        let mut completed = None;
+        for _ in 0..8 {
+            fx.h.advance(60_000);
+            app.watchers().unwrap().settle().unwrap();
+            completed = read(&*fx.store, |snapshot| {
+                snapshot.watchers().watch_event_for_watcher(&watcher)
+            });
+            if completed.is_some() {
+                break;
+            }
+        }
+        let completed = completed.expect("GitHub reported the terminal result");
+        acknowledge_github_notice(&fx, &app, &wired, &watcher, &session, &completed.id).await;
         app.shutdown().await;
     });
 }

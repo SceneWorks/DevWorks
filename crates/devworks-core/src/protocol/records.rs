@@ -19995,6 +19995,10 @@ pub enum WatchSourceKind {
     File,
     #[schemars(extend("x-since" = 9))]
     GitHub,
+    #[schemars(extend("x-since" = 18))]
+    AttachedProcess,
+    #[schemars(extend("x-since" = 18))]
+    Assignment,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
@@ -20003,11 +20007,57 @@ impl Check for WatchSourceKind {
 }
 
 impl Revisioned for WatchSourceKind {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if matches!(self, Self::AttachedProcess) && revision < 18 {
+            *self = Self::Process;
+        }
+    }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         if revision < 9 && matches!(self, Self::GitHub) {
             return Err("enum variant predates its introduction: GitHub".into());
         }
+        if revision < 18 && matches!(self, Self::AttachedProcess) {
+            return Err("enum variant predates its introduction: AttachedProcess".into());
+        }
+        if revision < 18 && matches!(self, Self::Assignment) {
+            return Err("enum variant predates its introduction: Assignment".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAssignmentSource {
+    pub assignment_id: AssignmentId,
+    pub session_id: Id,
+}
+impl Check for WatchAssignmentSource {
+    fn check(&self) -> Result<(), String> {
+        self.assignment_id.check()?;
+        self.session_id.check()?;
+        crate::protocol::rules::record(
+            "WatchAssignmentSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAttachedProcess {
+    pub pid: u32,
+    pub birth_token: Label,
+}
+impl Check for WatchAttachedProcess {
+    fn check(&self) -> Result<(), String> {
+        self.pid.check()?;
+        self.birth_token.check()?;
+        crate::protocol::rules::record(
+            "WatchAttachedProcess",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -20054,9 +20104,25 @@ pub enum WatchOutcomeKind {
     Interrupted,
     Lost,
     Uncertain,
+    #[schemars(extend("x-since" = 18))]
+    Exited,
 }
 impl Check for WatchOutcomeKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcomeKind {
+    fn retain_revision(&mut self, revision: u32) {
+        if matches!(self, Self::Exited) && revision < 18 {
+            *self = Self::Uncertain;
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision < 18 && matches!(self, Self::Exited) {
+            return Err("enum variant predates its introduction: Exited".into());
+        }
         Ok(())
     }
 }
@@ -20082,6 +20148,16 @@ impl Check for WatchOutcome {
             "WatchOutcome",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        self.kind.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.kind.check_revision(revision)?;
         Ok(())
     }
 }
@@ -20376,6 +20452,20 @@ pub struct WatcherRecord {
     pub stop_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<WatchEvent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "u32", extend("x-since" = 18))]
+    pub attached_pid: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchAssignmentSource", extend("x-since" = 18))]
+    pub assignment: Option<WatchAssignmentSource>,
 }
 impl Check for WatcherRecord {
     fn check(&self) -> Result<(), String> {
@@ -20402,6 +20492,8 @@ impl Check for WatcherRecord {
         self.output_truncated.check()?;
         self.stop_requested.check()?;
         self.event.check()?;
+        self.attached_pid.check()?;
+        self.assignment.check()?;
         crate::protocol::rules::record(
             "WatcherRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -20415,10 +20507,18 @@ impl Revisioned for WatcherRecord {
         if revision < 9 {
             self.github = None;
         }
+        if revision < 18 {
+            self.attached_pid = None;
+        }
+        if revision < 18 {
+            self.assignment = None;
+        }
         self.source_kind.retain_revision(revision);
+        self.outcome.retain_revision(revision);
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         self.source_kind.check_revision(revision)?;
+        self.outcome.check_revision(revision)?;
         Ok(())
     }
 }

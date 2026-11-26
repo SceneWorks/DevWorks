@@ -779,6 +779,17 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "b4655417647e74fda9a997fa35e0fb814a8f9ec2b1aa5e83a8ad391a66b494b5",
         rebuilds_tables: true,
     },
+    Migration {
+        version: 70,
+        minimum_reader: 70,
+        minimum_writer: 70,
+        sql: concat!(
+            include_str!("migrations/0070_watcher_source_columns.sql"),
+            include_str!("migrations/0070_combined_watchers.sql")
+        ),
+        expected_sha256: "7e3c3df3cf96d962469169ba453d7437afb505b060ecb89cb00d6021fd0d0db3",
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -1197,6 +1208,102 @@ fn reconcile_watcher_branch(
     Ok(watcher.version)
 }
 
+/// The published watcher branches used these numbers before the main ledger advanced.
+/// Only recognize the exact known suffixes, and preserve their watcher rows and events.
+fn legacy_watcher_branch(
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+) -> Option<(usize, bool)> {
+    const ATTACHED: &str = "a23ddfe3134f16970b55a18a91f6582fd3e3fe9f087a3ed5224e04288211b8e2";
+    const ASSIGNMENT: &str = "b2432a633eec00d44bc5f9bcd7cb23161e4f6dd303755fad5d27e245afdc50b1";
+    let (prefix, assignment) = match (
+        meta.schema_version,
+        meta.minimum_reader,
+        meta.minimum_writer,
+    ) {
+        (64, 64, 64) => (63, false),
+        (67, 67, 67) => (66, false),
+        (68, 68, 68) => (66, true),
+        _ => return None,
+    };
+    if migrations.get(69)?.version != 70
+        || applied.len() != prefix + 1 + usize::from(assignment)
+        || applied[prefix].version != prefix as i64 + 1
+        || applied[prefix].checksum != ATTACHED
+        || (assignment && (applied[67].version != 68 || applied[67].checksum != ASSIGNMENT))
+        || !migrations[..prefix]
+            .iter()
+            .zip(applied)
+            .all(|(expected, actual)| {
+                expected.version == actual.version && expected.checksum() == actual.checksum
+            })
+    {
+        return None;
+    }
+    Some((prefix, assignment))
+}
+
+fn reconcile_legacy_watchers(
+    conn: &Connection,
+    migrations: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    db(conn.pragma_update(None, "foreign_keys", false))?;
+    let outcome = (|| {
+        let tx = db(rusqlite::Transaction::new_unchecked(
+            conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
+        let changed =
+            || StorageError::IncompatibleSchema("legacy watcher migration ledger changed".into());
+        let meta = read_meta(&tx)?.ok_or_else(changed)?;
+        let applied = ledger(&tx)?;
+        let (prefix, assignment) =
+            legacy_watcher_branch(migrations, &meta, &applied).ok_or_else(changed)?;
+        if db(tx.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)))?
+            != meta.schema_version
+        {
+            return Err(changed());
+        }
+        for old in &applied[prefix..] {
+            if db(tx.execute(
+                "DELETE FROM schema_migrations WHERE version=?1 AND checksum=?2",
+                params![old.version, old.checksum],
+            ))? != 1
+            {
+                return Err(changed());
+            }
+        }
+        for m in &migrations[prefix..68] {
+            db(tx.execute_batch(m.sql))?;
+        }
+        if !assignment {
+            db(tx.execute_batch(include_str!("migrations/0068_assignment_watchers.sql")))?;
+        }
+        db(tx.execute_batch("ALTER TABLE watchers ADD COLUMN github_json TEXT;"))?;
+        db(tx.execute_batch(include_str!("migrations/0070_combined_watchers.sql")))?;
+        for m in &migrations[prefix..70] {
+            db(tx.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+                params![m.version,m.checksum(),now_ms,app_build],
+            ))?;
+        }
+        let latest = &migrations[69];
+        db(tx.execute(
+            "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+            params![latest.version,latest.minimum_reader,latest.minimum_writer],
+        ))?;
+        db(tx.pragma_update(None, "user_version", latest.version))?;
+        verify_after(&tx)?;
+        db(tx.commit())?;
+        Ok(latest.version)
+    })();
+    db(conn.pragma_update(None, "foreign_keys", true))?;
+    outcome
+}
+
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
 /// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
 pub(crate) fn check(
@@ -1222,6 +1329,7 @@ pub(crate) fn check(
     let applied = ledger(conn)?;
     let intelligence = intelligence_branch(migrations, &meta, &applied);
     let watcher_history = watcher_branch(conn, migrations, &meta, &applied)?;
+    let legacy_watchers = legacy_watcher_branch(migrations, &meta, &applied);
     for m in migrations
         .iter()
         .filter(|m| m.version <= meta.schema_version)
@@ -1231,6 +1339,7 @@ pub(crate) fn check(
             Some(a) if split_migration(migrations, &meta, a).is_some() => {}
             Some(_) if matches!(m.version, 64 | 65) && intelligence.is_some() => {}
             Some(_) if m.version == 67 && watcher_history => {}
+            Some(_) if legacy_watchers.is_some_and(|(prefix, _)| m.version > prefix as i64) => {}
             Some(a) => {
                 return Err(StorageError::IncompatibleSchema(format!(
                     "migration {} checksum {} does not match this build ({})",
@@ -1286,6 +1395,9 @@ pub(crate) fn prepare(
         return Ok((meta, access));
     }
     let mut version = meta.schema_version;
+    if legacy_watcher_branch(migrations, &meta, &ledger(conn)?).is_some() {
+        version = reconcile_legacy_watchers(conn, migrations, now_ms, app_build)?;
+    }
     if matches!(version, 64 | 65) {
         let applied = ledger(conn)?;
         if intelligence_branch(migrations, &meta, &applied).is_some() {

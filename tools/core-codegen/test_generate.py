@@ -79,7 +79,9 @@ class SchemaRevisionRules(unittest.TestCase):
             # A prioritization's bounded placement (one move, any bucket size).
             'features.prioritize', 'issues.prioritize', 'tasks.prioritize',
             'indexing.status', 'indexing.runs', 'indexing.refresh_overlay',
-            'artifacts.read', 'git.pull_request', 'browser.sessions', 'browser.input',
+            'artifacts.read', 'git.pull_request', 'git.push', 'git.integrate', 'browser.sessions', 'browser.input',
+            'reviews.list', 'reviews.inspect', 'reviews.request', 'reviews.findings',
+            'reviews.respond', 'reviews.adjudicate', 'reviews.readiness',
             'github.account', 'github.poll_status', 'issues.link', 'issues.publish',
             'browser.upload', 'browser.console', 'browser.network',
             'desktop.inspect', 'desktop.capture', 'desktop.request_control',
@@ -116,7 +118,7 @@ class SchemaRevisionRules(unittest.TestCase):
         for name in ('agents.post', 'agents.receive', 'agents.ack', 'agents.history', 'agents.events'):
             self.assertEqual(carried[name], {7})
         for name in ('watch.create', 'watch.list', 'watch.inspect', 'watch.cancel'):
-            self.assertEqual(carried[name], {8, 9})
+            self.assertEqual(carried[name], {8, 9, 18})
         for name in ('schemas.code_references', 'settings.read_effective', 'settings.validate',
                      'settings.save_revision', 'settings.explain_source'):
             self.assertEqual(carried[name], {8})

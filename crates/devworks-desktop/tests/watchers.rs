@@ -66,6 +66,8 @@ fn timer(
         matching: None,
         file_path: None,
         github: None,
+        attached_process: None,
+        assignment: None,
     }
 }
 

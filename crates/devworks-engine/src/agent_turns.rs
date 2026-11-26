@@ -121,6 +121,69 @@ async fn drive_agent_turn(
     coordinator: AgentRecord,
     mut stop: watch::Receiver<bool>,
 ) -> LaunchEnd {
+    let Some(session) = ctx.session_id() else {
+        return turn_failure(StorageError::ScopeDenied);
+    };
+    let mut commits = engine.commit_changes();
+    loop {
+        let mut progress = TurnProgress::default();
+        let end = drive_agent_turn_once(
+            &engine,
+            &agents,
+            &ctx,
+            &coordinator,
+            stop.clone(),
+            &mut progress,
+        )
+        .await;
+        if !matches!(
+            end,
+            LaunchEnd::Finished {
+                outcome: ActivationOutcome::Completed,
+                ..
+            }
+        ) {
+            return end;
+        }
+        loop {
+            if *stop.borrow() {
+                return cancelled();
+            }
+            commits.borrow_and_update();
+            match crate::watch::agent_input(&engine, session, progress.input_sequence).await {
+                Ok(crate::watch::AgentInput::Ready) => break,
+                Ok(crate::watch::AgentInput::Finished) => return end,
+                Ok(crate::watch::AgentInput::Waiting) => {
+                    if let Err(error) = plan_review::wait_for_change(&mut commits, &mut stop).await
+                    {
+                        return if matches!(error, StorageError::Cancelled) {
+                            cancelled()
+                        } else {
+                            turn_failure(error)
+                        };
+                    }
+                }
+                Err(error) => return turn_failure(error),
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct TurnProgress {
+    input_sequence: i64,
+    retry_at_ms: Option<i64>,
+    credentials_rejected: bool,
+}
+
+async fn drive_agent_turn_once(
+    engine: &TurnEngine,
+    agents: &Arc<devworks_core::services::agents::AgentService>,
+    ctx: &InvocationContext,
+    coordinator: &AgentRecord,
+    mut stop: watch::Receiver<bool>,
+    progress: &mut TurnProgress,
+) -> LaunchEnd {
     if *stop.borrow() {
         return cancelled();
     }
@@ -134,15 +197,15 @@ async fn drive_agent_turn(
         return turn_failure(StorageError::ScopeDenied);
     };
     let activation_id = activation_id.clone();
-    if !is_plan_reviewer(&coordinator)
-        && let Err(error) = acknowledge_native_instructions(&engine, &ctx, &coordinator).await
+    if !is_plan_reviewer(coordinator)
+        && let Err(error) = acknowledge_native_instructions(engine, ctx, coordinator).await
     {
         return turn_failure(error);
     }
     let is_feature_coordinator =
         coordinator.role_id.as_str() == AgentRole::FeatureCoordinator.as_str();
     if is_feature_coordinator {
-        match plan_review::schedule(&engine, &agents, &ctx, &mut stop, false).await {
+        match plan_review::schedule(engine, agents, ctx, &mut stop, false).await {
             Ok(ScheduleResult::Failed { .. }) => return awaiting_plan_review(),
             Ok(_) => {}
             Err(StorageError::Cancelled) => return cancelled(),
@@ -179,44 +242,40 @@ async fn drive_agent_turn(
     let is_coordinator = is_feature_coordinator
         || coordinator.role_id.as_str() == AgentRole::IssueCoordinator.as_str();
     let mut reviews = is_coordinator.then(|| CoordinatorReview {
-        agents: &agents,
+        agents,
         offered_reports: HashSet::new(),
         feature: is_feature_coordinator,
     });
-    let mut retry_at_ms = None;
-    let mut credentials_rejected = false;
     let mut result = run_native_loop(
-        &engine,
-        &ctx,
-        &coordinator,
+        engine,
+        ctx,
+        coordinator,
         reviews.as_mut(),
         Stop {
             cancellation: &cancellation,
             stopped: stopped.clone(),
         },
-        &mut retry_at_ms,
-        &mut credentials_rejected,
+        progress,
     )
     .await;
-    if is_plan_reviewer(&coordinator) && !cancellation.is_cancelled() {
-        let mut report = review_report(&engine, &ctx, result).await;
+    if is_plan_reviewer(coordinator) && !cancellation.is_cancelled() {
+        let mut report = review_report(engine, ctx, result).await;
         if report.as_ref().is_ok_and(|report| report.needs_source) {
-            report = match crate::plan_review::enable_sources(&engine, &ctx).await {
+            report = match crate::plan_review::enable_sources(engine, ctx).await {
                 Ok(()) => {
                     let result = run_native_loop(
-                        &engine,
-                        &ctx,
-                        &coordinator,
+                        engine,
+                        ctx,
+                        coordinator,
                         None,
                         Stop {
                             cancellation: &cancellation,
                             stopped: stopped.clone(),
                         },
-                        &mut retry_at_ms,
-                        &mut credentials_rejected,
+                        progress,
                     )
                     .await;
-                    review_report(&engine, &ctx, result).await
+                    review_report(engine, ctx, result).await
                 }
                 Err(error) => Err(error.into()),
             };
@@ -225,8 +284,8 @@ async fn drive_agent_turn(
             Err(StorageError::Cancelled.into())
         } else {
             crate::plan_review::settle(
-                &engine,
-                &ctx,
+                engine,
+                ctx,
                 report.map_err(|error| format!("Native plan review failed: {error:?}")),
             )
             .await
@@ -236,12 +295,12 @@ async fn drive_agent_turn(
         && !cancellation.is_cancelled()
     {
         if result.is_ok() {
-            result = crate::code_review::complete(&engine, &ctx)
+            result = crate::code_review::complete(engine, ctx)
                 .await
                 .map_err(Into::into);
         }
         if result.is_err() {
-            let _ = crate::code_review::fail(&engine, &ctx).await;
+            let _ = crate::code_review::fail(engine, ctx).await;
         }
     } else if let Some(reviews) = reviews.as_mut() {
         // The active coordinator still owns any review discovered while its children drain.
@@ -258,11 +317,11 @@ async fn drive_agent_turn(
                 break;
             }
             commits.borrow_and_update();
-            if let Err(error) = crate::code_review::schedule(&engine, &agents, &ctx).await {
+            if let Err(error) = crate::code_review::schedule(engine, agents, ctx).await {
                 result = Err(error.into());
                 break;
             }
-            match crate::code_review::pending(&engine, &ctx).await {
+            match crate::code_review::pending(engine, ctx).await {
                 Ok(true) => {
                     if let Err(error) =
                         plan_review::wait_for_change(&mut commits, &mut drain_stop).await
@@ -279,7 +338,7 @@ async fn drive_agent_turn(
                 }
             }
             let scheduled = if reviews.feature {
-                plan_review::schedule(&engine, &agents, &ctx, &mut drain_stop, true).await
+                plan_review::schedule(engine, agents, ctx, &mut drain_stop, true).await
             } else {
                 Ok(ScheduleResult::Idle)
             };
@@ -301,31 +360,43 @@ async fn drive_agent_turn(
                 });
                 break;
             }
-            match reviews.offer_reports(&engine, &ctx, true).await {
-                Ok(new_report) if new_report || matches!(scheduled, ScheduleResult::Complete) => {
-                    result = run_native_loop(
-                        &engine,
-                        &ctx,
-                        &coordinator,
-                        Some(reviews),
-                        Stop {
-                            cancellation: &cancellation,
-                            stopped: drain_stop.clone(),
-                        },
-                        &mut retry_at_ms,
-                        &mut credentials_rejected,
-                    )
-                    .await;
-                    continue;
-                }
-                Ok(_) => {}
+            let new_report = match reviews.offer_reports(engine, ctx, true).await {
+                Ok(new_report) => new_report,
                 Err(error) => {
                     result = Err(error.into());
                     break;
                 }
+            };
+            let watcher_input = if result.is_ok() {
+                match crate::watch::notice_after_input(engine, &session_id, progress.input_sequence)
+                    .await
+                {
+                    Ok(watcher_input) => watcher_input,
+                    Err(error) => {
+                        result = Err(error.into());
+                        break;
+                    }
+                }
+            } else {
+                false
+            };
+            if new_report || watcher_input || matches!(scheduled, ScheduleResult::Complete) {
+                result = run_native_loop(
+                    engine,
+                    ctx,
+                    coordinator,
+                    Some(reviews),
+                    Stop {
+                        cancellation: &cancellation,
+                        stopped: drain_stop.clone(),
+                    },
+                    progress,
+                )
+                .await;
+                continue;
             }
             let review_failed = matches!(scheduled, ScheduleResult::Failed { .. });
-            match children_to_drain(&engine, &ctx, review_failed).await {
+            match children_to_drain(engine, ctx, review_failed).await {
                 Ok(ChildrenToDrain { runnable: true, .. }) => {
                     if let Err(error) =
                         plan_review::wait_for_change(&mut commits, &mut drain_stop).await
@@ -350,6 +421,9 @@ async fn drive_agent_turn(
                 }
             }
         }
+    }
+    if *stop.borrow() {
+        cancellation.cancel();
     }
     bridge.abort();
     let control = engine.runs().service().clone();
@@ -380,16 +454,20 @@ async fn drive_agent_turn(
             until_ms,
             detail: "The assigned tier is cooling down.".into(),
         }),
-        Err(error) if retry_at_ms.is_some() => LaunchEnd::Failed(ActivationFailure::RateLimited {
-            until_ms: retry_at_ms.expect("checked above"),
-            detail: format!("native agent provider cooldown: {error:?}"),
-        }),
+        Err(error) if progress.retry_at_ms.is_some() => {
+            LaunchEnd::Failed(ActivationFailure::RateLimited {
+                until_ms: progress.retry_at_ms.expect("checked above"),
+                detail: format!("native agent provider cooldown: {error:?}"),
+            })
+        }
         // The provider rejected the credential: its credentials hold explains the wait and
         // clears on repair. Retrying (not escalating) lets the root resume even when the repair
         // lands before this failure is reported.
-        Err(error) if credentials_rejected => LaunchEnd::Failed(ActivationFailure::Transient(
-            format!("native agent provider rejected the credential: {error:?}"),
-        )),
+        Err(error) if progress.credentials_rejected => {
+            LaunchEnd::Failed(ActivationFailure::Transient(format!(
+                "native agent provider rejected the credential: {error:?}"
+            )))
+        }
         Err(error) => turn_failure(error),
     }
 }
@@ -518,8 +596,7 @@ async fn run_native_loop(
     agent: &AgentRecord,
     mut review: Option<&mut CoordinatorReview<'_>>,
     mut stop: Stop<'_>,
-    retry_at_ms: &mut Option<i64>,
-    credentials_rejected: &mut bool,
+    turn_progress: &mut TurnProgress,
 ) -> Result<(), TurnError> {
     let cancellation = stop.cancellation;
     // Marked seen before each dispatch, so a change committed while a call is dispatched still
@@ -535,6 +612,7 @@ async fn run_native_loop(
     let mut compacted: Option<String> = None;
     // Consecutive stale-head refusals of one request against one context version.
     let mut stale_refusals = None;
+    let mut stale_preparations = None;
     loop {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
@@ -635,43 +713,13 @@ async fn run_native_loop(
                     sequence,
                     facts,
                 } => {
-                    let bytes = engine
-                        .artifacts()
-                        .read_exact(engine.store().as_ref(), ctx, &head, 8 * 1024 * 1024)
-                        .map_err(artifact_read_fault)?
-                        .0;
-                    let mut context: ProviderContext = serde_json::from_slice(&bytes)
-                        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
-                    context.messages.push(Message {
-                        role: MessageRole::User,
-                        content: vec![ContentBlock::Text {
-                            text: "Host notice: The previous assistant response was interrupted before \
-                                completion. Continue from the last completed step; do not assume the \
-                                partial response was applied.".into(),
-                            cache: None,
-                        }],
-                    });
-                    for fact in facts {
-                        crate::tool_turn::append_context_fact(
-                            &mut context,
-                            engine.store().as_ref(),
-                            engine.artifacts(),
-                            ctx,
-                            session_id,
-                            fact,
-                        )?;
-                    }
-                    crate::tool_turn::publish_continuation(
-                        engine.store().as_ref(),
-                        engine.artifacts(),
+                    publish_interruption(
+                        engine,
                         ctx,
-                        session_id,
-                        &attempt_id,
-                        &binding,
-                        crate::tool_turn::ContinuationMaterial {
-                            context,
-                            observed_sequence: sequence,
-                        },
+                        (&head, &binding),
+                        attempt_id,
+                        sequence,
+                        facts,
                     )?;
                     recovered = engine.recover_native_context_head(ctx, session_id)?;
                     continue;
@@ -707,32 +755,50 @@ async fn run_native_loop(
                 &binding,
                 &head,
             )?;
-            crate::tool_turn::publish_continuation(
-                engine.store().as_ref(),
-                engine.artifacts(),
-                ctx,
-                session_id,
-                &attempt_id,
-                &binding,
-                material,
-            )?;
+            publish_agent_continuation(engine, ctx, &attempt_id, &binding, material)?;
             recovered = engine.recover_native_context_head(ctx, session_id)?;
             continue;
         }
         wait_for_running_tool_results(engine, ctx, session_id, cancellation, None).await?;
-        let (prepared_head, prepared_binding, route, windows) = {
+        let prepared = {
             let (engine, ctx, session, head, is_reviewer) = (
                 engine.clone(),
                 ctx.clone(),
                 session_id.clone(),
-                head,
+                head.clone(),
                 is_plan_reviewer(agent),
             );
             tokio::task::spawn_blocking(move || {
                 prepare_generation_context(&engine, &ctx, &session, head, binding, is_reviewer)
             })
             .await
-            .map_err(|error| TurnError::Worker(format!("generation context worker: {error}")))??
+            .map_err(|error| TurnError::Worker(format!("generation context worker: {error}")))?
+        };
+        let (prepared_head, prepared_binding, route, windows) = match prepared {
+            Ok(prepared) => {
+                stale_preparations = None;
+                prepared
+            }
+            Err(TurnError::Store(StorageError::ScopeDenied))
+                if crate::tool_turn::native_head_became_stale(
+                    engine.store().as_ref(),
+                    ctx,
+                    session_id,
+                    &head,
+                )? =>
+            {
+                let failure = (
+                    head.version_id.clone(),
+                    transcript_position(engine.store().as_ref(), session_id)?,
+                );
+                if stale_preparations.as_ref() == Some(&failure) {
+                    return Err(StorageError::ScopeDenied.into());
+                }
+                stale_preparations = Some(failure);
+                recovered = engine.recover_native_context_head(ctx, session_id)?;
+                continue;
+            }
+            Err(error) => return Err(error),
         };
         head = prepared_head;
         binding = prepared_binding;
@@ -754,7 +820,7 @@ async fn run_native_loop(
                 &binding,
                 &head,
                 cancellation,
-                retry_at_ms,
+                &mut turn_progress.retry_at_ms,
             )
             .await
             {
@@ -829,6 +895,9 @@ async fn run_native_loop(
             Err(error) => return Err(error.into()),
         };
         stale_refusals = None;
+        if let Some(sequence) = progress.provider.result.turn_start_sequence {
+            turn_progress.input_sequence = sequence;
+        }
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled.into());
         }
@@ -869,8 +938,8 @@ async fn run_native_loop(
             }
             Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled.into()),
             outcome => {
-                *retry_at_ms = progress.provider.result.retry_at_ms;
-                *credentials_rejected = progress
+                turn_progress.retry_at_ms = progress.provider.result.retry_at_ms;
+                turn_progress.credentials_rejected = progress
                     .provider
                     .result
                     .faults
@@ -885,6 +954,112 @@ async fn run_native_loop(
     }
 }
 
+pub(crate) fn recover_interrupted_workspace_turn(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session: &Id,
+) -> Result<(), StorageError> {
+    loop {
+        let Some((head, binding, observed)) = engine.recover_native_context_head(ctx, session)?
+        else {
+            return Ok(());
+        };
+        let Some(UnpublishedTurn::Interrupted {
+            attempt_id,
+            sequence,
+            facts,
+        }) = unpublished_turn(engine.store().as_ref(), ctx, session, observed)?
+        else {
+            return Ok(());
+        };
+        publish_interruption(engine, ctx, (&head, &binding), attempt_id, sequence, facts)?;
+    }
+}
+
+fn publish_interruption(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    (head, binding): (&ArtifactRef, &NativeBinding),
+    attempt: AttemptId,
+    sequence: i64,
+    facts: Vec<TranscriptBody>,
+) -> Result<(), StorageError> {
+    let store = engine.store().as_ref();
+    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let bytes = engine
+        .artifacts()
+        .read_exact(store, ctx, head, 8 * 1024 * 1024)
+        .map_err(artifact_read_fault)?
+        .0;
+    let mut context: ProviderContext = serde_json::from_slice(&bytes)
+        .map_err(|_| StorageError::InvalidRecord("agent context head".into()))?;
+    context.messages.push(Message {
+        role: MessageRole::User,
+        content: vec![ContentBlock::Text {
+            text: "Host notice: The previous assistant response was interrupted before completion. \
+                Continue from the last completed step; do not assume the partial response was applied.".into(),
+            cache: None,
+        }],
+    });
+    for fact in facts {
+        crate::tool_turn::append_context_fact(
+            &mut context,
+            store,
+            engine.artifacts(),
+            ctx,
+            session,
+            fact,
+        )?;
+    }
+    publish_agent_continuation(
+        engine,
+        ctx,
+        &attempt,
+        binding,
+        crate::tool_turn::ContinuationMaterial {
+            context,
+            observed_sequence: sequence,
+        },
+    )
+}
+
+/// A watcher can publish while an interrupted or settled exchange is being rebuilt. Recheck
+/// the transcript from the last published head when that concurrent append rejects publication.
+fn publish_agent_continuation(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    attempt: &AttemptId,
+    binding: &NativeBinding,
+    material: crate::tool_turn::ContinuationMaterial,
+) -> Result<(), StorageError> {
+    let store = engine.store().as_ref();
+    let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let observed = material.observed_sequence;
+    match crate::tool_turn::publish_continuation(
+        store,
+        engine.artifacts(),
+        ctx,
+        session,
+        attempt,
+        binding,
+        material,
+    ) {
+        Ok(_) => Ok(()),
+        Err(StorageError::ScopeDenied) if transcript_position(store, session)? > observed => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn transcript_position(store: &dyn ApplicationStore, session: &Id) -> Result<i64, StorageError> {
+    read_snapshot(store, &ReadOptions::default(), |snapshot| {
+        snapshot
+            .sessions()
+            .session(session)?
+            .map(|row| row.last_durable_sequence())
+            .ok_or(StorageError::ScopeDenied)
+    })
+}
+
 struct ChildrenToDrain {
     runnable: bool,
     held: bool,
@@ -896,15 +1071,41 @@ async fn children_to_drain(
     independent_only: bool,
 ) -> Result<ChildrenToDrain, StorageError> {
     let root = ctx.root_id().cloned().ok_or(StorageError::ScopeDenied)?;
+    let session = ctx.session_id().cloned().ok_or(StorageError::ScopeDenied)?;
     let control = engine.runs().service().clone();
     store::read(engine.store(), move |snapshot| {
         let work = snapshot
             .sessions()
             .work_root(&root)?
             .ok_or(StorageError::ScopeDenied)?;
+        use devworks_core::ports::storage::{MAX_PAGE, WatcherFilter, WatcherPhase};
+        let mut watched = HashSet::new();
+        let filter = WatcherFilter::Session(session);
+        let mut before = None;
+        loop {
+            let page = snapshot.watchers().watchers(
+                &filter,
+                &[WatcherPhase::Active],
+                before.as_ref().map(|(time, id)| (*time, id)),
+                MAX_PAGE,
+            )?;
+            watched.extend(
+                page.iter().filter_map(|watcher| {
+                    watcher.assignment.as_ref().map(|source| source.id.clone())
+                }),
+            );
+            if page.len() < usize::from(MAX_PAGE) {
+                break;
+            }
+            before = page
+                .last()
+                .map(|watcher| (watcher.created_at_ms, watcher.id.clone()));
+        }
         let mut held = false;
         for assignment in root_assignments(snapshot.runs(), &root, true)? {
-            if assignment.purpose != AssignmentPurpose::Child {
+            // The ordinary watcher wait keeps the activation alive after this turn. End
+            // the turn so its own watched child can wake it through the durable event path.
+            if assignment.purpose != AssignmentPurpose::Child || watched.contains(&assignment.id) {
                 continue;
             }
             if !independent_only
@@ -1209,8 +1410,15 @@ fn unpublished_turn(
                         has_tools = true;
                     }
                     fact @ (TranscriptBody::UserMessage { .. }
-                    | TranscriptBody::HostNotice { .. }
-                    | TranscriptBody::OperationUpdate { .. }) => facts.push(fact),
+                    | TranscriptBody::HostNotice { .. })
+                        if ctx
+                            .workspace_reply()
+                            .is_none_or(|reply| position <= reply.user_sequence)
+                            || crate::watch::is_notice(&fact) =>
+                    {
+                        facts.push(fact)
+                    }
+                    fact @ TranscriptBody::OperationUpdate { .. } => facts.push(fact),
                     _ => {}
                 }
             }
@@ -2756,6 +2964,33 @@ fn plan_request(
         // The origin of a workspace turn is its durable message intent, not a run activation.
         identity.push(':');
         identity.push_str(ctx.invocation_id().as_str());
+    } else if !compaction {
+        // After a disconnected carrying turn, recovery can settle its provider attempt without
+        // adding a transcript entry. Keep requests stable within the turn, but let its replacement
+        // send the same unacknowledged watcher input under its own resume/admission identity.
+        let watch_turn = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+            let turn = read.runs().session_turn(session_id)?;
+            if turn.as_ref().is_some_and(|turn| {
+                ctx.activation().is_some_and(|(owner, epoch)| {
+                    owner == &turn.execution_id && epoch == turn.owner_epoch
+                })
+            }) && !read
+                .watchers()
+                .watch_events(
+                    session_id,
+                    &[devworks_core::ports::storage::WatchEventState::Delivered],
+                    1,
+                )?
+                .is_empty()
+            {
+                return Ok(turn.map(|turn| turn.turn_id));
+            }
+            Ok(None)
+        })?;
+        if let Some(turn) = watch_turn {
+            identity.push(':');
+            identity.push_str(turn.as_str());
+        }
     }
     let info = engine.store().info();
     let (

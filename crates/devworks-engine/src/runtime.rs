@@ -672,7 +672,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     // step 4.
     let supervisor = Arc::new(ProcessSupervisor::new(
         store.clone(),
-        process_host,
+        process_host.clone(),
         resources.clone(),
     ));
     if let (Some(service), Some(composition)) = (use_cases.mcp_service(), config.mcp.as_ref()) {
@@ -852,6 +852,11 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         consumers.push(crate::process_tools::consumer(service.clone()));
         consumers.push(crate::process_tools::cancel_consumer(service.clone()));
     }
+    let workspace_replies_enabled = config.providers.is_some()
+        && application
+            .sessions
+            .as_ref()
+            .is_some_and(|sessions| sessions.coordinator.is_some());
     // Watchers launch through the process tools, so they are composed with them.
     let watchers = process_tools.as_ref().map(|service| {
         Arc::new(crate::watch::WatchSupervisor::new(
@@ -861,12 +866,14 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                 devworks_core::services::watch::WatchService::new(
                     store.clone(),
                     service.clone(),
+                    process_host.clone(),
                     artifacts.clone(),
                     ids.clone(),
                     clock.clone(),
                 )
                 .with_root_control(control.clone())
                 .with_github(github.clone())
+                .with_workspace_replies(workspace_replies_enabled)
                 .with_diagnostics(diagnostics.clone()),
             ),
         ))
@@ -1101,12 +1108,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     } else {
         use_cases
     };
-    let workspace_replies = (config.providers.is_some()
-        && application
-            .sessions
-            .as_ref()
-            .is_some_and(|sessions| sessions.coordinator.is_some()))
-    .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
+    let workspace_replies = workspace_replies_enabled
+        .then(|| Arc::new(crate::workspace_reply::WorkspaceReplies::default()));
     if let Some(worker) = &workspace_replies {
         consumers.push(worker.consumer());
     }

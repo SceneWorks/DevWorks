@@ -349,8 +349,16 @@ fn source_label(w: &WatcherRecord) -> String {
             ),
             None => "Probe".to_owned(),
         },
+        WatchSourceKind::Assignment => w.assignment.as_ref().map_or_else(
+            || "Delegated assignment".to_owned(),
+            |child| format!("Delegated assignment {}", child.assignment_id.0.as_str()),
+        ),
         WatchSourceKind::Timer => "Timer".to_owned(),
         WatchSourceKind::File => "File".to_owned(),
+        WatchSourceKind::AttachedProcess => w.attached_pid.map_or_else(
+            || "Attached process".to_owned(),
+            |pid| format!("Attached process {pid}"),
+        ),
         WatchSourceKind::GitHub => match &w.github {
             Some(source) => match &source.workflow_run_id {
                 Some(run) => format!("GitHub Actions run {}", run.get()),
@@ -374,6 +382,15 @@ fn state_label(w: &WatcherRecord) -> (String, Tone) {
         WatcherState::Stopping => ("Stopping".into(), Tone::Attention),
         WatcherState::Cancelled => ("Cancelled".into(), Tone::Neutral),
         WatcherState::Settled => match w.outcome.as_ref().map(|o| &o.kind) {
+            Some(WatchOutcomeKind::Exited) => (
+                if w.outcome.as_ref().and_then(|o| o.exit_code).is_some() {
+                    "Exited"
+                } else {
+                    "Exited (status unknown)"
+                }
+                .into(),
+                Tone::Neutral,
+            ),
             Some(WatchOutcomeKind::Succeeded) => ("Succeeded".into(), Tone::Good),
             Some(WatchOutcomeKind::Failed) => ("Failed".into(), Tone::Bad),
             Some(WatchOutcomeKind::Cancelled) => ("Cancelled".into(), Tone::Neutral),

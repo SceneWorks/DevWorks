@@ -9,7 +9,8 @@ use crate::turn_engine::TurnEngine;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind, WorkspaceReply};
 use devworks_core::ports::storage::{
     AttemptRecord, Cancellation, EventFilter, OperationRecord, QueueState, ReadOptions,
-    ReadSnapshot, StorageError, StoredSession, Wake, WriteOptions, WriteTransaction, read_snapshot,
+    ReadSnapshot, StorageError, StoredSession, Wake, WatchEventState, WriteOptions,
+    WriteTransaction, read_snapshot,
 };
 use devworks_core::protocol::provider::{
     ArtifactRef, EndpointProfile, InferenceInput, NativeBinding, TranscriptBody, UserContent,
@@ -371,6 +372,91 @@ fn completed(intent: &ReplyIntent, result: &ProviderResult) -> Value {
     })
 }
 
+/// A workspace reply's durable operation is the turn identity used by its provider send fence.
+pub(crate) fn watcher_turn(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    session: &Id,
+) -> Result<Option<Id>, StorageError> {
+    let id = OperationId(ctx.invocation_id().clone());
+    let operation = tx
+        .operations()
+        .operation(&id)?
+        .filter(|operation| {
+            operation.capability == CAPABILITY && operation.state == OperationState::Dispatching
+        })
+        .ok_or(StorageError::ScopeDenied)?;
+    let intent: ReplyIntent = serde_json::from_value(operation.payload).map_err(invalid)?;
+    if intent.session_id != *session
+        || intent.agent_id != *ctx.principal()
+        || ctx
+            .workspace_reply()
+            .is_none_or(|reply| reply.user_sequence != intent.user_sequence)
+    {
+        return Err(StorageError::ScopeDenied);
+    }
+    Ok(Some(id.0))
+}
+
+fn release_carry(
+    tx: &mut dyn WriteTransaction,
+    operation: &OperationRecord,
+    completed: bool,
+) -> Result<(), StorageError> {
+    let session = operation.payload["sessionId"]
+        .as_str()
+        .and_then(|id| Id::new(id).ok())
+        .ok_or(StorageError::ScopeDenied)?;
+    let now = tx.now_ms();
+    tx.watchers()
+        .release_watch_events(&session, &operation.id.0, completed, now)?;
+    Ok(())
+}
+
+fn settlement_outcome(watcher: bool, value: Value) -> EffectResult {
+    if watcher && value["kind"] == "WorkspaceReplyUnavailable" {
+        return EffectResult::NotApplied(
+            value["detail"]
+                .as_str()
+                .unwrap_or("The watcher reply did not finish")
+                .to_owned(),
+        );
+    }
+    EffectResult::Completed(value)
+}
+
+async fn recover_settlement(
+    engine: &TurnEngine,
+    id: &OperationId,
+    attempt_no: i64,
+    value: Value,
+) -> Result<EffectResult, StorageError> {
+    let id = id.clone();
+    let completed = value["kind"] == "WorkspaceReplyCompleted";
+    let recovered = value.clone();
+    let watcher = crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
+        let operation = tx
+            .operations()
+            .operation(&id)?
+            .filter(|operation| {
+                operation.capability == CAPABILITY
+                    && operation
+                        .latest_attempt()
+                        .is_some_and(|attempt| attempt.attempt_no == attempt_no)
+            })
+            .ok_or(StorageError::ScopeDenied)?;
+        release_carry(tx, &operation, completed)?;
+        let watcher = operation.payload["watcherSource"].is_string();
+        if watcher && !completed {
+            tx.operations()
+                .observe(&id, attempt_no, json!({"replySettlement":recovered}))?;
+        }
+        Ok(watcher)
+    })
+    .await?;
+    Ok(settlement_outcome(watcher, value))
+}
+
 /// A durable provider result can finish local publication during observation. A tool dispatch
 /// still belongs to the executor and can resume from the exact recorded request on the next pass.
 async fn settle_from_evidence(
@@ -386,7 +472,10 @@ async fn settle_from_evidence(
         .rev()
         .find_map(|value| value.get("replySettlement").cloned())
     {
-        return Ok(EffectResult::Completed(saved));
+        return Ok(settlement_outcome(
+            operation.payload["watcherSource"].is_string(),
+            saved,
+        ));
     }
     let Some(prepared) = prepared_reply(attempt)? else {
         return Ok(EffectResult::NotApplied(
@@ -435,18 +524,34 @@ async fn settle_from_evidence(
                 }
             }
             let mut sweep = prepared.sweep;
-            Ok(if sweep.complete_window() {
-                EffectResult::Completed(completed(&intent, &recorded.provider))
+            if sweep.complete_window() {
+                recover_settlement(
+                    engine,
+                    &operation.id,
+                    attempt.attempt_no,
+                    completed(&intent, &recorded.provider),
+                )
+                .await
             } else {
-                EffectResult::NotApplied("Resume with the next workspace tool window.".into())
-            })
+                Ok(EffectResult::NotApplied(
+                    "Resume with the next workspace tool window.".into(),
+                ))
+            }
         }
         Some(AttemptEnd::ToolCallsReady) if previous_boot || recorded.published.is_some() => Ok(
             EffectResult::NotApplied("Resume the recorded workspace tool turn.".into()),
         ),
-        Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete) => Ok(
-            EffectResult::Completed(unavailable(provider_fault(&recorded.provider))),
-        ),
+        Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete) => {
+            let ctx = invocation(engine.store().as_ref(), &intent, &operation.id)?;
+            recover_interruption(engine, ctx, intent.session_id).await?;
+            recover_settlement(
+                engine,
+                &operation.id,
+                attempt.attempt_no,
+                unavailable(provider_fault(&recorded.provider)),
+            )
+            .await
+        }
         _ => Ok(unknown()),
     }
 }
@@ -473,6 +578,30 @@ async fn run(
         Ok(ctx) => ctx,
         Err(error) => return EffectResult::Failed(error.to_string()),
     };
+    if let Some(source) = &intent.watcher_source {
+        let consumed = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+            Ok(read.watchers().watch_event(source)?.is_some_and(|event| {
+                event.session_id == intent.session_id
+                    && event.state == WatchEventState::Acknowledged
+            }))
+        });
+        match consumed {
+            Ok(true) => {
+                return settled(
+                    engine,
+                    &operation.id,
+                    attempt_no,
+                    json!({
+                        "kind":"WorkspaceReplyCompleted", "sessionId":intent.session_id,
+                        "entryId":intent.user_entry_id,
+                    }),
+                )
+                .await;
+            }
+            Ok(false) => {}
+            Err(error) => return EffectResult::Unknown(error.to_string()),
+        }
+    }
     let mut sweep =
         match resume_recorded_turn(engine, &ctx, &intent, &operation, attempt_no, stopping).await {
             Ok(sweep) => sweep,
@@ -594,6 +723,11 @@ async fn run(
                 );
             }
             _ => {
+                if let Err(error) =
+                    recover_interruption(engine, ctx.clone(), intent.session_id.clone()).await
+                {
+                    return EffectResult::Unknown(error.to_string());
+                }
                 return settled(
                     engine,
                     &operation.id,
@@ -622,6 +756,19 @@ async fn run(
     .await
 }
 
+async fn recover_interruption(
+    engine: &TurnEngine,
+    ctx: InvocationContext,
+    session: Id,
+) -> Result<(), StorageError> {
+    let engine = engine.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::agent_turns::recover_interrupted_workspace_turn(&engine, &ctx, &session)
+    })
+    .await
+    .map_err(invalid)?
+}
+
 fn provider_fault(result: &ProviderResult) -> &str {
     result.faults.first().map_or(
         "The selected route did not complete a reply.",
@@ -642,8 +789,18 @@ async fn resume_recorded_turn(
     let unknown = |error: StorageError| EffectResult::Unknown(error.to_string());
     let mut previous = None;
     for attempt in operation.attempts.iter().rev().skip(1) {
-        if let Some(prepared) = prepared_reply(attempt).map_err(unknown)? {
-            previous = Some(prepared);
+        let prepared = prepared_reply(attempt).map_err(unknown)?;
+        if intent.watcher_source.is_some()
+            && attempt.observations.iter().any(|observation| {
+                observation["replySettlement"]["kind"] == "WorkspaceReplyUnavailable"
+            })
+        {
+            // The exact failed request was reconciled and its carry released. Earlier
+            // provider contexts may have been superseded by interruption recovery.
+            return Ok(prepared.map_or_else(ToolWindowSweep::default, |reply| reply.sweep));
+        }
+        if prepared.is_some() {
+            previous = prepared;
             break;
         }
     }
@@ -657,6 +814,16 @@ async fn resume_recorded_turn(
     else {
         return Ok(sweep);
     };
+    if intent.watcher_source.is_some()
+        && matches!(
+            recorded.provider.outcome,
+            Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete)
+        )
+    {
+        // Its exact provider request has a recorded terminal failure. Start the next
+        // bounded queue attempt with a fresh request and the same durable watcher input.
+        return Ok(sweep);
+    }
     save_prepared(engine, &operation.id, attempt_no, &prepared)
         .await
         .map_err(unknown)?;
@@ -744,6 +911,7 @@ async fn save_prepared(
             "compactionSource": prepared.compaction_source, "toolWindowSweep": prepared.sweep.checkpoint()}),
     )
     .await
+    .map(|_| ())
 }
 
 enum CompactionStep {
@@ -908,7 +1076,7 @@ async fn settled(
     value: Value,
 ) -> EffectResult {
     match observe(engine, operation, attempt, json!({"replySettlement":value})).await {
-        Ok(()) => EffectResult::Completed(value),
+        Ok(watcher) => settlement_outcome(watcher, value),
         Err(error) => EffectResult::Unknown(error.to_string()),
     }
 }
@@ -918,7 +1086,7 @@ async fn observe(
     operation: &OperationId,
     attempt: i64,
     value: Value,
-) -> Result<(), StorageError> {
+) -> Result<bool, StorageError> {
     let operation = operation.clone();
     crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
         let current = tx
@@ -935,7 +1103,15 @@ async fn observe(
                 id: operation.0.as_str().to_owned(),
             });
         }
-        tx.operations().observe(&operation, attempt, value)
+        if let Some(settlement) = value.get("replySettlement") {
+            release_carry(
+                tx,
+                &current,
+                settlement["kind"] == "WorkspaceReplyCompleted",
+            )?;
+        }
+        tx.operations().observe(&operation, attempt, value)?;
+        Ok(current.payload["watcherSource"].is_string())
     })
     .await
 }
@@ -1259,13 +1435,24 @@ fn input_prefix(
             cursor = entry.sequence;
             let body: TranscriptBody = serde_json::from_value(entry.body)
                 .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
-            if cursor == intent.user_sequence
-                && (entry.entry_id != intent.user_entry_id
-                    || entry.actor != intent.creator_id
+            if cursor == intent.user_sequence {
+                let expected = match &intent.watcher_source {
+                    Some(source) => {
+                        snapshot.actors().actor_kind(&entry.actor)? == Some(PrincipalKind::Host)
+                            && crate::watch::is_notice(&body)
+                            && matches!(&body, TranscriptBody::HostNotice { source: notice, .. } if notice == source)
+                    }
+                    None => {
+                        entry.actor == intent.creator_id
+                            && matches!(&body, TranscriptBody::UserMessage { .. })
+                    }
+                };
+                if entry.entry_id != intent.user_entry_id
                     || entry.context_epoch != intent.context_epoch
-                    || !matches!(&body, TranscriptBody::UserMessage { .. }))
-            {
-                return Err(StorageError::ScopeDenied);
+                    || !expected
+                {
+                    return Err(StorageError::ScopeDenied);
+                }
             }
             if matches!(
                 &body,

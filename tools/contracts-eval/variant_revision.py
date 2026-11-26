@@ -76,3 +76,15 @@ def method(definition, found):
 def extend(implementation, definition, found):
     check = method(definition, found)
     return implementation[:-1] + check + '}' if check else implementation
+
+
+def enum_projection(name, definition, found):
+    since = definition.get('introducedVariants', {})
+    fallbacks = definition.get('fallbackVariants', {})
+    if not since:
+        return ''
+    retain = ''.join(f'if matches!(self, Self::{v}) && revision < {since[v]} {{*self = Self::{old};}}'
+                     for v, old in fallbacks.items())
+    check = method(definition, found)
+    parameter = 'revision' if retain else '_revision'
+    return f'impl Revisioned for {name} {{fn retain_revision(&mut self, {parameter}:u32){{{retain}}}{check}}}'

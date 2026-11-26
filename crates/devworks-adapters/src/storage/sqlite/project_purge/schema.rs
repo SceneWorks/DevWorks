@@ -67,8 +67,10 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// source. Project purge removes only the project's existing access to that shared source.
 /// Migration 69 rebuilds watchers to bind a GitHub source and preserves their existing project
 /// and session owners. The source is an observation selector and adds no ownership reference.
+/// Migration 70 gives watchers external process and direct child identities. The owning
+/// project and session are retained unchanged.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "e20c96c3dbe006687feea65637826ebfadeb39e4ee9d73350d1e3e0a994fc395";
+    "4abb22743c4140692045d267233a953f3e717a91f6507d5044bf1c554b7addd0";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

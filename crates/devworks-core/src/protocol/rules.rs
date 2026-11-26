@@ -542,6 +542,12 @@ fn convention_input(op: &str, v: &Value) -> Result<(), String> {
 }
 
 pub fn record(name: &str, v: &Value) -> Result<(), String> {
+    if name == "WatchAttachedProcess" {
+        require(
+            v["pid"].as_u64().is_some_and(|pid| pid > 0),
+            "a process PID must be positive",
+        )?;
+    }
     if name == "WatchGithubTarget" {
         require(
             present(v, "workflowRunId") != present(v, "pullRequestNumber"),
@@ -1271,16 +1277,26 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
         )?
     }
     if op == "watch.create" {
-        let sources = ["process", "probe", "timer", "file", "github"]
-            .iter()
-            .filter(|k| present(v, k))
-            .count();
+        let sources = [
+            "process",
+            "probe",
+            "timer",
+            "file",
+            "github",
+            "attachedProcess",
+            "assignmentId",
+        ]
+        .iter()
+        .filter(|k| present(v, k))
+        .count();
         require(sources == 1, "a watcher names exactly one source")?;
         require(
             !present(v, "maxLifetimeMs")
                 || present(v, "probe")
                 || present(v, "file")
-                || present(v, "github"),
+                || present(v, "github")
+                || present(v, "attachedProcess")
+                || present(v, "assignmentId"),
             "only a polling watcher takes a maximum lifetime",
         )?;
         require(
@@ -1292,8 +1308,12 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
             "a file watcher needs a match",
         )?;
         require(
-            !present(v, "tailBytes") || !(present(v, "timer") || present(v, "github")),
-            "a timer or GitHub watcher has no output tail",
+            !present(v, "tailBytes")
+                || (!present(v, "timer")
+                    && !present(v, "attachedProcess")
+                    && !present(v, "assignmentId")
+                    && !present(v, "github")),
+            "timer, attached process assignment and GitHub watchers have no output tail",
         )?;
     }
     if op == "indexing.status" {

@@ -20010,6 +20010,10 @@ pub enum WatchSourceKind {
     File,
     #[schemars(extend("x-since" = 9))]
     GitHub,
+    #[schemars(extend("x-since" = 18))]
+    AttachedProcess,
+    #[schemars(extend("x-since" = 18))]
+    Assignment,
 }
 impl Check for WatchSourceKind {
     fn check(&self) -> Result<(), String> {
@@ -20023,6 +20027,48 @@ impl Revisioned for WatchSourceKind {
         if revision < 9 && matches!(self, Self::GitHub) {
             return Err("enum variant predates its introduction: GitHub".into());
         }
+        if revision < 18 && matches!(self, Self::AttachedProcess) {
+            return Err("enum variant predates its introduction: AttachedProcess".into());
+        }
+        if revision < 18 && matches!(self, Self::Assignment) {
+            return Err("enum variant predates its introduction: Assignment".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAssignmentSource {
+    pub assignment_id: AssignmentId,
+    pub session_id: Id,
+}
+impl Check for WatchAssignmentSource {
+    fn check(&self) -> Result<(), String> {
+        self.assignment_id.check()?;
+        self.session_id.check()?;
+        super::domain_rules::record(
+            "WatchAssignmentSource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatchAttachedProcess {
+    pub pid: u32,
+    pub birth_token: Label,
+}
+impl Check for WatchAttachedProcess {
+    fn check(&self) -> Result<(), String> {
+        self.pid.check()?;
+        self.birth_token.check()?;
+        super::domain_rules::record(
+            "WatchAttachedProcess",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
         Ok(())
     }
 }
@@ -20069,9 +20115,21 @@ pub enum WatchOutcomeKind {
     Interrupted,
     Lost,
     Uncertain,
+    #[schemars(extend("x-since" = 18))]
+    Exited,
 }
 impl Check for WatchOutcomeKind {
     fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcomeKind {
+    fn retain_revision(&mut self, _revision: u32) {}
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        if revision < 18 && matches!(self, Self::Exited) {
+            return Err("enum variant predates its introduction: Exited".into());
+        }
         Ok(())
     }
 }
@@ -20097,6 +20155,16 @@ impl Check for WatchOutcome {
             "WatchOutcome",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
         )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for WatchOutcome {
+    fn retain_revision(&mut self, revision: u32) {
+        self.kind.retain_revision(revision);
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        self.kind.check_revision(revision)?;
         Ok(())
     }
 }
@@ -20391,6 +20459,20 @@ pub struct WatcherRecord {
     pub stop_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<WatchEvent>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "u32", extend("x-since" = 18))]
+    pub attached_pid: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchAssignmentSource", extend("x-since" = 18))]
+    pub assignment: Option<WatchAssignmentSource>,
 }
 impl Check for WatcherRecord {
     fn check(&self) -> Result<(), String> {
@@ -20417,6 +20499,8 @@ impl Check for WatcherRecord {
         self.output_truncated.check()?;
         self.stop_requested.check()?;
         self.event.check()?;
+        self.attached_pid.check()?;
+        self.assignment.check()?;
         super::domain_rules::record(
             "WatcherRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -20431,9 +20515,17 @@ impl Revisioned for WatcherRecord {
         if revision < 9 {
             self.github = None;
         }
+        self.outcome.retain_revision(revision);
+        if revision < 18 {
+            self.attached_pid = None;
+        }
+        if revision < 18 {
+            self.assignment = None;
+        }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         self.source_kind.check_revision(revision)?;
+        self.outcome.check_revision(revision)?;
         Ok(())
     }
 }
@@ -25971,6 +26063,20 @@ pub enum DomainCommand {
         tail_bytes: Option<ByteLimit>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_lifetime_ms: Option<Counter>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "WatchAttachedProcess", extend("x-since" = 18))]
+        attached_process: Option<WatchAttachedProcess>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "AssignmentId", extend("x-since" = 18))]
+        assignment_id: Option<AssignmentId>,
     },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.cancel")]
@@ -28205,6 +28311,8 @@ impl Check for DomainCommand {
                 matching,
                 tail_bytes,
                 max_lifetime_ms,
+                attached_process,
+                assignment_id,
             } => {
                 process.check()?;
                 probe.check()?;
@@ -28214,6 +28322,8 @@ impl Check for DomainCommand {
                 matching.check()?;
                 tail_bytes.check()?;
                 max_lifetime_ms.check()?;
+                attached_process.check()?;
+                assignment_id.check()?;
             }
             Self::WatchCancel {
                 watcher_id,
@@ -28756,9 +28866,20 @@ impl Revisioned for DomainCommand {
                     *placement = None;
                 }
             }
-            Self::WatchCreate { github, .. } => {
+            Self::WatchCreate {
+                github,
+                attached_process,
+                assignment_id,
+                ..
+            } => {
                 if revision < 9 {
                     *github = None;
+                }
+                if revision < 18 {
+                    *attached_process = None;
+                }
+                if revision < 18 {
+                    *assignment_id = None;
                 }
             }
             _ => {}

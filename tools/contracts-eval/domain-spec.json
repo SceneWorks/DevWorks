@@ -7173,10 +7173,31 @@
         "Probe",
         "Timer",
         "File",
-        "GitHub"
+        "GitHub",
+        "AttachedProcess",
+        "Assignment"
       ],
       "introducedVariants": {
-        "GitHub": 9
+        "GitHub": 9,
+        "AttachedProcess": 18,
+        "Assignment": 18
+      },
+      "fallbackVariants": {
+        "AttachedProcess": "Process"
+      }
+    },
+    "WatchAssignmentSource": {
+      "kind": "record",
+      "fields": {
+        "assignment_id": "AssignmentId",
+        "session_id": "Id"
+      }
+    },
+    "WatchAttachedProcess": {
+      "kind": "record",
+      "fields": {
+        "pid": "u32",
+        "birth_token": "Label"
       }
     },
     "WatchGithubTarget": {
@@ -7197,8 +7218,15 @@
         "TimedOut",
         "Interrupted",
         "Lost",
-        "Uncertain"
-      ]
+        "Uncertain",
+        "Exited"
+      ],
+      "introducedVariants": {
+        "Exited": 18
+      },
+      "fallbackVariants": {
+        "Exited": "Uncertain"
+      }
     },
     "WatchOutcome": {
       "kind": "record",
@@ -7325,9 +7353,15 @@
         "output_tail": "?Content",
         "output_truncated": "bool",
         "stop_requested": "bool",
-        "event": "?WatchEvent"
+        "event": "?WatchEvent",
+        "attached_pid": "?u32",
+        "assignment": "?WatchAssignmentSource"
       },
-      "since": { "github": 9 }
+      "since": {
+        "github": 9,
+        "attached_pid": 18,
+        "assignment": 18
+      }
     }
   },
   "operations": {
@@ -12254,13 +12288,19 @@
         "github": "?WatchGithubTarget",
         "matching": "?WatchMatch",
         "tail_bytes": "?ByteLimit",
-        "max_lifetime_ms": "?Counter"
+        "max_lifetime_ms": "?Counter",
+        "attached_process": "?WatchAttachedProcess",
+        "assignment_id": "?AssignmentId"
       },
-      "since": { "github": 9 },
+      "since": {
+        "github": 9,
+        "attached_process": 18,
+        "assignment_id": 18
+      },
       "result": "WatcherRecord",
       "effect": "External",
       "authority": "Scoped",
-      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A GitHub watcher observes an exact bound workflow run or the current pull request head checks, within the shared account polling budget, and resumes on restart. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers and cannot launch a process through a watcher.",
+      "rules": "Exactly one source. A process is launched through the process.execute domain service (same bindings, preflight, native grant and output bounds) and the watcher answers before it exits. A probe runs its command through the same service every interval, backing off after each run whose exit code and output do not meet its condition, until one does; it ends TimedOut at its maximum lifetime (max_lifetime_ms, else the watch.maxLifetimeMs setting, 24 hours by default). A timer fires at an absolute time or after a delay. A GitHub watcher observes an exact bound workflow run or the current pull request head checks, within the shared account polling budget, and resumes on restart. A `matching` rule is a regular expression over a launched process's output or over a file (a file watcher needs one): the first match completes the watcher, or with `each` every match is reported in intermediate events coalesced to at most one per minimum interval, each carrying its match count, until the source ends (a file watcher ends at its maximum lifetime or when cancelled). Process and probe commands pass the shell preflight at creation. Requires an owning session; the settled outcome is delivered to that session's input as a host-only watcher message. Reviewer roles may create only observing watchers and cannot launch a process through a watcher. Revision 18 adds read-only attachment by PID and birth token and watches for a direct delegated assignment.",
       "introducedRevision": 8
     },
     "watch.list": {
@@ -13403,19 +13443,23 @@
     ],
     "watch.create": [
       8,
-      9
+      9,
+      18
     ],
     "watch.list": [
       8,
-      9
+      9,
+      18
     ],
     "watch.inspect": [
       8,
-      9
+      9,
+      18
     ],
     "watch.cancel": [
       8,
-      9
+      9,
+      18
     ]
   },
   "familyRules": {
