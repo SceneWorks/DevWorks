@@ -1660,7 +1660,299 @@ fn reconciled_documents_roll_back_app_operations_on_a_late_collision() {
     conn.execute_batch("DROP TABLE app_update_state").unwrap();
     drop(conn);
     let combined = h.store();
-    assert_eq!(combined.compatibility().unwrap().store_schema_version, 78);
+    assert_eq!(
+        combined.compatibility().unwrap().store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
+}
+
+/// The ledger checksums the signed DW-62 build (23751f08d) records at versions 67–78.
+const DW62_SUFFIX_SHA256: [&str; 12] = [
+    "dab03fc587c9d7b3fb8cfc1a3ad9f9caedff1ba7bd0f52739e02552982267ce6",
+    "9cf44f5dc2de0ab5b235807f1abedca2866b83b2b1724729bd120bebe0c6548a",
+    "ebf85fad80712a1b22f554570f1fa668c15a807fe69095cd6891e302a5eefcde",
+    "d1ebef486a64086c5867aee1e1e62bdda234bfc91a5306b0565e01cb9401a945",
+    "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+    "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+    "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+    "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+    "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
+    "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
+    "7e4772630d9f1125814cb53ffa641fcf371afea8c7801d2c6065c590b61b95d4",
+    "a604659ef41800df6389f9094fd42f27c15e4d7623d8718a9efae1c533d1ae01",
+];
+
+/// The DW-62 catalogue: canonical 69–78 at 67–76, transfers (79) at 77 and analysis (67) at 78.
+pub(super) fn dw62_test_migrations() -> Vec<Migration> {
+    let mut migrations = MIGRATIONS[..66].to_vec();
+    let suffix = MIGRATIONS[68..78]
+        .iter()
+        .chain([&MIGRATIONS[78], &MIGRATIONS[66]]);
+    migrations.extend(suffix.enumerate().map(|(index, item)| {
+        let version = 67 + index as i64;
+        Migration {
+            version,
+            minimum_reader: if index == 0 { 66 } else { 68 },
+            minimum_writer: version,
+            ..*item
+        }
+    }));
+    let checksums = migrations[66..]
+        .iter()
+        .map(Migration::checksum)
+        .collect::<Vec<_>>();
+    assert_eq!(checksums, DW62_SUFFIX_SHA256);
+    migrations
+}
+
+fn dw62_profile(h: &Harness) {
+    let mut config = h.config();
+    config.app_build = "dw-62".into();
+    let legacy = SqliteStore::open_with(config, &dw62_test_migrations()).unwrap();
+    let id = |name| Id::new(name).unwrap();
+    write(&legacy, move |tx| {
+        tx.actors().register(
+            &ActorId(id("incoming-client")),
+            devworks_core::context::PrincipalKind::McpClient,
+            "Incoming client",
+        )?;
+        let digest = "a".repeat(64);
+        let generation = "dw62-blob".to_owned();
+        let owner = tx.store().host_actor.clone();
+        tx.artifacts()
+            .put_blob(&digest, 4, &generation, "blobs/dw62")?;
+        tx.artifacts().insert_artifact(&StoredArtifact {
+            id: id("dw62-document"),
+            origin_project_id: None,
+            origin_work_id: None,
+            title: "Transferred document".into(),
+            revision: 1,
+            scope: ArtifactScope::Workspace,
+            owner: Some(owner),
+            retention: ArtifactRetention::Explicit,
+            scope_revision: 1,
+            reference_revision: 1,
+            current_version_id: None,
+            state: ArtifactState::Live,
+            created_at_ms: T0,
+            provenance: json!({}),
+        })
+    })
+    .unwrap();
+    drop(legacy);
+    h.raw()
+        .execute_batch(
+            r#"INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at)
+                   VALUES('dw62-source','Source','Active',1,1,0),
+                         ('dw62-destination','Destination','Active',1,1,0);
+               INSERT INTO document_transfers VALUES('dw62-transfer','dw62-document',
+                   'dw62-source','dw62-destination','{"retained":"transfer"}',1,'Pending');
+               INSERT INTO analysis_runs VALUES('dw62-analysis','dw62-analysis-op','workspace',
+                   replace(hex(zeroblob(32)),'0','c'),replace(hex(zeroblob(32)),'0','d'),
+                   0,1,'{"retained":"analysis"}');
+               INSERT INTO app_update_state VALUES(1,'{"retained":"update"}');"#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn the_published_dw62_profile_upgrades_atomically_and_keeps_its_rows_and_evidence() {
+    let fresh = Harness::new();
+    drop(fresh.store());
+    let fresh_schema = super::workspace_archive::schema_digest(&fresh.raw()).unwrap();
+    let h = Harness::new();
+    dw62_profile(&h);
+    let conn = h.raw();
+    let store_id: String = conn
+        .query_row("SELECT store_id FROM store_meta", [], |r| r.get(0))
+        .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+
+    let upgraded = h.store();
+    let report = upgraded.compatibility().unwrap();
+    let after = report.migrations;
+    assert_eq!(
+        report.store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
+    assert_eq!(after.len(), MIGRATIONS.len());
+    for (saved, migration) in after.iter().zip(MIGRATIONS) {
+        assert_eq!(
+            (saved.version, &saved.checksum),
+            (migration.version, &migration.checksum())
+        );
+    }
+    assert_eq!(&after[..66], &before[..66]);
+    // Every retained DW-62 row keeps its recorded build and time at its canonical version.
+    for (old, new) in before[66..76].iter().zip(&after[68..78]) {
+        assert_eq!(
+            (new.version, &new.applied_at_ms, &new.app_build),
+            (old.version + 2, &old.applied_at_ms, &old.app_build)
+        );
+    }
+    for (old, new) in [(&before[76], &after[78]), (&before[77], &after[66])] {
+        assert_eq!(
+            (&new.checksum, new.applied_at_ms, &new.app_build),
+            (&old.checksum, old.applied_at_ms, &old.app_build)
+        );
+    }
+    assert_eq!(after[67].version, 68);
+    assert_ne!(after[67].app_build, "dw-62");
+    let conn = h.raw();
+    assert_eq!(
+        super::workspace_archive::schema_digest(&conn).unwrap(),
+        fresh_schema
+    );
+    let (kept_id, user_version): (String, i64) = conn
+        .query_row(
+            "SELECT store_id,(SELECT user_version FROM pragma_user_version) FROM store_meta",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (kept_id, user_version),
+        (store_id, MIGRATIONS.last().unwrap().version)
+    );
+    for (query, value) in [
+        (
+            "SELECT json_extract(proposal_json,'$.retained') FROM document_transfers",
+            "transfer",
+        ),
+        (
+            "SELECT json_extract(payload_json,'$.retained') FROM analysis_runs",
+            "analysis",
+        ),
+        (
+            "SELECT json_extract(record_json,'$.retained') FROM app_update_state",
+            "update",
+        ),
+        (
+            "SELECT kind FROM actors WHERE id='incoming-client'",
+            "mcp_client",
+        ),
+    ] {
+        let retained: String = conn.query_row(query, [], |r| r.get(0)).unwrap();
+        assert_eq!(retained, value);
+    }
+    drop(conn);
+    drop(upgraded);
+    assert_eq!(h.store().compatibility().unwrap().migrations, after);
+}
+
+#[test]
+fn a_composed_build_places_dw62_transfers_after_its_independent_migrations() {
+    // A combined installer may put independent migrations (such as F14's watchers) at 79 and
+    // 80, ahead of document transfers. The DW-62 profile then gains those as missing entries.
+    let composed = |version: i64, sql: &'static str| Migration {
+        version,
+        minimum_reader: 68,
+        minimum_writer: version,
+        sql,
+        expected_sha256: "",
+        rebuilds_tables: false,
+    };
+    let mut catalogue = MIGRATIONS[..78].to_vec();
+    catalogue.push(composed(
+        79,
+        "CREATE TABLE composed_first(id TEXT PRIMARY KEY) STRICT;",
+    ));
+    catalogue.push(composed(
+        80,
+        "CREATE TABLE composed_second(id TEXT PRIMARY KEY) STRICT;",
+    ));
+    catalogue.push(Migration {
+        version: 81,
+        minimum_writer: 81,
+        ..MIGRATIONS[78]
+    });
+    let h = Harness::new();
+    dw62_profile(&h);
+    let before = migrations::ledger(&h.raw()).unwrap();
+    let upgraded = SqliteStore::open_with(h.config(), &catalogue).unwrap();
+    let after = upgraded.compatibility().unwrap().migrations;
+    let expected = catalogue
+        .iter()
+        .map(|migration| (migration.version, migration.checksum()))
+        .collect::<Vec<_>>();
+    let saved = after
+        .iter()
+        .map(|applied| (applied.version, applied.checksum.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(saved, expected);
+    assert_eq!(
+        (after[80].applied_at_ms, &after[80].app_build),
+        (before[76].applied_at_ms, &before[76].app_build)
+    );
+    drop(upgraded);
+    let conn = h.raw();
+    for table in ["composed_first", "composed_second", "document_transfers"] {
+        let present: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?1)",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(present, "{table}");
+    }
+    drop(conn);
+    // The canonical F12 catalogue never adopts a profile reconciled by another composition.
+    assert!(SqliteStore::open(h.config()).is_err());
+}
+
+#[test]
+fn fabricated_dw62_witnesses_are_refused_without_writes() {
+    for corrupt in [
+        "PRAGMA user_version=77",
+        "UPDATE store_meta SET minimum_reader=66",
+        "UPDATE store_meta SET minimum_writer=77",
+        "DELETE FROM schema_migrations WHERE version=77",
+        "UPDATE schema_migrations SET checksum=(SELECT checksum FROM schema_migrations WHERE version=78) WHERE version=77",
+        "UPDATE schema_migrations SET checksum='a702716325ba7e39d34906db691762fdb215b7321b67e2ea2bd5fa637901ab69' WHERE version=67",
+        "INSERT INTO schema_migrations VALUES(79,'unknown',0,'other-branch')",
+    ] {
+        let h = Harness::new();
+        dw62_profile(&h);
+        h.raw().execute_batch(corrupt).unwrap();
+        let unchanged = file_digest(&h);
+        assert!(
+            matches!(
+                SqliteStore::open(h.config()),
+                Err(StorageError::IncompatibleSchema(_))
+            ),
+            "{corrupt}"
+        );
+        assert_eq!(file_digest(&h), unchanged, "{corrupt}");
+    }
+}
+
+#[test]
+fn dw62_reconciliation_rolls_back_when_the_missing_policy_fails() {
+    let h = Harness::new();
+    dw62_profile(&h);
+    let conn = h.raw();
+    conn.execute_batch("CREATE TABLE database_sensitive_policies (fixture_fault INTEGER)")
+        .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+    assert!(SqliteStore::open(h.config()).is_err());
+    let conn = h.raw();
+    assert_eq!(migrations::ledger(&conn).unwrap(), before);
+    assert_eq!(version_and_ledger(&h, "document_transfers"), (1, 78, 78));
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        78,
+    );
+    conn.execute_batch("DROP TABLE database_sensitive_policies")
+        .unwrap();
+    drop(conn);
+    assert_eq!(
+        h.store().compatibility().unwrap().store_schema_version,
+        MIGRATIONS.last().unwrap().version
+    );
 }
 
 #[test]

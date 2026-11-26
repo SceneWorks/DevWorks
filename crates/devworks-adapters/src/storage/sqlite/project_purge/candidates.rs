@@ -405,6 +405,51 @@ mod tests {
     }
 
     #[test]
+    fn purge_selects_document_transfers_that_either_participating_project_owns() {
+        let h = crate::storage::sqlite::tests::Harness::new();
+        let store = h.store();
+        let conn = h.raw();
+        // Selection reads only the transfer rows; the artifact rows are not part of this check.
+        conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        for project in ["purge-a", "purge-b", "purge-c"] {
+            conn.execute(
+                "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) \
+                 VALUES(?1,'Fixture','Deleted',1,1,0)",
+                [project],
+            )
+            .unwrap();
+        }
+        for (id, source, destination) in [
+            ("transfer-out", "purge-a", "purge-b"),
+            ("transfer-in", "purge-b", "purge-a"),
+            ("transfer-other", "purge-b", "purge-c"),
+        ] {
+            conn.execute(
+                "INSERT INTO document_transfers VALUES(?1,'unrelated-document',?2,?3,'{}',1,'Pending')",
+                [id, source, destination],
+            )
+            .unwrap();
+        }
+        let project = ProjectId(Id::new("purge-a").unwrap());
+        let selected = read_snapshot(&store, &ReadOptions::default(), |read| {
+            read.projects().purge_candidates(&project)
+        })
+        .unwrap()
+        .unwrap();
+        let mut keys = selected
+            .rows
+            .iter()
+            .filter(|row| row.table == ProjectRecordKind::DocumentTransfers)
+            .map(|row| row.key_digest.clone())
+            .collect::<Vec<_>>();
+        keys.sort();
+        let mut expected = ["transfer-out", "transfer-in"]
+            .map(|id| super::super::guard::key_digest(&format!(r#"["{id}"]"#)).unwrap());
+        expected.sort();
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
     fn confined_instruction_drafts_are_purged_with_their_project_only() {
         let h = crate::storage::sqlite::tests::Harness::new();
         let store = h.store();

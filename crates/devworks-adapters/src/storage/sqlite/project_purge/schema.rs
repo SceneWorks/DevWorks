@@ -86,8 +86,11 @@ use rusqlite::Connection;
 /// action records, plus scoped source observations. A project's settings and runs belong to
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
+/// Migration 79 adds coordinator document transfer proposals, the exact SQL the DW-62 candidate
+/// published at 77; its policy filename keeps that number. Guarded purge owns each deletion,
+/// with custody tied to either participating project and to the retained artifact.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "854be39290acdaa87e4632b8207980ed7a9945ea13fa73b5867c2eea846d0f06";
+    "76e25e71de8d2007567e1e41341320e8a937809dbc38b6dd5cace378c4f19e78";
 
 pub(super) fn verify(conn: &Connection) -> Result<(), StorageError> {
     // A later build must extend the ownership policy deliberately, rather than blessing a newly

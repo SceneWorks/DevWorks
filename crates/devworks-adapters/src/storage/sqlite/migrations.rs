@@ -851,6 +851,15 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
         rebuilds_tables: false,
     },
+    // The signed DW-62 candidate published this exact SQL at 77. Older readers ignore it.
+    Migration {
+        version: 79,
+        minimum_reader: 68,
+        minimum_writer: 79,
+        sql: include_str!("migrations/0079_document_transfers.sql"),
+        expected_sha256: DOCUMENT_TRANSFERS_SHA256,
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -1278,6 +1287,132 @@ fn reconcile_application(
     Ok(current.version)
 }
 
+const ANALYSIS_SHA256: &str = "a604659ef41800df6389f9094fd42f27c15e4d7623d8718a9efae1c533d1ae01";
+const DOCUMENT_TRANSFERS_SHA256: &str =
+    "7e4772630d9f1125814cb53ffa641fcf371afea8c7801d2c6065c590b61b95d4";
+const DW62_VERSION: i64 = 78;
+
+/// The signed DW-62 candidate (23751f08d) published schema 78: the application suffix at
+/// 67–76, document transfers at 77 and repository analysis at 78, without the database policy
+/// at 68. Rebuild that exact catalogue from the canonical entries so its witnesses can be
+/// compared. The transfers entry is found by checksum, because a composed build may place other
+/// independent migrations before it. Refuse when this build lacks any entry the profile needs.
+struct Dw62 {
+    source: Vec<Migration>,
+    transfers: usize,
+}
+
+fn dw62_catalogue(migrations: &[Migration]) -> Option<Dw62> {
+    let analysis = migrations.get(66)?;
+    let application = migrations.get(68..COMBINED_VERSION)?;
+    let transfers = COMBINED_VERSION
+        + migrations[COMBINED_VERSION..]
+            .iter()
+            .position(|migration| migration.checksum() == DOCUMENT_TRANSFERS_SHA256)?;
+    if analysis.version != 67
+        || analysis.checksum() != ANALYSIS_SHA256
+        || application.first()?.version != 69
+        || documents(migrations).is_none()
+    {
+        return None;
+    }
+    let mut source = migrations[..66].to_vec();
+    source.extend(application.iter().enumerate().map(|(index, migration)| {
+        let version = migration.version - 2;
+        Migration {
+            version,
+            minimum_reader: if index == 0 { 66 } else { 68 },
+            minimum_writer: version,
+            ..*migration
+        }
+    }));
+    for (version, migration) in [(77, &migrations[transfers]), (DW62_VERSION, analysis)] {
+        source.push(Migration {
+            version,
+            minimum_reader: 68,
+            minimum_writer: version,
+            ..*migration
+        });
+    }
+    Some(Dw62 { source, transfers })
+}
+
+/// Only the complete DW-62 ledger with matching store and SQLite version witnesses is admitted.
+fn dw62_lineage(
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+    sqlite_version: i64,
+) -> Option<Dw62> {
+    if meta.schema_version != DW62_VERSION
+        || sqlite_version != DW62_VERSION
+        || meta.minimum_reader != 68
+        || meta.minimum_writer != DW62_VERSION
+    {
+        return None;
+    }
+    let lineage = dw62_catalogue(migrations)?;
+    matches_catalogue(applied, &lineage.source).then_some(lineage)
+}
+
+/// Rekey each retained DW-62 ledger row to its canonical version and apply the canonical entries
+/// it lacks up to document transfers, in one transaction. Recorded checksums, times and builds
+/// stay unchanged.
+fn reconcile_dw62(
+    conn: &Connection,
+    migrations: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    let tx = db(rusqlite::Transaction::new_unchecked(
+        conn,
+        rusqlite::TransactionBehavior::Immediate,
+    ))?;
+    let meta = read_meta(&tx)?.ok_or_else(dw62_lineage_changed)?;
+    let Dw62 { source, transfers } =
+        dw62_lineage(migrations, &meta, &ledger(&tx)?, user_version(&tx)?)
+            .ok_or_else(dw62_lineage_changed)?;
+    let missing = std::iter::once(&migrations[67]).chain(&migrations[COMBINED_VERSION..transfers]);
+    if missing.clone().any(|migration| migration.rebuilds_tables) {
+        return Err(dw62_lineage_changed());
+    }
+    // Source and canonical versions overlap, so park the suffix above every known version first.
+    const PARKED: i64 = 1_000_000;
+    db(tx.execute(
+        "UPDATE schema_migrations SET version=version+?1 WHERE version>66",
+        [PARKED],
+    ))?;
+    let targets = migrations[68..COMBINED_VERSION]
+        .iter()
+        .chain([&migrations[transfers], &migrations[66]]);
+    for (old, target) in source[66..].iter().zip(targets) {
+        let moved = db(tx.execute(
+            "UPDATE schema_migrations SET version=?1 WHERE version=?2 AND checksum=?3",
+            params![target.version, old.version + PARKED, target.checksum()],
+        ))?;
+        if moved != 1 {
+            return Err(dw62_lineage_changed());
+        }
+    }
+    for migration in missing {
+        db(tx.execute_batch(migration.sql))?;
+        record_applied(&tx, migration, now_ms, app_build)?;
+    }
+    let current = &migrations[transfers];
+    update_schema_meta(&tx, current)?;
+    db(tx.pragma_update(None, "user_version", current.version))?;
+    if !matches_catalogue(&ledger(&tx)?, &migrations[..=transfers]) {
+        return Err(dw62_lineage_changed());
+    }
+    verify_after(&tx)?;
+    db(tx.commit())?;
+    Ok(current.version)
+}
+
+fn dw62_lineage_changed() -> StorageError {
+    StorageError::IncompatibleSchema("DW-62 migration ledger changed before reconciliation".into())
+}
+
 /// Source catalogues are retained for archive attestation. Replaying one in a separate
 /// empty reference database never changes the source or authorizes a migration.
 pub(super) fn checkpoint_catalogue(
@@ -1306,6 +1441,9 @@ pub(super) fn checkpoint_catalogue(
                 }),
         );
         return Ok((meta, source));
+    }
+    if let Some(lineage) = dw62_lineage(migrations, &meta, &applied, sqlite_version) {
+        return Ok((meta, lineage.source));
     }
     if let Some(count) = application_lineage(migrations, &meta, &applied, sqlite_version) {
         let mut source = migrations[..66].to_vec();
@@ -1544,6 +1682,7 @@ pub(crate) fn check(
     if document_lineage(migrations, &meta, &applied, sqlite_version).is_some()
         || intelligence_branch(migrations, &meta, &applied).is_some()
         || application_lineage(migrations, &meta, &applied, sqlite_version).is_some()
+        || dw62_lineage(migrations, &meta, &applied, sqlite_version).is_some()
     {
         return Ok(Some((meta, AccessMode::ReadWrite)));
     }
@@ -1626,6 +1765,8 @@ pub(crate) fn prepare(
         application_lineage(migrations, &meta, &applied, user_version(conn)?)
     {
         version = reconcile_application(conn, migrations, count, now_ms, app_build)?;
+    } else if dw62_lineage(migrations, &meta, &applied, user_version(conn)?).is_some() {
+        version = reconcile_dw62(conn, migrations, now_ms, app_build)?;
     } else if intelligence_branch(migrations, &meta, &applied).is_some() {
         version = reconcile_intelligence_branch(conn, migrations, now_ms, app_build)?;
     } else if version == 64
