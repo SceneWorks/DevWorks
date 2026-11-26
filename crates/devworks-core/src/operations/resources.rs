@@ -13,7 +13,7 @@ use crate::protocol::data::DataScope;
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, ResourceId, Revision};
+use crate::protocol::{Counter, Id, ProjectId, ResourceId, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -147,16 +147,28 @@ impl Revisioned for ReleaseInput {
 pub struct HoldersInput {
     pub resource_id: ResourceId,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 22))]
+    pub project_id: Option<ProjectId>,
 }
 impl Check for HoldersInput {
     fn check(&self) -> Result<(), String> {
         self.resource_id.check()?;
         self.page.check()?;
+        self.project_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for HoldersInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 22 {
+            self.project_id = None;
+        }
+    }
 }
 
 /// `resources.waiters` Query input.
@@ -165,16 +177,28 @@ impl Revisioned for HoldersInput {
 pub struct WaitersInput {
     pub resource_id: ResourceId,
     pub page: PageRequest,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ProjectId", extend("x-since" = 22))]
+    pub project_id: Option<ProjectId>,
 }
 impl Check for WaitersInput {
     fn check(&self) -> Result<(), String> {
         self.resource_id.check()?;
         self.page.check()?;
+        self.project_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for WaitersInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 22 {
+            self.project_id = None;
+        }
+    }
 }
 
 /// An admitted input of the `resources` family, built only for the selected operation and mode.

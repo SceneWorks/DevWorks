@@ -10496,24 +10496,32 @@
       "mode": "Query",
       "fields": {
         "resource_id": "ResourceId",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "project_id": "?ProjectId"
       },
       "result": "Page<LeaseRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session. Schema revision 22: project_id names the project whose resource resource_id is, so a workspace caller can read a project resource; a project-bound caller may name only its own project.",
+      "since": {
+        "project_id": 22
+      }
     },
     "resources.waiters": {
       "operation": "resources.waiters",
       "mode": "Query",
       "fields": {
         "resource_id": "ResourceId",
-        "page": "PageRequest"
+        "page": "PageRequest",
+        "project_id": "?ProjectId"
       },
       "result": "Page<LeaseRecord>",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session."
+      "rules": "Schema revision 2: records carry scope, physical, labels, occupancy, purpose, priority, queue position, lifecycle times, end reason, unreachable ownership and the owning project, work, assignment and session. Schema revision 22: project_id names the project whose resource resource_id is, so a workspace caller can read a project resource; a project-bound caller may name only its own project.",
+      "since": {
+        "project_id": 22
+      }
     },
     "browser.sessions": {
       "operation": "browser.sessions",
@@ -12631,11 +12639,13 @@
     ],
     "resources.holders": [
       1,
-      2
+      2,
+      22
     ],
     "resources.waiters": [
       1,
-      2
+      2,
+      22
     ],
     "sessions.list": [
       1,
