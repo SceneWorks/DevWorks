@@ -208,12 +208,13 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
     assert!(rejected.contains("schema"), "{rejected}");
 
     // Preserve the captured authored data in an exact schema-77 bundle so restore must
-    // obtain separate approval to run the compiled Dreaming migration (0078).
+    // obtain separate approval to run the compiled Dreaming (0078) and transfer (0079) migrations.
     {
         let external = Connection::open(bundle.join("workspace.sqlite")).unwrap();
         external
             .execute_batch(
                 "DROP VIEW unexpected_archive_view;
+             DROP TABLE document_transfers;
              DROP TRIGGER dreaming_source_observed;
              DROP TRIGGER dreaming_source_replaced;
              DROP TRIGGER dreaming_repository_published;
@@ -227,12 +228,12 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
              DROP TABLE dreaming_source_changes;
              DROP TABLE dreaming_instruction_revisions;
              DROP TABLE dreaming_scope_state;
-             DELETE FROM schema_migrations WHERE version=78;
+             DELETE FROM schema_migrations WHERE version IN (78,79);
              PRAGMA user_version=77;",
             )
             .unwrap();
-        let latest = metadata.checkpoint.migrations.pop().unwrap();
-        assert_eq!(latest.version, 78);
+        let removed = [(); 2].map(|()| metadata.checkpoint.migrations.pop().unwrap().version);
+        assert_eq!(removed, [79, 78]);
         let previous = metadata.checkpoint.migrations.last().unwrap();
         metadata.checkpoint.schema_version = previous.version;
         metadata.checkpoint.minimum_reader = previous.minimum_reader;
@@ -368,7 +369,7 @@ fn native_backup_restore_keeps_snapshot_and_prior_profile_with_real_managed_byte
         .expect("qualified native restore result");
     assert!(matches!(completion, OperationCompletion::Succeeded {
         result: OperationResult::WorkspaceRestore { value }, ..
-    } if value.schema_version.get() == 78 && value.id == proposal.id));
+    } if value.schema_version.get() == 79 && value.id == proposal.id));
     assert_eq!(storage_title(&root), "Checkpoint authorship");
     let prior = root
         .0

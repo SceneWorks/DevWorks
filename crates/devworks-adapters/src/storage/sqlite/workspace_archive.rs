@@ -552,7 +552,7 @@ mod tests {
         use devworks_core::ports::storage::{ARCHIVE_FORMAT, ARCHIVE_REVISION};
 
         use crate::storage::sqlite::tests::{
-            application_test_migrations, feature_document_migrations,
+            application_test_migrations, dw62_test_migrations, feature_document_migrations,
         };
 
         // DW-F8 exposed a database profile, before the archive producer shipped. Seal an
@@ -560,6 +560,7 @@ mod tests {
         for history in [
             MIGRATIONS[..72].to_vec(),
             application_test_migrations(10),
+            dw62_test_migrations(),
             feature_document_migrations(63, 5),
             feature_document_migrations(66, 6),
         ] {

@@ -123,6 +123,11 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema68-extension.json"
     ),
+    policy_document!(
+        "documentTransferExtension",
+        Tables,
+        "schema77-document-transfers-extension.json"
+    ),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {
@@ -379,6 +384,7 @@ fn content_lineage(reference: &ColumnReference) -> bool {
         ("artifact_versions" | "artifact_tags", "artifacts") => "artifact_id",
         ("artifact_links", "artifact_versions") => "artifact_version_id",
         ("document_retrieval_preferences", "artifacts") => "artifact_id",
+        ("document_transfers", "artifacts") => "artifact_id",
         (
             "document_extractions" | "document_index_versions" | "document_extraction_keys",
             "artifact_versions",
@@ -450,6 +456,12 @@ fn content_partitions(
             Reason::SharedContent,
         ),
         (
+            "document_transfers",
+            "source_project_id=?1 OR destination_project_id=?1",
+            Action::Delete,
+            Reason::ProjectMembership,
+        ),
+        (
             "work_dependencies",
             "work_id IN(SELECT id FROM ownedWork)",
             Action::Delete,
@@ -505,6 +517,14 @@ fn propagate_content(
             else {
                 continue;
             };
+            // A participating project's purge removes its transfers even when the artifact stays.
+            if child.table.as_str() == "document_transfers"
+                && rows
+                    .get(&(child.table, child.key_digest.clone()))
+                    .is_some_and(|row| row.reason == Reason::ProjectMembership)
+            {
+                continue;
+            }
             changed |= assign(child, parent.action, reason, rows, unresolved);
         }
         if !changed {

@@ -3047,6 +3047,66 @@ fn clean_shutdown_records_planner_statistics_that_purge_planning_accepts() {
 }
 
 #[test]
+fn purge_planning_deletes_document_transfers_by_membership_or_owned_artifact() {
+    let h = Harness::new();
+    let store = h.store();
+    let _ = purge_storage_fixture(&store);
+    store
+        .with_writer_connection(|c| {
+            super::super::conn::db(c.execute_batch(
+                "INSERT INTO projects(id,title,lifecycle,revision,scope_revision,created_at) \
+                 VALUES('purge-c','Third','Active',1,1,0);
+                 INSERT INTO artifacts(id,title,revision,scope_revision,\
+                 origin_project_id,current_project_id,scope_kind,owner_actor_id) VALUES
+                 ('owned-doc','owned',1,1,'purge-a','purge-a','Project',NULL),
+                 ('shared-doc','shared',1,1,'purge-a','purge-a','Project',NULL),
+                 ('other-doc','other',1,1,'purge-b','purge-b','Project',NULL);
+                 INSERT INTO artifact_shares VALUES('shared-doc','purge-b');
+                 INSERT INTO document_transfers VALUES
+                 ('by-artifact','owned-doc','purge-b','purge-c','{}',1,'Pending'),
+                 ('by-member','shared-doc','purge-a','purge-b','{}',1,'Pending'),
+                 ('unrelated','other-doc','purge-b','purge-c','{}',1,'Pending');",
+            ))
+        })
+        .unwrap();
+    let plan = read_snapshot(&store, &ReadOptions::default(), |r| {
+        r.projects().purge_planning(&project("purge-a"))
+    })
+    .unwrap()
+    .unwrap();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    let action = |table: &str, key: serde_json::Value| {
+        let digest = devworks_core::fingerprint::sha256_hex(key.to_string().as_bytes());
+        plan.rows
+            .iter()
+            .find(|r| r.table == table && r.key_digest == digest)
+            .map(|r| r.action.clone())
+    };
+    // A transfer between other projects leaves with the purged project's artifact, and a
+    // participating project's transfer leaves even when its shared artifact is kept.
+    assert_eq!(
+        action("document_transfers", json!(["by-artifact"])),
+        Some(ProjectPurgeRowAction::Delete)
+    );
+    assert_eq!(
+        action("document_transfers", json!(["by-member"])),
+        Some(ProjectPurgeRowAction::Delete)
+    );
+    assert_eq!(
+        action("artifacts", json!(["shared-doc"])),
+        Some(ProjectPurgeRowAction::Keep)
+    );
+    assert_eq!(
+        action("artifacts", json!(["owned-doc"])),
+        Some(ProjectPurgeRowAction::Delete)
+    );
+    assert!(matches!(
+        action("document_transfers", json!(["unrelated"])),
+        None | Some(ProjectPurgeRowAction::Keep)
+    ));
+}
+
+#[test]
 fn purge_candidate_snapshot_tracks_shared_and_moved_content_without_selecting_it_for_deletion() {
     let h = Harness::new();
     let store = h.store();
