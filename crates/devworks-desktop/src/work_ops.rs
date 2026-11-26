@@ -75,6 +75,12 @@ pub enum WorkSlot {
     /// A root's run controls (inspect) and one Start/Pause/Continue.
     WorkInspect(String),
     WorkRun(String),
+    /// The conditions holding a root (its ID).
+    WorkEligibility(String),
+    /// A redirect sent to a root (its ID).
+    WorkRedirect(String),
+    /// A stop of a root (its ID).
+    WorkStop(String),
     /// The roots and running work of a project an archival would stop (features, issues).
     ArchiveCount(String, bool),
     /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
@@ -376,9 +382,10 @@ pub fn events_page(outcome: QueryOutcome) -> Result<(Vec<Event>, Option<String>,
         (other, _) => Err(unexpected("history.events", &other)),
     }
 }
-/// `runs.inspect` of a root (its control revision and holds).
+/// `runs.inspect` of a root: its control revision, holds and, from schema revision 20, each
+/// hold's gate and reason and its redirects' stages.
 pub fn run_inspect(backend: &dyn Backend, root: &str) -> Vec<u8> {
-    frame::with(backend, Negotiate::Initial, || {
+    frame::with(backend, Negotiate::Latest, || {
         Some(In::Runs(runs::Input::Inspect(QueryRequest {
             protocol: frame::protocol(),
             query_id: frame::query_id(backend)?,
@@ -392,6 +399,72 @@ pub fn run_snapshot(outcome: QueryOutcome) -> Result<RootSnapshot, Failure> {
     match query_result(outcome)? {
         (OperationResult::RunsInspect { value }, _) => Ok(value),
         (other, _) => Err(unexpected("runs.inspect", &other)),
+    }
+}
+/// `runs.eligibility` of a root for `purpose`: every stored and derived condition holding it.
+pub fn run_eligibility(
+    backend: &dyn Backend,
+    root: &str,
+    purpose: devworks_core::protocol::Purpose,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Runs(runs::Input::Eligibility(QueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: Query::Eligibility {
+                target: devworks_core::protocol::EligibilityTarget::Root(frame::text(root)?),
+                purpose,
+            },
+        })))
+    })
+}
+pub fn run_eligible(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::EligibilitySnapshot, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RunsEligibility { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("runs.eligibility", &other)),
+    }
+}
+/// `runs.redirect`: an instruction to the root's running coordinator at its inspected revision.
+pub fn run_redirect(
+    backend: &dyn Backend,
+    root: &str,
+    snapshot: &RootSnapshot,
+    message: &str,
+) -> Vec<u8> {
+    let revision = snapshot.root.revision.clone();
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Runs(runs::Input::Redirect(runs::RedirectInput {
+            root_id: frame::text(root)?,
+            expected_control_revision: revision,
+            message: frame::text(message)?,
+            attachments: BoundedList(Vec::new()),
+        })))
+    })
+}
+pub fn run_redirected(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
+    match command_result(outcome)? {
+        OperationResult::RunsRedirect { value } => Ok(value),
+        other => Err(unexpected("runs.redirect", &other)),
+    }
+}
+/// `runs.stop` of a root at its inspected revision.
+pub fn run_stop(backend: &dyn Backend, root: &str, snapshot: &RootSnapshot) -> Vec<u8> {
+    let revision = snapshot.root.revision.clone();
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Runs(runs::Input::Stop(runs::StopInput {
+            root_id: frame::text(root)?,
+            expected_control_revision: revision,
+        })))
+    })
+}
+pub fn run_stopped(
+    outcome: CommandOutcome,
+) -> Result<devworks_core::protocol::records::OperationRef, Failure> {
+    match command_result(outcome)? {
+        OperationResult::RunsStop { value } => Ok(value),
+        other => Err(unexpected("runs.stop", &other)),
     }
 }
 /// Whether a hold is one Continue clears (a manual-resume condition).

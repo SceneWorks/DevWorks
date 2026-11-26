@@ -117,6 +117,12 @@ pub struct WorkUi {
     pub code_reviews: BTreeMap<String, reviews::ReviewPane>,
     pub git: BTreeMap<String, Paged<devworks_core::protocol::records::AttributedGitLink>>,
     pub runs: BTreeMap<String, RootSnapshot>,
+    /// Every stored and derived condition holding each inspected root (`runs.eligibility`).
+    pub eligibility: BTreeMap<String, devworks_core::protocol::records::EligibilitySnapshot>,
+    /// The redirect message being written for each root.
+    pub redirect_drafts: BTreeMap<String, String>,
+    /// Roots Continue all is inspecting: each is continued once its snapshot shows a manual hold.
+    pub continue_all: BTreeSet<String>,
     pub git_inspections:
         BTreeMap<String, Result<devworks_core::protocol::records::GitInspection, String>>,
     pub github_links: BTreeMap<String, devworks_core::protocol::records::GithubIssueLink>,
@@ -319,6 +325,12 @@ pub(crate) enum Action {
     RequestApproval(WorkRecord),
     Inspect(String),
     Run(&'static str, WorkRecord),
+    /// Sends the root's redirect draft.
+    Redirect(WorkRecord),
+    /// Stops the root's running work.
+    Stop(WorkRecord),
+    /// Continues every listed root that a manual hold keeps paused.
+    ContinueAllHeld,
     SelectCard(Option<String>),
     OpenDetail(String),
     RefreshGit(String),

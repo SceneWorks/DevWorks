@@ -69,16 +69,20 @@ use crate::ports::storage::{
 use crate::ports::{
     CommandHandler, Decided, HandlerFailure, IdKind, IdSource, QueryAnswer, QueryHandler,
 };
-use crate::protocol::records::{EligibilitySnapshot, MutationSummary, OperationRef, RootSnapshot};
+use crate::protocol::records::{
+    EligibilitySnapshot, HoldCondition, HoldGate, MutationSummary, OperationRef, RedirectRecord,
+    RedirectStage, RootSnapshot,
+};
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::support::BoundedList;
+use crate::protocol::support::Items;
 use crate::protocol::{
     Activation, ActorId, AssignmentId, Blocker, Blockers, Cause, CorrelationId, DesiredState,
     DomainErrorCode, DomainFault, EligibilityTarget, EventId, ExecutionId, HoldId, HoldRef, Id,
     OperationId, OperationState, Phase, Purpose, Query, RetryAdvice, RevisionDimension,
     RootCommand, RootControl, RootId, Subject,
 };
-use crate::services::kernel::{Failure, Refusal, not_found, query_fault, rev};
+use crate::services::kernel::{Failure, Refusal, counter, not_found, query_fault, rev};
 use scope::{ExecutionScope, PlanState, RecordedScope, is_feature};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -653,6 +657,8 @@ pub struct Condition {
     pub reason: String,
     pub stored: bool,
     pub gate: Gate,
+    /// A stored capacity hold that waits out a provider rate limit.
+    pub rate_limited: bool,
 }
 
 /// The gate a condition comes from. Allocation reports it as the reason queued work is not
@@ -859,6 +865,8 @@ fn stored(b: &StoredBlocker) -> Condition {
         } else {
             Gate::Hold
         },
+        rate_limited: b.cause == HoldCause::Capacity
+            && inspect::wait_kind(b) == Some("RateLimited"),
     }
 }
 /// A card's repository references must remain within its feature's active approved scope.
@@ -967,6 +975,7 @@ fn derived(
         reason: reason.to_owned(),
         stored: false,
         gate,
+        rate_limited: false,
     }
 }
 
@@ -1416,6 +1425,83 @@ fn wire_blockers(conditions: &[Condition]) -> Blockers {
         has_more: conditions.len() > LISTED_BLOCKERS,
     }
 }
+/// Each listed condition with the gate it comes from and its recorded reason (schema revision
+/// 20); the projection drops them for an earlier revision.
+fn wire_conditions(conditions: &[Condition]) -> Option<Items<HoldCondition>> {
+    use crate::protocol::support::BoundedText;
+    Some(BoundedList(
+        conditions
+            .iter()
+            .take(LISTED_BLOCKERS.min(128))
+            .map(|c| HoldCondition {
+                hold_id: HoldId(c.hold_id.clone()),
+                gate: match c.gate {
+                    Gate::Archived => HoldGate::Archived,
+                    Gate::Pause => HoldGate::Pause,
+                    Gate::Hold => HoldGate::Hold,
+                    Gate::Prerequisite => HoldGate::Prerequisite,
+                    Gate::Question => HoldGate::Question,
+                    Gate::Plan => HoldGate::Plan,
+                    Gate::Readiness { .. } => HoldGate::Readiness,
+                    Gate::Assignment => HoldGate::Assignment,
+                },
+                cause: cause_of(c.cause),
+                rate_limited: c.rate_limited,
+                reason: BoundedText(c.reason.chars().take(65536).collect()),
+            })
+            .collect(),
+    ))
+}
+/// The redirects a root snapshot lists: its latest ones, oldest first.
+const LISTED_REDIRECTS: usize = 20;
+/// The root's latest redirects with their durable stages (schema revision 20).
+fn wire_redirects(
+    runs: &dyn RunRead,
+    root: &RootId,
+) -> Result<Items<RedirectRecord>, StorageError> {
+    use crate::ports::storage::InstructionStage;
+    use crate::protocol::support::BoundedText;
+    let mut latest: std::collections::VecDeque<StoredInstruction> = Default::default();
+    let mut after = 0;
+    loop {
+        let page = runs.instructions(root, after, 500)?;
+        let Some(last) = page.last() else { break };
+        after = last.seq;
+        let full = page.len() == 500;
+        for i in page {
+            if latest.len() == LISTED_REDIRECTS {
+                latest.pop_front();
+            }
+            latest.push_back(i);
+        }
+        if !full {
+            break;
+        }
+    }
+    let text = |t: &str| BoundedText(t.chars().take(65536).collect());
+    Ok(BoundedList(
+        latest
+            .into_iter()
+            .map(|i| RedirectRecord {
+                instruction_id: i.id.clone(),
+                stage: match i.stage {
+                    InstructionStage::Received => RedirectStage::Received,
+                    InstructionStage::Acknowledged => RedirectStage::Acknowledged,
+                    InstructionStage::Incorporated => RedirectStage::Incorporated,
+                },
+                message: text(&i.message),
+                received_at_ms: counter(i.received_at_ms),
+                acknowledged_at_ms: i.acknowledged_at_ms.map(counter),
+                incorporated_at_ms: i.incorporated_at_ms.map(counter),
+                outcome: i
+                    .disposition
+                    .as_ref()
+                    .and_then(|d| d["summary"].as_str())
+                    .map(text),
+            })
+            .collect(),
+    ))
+}
 fn phase_of(p: ActivationPhase) -> Phase {
     match p {
         ActivationPhase::Pending => Phase::Pending,
@@ -1465,6 +1551,8 @@ pub fn root_snapshot(runs: &dyn RunRead, root: &RootId) -> Result<RootSnapshot, 
         root: wire_control(&control),
         activation,
         blockers: wire_blockers(&blockers),
+        conditions: wire_conditions(&blockers),
+        redirects: Some(wire_redirects(runs, root)?),
     })
 }
 
@@ -2686,6 +2774,7 @@ impl ControlService {
                 purpose: purpose.clone(),
                 eligible: e.eligible,
                 blockers: wire_blockers(&e.conditions),
+                conditions: wire_conditions(&e.conditions),
             },
         })
     }

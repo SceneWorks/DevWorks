@@ -389,6 +389,59 @@ impl WorkCtl<'_, '_> {
                     );
                 }
                 Action::Inspect(root) => self.inspect(&root),
+                Action::Redirect(w) => {
+                    let id = w.id.as_str().to_owned();
+                    let Some(snapshot) = self.work.runs.get(&id).cloned() else {
+                        self.inspect(&id);
+                        continue;
+                    };
+                    let message = self
+                        .work
+                        .redirect_drafts
+                        .get(&id)
+                        .map(|m| m.trim().to_owned())
+                        .unwrap_or_default();
+                    if message.is_empty() {
+                        continue;
+                    }
+                    let root = id.clone();
+                    self.command(
+                        WorkSlot::WorkRedirect(id),
+                        "Sending a redirect",
+                        "runs.redirect",
+                        move |be| wops::run_redirect(be, &root, &snapshot, &message),
+                    );
+                }
+                Action::Stop(w) => {
+                    let id = w.id.as_str().to_owned();
+                    let Some(snapshot) = self.work.runs.get(&id).cloned() else {
+                        self.inspect(&id);
+                        continue;
+                    };
+                    let root = id.clone();
+                    self.command(
+                        WorkSlot::WorkStop(id),
+                        "Stopping work",
+                        "runs.stop",
+                        move |be| wops::run_stop(be, &root, &snapshot),
+                    );
+                }
+                Action::ContinueAllHeld => {
+                    let roots: Vec<String> = self
+                        .work
+                        .features
+                        .items
+                        .iter()
+                        .chain(self.work.cards.items.iter())
+                        .filter(|w| w.parent_id.is_none())
+                        .map(|w| w.id.as_str().to_owned())
+                        .collect();
+                    for root in roots {
+                        // Each root is continued from its current snapshot, never a remembered one.
+                        self.work.continue_all.insert(root.clone());
+                        self.inspect(&root);
+                    }
+                }
                 Action::Run(op, w) => {
                     let Some(snapshot) = self.work.runs.get(w.id.as_str()).cloned() else {
                         self.inspect(w.id.as_str());

@@ -8837,3 +8837,102 @@ mod review_capacity_tests;
 #[cfg(unix)]
 #[path = "runs/feature_delivery.rs"]
 mod feature_delivery_tests;
+
+/// Revision 20 names the gate, cause and reason of each condition holding a root, so a person
+/// can see why it waits; revision 1 keeps its recorded shape.
+#[test]
+fn revision_20_lists_the_gate_and_reason_of_every_hold() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let at = |revision: u64, query: Value| {
+        result(&fx.query(
+            &fx.user,
+            query["kind"].as_str().unwrap().to_owned().as_str(),
+            json!({"protocol": PROTOCOL, "schemaRevision": revision, "queryId": fx.key(), "query": query}),
+        ))
+    };
+    let eligibility = json!({"kind": "runs.eligibility",
+        "target": {"kind": "root", "id": "root-g"}, "purpose": "Implementation"});
+    // No approved plan covers root-g: a derived Plan condition with its reason.
+    let held = at(20, eligibility.clone());
+    let conditions = held["conditions"].as_array().unwrap();
+    let plan = conditions
+        .iter()
+        .find(|c| c["gate"] == "Plan")
+        .unwrap_or_else(|| panic!("{held}"));
+    assert!(!plan["reason"].as_str().unwrap().is_empty(), "{plan}");
+    assert_eq!(plan["rateLimited"], false);
+    assert!(at(1, eligibility).get("conditions").is_none());
+    // A paused root lists its pause as a Pause condition with the HumanPause cause.
+    let f = rid("root-f");
+    fx.scope.approve(&f, 1, &[("x", "dx")]);
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.pause(&fx.user, "root-f"));
+    let inspect = json!({"kind": "runs.inspect", "rootId": "root-f"});
+    let snapshot = at(20, inspect.clone());
+    let pause = snapshot["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["gate"] == "Pause")
+        .unwrap_or_else(|| panic!("{snapshot}"));
+    assert_eq!(pause["cause"], "HumanPause");
+    assert!(at(1, inspect).get("conditions").is_none());
+}
+
+/// Revision 20 lists a root's redirects with each durable stage as it advances.
+#[test]
+fn revision_20_shows_each_redirect_stage() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    fx.assign("root-f", "root-f", None, None);
+    let a = fx.launch("supervisor-1");
+    let redirects = || {
+        let v = result(&fx.query(
+            &fx.user,
+            "runs.inspect",
+            json!({"protocol": PROTOCOL, "schemaRevision": 20, "queryId": fx.key(),
+                "query": {"kind": "runs.inspect", "rootId": "root-f"}}),
+        ));
+        v["redirects"].as_array().unwrap().clone()
+    };
+    assert!(redirects().is_empty());
+    let summary = applied(&fx.redirect(&fx.user, "root-f", "Ship the CLI first"));
+    let instruction = id(summary["id"].as_str().unwrap());
+    let r = redirects();
+    assert_eq!(
+        (r.len(), r[0]["stage"].clone(), r[0]["message"].clone()),
+        (1, json!("Received"), json!("Ship the CLI first"))
+    );
+    assert!(r[0].get("acknowledgedAtMs").is_none());
+    let seq = read(&*fx.store, |s| s.runs().instruction(&instruction))
+        .unwrap()
+        .seq;
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    fx.tx(move |svc, tx| svc.acknowledge_instructions(tx, &x, e, seq))
+        .unwrap();
+    let r = redirects();
+    assert_eq!(r[0]["stage"], "Acknowledged");
+    assert!(r[0]["acknowledgedAtMs"].is_string());
+    let (x, i) = (a.id.clone(), instruction.clone());
+    fx.tx(move |svc, tx| {
+        svc.incorporate_instruction(
+            tx,
+            &x,
+            e,
+            &i,
+            Disposition {
+                summary: "CLI moved ahead of the GUI".into(),
+                superseded: vec![],
+                pending_plan_revision: None,
+            },
+        )
+    })
+    .unwrap();
+    let r = redirects();
+    assert_eq!(
+        (r[0]["stage"].clone(), r[0]["outcome"].clone()),
+        (json!("Incorporated"), json!("CLI moved ahead of the GUI"))
+    );
+}

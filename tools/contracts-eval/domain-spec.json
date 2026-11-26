@@ -3361,12 +3361,61 @@
         "ClearEmbeddingSpace": 3
       }
     },
+    "HoldGate": {
+      "kind": "enum",
+      "values": [
+        "Archived",
+        "Pause",
+        "Hold",
+        "Prerequisite",
+        "Question",
+        "Plan",
+        "Readiness",
+        "Assignment"
+      ]
+    },
+    "HoldCondition": {
+      "kind": "record",
+      "fields": {
+        "hold_id": "HoldId",
+        "gate": "HoldGate",
+        "cause": "Cause",
+        "rate_limited": "bool",
+        "reason": "Content"
+      }
+    },
+    "RedirectStage": {
+      "kind": "enum",
+      "values": [
+        "Received",
+        "Acknowledged",
+        "Incorporated"
+      ]
+    },
+    "RedirectRecord": {
+      "kind": "record",
+      "fields": {
+        "instruction_id": "Id",
+        "stage": "RedirectStage",
+        "message": "Content",
+        "received_at_ms": "Counter",
+        "acknowledged_at_ms": "?Counter",
+        "incorporated_at_ms": "?Counter",
+        "outcome": "?Content"
+      }
+    },
     "RootSnapshot": {
       "kind": "record",
       "fields": {
         "root": "RootControl",
         "activation": "?Activation",
-        "blockers": "Blockers"
+        "blockers": "Blockers",
+        "conditions": "?Items<HoldCondition>",
+        "redirects": "?Items<RedirectRecord>"
+      },
+      "since": {
+        "conditions": 20,
+        "redirects": 20
       }
     },
     "EligibilitySnapshot": {
@@ -3375,7 +3424,11 @@
         "target": "EligibilityTarget",
         "purpose": "Purpose",
         "eligible": "bool",
-        "blockers": "Blockers"
+        "blockers": "Blockers",
+        "conditions": "?Items<HoldCondition>"
+      },
+      "since": {
+        "conditions": 20
       }
     },
     "ReceiptObservation": {
@@ -12422,6 +12475,26 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "runs.start": [
+      1,
+      20
+    ],
+    "runs.pause": [
+      1,
+      20
+    ],
+    "runs.continue": [
+      1,
+      20
+    ],
+    "runs.inspect": [
+      1,
+      20
+    ],
+    "runs.eligibility": [
+      1,
+      20
+    ],
     "git.integrate": [1, 17],
     "reviews.list": [1, 15],
     "reviews.inspect": [1, 15],
