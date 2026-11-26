@@ -976,7 +976,10 @@
         "execute_write",
         "apply_migration",
         "direct_schema_change",
-        "configure_sensitive_columns"
+        "configure_sensitive_columns",
+        "mysql_readonly_query",
+        "sensitive_columns",
+        "edit_sensitive_column_rules"
       ],
       "effectAndAuthority": "Read-only connection and project defaults; explicit write enablement and migration provenance",
       "status": "Proposed; exact command/tool schemas require review"
@@ -1363,6 +1366,8 @@
         "rollback",
         "uninstall",
         "invoke",
+        "run_workflow",
+        "read_content",
         "invocation"
       ],
       "effectAndAuthority": "Version/digest-bound activation approval for agent-authored packages; declared effect classification",
