@@ -200,6 +200,7 @@ impl AgentsScreen {
         let mut more = false;
         let mut link = false;
         let mut open: Option<String> = None;
+        let mut more_messages = false;
         let mut mem = cx.routes.remove(&Route::Agents).unwrap_or_default();
         let shown_tab = mem.tab;
         let project = cx.selected_project().map(str::to_owned);
@@ -210,7 +211,14 @@ impl AgentsScreen {
             ..
         } = self;
         let scrolls = &mut *cx.scrolls;
-        let mut st = (&mut reload, &mut mem, &mut more, &mut link, &mut open);
+        let mut st = (
+            &mut reload,
+            &mut mem,
+            &mut more,
+            &mut link,
+            &mut open,
+            &mut more_messages,
+        );
         let (_, tab) = widgets::pane(
             ui,
             Header {
@@ -347,10 +355,11 @@ impl AgentsScreen {
                                 return;
                             };
                             let _ = shown;
-                            if !m.loaded {
-                                ui.spinner();
-                            } else if let Some(e) = &m.error {
+                            // A failed first read is shown, never a spinner with nothing in flight.
+                            if let Some(e) = &m.error {
                                 widgets::caption(ui, format!("Messages could not be read: {e}"));
+                            } else if !m.loaded {
+                                ui.spinner();
                             } else if m.items.is_empty() {
                                 widgets::caption(ui, "No messages for this assignment yet.");
                             }
@@ -373,6 +382,8 @@ impl AgentsScreen {
                                 ui.label(message.content.0.as_str());
                                 ui.add_space(4.0);
                             }
+                            // Older messages are read a page at a time.
+                            crate::paged::load_more_control(ui, m, st.5);
                         });
                 });
             },
@@ -401,6 +412,12 @@ impl AgentsScreen {
         if more && let (Some((p, live)), Some(fetch)) = (self.scope.clone(), self.list.more_page())
         {
             Self::send(cx, &mut self.list, p, live, fetch);
+        }
+        if more_messages
+            && let Some((a, list)) = &mut self.messages
+            && let Some(fetch) = list.more_page()
+        {
+            Self::send_messages(cx, list, a.clone(), fetch);
         }
     }
 }

@@ -199,3 +199,117 @@ fn the_agents_screen_lists_a_coordinator_and_workers_and_opens_their_transcripts
         "the coordinator's own session is opened"
     );
 }
+
+/// A project with one issue run by a coordinator and two workers.
+fn staffed(
+    engine: &devworks_desktop::host::Engine,
+    b: &dyn Backend,
+    name: &str,
+) -> (String, String, Vec<StoredAssignment>) {
+    let project =
+        ops::project_changed(b.command("projects.create", &ops::project_create(b, name, "", &[])))
+            .unwrap()
+            .id;
+    let pid = project.0.as_str().to_owned();
+    let backlog = devworks_core::services::work::workflow::default_status_id(&project, "backlog");
+    let issue = command(
+        b,
+        "issues.create",
+        json!({"projectId": pid, "title": format!("{name} issue"), "description": "",
+            "repositoryIds": [], "statusId": backlog, "priority": 0}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sessions = [
+        session(b, &pid, &issue, "Lead"),
+        session(b, &pid, &issue, "Fix"),
+        session(b, &pid, &issue, "Review"),
+    ];
+    let agents = assign(engine, &project, &issue, sessions);
+    (pid, issue, agents)
+}
+
+fn rows(h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) -> Vec<String> {
+    h.query_all_by_label_contains("  ·  ")
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Coordinator") || l.starts_with("Worker"))
+        .collect()
+}
+
+/// More messages than one page are reached with Load more; a failed first read is shown.
+#[test]
+fn agent_messages_page_through_load_more_and_show_a_failed_read() {
+    let root = Root::new("agents-screen-messages");
+    let engine = start(&root);
+    let b = engine.backend();
+    let (pid, _, agents) = staffed(&engine, &*b, "Shop");
+    for i in 0..=ops::PAGE_LIMIT {
+        command(
+            &*b,
+            "agents.messages",
+            json!({"recipientAssignmentId": agents[1].id, "messageClass": "Status",
+                "content": format!("Message {i}"), "attachments": []}),
+        );
+    }
+    let gate = Gate::new("agents.inbox").refusing_queries();
+    let mut h = harness(
+        shell_with(Ok(gate.over(b.clone())), &root, Script::default(), None),
+        1500.0,
+        1000.0,
+    );
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid));
+    h.state_mut().navigate(Route::Agents);
+    settle(&mut h);
+    let worker = rows(&h)
+        .into_iter()
+        .find(|r| r.starts_with("Worker  ·  worker"))
+        .unwrap();
+    // The first read is refused: its failure is shown, not a spinner.
+    click(&mut h, Role::Button, &worker);
+    assert!(has_text(&h, "Messages could not be read"));
+    drop(h);
+
+    let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Agents);
+    settle(&mut h);
+    click(&mut h, Role::Button, &worker);
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Load more")
+            .is_some(),
+        "more than one page of messages exists"
+    );
+    click(&mut h, Role::Button, "Load more");
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Load more")
+            .is_none(),
+        "every message has been read"
+    );
+}
+
+/// Selecting another project while Agents is shown replaces its rows at once.
+#[test]
+fn the_agents_screen_follows_the_selected_project() {
+    let root = Root::new("agents-screen-switch");
+    let engine = start(&root);
+    let b = engine.backend();
+    let (first, first_issue, _) = staffed(&engine, &*b, "Shop");
+    let (second, second_issue, _) = staffed(&engine, &*b, "Bank");
+    let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(first));
+    h.state_mut().navigate(Route::Agents);
+    settle(&mut h);
+    assert!(
+        rows(&h).iter().all(|r| r.contains(&first_issue)),
+        "{:?}",
+        rows(&h)
+    );
+    h.state_mut().select_project(Some(second));
+    settle(&mut h);
+    let shown = rows(&h);
+    assert_eq!(shown.len(), 3, "{shown:?}");
+    assert!(shown.iter().all(|r| r.contains(&second_issue)), "{shown:?}");
+}

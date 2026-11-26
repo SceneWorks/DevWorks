@@ -1032,6 +1032,10 @@ impl Shell {
         if self.route == Route::Artifacts {
             self.with_screen(ScreenId::Artifacts, |s, cx| s.load(cx, Route::Artifacts));
         }
+        // So does Agents: another project's agents and messages are never shown.
+        if self.route == Route::Agents {
+            self.with_screen(ScreenId::Agents, |s, cx| s.load(cx, Route::Agents));
+        }
         if matches!(
             self.route,
             Route::Overview | Route::Features | Route::Issues
