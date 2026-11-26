@@ -380,6 +380,10 @@ impl ArtifactsScreen {
                     return;
                 }
                 let id = record.artifact.artifact_id.as_str().to_owned();
+                // One save per artifact at a time, whatever control asked for it.
+                if cx.pending(&ArtifactsSlot::ArtifactTag(id.clone())) {
+                    return;
+                }
                 let artifact = id.clone();
                 self.tag_submitted
                     .insert(id.clone(), (revision.clone(), submitted));
@@ -702,11 +706,9 @@ fn detail(
                 entries.push(String::new());
             }
             // One save per artifact at a time: a second would carry the same opening revision.
-            let save = ui.add_enabled(
-                !tag_saving,
-                egui::Button::new(egui::RichText::new("Save tags").color(crate::theme::MUTED)),
-            );
-            if save.clicked() {
+            let save =
+                ui.add_enabled_ui(!tag_saving, |ui| widgets::secondary_button(ui, "Save tags"));
+            if save.inner.clicked() {
                 *action = Some(Action::SaveTags);
             }
             if widgets::secondary_button(ui, "Cancel").clicked() {

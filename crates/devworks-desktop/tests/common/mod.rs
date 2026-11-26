@@ -381,6 +381,10 @@ impl Gate {
     pub fn has_waiter(&self) -> bool {
         self.waiters.load(Ordering::SeqCst) > 0
     }
+    /// How many matching requests are held at the gate now.
+    pub fn waiters(&self) -> usize {
+        self.waiters.load(Ordering::SeqCst)
+    }
     pub fn open(&self) {
         *self.open.0.lock().unwrap() = true;
         self.open.1.notify_all();

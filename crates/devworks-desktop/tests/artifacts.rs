@@ -573,23 +573,32 @@ fn a_second_tag_save_is_not_submitted_while_the_first_is_in_flight() {
     gate.close();
     h.get_by_role_and_label(Role::Button, "Save tags").click();
     step_until(&mut h, "the save is in flight", |_| gate.has_waiter());
+    h.step();
+    assert!(
+        h.get_by_role_and_label(Role::Button, "Save tags")
+            .accesskit_node()
+            .is_disabled(),
+        "Save tags stays enabled while its save is in flight"
+    );
     // Clicking again while the first save is pending must not submit a second command.
     h.get_by_role_and_label(Role::Button, "Save tags").click();
     for _ in 0..3 {
         h.step();
     }
+    assert_eq!(gate.waiters(), 1, "a second tag save reached the backend");
     gate.open();
     settle(&mut h);
     assert_eq!(
         listed(&*real, &project)[0].tags.as_ref().unwrap().0,
         ["first".to_owned()]
     );
-    if h.query_by_role_and_label(Role::TextInput, "Tag 1")
-        .is_none()
-    {
-        select(&mut h, "notes.md");
-        click(&mut h, Role::Button, "Edit tags");
-    }
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Tag 1")
+            .is_none(),
+        "the committed save closes the editor"
+    );
+    select(&mut h, "notes.md");
+    click(&mut h, Role::Button, "Edit tags");
     click(&mut h, Role::Button, "Add tag");
     type_into(&mut h, "Tag 2", "second");
     click(&mut h, Role::Button, "Save tags");
