@@ -428,6 +428,7 @@ impl ArtifactsScreen {
             project,
             preview,
             tag_draft,
+            tag_submitted,
             confirm_delete,
             ..
         } = self;
@@ -439,6 +440,12 @@ impl ArtifactsScreen {
                 .find(|r| r.id.0.as_str() == p)
                 .map_or_else(|| p.clone(), |r| r.name.0.clone())
         });
+        // Artifacts whose tag save is in flight (`tag_submitted` holds every one of them).
+        let saving: Vec<String> = tag_submitted
+            .keys()
+            .filter(|id| cx.pending(&ArtifactsSlot::ArtifactTag((*id).clone())))
+            .cloned()
+            .collect();
         let scrolls = &mut *cx.scrolls;
         let mut st = (&mut reload, &mut mem, &mut more, &mut action);
         let (_, tab) = widgets::pane(
@@ -524,6 +531,7 @@ impl ArtifactsScreen {
                             .iter()
                             .find(|a| a.artifact.artifact_id.as_str() == id)
                     });
+                    let tag_saving = selection.as_ref().is_some_and(|id| saving.contains(id));
                     match selected {
                         // The detail scrolls on its own, so a long tag list keeps its actions
                         // reachable at the smallest window size.
@@ -532,7 +540,15 @@ impl ArtifactsScreen {
                                 .id_salt("artifact-detail")
                                 .auto_shrink([false, false])
                                 .show(&mut cols[1], |ui| {
-                                    detail(ui, record, preview, tag_draft, confirm_delete, st.3)
+                                    detail(
+                                        ui,
+                                        record,
+                                        preview,
+                                        tag_draft,
+                                        confirm_delete,
+                                        tag_saving,
+                                        st.3,
+                                    )
                                 });
                         }
                         None => widgets::caption(
@@ -603,6 +619,7 @@ fn detail(
     preview: &mut Option<(String, Shown)>,
     tag_draft: &mut Option<(ArtifactRecord, Vec<String>)>,
     confirm_delete: &Option<ArtifactRecord>,
+    tag_saving: bool,
     action: &mut Option<Action>,
 ) {
     let id = record.artifact.artifact_id.as_str();
@@ -684,7 +701,12 @@ fn detail(
             if widgets::secondary_button(ui, "Add tag").clicked() {
                 entries.push(String::new());
             }
-            if widgets::secondary_button(ui, "Save tags").clicked() {
+            // One save per artifact at a time: a second would carry the same opening revision.
+            let save = ui.add_enabled(
+                !tag_saving,
+                egui::Button::new(egui::RichText::new("Save tags").color(crate::theme::MUTED)),
+            );
+            if save.clicked() {
                 *action = Some(Action::SaveTags);
             }
             if widgets::secondary_button(ui, "Cancel").clicked() {
