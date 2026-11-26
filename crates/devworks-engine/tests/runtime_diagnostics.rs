@@ -732,8 +732,12 @@ fn a_quarantined_corrupt_artifact_at_boot_needs_attention() {
     assert!(recovery.message.0.contains("quarantined"));
     let links = text!(recovery.recovery.as_ref().unwrap());
     assert!(links.contains("artifacts.list"), "{links}");
-    // No handler restores a workspace backup, so no check links one.
-    assert!(!links.contains("workspace.restore"), "{links}");
+    // A backup restore is linked exactly while this runtime can run one.
+    assert_eq!(
+        links.contains("workspace.restore"),
+        app.handles("workspace.restore"),
+        "{links}"
+    );
     let readiness = check(&all, "health.readiness");
     assert_eq!(health(readiness), "Degraded");
     let boot_record = logs(&app, &user, json!({"component": "boot"}))

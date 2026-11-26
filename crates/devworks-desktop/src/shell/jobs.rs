@@ -271,7 +271,10 @@ impl JobsCtl<'_, '_> {
                     };
                     self.command(slot, label, op, move |b| ops::job_command(b, command, &job));
                 }
-                JobAction::ReloadDeliveries => self.load_deliveries(),
+                JobAction::ReloadDeliveries => {
+                    self.jobs.delivery_notice = None;
+                    self.load_deliveries();
+                }
                 JobAction::MoreDeliveries => {
                     if let Some(fetch) = self.jobs.deliveries.more_page() {
                         self.send_deliveries(fetch);
@@ -445,11 +448,15 @@ impl JobsCtl<'_, '_> {
                     .jobs
                     .deliveries
                     .apply_unique(g, page, |d| d.id.as_str().to_owned());
-                if let Applied::Continue(fetch) = applied {
-                    self.send_deliveries(fetch);
+                match applied {
+                    Applied::Continue(fetch) => self.send_deliveries(fetch),
+                    Applied::Stale => {}
+                    // The list was read after every answered resolution.
+                    _ => self.jobs.resolved_deliveries.clear(),
                 }
             }
-            (JobsSlot::DeliveryCommand(_), Reply::Command(c)) => {
+            (JobsSlot::DeliveryCommand(id), Reply::Command(c)) => {
+                self.jobs.resolved_deliveries.insert(id);
                 self.jobs.delivery_notice = Some(match jobs_ops::queue_resolved(c) {
                     // Only a dismissal leaves a resolved delivery failed (it is settled as such).
                     Ok(d) if d.state == devworks_core::protocol::OperationState::Failed => (
@@ -633,7 +640,10 @@ impl JobsCtl<'_, '_> {
             .items
             .iter()
             .map(|d| d.id.as_str().to_owned())
-            .filter(|id| self.waiting(&JobsSlot::DeliveryCommand(id.clone())))
+            .filter(|id| {
+                self.jobs.resolved_deliveries.contains(id)
+                    || self.waiting(&JobsSlot::DeliveryCommand(id.clone()))
+            })
             .collect();
         // The Deliveries subview reads its list when it is first shown.
         if tab == DELIVERIES_TAB
@@ -769,6 +779,10 @@ impl JobsCtl<'_, '_> {
                     }
                 },
             );
+        }
+        if tab == DELIVERIES_TAB && new_tab != tab {
+            // A resolution's outcome belongs to the visit that made it.
+            self.jobs.delivery_notice = None;
         }
         mem.tab = new_tab;
         self.routes.insert(Route::Jobs, mem);

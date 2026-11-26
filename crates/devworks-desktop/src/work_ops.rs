@@ -555,32 +555,48 @@ pub fn tool_usage(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Ve
         )))
     })
 }
-/// The rows of a usage page (model requests, then tool calls) and the cursor of the next one,
-/// present only while more exist.
+/// The rows of a usage page in committed order and the cursor of the next one, present only
+/// while more exist.
 pub fn tool_usage_result(
     outcome: QueryOutcome,
 ) -> Result<(Vec<UsageRow>, Option<String>), Failure> {
     match query_result(outcome)? {
-        (OperationResult::HistoryToolUsage { value }, _) => {
-            let next = value.next_cursor.map(|c| c.0).filter(|_| value.has_more);
-            let rows = value
-                .items
-                .0
-                .into_iter()
-                .map(UsageRow::Model)
-                .chain(
-                    value
-                        .tool_invocations
-                        .map(|t| t.0)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(UsageRow::Tool),
-                )
-                .collect();
-            Ok((rows, next))
-        }
+        (OperationResult::HistoryToolUsage { value }, _) => Ok(usage_rows(value)),
         (other, _) => Err(unexpected("history.tool_usage", &other)),
     }
+}
+
+/// A usage page's model requests and tool calls merged by their committed sequences. Pages
+/// follow one another in that order, so appended pages stay ordered. A page without model
+/// sequences (revision 1) carries no tool calls and keeps its wire order.
+pub fn usage_rows(
+    page: devworks_core::protocol::records::UsagePage,
+) -> (Vec<UsageRow>, Option<String>) {
+    let next = page.next_cursor.map(|c| c.0).filter(|_| page.has_more);
+    let models = page.items.0;
+    let sequences = page.item_sequences.map(|s| s.0).unwrap_or_default();
+    let mut rows: Vec<(i64, UsageRow)> = if sequences.len() == models.len() {
+        sequences
+            .iter()
+            .map(|s| s.get())
+            .zip(models.into_iter().map(UsageRow::Model))
+            .collect()
+    } else {
+        models
+            .into_iter()
+            .map(|m| (0, UsageRow::Model(m)))
+            .collect()
+    };
+    rows.extend(
+        page.tool_invocations
+            .map(|t| t.0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| (t.sequence.get(), UsageRow::Tool(t))),
+    );
+    // Stable: rows without a known sequence keep their wire order.
+    rows.sort_by_key(|(sequence, _)| *sequence);
+    (rows.into_iter().map(|(_, row)| row).collect(), next)
 }
 
 /// Project workflow columns, including the backend's edit/removal fences.
@@ -676,5 +692,65 @@ pub fn inspected_claim(outcome: QueryOutcome) -> Result<AllocationClaimRecord, F
     match query_result(outcome)? {
         (OperationResult::NextWorkInspectClaim { value }, _) => Ok(value),
         (other, _) => Err(unexpected("next_work.inspect_claim", &other)),
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn page(models: &[(&str, i64)], tools: &[(&str, i64)], more: bool) -> serde_json::Value {
+        let item = |id: &str| {
+            json!({"requestId": id, "purpose": "chat", "modelId": "model-a",
+                "inputTokens": "1", "outputTokens": "1", "cacheReadTokens": "0",
+                "cacheWriteTokens": "0", "priceKind": "Untracked", "priceOrigin": "Untracked",
+                "incomplete": false})
+        };
+        let tool = |id: &str, sequence: i64| {
+            json!({"sequence": sequence.to_string(), "callId": id, "sessionId": "session-a",
+                "toolName": "fs.read", "outcome": "Completed", "actorId": "actor-a",
+                "occurredAtMs": "1"})
+        };
+        let mut value = json!({
+            "items": models.iter().map(|(id, _)| item(id)).collect::<Vec<_>>(),
+            "hasMore": more,
+            "itemSequences": models.iter().map(|(_, s)| s.to_string()).collect::<Vec<_>>(),
+            "toolInvocations": tools.iter().map(|(id, s)| tool(id, *s)).collect::<Vec<_>>(),
+        });
+        if more {
+            value["nextCursor"] = json!("next");
+        }
+        value
+    }
+
+    fn ids(rows: &[UsageRow]) -> Vec<&str> {
+        rows.iter()
+            .map(|r| match r {
+                UsageRow::Model(m) => m.request_id.as_str(),
+                UsageRow::Tool(t) => t.call_id.as_str(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn usage_pages_list_model_requests_and_tool_calls_in_committed_order() {
+        let first: devworks_core::protocol::records::UsagePage = serde_json::from_value(page(
+            &[("m-1", 1), ("m-4", 4)],
+            &[("t-2", 2), ("t-3", 3)],
+            true,
+        ))
+        .unwrap();
+        let second: devworks_core::protocol::records::UsagePage =
+            serde_json::from_value(page(&[("m-6", 6)], &[("t-5", 5), ("t-7", 7)], false)).unwrap();
+        let (mut rows, next) = usage_rows(first);
+        assert_eq!(next.as_deref(), Some("next"));
+        let (more, last) = usage_rows(second);
+        assert_eq!(last, None);
+        rows.extend(more);
+        assert_eq!(
+            ids(&rows),
+            ["m-1", "t-2", "t-3", "m-4", "t-5", "m-6", "t-7"]
+        );
     }
 }

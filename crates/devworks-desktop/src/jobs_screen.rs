@@ -400,6 +400,9 @@ pub struct JobsUi {
     pub deliveries: Paged<QueueDelivery>,
     /// The outcome of the last delivery resolution.
     pub delivery_notice: Option<(Tone, String)>,
+    /// Deliveries whose resolution was answered: their rows still show the state before it, so
+    /// their actions stay disabled until the next Deliveries page is applied.
+    pub resolved_deliveries: std::collections::BTreeSet<String>,
     /// A terminal resolution (Dismiss, Cancel) waiting for confirmation, with its reason.
     pub confirm_resolution: Option<(QueueDelivery, DeliveryResolution, String)>,
 }

@@ -409,6 +409,10 @@ fn storage_monitor(svc: &DiagnosticService, out: &mut Vec<HealthCheck>) {
                 format!("Integrity problems: {}", shown.join("; ")),
             )
             .metric(MetricReading::count("problems", problems.len() as i64))
+            .link(RecoveryLink::new(
+                "workspace.restore",
+                "Restore a verified manual backup",
+            ))
             .at(*at)
         }
         Some((at, Err(why))) => HealthCheck::new(

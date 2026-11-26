@@ -114,6 +114,9 @@ pub struct WorkUi {
         BTreeMap<String, Paged<devworks_core::protocol::records::LineageRecord>>,
     /// Each root's linked history (HISTORY-01), read when a person asks for it.
     pub linked: BTreeMap<String, LinkedHistory>,
+    /// Request-generation spaces given to linked histories so far: each new one reads in its
+    /// own, so a late reply meant for one it replaced is never applied to it.
+    linked_spaces: u32,
     /// Each root's source-control links: a re-read keeps the list on screen until every page
     /// arrived, so a refresh never shifts the controls beneath it.
     pub code_reviews: BTreeMap<String, reviews::ReviewPane>,
@@ -194,6 +197,7 @@ impl WorkUi {
         self.allocation_queues.retain(|(p, _), _| p != project);
         self.allocation_busy.retain(|(p, _)| p != project);
         self.detail.retain(|id, _| !owned(id));
+        self.linked.retain(|id, _| !owned(id));
         self.git.retain(|id, _| !owned(id));
         self.runs.retain(|id, _| !owned(id));
         self.git_inspections.retain(|id, _| !owned(id));
@@ -553,4 +557,30 @@ pub struct LinkedHistory {
     pub lineage: Paged<devworks_core::protocol::records::LineageRecord>,
     pub evidence: Paged<devworks_core::protocol::records::EvidenceLink>,
     pub usage: Paged<wops::UsageRow>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::protocol::{Id, ProjectId};
+
+    #[test]
+    fn a_purge_drops_the_purged_items_linked_history_and_keeps_others() {
+        let mut work = WorkUi::default();
+        work.linked
+            .insert("w-purged".into(), LinkedHistory::default());
+        work.linked
+            .insert("w-kept".into(), LinkedHistory::default());
+        let scope = devworks_core::ports::storage::ProjectPurgeClientScope {
+            project_id: ProjectId(Id::new("p").unwrap()),
+            session_ids: vec![],
+            conversation_ids: vec![],
+            work_ids: vec![Id::new("w-purged").unwrap()],
+            operation_ids: vec![],
+            deleted_artifact_ids: vec![],
+            record_ids: BTreeMap::new(),
+        };
+        work.drop_purged(&scope);
+        assert_eq!(work.linked.keys().collect::<Vec<_>>(), ["w-kept"]);
+    }
 }

@@ -1092,7 +1092,26 @@ fn a_failed_delivery_is_listed_retried_and_dismissed_from_the_deliveries_view() 
     fail_seeded(&engine, "payload schema is not supported");
     assert_eq!(seeded_entry(&engine, &delivery).state, QueueState::Failed);
 
-    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    // The reads of the list can be held, to look at the rows between a resolution's reply and
+    // the list's next page.
+    let gate = Gate::new("queue.inspect");
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
     settle(&mut h);
     click_nav(&mut h, "Scheduled jobs");
     click(&mut h, Role::Button, "Deliveries");
@@ -1103,9 +1122,26 @@ fn a_failed_delivery_is_listed_retried_and_dismissed_from_the_deliveries_view() 
     assert!(has_text(&h, "attempt 1"));
     assert!(has_text(&h, "Last error: payload schema is not supported"));
 
-    // Retry (queue.retry) makes it ready again with a fresh budget.
-    click(&mut h, Role::Button, "Retry");
+    // Retry (queue.retry) makes it ready again with a fresh budget. Until the list is read
+    // again its row still shows the failure, and its actions stay disabled.
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Retry").click();
+    step_until(&mut h, "the retry's reply and the held re-read", |s| {
+        s.jobs.delivery_notice.is_some() && gate.has_waiter()
+    });
+    h.step();
+    assert!(has_text(&h, "Last error: payload schema is not supported"));
+    for button in ["Retry", "Dismiss…"] {
+        assert!(
+            h.get_by_role_and_label(Role::Button, button)
+                .accesskit_node()
+                .is_disabled(),
+            "{button} is disabled before the list is read again"
+        );
+    }
+    gate.open();
     settle(&mut h);
+    assert!(h.state().jobs.resolved_deliveries.is_empty());
     let retried = seeded_entry(&engine, &delivery);
     assert_eq!(retried.state, QueueState::Ready);
     assert_eq!(retried.attempt_count, 0);
@@ -1113,8 +1149,11 @@ fn a_failed_delivery_is_listed_retried_and_dismissed_from_the_deliveries_view() 
 
     // Its next attempt fails again; Dismiss (queue.resolve) asks first, then settles it.
     fail_seeded(&engine, "payload schema is still not supported");
+    assert!(has_text(&h, "The seeded-consumer delivery is now queued."));
+    // A manual reload clears the last resolution's outcome.
     click(&mut h, Role::Button, "Refresh");
     settle(&mut h);
+    assert!(h.state().jobs.delivery_notice.is_none());
     assert!(has_text(
         &h,
         "Last error: payload schema is still not supported"
@@ -1138,4 +1177,7 @@ fn a_failed_delivery_is_listed_retried_and_dismissed_from_the_deliveries_view() 
     assert!(has_text(&h, "The seeded-consumer delivery was dismissed."));
     // A dismissed delivery is no longer listed.
     assert!(!has_text(&h, &format!("Delivery {}", delivery.as_str())));
+    // Leaving the subview clears the outcome too.
+    click(&mut h, Role::Button, "Runs");
+    assert!(h.state().jobs.delivery_notice.is_none());
 }

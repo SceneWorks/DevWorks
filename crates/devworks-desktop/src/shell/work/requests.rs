@@ -95,6 +95,7 @@ impl WorkCtl<'_, '_> {
             plan_saving: std::mem::take(&mut self.work.plan_saving),
             edit_saving: std::mem::take(&mut self.work.edit_saving),
             create_saving: std::mem::take(&mut self.work.create_saving),
+            linked_spaces: self.work.linked_spaces,
             ..WorkUi::default()
         };
     }
@@ -333,7 +334,18 @@ impl WorkCtl<'_, '_> {
     /// Reads a root's linked history again (every part, the pages shown re-read), or the next
     /// page of one part.
     pub(super) fn load_linked_history(&mut self, root: &str, part: Option<LinkedPart>) {
-        let linked = self.work.linked.entry(root.to_owned()).or_default();
+        if !self.work.linked.contains_key(root) {
+            self.work.linked_spaces += 1;
+            let space = self.work.linked_spaces;
+            let mut linked = LinkedHistory::default();
+            linked.lineage.separate(space);
+            linked.evidence.separate(space);
+            linked.usage.separate(space);
+            self.work.linked.insert(root.to_owned(), linked);
+        }
+        let Some(linked) = self.work.linked.get_mut(root) else {
+            return;
+        };
         let fetches: Vec<(LinkedPart, Fetch)> = match part {
             None => vec![
                 (LinkedPart::Lineage, linked.lineage.refresh()),
