@@ -1355,10 +1355,41 @@ fn dw62_lineage(
     matches_catalogue(applied, &lineage.source).then_some(lineage)
 }
 
+fn dw62_missing(
+    migrations: &[Migration],
+    transfers: usize,
+) -> impl Iterator<Item = &Migration> + Clone {
+    std::iter::once(&migrations[67]).chain(&migrations[COMBINED_VERSION..transfers])
+}
+
 /// Rekey each retained DW-62 ledger row to its canonical version and apply the canonical entries
 /// it lacks up to document transfers, in one transaction. Recorded checksums, times and builds
-/// stay unchanged.
+/// stay unchanged. As in [`apply`], foreign-key enforcement is off for a transaction that runs a
+/// table rebuild, and the in-transaction foreign-key check must still pass before it commits.
 fn reconcile_dw62(
+    conn: &Connection,
+    migrations: &[Migration],
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    let rebuilds = dw62_catalogue(migrations).is_some_and(|lineage| {
+        dw62_missing(migrations, lineage.transfers).any(|migration| migration.rebuilds_tables)
+    });
+    if rebuilds {
+        // A no-op inside a transaction, so it is switched before BEGIN.
+        db(conn.pragma_update(None, "foreign_keys", false))?;
+    }
+    let outcome = reconcile_dw62_in_transaction(conn, migrations, now_ms, app_build);
+    if rebuilds {
+        let restored = db(conn.pragma_update(None, "foreign_keys", true));
+        let version = outcome?;
+        restored?;
+        return Ok(version);
+    }
+    outcome
+}
+
+fn reconcile_dw62_in_transaction(
     conn: &Connection,
     migrations: &[Migration],
     now_ms: i64,
@@ -1372,10 +1403,7 @@ fn reconcile_dw62(
     let Dw62 { source, transfers } =
         dw62_lineage(migrations, &meta, &ledger(&tx)?, user_version(&tx)?)
             .ok_or_else(dw62_lineage_changed)?;
-    let missing = std::iter::once(&migrations[67]).chain(&migrations[COMBINED_VERSION..transfers]);
-    if missing.clone().any(|migration| migration.rebuilds_tables) {
-        return Err(dw62_lineage_changed());
-    }
+    let missing = dw62_missing(migrations, transfers);
     // Source and canonical versions overlap, so park the suffix above every known version first.
     const PARKED: i64 = 1_000_000;
     db(tx.execute(

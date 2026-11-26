@@ -1845,22 +1845,31 @@ fn the_published_dw62_profile_upgrades_atomically_and_keeps_its_rows_and_evidenc
 fn a_composed_build_places_dw62_transfers_after_its_independent_migrations() {
     // A combined installer may put independent migrations (such as F14's watchers) at 79 and
     // 80, ahead of document transfers. The DW-62 profile then gains those as missing entries.
-    let composed = |version: i64, sql: &'static str| Migration {
+    // Like F14's watcher migrations, the second one rebuilds a table other rows reference.
+    let composed = |version: i64, sql: &'static str, rebuilds_tables| Migration {
         version,
         minimum_reader: 68,
         minimum_writer: version,
         sql,
         expected_sha256: "",
-        rebuilds_tables: false,
+        rebuilds_tables,
     };
     let mut catalogue = MIGRATIONS[..78].to_vec();
     catalogue.push(composed(
         79,
         "CREATE TABLE composed_first(id TEXT PRIMARY KEY) STRICT;",
+        false,
     ));
     catalogue.push(composed(
         80,
-        "CREATE TABLE composed_second(id TEXT PRIMARY KEY) STRICT;",
+        "CREATE TABLE composed_second(id TEXT PRIMARY KEY) STRICT;
+         CREATE TABLE actors_rebuilt (
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, display_name TEXT NOT NULL
+         ) STRICT;
+         INSERT INTO actors_rebuilt SELECT id,kind,display_name FROM actors;
+         DROP TABLE actors;
+         ALTER TABLE actors_rebuilt RENAME TO actors;",
+        true,
     ));
     catalogue.push(Migration {
         version: 81,
@@ -1897,6 +1906,16 @@ fn a_composed_build_places_dw62_transfers_after_its_independent_migrations() {
             .unwrap();
         assert!(present, "{table}");
     }
+    let (enforced, kind): (bool, String) = conn
+        .query_row(
+            "SELECT (SELECT foreign_keys FROM pragma_foreign_keys),\
+             (SELECT kind FROM actors WHERE id='incoming-client')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "mcp_client");
+    assert!(enforced, "a fresh connection enforces foreign keys");
     drop(conn);
     // The canonical F12 catalogue never adopts a profile reconciled by another composition.
     assert!(SqliteStore::open(h.config()).is_err());
