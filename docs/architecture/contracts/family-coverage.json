@@ -3563,7 +3563,7 @@
             "pointer": "/kind",
             "equals": "agents.list"
           },
-          "resultValueType": "Page<AgentSummary>",
+          "resultValueType": "AgentPage",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,

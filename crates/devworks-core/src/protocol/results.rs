@@ -163,7 +163,7 @@ pub enum OperationResult {
     AgentsCheckpoint { value: CheckpointRecord },
     #[schemars(extend("x-since" = 21))]
     #[serde(rename = "agents.list")]
-    AgentsList { value: Page<AgentSummary> },
+    AgentsList { value: AgentPage },
     #[serde(rename = "sessions.list")]
     SessionsList { value: Page<SessionRecord> },
     #[serde(rename = "sessions.get")]

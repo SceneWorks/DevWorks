@@ -173,6 +173,7 @@ pub struct Shell {
     pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: crate::artifacts_screen::ArtifactsScreen,
     pub resources: crate::artifacts_screen::ResourcesScreen,
+    pub agents: crate::agents_screen::AgentsScreen,
     pub browser: crate::artifacts_screen::BrowserScreen,
     pub addons: crate::addons::AddonsScreen,
     /// The project lists of the navigation's project selector, All projects and Repositories
@@ -384,6 +385,7 @@ screens!(
     Conventions => conventions,
     Artifacts => artifacts,
     Resources => resources,
+    Agents => agents,
     Browser => browser,
     Projects => projects.screen,
     Watchers => watchers,
@@ -431,6 +433,7 @@ impl Shell {
             conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: Default::default(),
             resources: Default::default(),
+            agents: Default::default(),
             browser: Default::default(),
             addons: Default::default(),
             projects: Default::default(),

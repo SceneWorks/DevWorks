@@ -16,7 +16,7 @@
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "47128423ddfe707ddf3bcd83012f4d4b4d28ebf310b26420f58bf57e381ef058",
+    "contracts/family-coverage.json": "4fbe793dfc379420a7cc0e2da7bd2f9df7a6ac3b12328c4c9f14067251ce11f4",
     "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
     "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
   },
@@ -13751,7 +13751,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<AgentSummary>",
+      "resultValueType": "AgentPage",
       "requestModes": [
         "Query"
       ],

@@ -1178,7 +1178,7 @@ pub fn list_project_agents(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     input: &ops::ListInput,
-) -> Result<(Page<crate::protocol::records::AgentSummary>, i64), Failure> {
+) -> Result<(crate::protocol::records::AgentPage, i64), Failure> {
     if ctx.principal_kind() == PrincipalKind::Agent
         || ctx.project_id().is_some_and(|p| p != &input.project_id)
     {
@@ -1208,18 +1208,22 @@ pub fn list_project_agents(
                         .map_err(|_| StorageError::CursorExpired)
                 })
                 .transpose()?;
-            snapshot
-                .runs()
-                .project_assignments(&input.project_id, input.live_only, after.as_ref(), n)
+            snapshot.runs().project_assignments(
+                &input.project_id,
+                input.live_only,
+                after.as_ref(),
+                n,
+            )
         },
         |a| a.id.0.as_str().to_owned(),
     )?;
-    let page = rows.try_into_page(|a| {
+    let mut items = Vec::with_capacity(rows.items.len());
+    for a in &rows.items {
         let context = snapshot
             .runs()
             .agent_assignment_context(&a.id)?
             .ok_or_else(|| corrupt("assignment context"))?;
-        Ok::<_, StorageError>(crate::protocol::records::AgentSummary {
+        items.push(crate::protocol::records::AgentSummary {
             assignment_id: a.id.clone(),
             root_id: a.root_id.clone(),
             work_id: a.work_id.clone(),
@@ -1229,8 +1233,12 @@ pub fn list_project_agents(
             session_id: a.session_id.clone(),
             revision: rev(a.revision),
             created_at_ms: crate::services::kernel::counter(a.created_at_ms),
-        })
-    })?;
+        });
+    }
+    let page = crate::protocol::records::AgentPage {
+        items: BoundedList(items),
+        next_cursor: rows.next_cursor,
+    };
     Ok((page, project.scope_revision))
 }
 
@@ -2192,8 +2200,10 @@ impl QueryHandler for AgentService {
             OperationInput::Agents(ops::Input::Inspect(input)) => self
                 .inspect(snapshot, ctx, input)
                 .map(|(value, scope)| (OperationResult::AgentsInspect { value }, scope)),
-            OperationInput::Agents(ops::Input::List(input)) => list_project_agents(snapshot, ctx, input)
-                .map(|(value, scope)| (OperationResult::AgentsList { value }, scope)),
+            OperationInput::Agents(ops::Input::List(input)) => {
+                list_project_agents(snapshot, ctx, input)
+                    .map(|(value, scope)| (OperationResult::AgentsList { value }, scope))
+            }
             OperationInput::Agents(ops::Input::History(input)) => {
                 retained_history(snapshot, ctx, input)
                     .map(|(value, scope)| (OperationResult::AgentsHistory { value }, scope))

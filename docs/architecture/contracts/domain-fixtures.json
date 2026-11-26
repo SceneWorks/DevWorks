@@ -2634,7 +2634,7 @@
   {
     "id": "result-agents.list",
     "entry": "operation-result.r21",
-    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -10593,21 +10593,21 @@
   {
     "id": "r21-result-agents.list",
     "entry": "operation-result.r21",
-    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"sessionId\":\"session-a\",\"revision\":\"2\",\"createdAtMs\":\"1000\"},{\"assignmentId\":\"assignment-b\",\"rootId\":\"root-a\",\"workId\":\"task-a\",\"roleId\":\"worker\",\"state\":\"Dispatching\",\"sessionId\":\"session-b\",\"revision\":\"2\",\"createdAtMs\":\"1000\",\"parentId\":\"assignment-a\"}],\"hasMore\":false}}",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"sessionId\":\"session-a\",\"revision\":\"2\",\"createdAtMs\":\"1000\"},{\"assignmentId\":\"assignment-b\",\"rootId\":\"root-a\",\"workId\":\"task-a\",\"roleId\":\"worker\",\"state\":\"Dispatching\",\"sessionId\":\"session-b\",\"revision\":\"2\",\"createdAtMs\":\"1000\",\"parentId\":\"assignment-a\"}],\"nextCursor\":\"cursor-a\"}}",
     "typedValid": true,
     "schemaValid": true
   },
   {
     "id": "reject-r20-result-agents.list",
     "entry": "operation-result.r20",
-    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"sessionId\":\"session-a\",\"revision\":\"2\",\"createdAtMs\":\"1000\"}],\"hasMore\":false}}",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"sessionId\":\"session-a\",\"revision\":\"2\",\"createdAtMs\":\"1000\"}]}}",
     "typedValid": false,
     "schemaValid": false
   },
   {
     "id": "reject-r21-result-agents.list-without-session",
     "entry": "operation-result.r21",
-    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"revision\":\"2\",\"createdAtMs\":\"1000\"}],\"hasMore\":false}}",
+    "raw": "{\"kind\":\"agents.list\",\"value\":{\"items\":[{\"assignmentId\":\"assignment-a\",\"rootId\":\"root-a\",\"workId\":\"root-a\",\"roleId\":\"coordinator\",\"state\":\"Dispatching\",\"revision\":\"2\",\"createdAtMs\":\"1000\"}]}}",
     "typedValid": false,
     "schemaValid": false
   },

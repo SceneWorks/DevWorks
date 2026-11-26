@@ -1,0 +1,201 @@
+//! The Agents screen against the real runtime: a project's coordinator and workers with their
+//! role, assignment, state and current step, and the selected agent's transcript and messages.
+mod common;
+use common::*;
+use devworks_core::ports::storage::{
+    StoredAgentAssignmentContext, StoredAssignment, WriteOptions, write_job,
+};
+use devworks_core::protocol::{Id, ProjectId, RootId};
+use devworks_core::services::runs::substrate::NewRunAssignment;
+use devworks_desktop::backend::Backend;
+use devworks_desktop::ops;
+use devworks_desktop::route::Route;
+use eframe::egui::accesskit::Role;
+use egui_kittest::kittest::{NodeT, Queryable};
+use serde_json::json;
+
+fn command(b: &dyn Backend, operation: &str, input: serde_json::Value) -> serde_json::Value {
+    let frame = devworks_desktop::frame::fixture::command(b, operation, input);
+    let result = ops::command_result(b.command(operation, &frame))
+        .unwrap_or_else(|e| panic!("{operation}: {}", e.describe()));
+    serde_json::to_value(result).unwrap()["value"].clone()
+}
+
+fn session(b: &dyn Backend, project: &str, root: &str, title: &str) -> Id {
+    let mut frame: serde_json::Value =
+        serde_json::from_slice(&devworks_desktop::frame::fixture::command(
+            b,
+            "sessions.start",
+            json!({"scope": {"kind": "Project", "projectId": project}, "rootId": root,
+                "title": title}),
+        ))
+        .unwrap();
+    frame["schemaRevision"] = json!(devworks_desktop::frame::latest_revision("sessions.start"));
+    ops::started(b.command("sessions.start", frame.to_string().as_bytes()))
+        .unwrap()
+        .id
+}
+
+/// Registers the coordinator and two workers of `root` through the run substrate, each with
+/// the agent context a delegation records (no agent runs in this test).
+fn assign(
+    engine: &devworks_desktop::host::Engine,
+    project: &ProjectId,
+    root: &str,
+    sessions: [Id; 3],
+) -> Vec<StoredAssignment> {
+    let control = std::sync::Arc::new(devworks_core::services::runs::ControlService::with_scope(
+        std::sync::Arc::new(devworks_desktop::platform::HostIds::new()),
+        std::sync::Arc::new(devworks_core::services::runs::scope::ScriptedScope::new()),
+    ));
+    let (project, root) = (project.clone(), RootId(Id::new(root).unwrap()));
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    engine
+        .host()
+        .runtime()
+        .store()
+        .submit_write(
+            WriteOptions::fixture(),
+            write_job(
+                move |tx| {
+                    let host = tx.store().host_actor.clone();
+                    let [lead, first, second] = sessions;
+                    let new = |session: Id, parent| NewRunAssignment {
+                        root: root.clone(),
+                        work: root.clone(),
+                        parent,
+                        session,
+                        scope_key: None,
+                    };
+                    let coordinator = control
+                        .register_assignment(tx, &host, new(lead, None))?
+                        .unwrap();
+                    let mut out = vec![coordinator.clone()];
+                    for s in [first, second] {
+                        out.push(
+                            control
+                                .register_child_assignment(
+                                    tx,
+                                    &host,
+                                    new(s, Some(coordinator.id.clone())),
+                                )?
+                                .unwrap(),
+                        );
+                    }
+                    let now = tx.now_ms();
+                    for (a, role) in out.iter().zip(["coordinator", "worker", "reviewer"]) {
+                        tx.runs().insert_agent_assignment_context(
+                            &StoredAgentAssignmentContext {
+                                assignment_id: a.id.clone(),
+                                project_id: project.clone(),
+                                role_id: Id::new(role).unwrap(),
+                                role_instructions: String::new(),
+                                role_revisions: json!({}),
+                                brief: format!("The {role} of the issue"),
+                                task_ids: json!([]),
+                                source_checkpoint_id: None,
+                                created_at_ms: now,
+                            },
+                        )?;
+                    }
+                    Ok(out)
+                },
+                move |result| tx.send(result).unwrap(),
+            ),
+        )
+        .unwrap();
+    rx.recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn the_agents_screen_lists_a_coordinator_and_workers_and_opens_their_transcripts_and_messages() {
+    let root = Root::new("agents-screen");
+    let engine = start(&root);
+    let b = engine.backend();
+    let project = ops::project_changed(b.command(
+        "projects.create",
+        &ops::project_create(&*b, "Shop", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    let pid = project.0.as_str().to_owned();
+    let backlog = devworks_core::services::work::workflow::default_status_id(&project, "backlog");
+    let issue = command(
+        &*b,
+        "issues.create",
+        json!({"projectId": pid, "title": "Crash", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 0}),
+    );
+    let issue = issue["id"].as_str().unwrap().to_owned();
+    let sessions = [
+        session(&*b, &pid, &issue, "Lead"),
+        session(&*b, &pid, &issue, "Fix"),
+        session(&*b, &pid, &issue, "Review"),
+    ];
+    let lead_session = sessions[0].clone();
+    let agents = assign(&engine, &project, &issue, sessions);
+    // A person's instruction to the first worker, through the assignment message command.
+    let sent = command(
+        &*b,
+        "agents.messages",
+        json!({"recipientAssignmentId": agents[1].id, "messageClass": "Instruction",
+            "content": "Reproduce the crash first", "attachments": []}),
+    );
+    assert!(sent["id"].is_string(), "{sent}");
+
+    let mut h = harness(shell(&engine, &root, Script::default()), 1500.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Agents);
+    settle(&mut h);
+    assert!(
+        !has_text(&h, "Not available in this build"),
+        "the placeholder is gone"
+    );
+    let rows: Vec<String> = h
+        .query_all_by_label_contains("  ·  ")
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Coordinator") || l.starts_with("Worker"))
+        .collect();
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    // Role, assignment work, state and the root's current step.
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("Coordinator  ·  coordinator  ·  ")
+                && r.contains(&issue)
+                && r.contains("ready")
+                && r.contains("not started")),
+        "{rows:?}"
+    );
+    assert_eq!(rows.iter().filter(|r| r.starts_with("Worker")).count(), 2);
+
+    // Selecting the first worker shows its assignment messages.
+    let worker = rows
+        .iter()
+        .find(|r| r.starts_with("Worker  ·  worker"))
+        .unwrap()
+        .clone();
+    click(&mut h, Role::Button, &worker);
+    assert!(
+        has_text(&h, "Reproduce the crash first"),
+        "the assignment message is shown"
+    );
+    assert!(has_text(&h, "Instruction · from You to Worker worker"));
+
+    // Selecting the coordinator and opening its transcript opens its session in Chat.
+    let coordinator = rows
+        .iter()
+        .find(|r| r.starts_with("Coordinator"))
+        .unwrap()
+        .clone();
+    click(&mut h, Role::Button, &coordinator);
+    click(&mut h, Role::Button, "Open transcript");
+    assert_eq!(h.state().route(), Route::Chat);
+    assert_eq!(
+        h.state().chat.selected.as_deref(),
+        Some(lead_session.as_str()),
+        "the coordinator's own session is opened"
+    );
+}

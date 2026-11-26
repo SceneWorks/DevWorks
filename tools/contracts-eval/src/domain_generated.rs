@@ -1370,6 +1370,25 @@ impl Check for ActorAttribution {
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPage {
+    pub items: Rows<AgentSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for AgentPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "AgentPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentSummary {
     pub assignment_id: AssignmentId,
     pub root_id: RootId,
@@ -29151,7 +29170,7 @@ pub enum OperationResult {
     RunsStop { value: OperationRef },
     #[schemars(extend("x-since" = 21))]
     #[serde(rename = "agents.list")]
-    AgentsList { value: Page<AgentSummary> },
+    AgentsList { value: AgentPage },
     #[serde(rename = "agents.inspect")]
     AgentsInspect { value: AgentRecord },
     #[serde(rename = "agents.delegate")]

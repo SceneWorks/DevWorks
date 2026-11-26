@@ -876,12 +876,9 @@ pub fn agents_page(
     outcome: QueryOutcome,
 ) -> Result<Page<devworks_core::protocol::records::AgentSummary>, Failure> {
     match query_result(outcome)? {
-        (OperationResult::AgentsList { value }, _) => page_of(
-            "agents.list",
-            value.items.0,
-            value.has_more,
-            value.next_cursor,
-        ),
+        (OperationResult::AgentsList { value }, _) => {
+            Ok(Page::new(value.items.0, value.next_cursor.map(|c| c.0)))
+        }
         (other, _) => Err(unexpected("agents.list", &other)),
     }
 }

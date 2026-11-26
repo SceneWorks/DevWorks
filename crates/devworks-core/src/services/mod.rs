@@ -97,7 +97,8 @@ pub struct UseCases {
 }
 
 /// The operations of the agents family (`AgentService`).
-pub const AGENT_OPERATIONS: [&str; 11] = [
+pub const AGENT_OPERATIONS: [&str; 12] = [
+    "agents.list",
     "agents.inspect",
     "agents.delegate",
     "agents.messages",
