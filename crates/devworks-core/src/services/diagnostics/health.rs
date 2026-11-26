@@ -409,10 +409,6 @@ fn storage_monitor(svc: &DiagnosticService, out: &mut Vec<HealthCheck>) {
                 format!("Integrity problems: {}", shown.join("; ")),
             )
             .metric(MetricReading::count("problems", problems.len() as i64))
-            .link(RecoveryLink::new(
-                "workspace.restore",
-                "Restore a verified manual backup",
-            ))
             .at(*at)
         }
         Some((at, Err(why))) => HealthCheck::new(
@@ -988,6 +984,11 @@ pub(crate) fn checks(
         attention.len() as i64,
     ));
     out.insert(0, readiness);
+    if let Some(handled) = svc.operations.read_locked().as_ref() {
+        for c in &mut out {
+            c.recovery.retain(|l| handled.contains(l.operation));
+        }
+    }
     out
 }
 

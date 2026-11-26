@@ -1536,6 +1536,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         }
         package_guard.0 = Some(host);
     }
+    // Health checks link only operations this composition can actually run.
+    core.diagnostics.set_operations(use_cases.operations());
     Ok(Engine {
         store,
         clock,
@@ -2658,6 +2660,10 @@ impl Runtime {
     /// What boot recovery established.
     pub fn report(&self) -> &BootReport {
         &self.report
+    }
+    /// Whether this runtime registered a handler for `operation` (in any mode).
+    pub fn handles(&self, operation: &str) -> bool {
+        self.use_cases.has_query(operation) || self.use_cases.has_command(operation)
     }
     pub fn store(&self) -> &Arc<dyn ApplicationStore> {
         &self.store

@@ -160,10 +160,6 @@ fn boot_links(r: &BootReport) -> Vec<RecoveryLink> {
     let a = &r.artifacts;
     if !a.quarantined.is_empty() || !a.missing.is_empty() {
         links.push(RecoveryLink::new(
-            "workspace.restore",
-            "Restore a verified manual backup holding the corrupt or missing files",
-        ));
-        links.push(RecoveryLink::new(
             "artifacts.list",
             "Find the artifacts whose files are affected",
         ));
