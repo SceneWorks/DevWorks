@@ -1205,8 +1205,12 @@ fn parse_options(
                     seen.push((name, None));
                     i += 1;
                 }
+                // A required value that is missing is not a form this model knows.
                 None if valued => {
-                    seen.push((name, words.get(i + 1).map(|w| w.text.clone())));
+                    let Some(v) = words.get(i + 1) else {
+                        return Parsed::Unknown;
+                    };
+                    seen.push((name, Some(v.text.clone())));
                     i += 2;
                 }
                 _ => return Parsed::Unknown,
@@ -1226,7 +1230,10 @@ fn parse_options(
             if o.value_letters.contains(l) {
                 let rest: String = letters[k + 1..].iter().collect();
                 if rest.is_empty() {
-                    seen.push((opt, words.get(i + 1).map(|w| w.text.clone())));
+                    let Some(v) = words.get(i + 1) else {
+                        return Parsed::Unknown;
+                    };
+                    seen.push((opt, Some(v.text.clone())));
                     consumed = 2;
                 } else {
                     seen.push((opt, Some(rest)));
@@ -2006,6 +2013,7 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
         "-a", "-or", "-and", "-not", "!", "(", ")", "-true", "-false",
     ];
     let mut deletes = false;
+    let mut modeled = true;
     let mut k = 0;
     while k < expr.len() {
         let t = expr[k].text.as_str();
@@ -2027,21 +2035,27 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
                     // operand is the inner command's own target and is planned like a plain
                     // removal; one that embeds `{}`, or a relative one under -execdir/-okdir
                     // (resolved in each found path's folder), cannot be resolved here.
+                    // A hold never drops the start points' plan: a protected start point is
+                    // still refused.
                     let in_found_dir = matches!(t, "-execdir" | "-okdir");
-                    let mut own = Vec::new();
-                    for a in &inner[1..] {
-                        if a.text == "{}" {
-                            continue;
+                    match removal_plan(&n, &inner[1..]) {
+                        Some((kind, operands)) => {
+                            let mut own = Vec::new();
+                            for a in operands.iter().filter(|a| a.text != "{}") {
+                                if a.text.contains("{}")
+                                    || (in_found_dir && !a.text.starts_with('/'))
+                                {
+                                    c.hold(InputNeeded::OpaqueCommand);
+                                    modeled = false;
+                                } else {
+                                    own.push(a.clone());
+                                }
+                            }
+                            if !own.is_empty() {
+                                modeled &= c.push(kind, &own);
+                            }
                         }
-                        let relative = !a.text.starts_with('-') && !a.text.starts_with('/');
-                        if a.text.contains("{}") || (in_found_dir && relative) {
-                            c.hold(InputNeeded::OpaqueCommand);
-                            return false;
-                        }
-                        own.push(a.clone());
-                    }
-                    if !posix_removal(&n, &own, c) {
-                        return false;
+                        None => modeled = false,
                     }
                 }
                 _ if consequential_token(&n) || shell_program(&n) || interpreter(&n) => {
@@ -2075,9 +2089,9 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
         } else {
             starts
         };
-        return c.push(DestructiveKind::EraseContents, &starts);
+        return c.push(DestructiveKind::EraseContents, &starts) && modeled;
     }
-    true
+    modeled
 }
 
 fn protected_branch(c: &Collector, dest: &str) -> bool {
@@ -2689,6 +2703,16 @@ fn rsync(args: &[Word], c: &mut Collector) -> bool {
 }
 
 fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
+    match removal_plan(name, args) {
+        Some((_, [])) => true,
+        Some((kind, operands)) => c.push(kind, operands),
+        None => false,
+    }
+}
+
+/// The removal kind and operands of rm/rmdir/unlink/shred `args`; `None` for an option this
+/// model does not know.
+fn removal_plan<'a>(name: &str, args: &'a [Word]) -> Option<(DestructiveKind, &'a [Word])> {
     let options = match name {
         "rm" => Options {
             value_letters: "",
@@ -2730,12 +2754,9 @@ fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
     };
     let mut seen = Vec::new();
     let Parsed::Operand(k) = parse_options(args, 0, &options, &mut seen) else {
-        return false;
+        return None;
     };
-    let operands = &args[k..];
-    if operands.is_empty() {
-        return true;
-    }
+    let operands = args.get(k..)?;
     let recursive = seen
         .iter()
         .any(|(o, _)| matches!(o.as_str(), "-r" | "-R" | "--recursive"));
@@ -2744,7 +2765,7 @@ fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
         "rm" if recursive => DestructiveKind::RemoveTree,
         _ => DestructiveKind::Unlink,
     };
-    c.push(kind, operands)
+    Some((kind, operands))
 }
 
 /// `mkdir` writes a new entry at each operand (and its missing parents): planned as a write so a

@@ -754,6 +754,40 @@ fn find_exec_removal_of_a_protected_path_is_refused() {
         matches!(verdict(&argv), CommandVerdict::Blocked { .. }),
         "{argv:?}"
     );
+    // A held inner operand keeps the start point's plan: a protected start point is refused.
+    let argv = [
+        "find",
+        &repo,
+        "-maxdepth",
+        "0",
+        "-exec",
+        "rm",
+        "-rf",
+        "{}",
+        "{}/sub",
+        ";",
+    ];
+    assert!(
+        matches!(verdict(&argv), CommandVerdict::Blocked { .. }),
+        "{argv:?}"
+    );
+    // A placeholder given as an option's value, or a missing option value, gets a verdict.
+    for argv in [
+        &[
+            "find",
+            ".",
+            "-exec",
+            "shred",
+            "--random-source",
+            "{}",
+            "{}",
+            ";",
+        ][..],
+        &["find", ".", "-exec", "shred", "--random-source", ";"][..],
+        &["shred", "-n"][..],
+    ] {
+        let _verdict = verdict(argv);
+    }
     // Through a shell, as an agent would send it.
     let script = format!("find . -maxdepth 0 -exec rm -rf {} \\;", sh_quote(&repo));
     assert!(
