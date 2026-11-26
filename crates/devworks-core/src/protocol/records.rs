@@ -10662,6 +10662,27 @@ pub struct ArtifactRecord {
     )]
     #[schemars(with = "TestedRepositoryRevision", extend("x-since" = 4))]
     pub tested_repository: Option<TestedRepositoryRevision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 19))]
+    pub revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Revision", extend("x-since" = 19))]
+    pub reference_revision: Option<Revision>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Digest", extend("x-since" = 19))]
+    pub versions_digest: Option<Digest>,
 }
 impl Check for ArtifactRecord {
     fn check(&self) -> Result<(), String> {
@@ -10672,6 +10693,9 @@ impl Check for ArtifactRecord {
         self.reference_count.check()?;
         self.tags.check()?;
         self.tested_repository.check()?;
+        self.revision.check()?;
+        self.reference_revision.check()?;
+        self.versions_digest.check()?;
         crate::protocol::rules::record(
             "ArtifactRecord",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -10687,6 +10711,15 @@ impl Revisioned for ArtifactRecord {
         }
         if revision < 4 {
             self.tested_repository = None;
+        }
+        if revision < 19 {
+            self.revision = None;
+        }
+        if revision < 19 {
+            self.reference_revision = None;
+        }
+        if revision < 19 {
+            self.versions_digest = None;
         }
     }
 }

@@ -3754,11 +3754,17 @@
         "scope": "DataScope",
         "reference_count": "Counter",
         "tags": "?ArtifactTags",
-        "tested_repository": "?TestedRepositoryRevision"
+        "tested_repository": "?TestedRepositoryRevision",
+        "revision": "?Revision",
+        "reference_revision": "?Revision",
+        "versions_digest": "?Digest"
       },
       "since": {
         "tags": 2,
-        "tested_repository": 4
+        "tested_repository": 4,
+        "revision": 19,
+        "reference_revision": 19,
+        "versions_digest": 19
       }
     },
     "ArtifactReadContent": {
@@ -12493,13 +12499,15 @@
       1,
       2,
       3,
-      4
+      4,
+      19
     ],
     "artifacts.list": [
       1,
       2,
       3,
-      4
+      4,
+      19
     ],
     "history.events": [
       1,

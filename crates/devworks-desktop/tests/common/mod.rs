@@ -150,8 +150,14 @@ pub fn start(root: &Root) -> Engine {
 pub struct Script {
     pub files: Arc<Mutex<Vec<Vec<PathBuf>>>>,
     pub folders: Arc<Mutex<Vec<PathBuf>>>,
+    /// Save-dialog answers, consumed in order.
+    pub saves: Arc<Mutex<Vec<PathBuf>>>,
 }
 impl Dialogs for Script {
+    fn save_file(&mut self, _: &str) -> Option<PathBuf> {
+        let mut f = self.saves.lock().unwrap();
+        (!f.is_empty()).then(|| f.remove(0))
+    }
     fn pick_files(&mut self) -> Vec<PathBuf> {
         let mut f = self.files.lock().unwrap();
         if f.is_empty() {

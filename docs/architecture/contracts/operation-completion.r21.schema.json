@@ -2113,6 +2113,14 @@
         "referenceCount": {
           "$ref": "#/$defs/Counter"
         },
+        "referenceRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 19
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 19
+        },
         "scope": {
           "$ref": "#/$defs/DataScope"
         },
@@ -2123,6 +2131,10 @@
         "testedRepository": {
           "$ref": "#/$defs/TestedRepositoryRevision",
           "x-since": 4
+        },
+        "versionsDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 19
         }
       },
       "required": [

@@ -236,6 +236,17 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// Writes an `artifacts.export` stream to `destination` through the artifact service's
+    /// shared export writer (stream re-authorization, human-only, destination preflight, never
+    /// into application data). An existing file is replaced only with `overwrite`.
+    fn write_export(
+        &self,
+        _stream: &Id,
+        _destination: &std::path::Path,
+        _overwrite: bool,
+    ) -> Result<(), String> {
+        Err("exports are not available here".into())
+    }
     /// Probes package runtimes and refreshes the signed package indexes (blocking; off the UI
     /// thread).
     fn refresh_packages(&self) -> Result<(), String> {
@@ -470,6 +481,10 @@ pub enum TaskOutput {
     Instruction(crate::instructions_ops::TaskResult),
     /// Native host state was refreshed or updated.
     Refreshed,
+    /// An artifact's preview for the Artifacts screen.
+    ArtifactPreview(crate::artifacts_screen::PreviewView),
+    /// An artifact's verified bytes were written to the named file.
+    ArtifactExported(std::path::PathBuf),
     PackageViews {
         views: devworks_engine::package_host::native_ui::NativeViews,
         images: std::collections::BTreeMap<String, eframe::egui::ColorImage>,
