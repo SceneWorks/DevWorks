@@ -16,8 +16,8 @@
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "48d67875a3288fbc4593c15b1383367cc5d147a7c4895fc526f4a06defa7f148",
-    "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
+    "contracts/family-coverage.json": "52259e8fb9de7412da3dd11c018ced079ea00adc199353f35113d1734bd8481f",
+    "mcp-publication-candidates.json": "b5a25fc537027913cfdff9a397eaf06fb9334d4a918222320ff3e4bc55c075a1",
     "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },
   "counts": {
@@ -36664,10 +36664,10 @@
   ],
   "mcpPublication": {
     "counts": {
-      "catalogOperations": 353,
-      "modeDispositions": 358,
-      "tools": 154,
-      "readTools": 95,
+      "catalogOperations": 385,
+      "modeDispositions": 390,
+      "tools": 160,
+      "readTools": 101,
       "commandTools": 59
     },
     "queryAdapterSlice": "mcp_server",

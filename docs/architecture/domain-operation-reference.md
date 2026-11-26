@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 380 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 385 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -213,22 +213,22 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `analysis.health` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `AnalysisRecord` |
-| `analysis.cross_repo_links` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `Page<MetricRecord>` |
-| `analysis.community_analysis` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id` | `AnalysisRecord` |
-| `analysis.status` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `AnalysisRecord` |
-| `analysis.clusters` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `Page<ClusterRecord>` |
-| `analysis.cluster_detail` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`clusterId`: `Id`<br>`filters`: `Items<Label>` | `ClusterRecord` |
-| `analysis.link_and_detect` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id` | `AnalysisRecord` |
-| `analysis.process_batch` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id` | `AnalysisRecord` |
-| `analysis.security` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `AnalysisRecord` |
-| `analysis.metrics` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `Page<MetricRecord>` |
-| `analysis.hotspots` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `Page<MetricRecord>` |
-| `analysis.reanalyze` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id` | `AnalysisRecord` |
-| `analysis.synthesize` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id` | `AnalysisRecord` |
-| `analysis.fleet_health` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `Page<MetricRecord>` |
-| `analysis.archival_candidates` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>` | `Page<MetricRecord>` |
-| `analysis.file_hotspot` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`path`: `RelativePath`<br>`filters`: `Items<Label>` | `Page<MetricRecord>` |
+| `analysis.health` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br>`topHotspots`: `?Limit`<br>`runId`: `?Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.cross_repo_links` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisMetricPageResult` |
+| `analysis.community_analysis` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.status` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br>`runId`: `?Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.clusters` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br>`projection`: `?AnalysisClusterProjection`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisClusterPageResult` |
+| `analysis.cluster_detail` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`clusterId`: `Id`<br>`filters`: `Items<Label>`<br>`legacyOrdinal`: `?Counter`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `ClusterRecord` |
+| `analysis.link_and_detect` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id`<br>`linkMode`: `?AnalysisLinkMode`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.process_batch` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.security` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br>`runId`: `?Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.metrics` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br>`dotnetProject`: `?Label`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisMetricPageResult` |
+| `analysis.hotspots` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisMetricPageResult` |
+| `analysis.reanalyze` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id`<br>`refreshMode`: `?AnalysisRefreshMode`<br>`includeAllSource`: `?bool`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.synthesize` | **Command**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`expectedSourceRevision`: `Revision`<br>`nodeIds`: `Items<Id>`<br>`batchLimit`: `Limit`<br>`resumeRunId`: `?Id`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisRecord` |
+| `analysis.fleet_health` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br>`maxHealth`: `?Finite`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisMetricPageResult` |
+| `analysis.archival_candidates` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`filters`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisMetricPageResult` |
+| `analysis.file_hotspot` | **Query**<br>`scope`: `DataScope`<br>`views`: `ViewSelection`<br>`page`: `PageRequest`<br>`path`: `RelativePath`<br>`filters`: `Items<Label>`<br><br>**Schema revisions** 1, 3 ([revision 3 input](contracts/domain-request.r3.schema.json)) | `AnalysisMetricPageResult` |
 
 ### Schemas
 
@@ -251,11 +251,14 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `database.read` | **Query**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`rowLimit`: `Limit`<br>`timeoutMs`: `PositiveCounter` | `DbReadResult` |
-| `database.execute_write` | **Command**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`proposalId`: `?Id`<br>`timeoutMs`: `PositiveCounter` | `DbWriteResult` |
-| `database.apply_migration` | **Command**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`migration`: `ArtifactRef`<br>`expectedSchemaDigest`: `Digest`<br>`proposalId`: `?Id` | `DbWriteResult` |
-| `database.direct_schema_change` | **Command**<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`proposalId`: `?Id`<br>`timeoutMs`: `PositiveCounter` | `DbWriteResult` |
+| `database.read` | **Query**<br>`scope`: `?DataScope`<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`rowLimit`: `Limit`<br>`timeoutMs`: `PositiveCounter`<br>`includeSchemaDigest`: `?bool`<br>`schemaPreview`: `?Content`<br><br>**Schema revisions** 1, 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `DbReadResult` |
+| `database.execute_write` | **Command**<br>`scope`: `?DataScope`<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`proposalId`: `?Id`<br>`timeoutMs`: `PositiveCounter`<br><br>**Schema revisions** 1, 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `DbWriteResult` |
+| `database.apply_migration` | **Command**<br>`scope`: `?DataScope`<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`migration`: `ArtifactRef`<br>`expectedSchemaDigest`: `Digest`<br>`proposalId`: `?Id`<br>`source`: `?DatabaseMigrationSource`<br><br>**Schema revisions** 1, 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `DbWriteResult` |
+| `database.direct_schema_change` | **Command**<br>`scope`: `?DataScope`<br>`connectionId`: `Id`<br>`expectedConnectionRevision`: `Revision`<br>`statement`: `Content`<br>`parameters`: `Items<DbParameter>`<br>`proposalId`: `?Id`<br>`timeoutMs`: `PositiveCounter`<br>`expectedSchemaDigest`: `?Digest`<br>`fallbackReason`: `?Content`<br><br>**Schema revisions** 1, 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `DbWriteResult` |
 | `database.configure_sensitive_columns` | **Command**<br>`connectionId`: `Id`<br>`expectedRevision`: `Revision`<br>`columnIds`: `Items<Id>`<br><br>**Schema revisions** 1, 5 ([revision 5 input](contracts/domain-request.r5.schema.json)) | `SchemaConnection` |
+| `database.mysql_readonly_query` | **Query**<br>`scope`: `?DataScope`<br>`source`: `Text`<br>`sql`: `Content`<br>`limit`: `?i32`<br><br>**Schema revisions** 9, 10 ([revision 10 input](contracts/domain-request.r9.schema.json)) | `DatabaseLegacyRows` |
+| `database.sensitive_columns` | **Query**<br>`connectionId`: `?Id`<br><br>**Schema revisions** 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `DatabaseSensitiveRuleSet` |
+| `database.edit_sensitive_column_rules` | **Command**<br>`connectionId`: `?Id`<br>`expectedRevision`: `Revision`<br>`edit`: `DatabaseSensitiveRuleEdit`<br><br>**Schema revisions** 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `DatabaseSensitiveRuleSet` |
 
 ### Knowledge
 
@@ -416,9 +419,9 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 | `git.inspect` | **Query**<br>`repositoryId`: `Id`<br>`worktreeId`: `?Id` | `GitInspection` |
 | `git.diff` | **Query**<br>`repositoryId`: `Id`<br>`worktreeId`: `?Id`<br>`base`: `GitOid`<br>`head`: `GitOid`<br>`paths`: `Items<RelativePath>`<br>`page`: `PageRequest` | `Page<ArtifactRef>` |
 | `git.commit` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Commit'} | `GitInspection` |
-| `git.push` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Push'} | `GitInspection` |
-| `git.pull_request` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'OpenPullRequest'}<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/git-command-request.r2.schema.json)) | `GitLink` |
-| `git.integrate` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Integrate'} | `DeliverySnapshot` |
+| `git.push` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Push'}<br><br>**Schema revisions** 1, 16 ([revision 16 input](contracts/git-command-request.r16.schema.json)) | `GitInspection` |
+| `git.pull_request` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'OpenPullRequest'}<br><br>**Schema revisions** 1, 2, 16 ([revision 16 input](contracts/git-command-request.r16.schema.json)) | `GitLink` |
+| `git.integrate` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Integrate'}<br><br>**Schema revisions** 1, 17 ([revision 17 input](contracts/git-command-request.r17.schema.json)) | `DeliverySnapshot` |
 | `git.cleanup` | **Command**<br>[Existing input schema](contracts/git-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Cleanup'} | `MutationSummary` |
 
 ### Reviews
@@ -427,13 +430,13 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `reviews.list` | **Query**<br>`scope`: `DataScope`<br>`rootId`: `?RootId`<br>`page`: `PageRequest` | `Page<ReviewRecord>` |
-| `reviews.inspect` | **Query**<br>`reviewId`: `Id` | `ReviewRecord` |
-| `reviews.request` | **Command**<br>`rootId`: `RootId`<br>`expectedRevision`: `Revision`<br>`barrier`: `DeliveryBarrier`<br>`policyRevision`: `Revision` | `ReviewRecord` |
-| `reviews.findings` | **Query**<br>`reviewId`: `Id`<br>`page`: `PageRequest` | `Page<ReviewFinding>` |
-| `reviews.respond` | **Command**<br>`findingId`: `Id`<br>`expectedRevision`: `Revision`<br>`response`: `Content`<br>`evidence`: `Items<ArtifactRef>` | `ReviewFinding` |
-| `reviews.adjudicate` | **Command**<br>`findingId`: `Id`<br>`expectedRevision`: `Revision`<br>`actionable`: `bool`<br>`rationale`: `Content`<br>`evidence`: `Items<ArtifactRef>` | `ReviewFinding` |
-| `reviews.readiness` | **Query**<br>`rootId`: `RootId`<br>`barrier`: `DeliveryBarrier`<br>`policyRevision`: `Revision` | `ReviewReadiness` |
+| `reviews.list` | **Query**<br>`scope`: `DataScope`<br>`rootId`: `?RootId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `Page<ReviewRecord>` |
+| `reviews.inspect` | **Query**<br>`reviewId`: `Id`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `ReviewRecord` |
+| `reviews.request` | **Command**<br>`rootId`: `RootId`<br>`expectedRevision`: `Revision`<br>`barrier`: `?DeliveryBarrier`<br>`policyRevision`: `Revision`<br>`localTarget`: `?LocalReviewTarget`<br>`candidateRepair`: `?ReviewCandidateRepair`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `ReviewRecord` |
+| `reviews.findings` | **Query**<br>`reviewId`: `Id`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `Page<ReviewFinding>` |
+| `reviews.respond` | **Command**<br>`findingId`: `Id`<br>`expectedRevision`: `Revision`<br>`response`: `Content`<br>`evidence`: `Items<ArtifactRef>`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `ReviewFinding` |
+| `reviews.adjudicate` | **Command**<br>`findingId`: `Id`<br>`expectedRevision`: `Revision`<br>`actionable`: `bool`<br>`rationale`: `Content`<br>`evidence`: `Items<ArtifactRef>`<br>`resolution`: `?CodeReviewResolution`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `ReviewFinding` |
+| `reviews.readiness` | **Query**<br>`rootId`: `RootId`<br>`barrier`: `?DeliveryBarrier`<br>`policyRevision`: `Revision`<br>`localTarget`: `?LocalReviewTarget`<br><br>**Schema revisions** 1, 15 ([revision 15 input](contracts/domain-request.r15.schema.json)) | `ReviewReadiness` |
 
 ### Releases
 
@@ -619,6 +622,8 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 | `addons.rollback` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Rollback'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 | `addons.uninstall` | **Command**<br>[Existing input schema](contracts/addon-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Uninstall'}<br><br>**Schema revisions** 1, 2, 3 ([revision 3 input](contracts/addon-command-request.schema.json)) | `PackageRecord` |
 | `addons.invoke` | **Command**<br>`packageId`: `Id`<br>`contributionId`: `Label`<br>`input`: `ArtifactRef`<br>`expectedDigest`: `?Digest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `PackageInvocation` |
+| `addons.run_workflow` | **Command**<br>`workflowId`: `Id`<br>`packageId`: `Id`<br>`contributionId`: `Label`<br>`manifestDigest`: `Digest`<br>`input`: `ArtifactRef`<br>`requiredGates`: `Items<PackageWorkflowGate>`<br><br>**Schema revisions** 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `PackageInvocation` |
+| `addons.read_content` | **Command**<br>`packageId`: `Id`<br>`contributionId`: `Label`<br>`manifestDigest`: `Digest`<br><br>**Schema revisions** 9 ([revision 9 input](contracts/domain-request.r9.schema.json)) | `PackageContent` |
 | `addons.invocation` | **Query**<br>`operationId`: `OperationId`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `PackageInvocation` |
 
 ### Help
@@ -731,14 +736,33 @@ All 380 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `watch.create` | **Command**<br>`process`: `?ProcessSpec`<br>`probe`: `?WatchProbe`<br>`timer`: `?WatchTimer`<br>`file`: `?WatchFile`<br>`matching`: `?WatchMatch`<br>`tailBytes`: `?ByteLimit`<br>`maxLifetimeMs`: `?Counter`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
-| `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`featureId`: `?RootId`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherPage` |
-| `watch.inspect` | **Query**<br>`watcherId`: `Id`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
-| `watch.cancel` | **Command**<br>`watcherId`: `Id`<br>`expectedRevision`: `Revision`<br>`stopProcess`: `bool`<br><br>**Schema revisions** 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `WatcherRecord` |
+| `watch.create` | **Command**<br>`process`: `?ProcessSpec`<br>`probe`: `?WatchProbe`<br>`timer`: `?WatchTimer`<br>`file`: `?WatchFile`<br>`github`: `?WatchGithubTarget`<br>`matching`: `?WatchMatch`<br>`tailBytes`: `?ByteLimit`<br>`maxLifetimeMs`: `?Counter`<br>`attachedProcess`: `?WatchAttachedProcess`<br>`assignmentId`: `?AssignmentId`<br><br>**Schema revisions** 8, 9, 18 ([revision 18 input](contracts/domain-request.r18.schema.json)) | `WatcherRecord` |
+| `watch.list` | **Query**<br>`sessionId`: `?Id`<br>`featureId`: `?RootId`<br>`states`: `?Items<WatcherState>`<br>`page`: `PageRequest`<br><br>**Schema revisions** 8, 9, 18 ([revision 18 input](contracts/domain-request.r18.schema.json)) | `WatcherPage` |
+| `watch.inspect` | **Query**<br>`watcherId`: `Id`<br><br>**Schema revisions** 8, 9, 18 ([revision 18 input](contracts/domain-request.r18.schema.json)) | `WatcherRecord` |
+| `watch.cancel` | **Command**<br>`watcherId`: `Id`<br>`expectedRevision`: `Revision`<br>`stopProcess`: `bool`<br><br>**Schema revisions** 8, 9, 18 ([revision 18 input](contracts/domain-request.r18.schema.json)) | `WatcherRecord` |
 
 ## Domain types
 
 Reference names reused from earlier shared/provider/data contracts retain their existing schema definitions; they are not redeclared here. Other types below are closed records, enumerations or `kind`-tagged unions. Generic lists/pages and scalar bounds are native checked support types. A field marked *revision N+* was introduced at schema revision N: callers that negotiated an earlier revision never receive it and may not send it.
+
+### PackageContent
+
+| Field | Type |
+| --- | --- |
+| `packageId` | `Id` |
+| `contributionId` | `Label` |
+| `contentKind` | `Label` |
+| `manifestDigest` | `Digest` |
+| `artifact` | `ArtifactRef` |
+
+### PackageWorkflowGate
+
+| Field | Type |
+| --- | --- |
+| `packageId` | `Id` |
+| `contributionId` | `Label` |
+| `manifestDigest` | `Digest` |
+| `reason` | `Content` |
 
 ### LifeState
 
@@ -1365,6 +1389,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `state` | `OperationState` |
 | `report` | `?ArtifactRef` |
 | `coverage` | `Coverage` |
+| `observation` | `?AnalysisObservation` · *revision 3+* |
 
 ### ClusterRecord
 
@@ -1375,6 +1400,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `name` | `Label` |
 | `memberNodeIds` | `Items<Id>` |
 | `score` | `Finite` |
+| `details` | `?AnalysisClusterDetails` · *revision 3+* |
 
 ### MetricRecord
 
@@ -1385,6 +1411,289 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `unit` | `Label` |
 | `sourceId` | `Id` |
 | `inferred` | `bool` |
+
+### AnalysisAvailability
+
+`Available`, `NoData`, `Pending`, `Stale`, `Partial`, `Failed`, `Unavailable`.
+
+### AnalysisLinkMode
+
+`LinksOnly`, `LinksAndCommunities`.
+
+### AnalysisRefreshMode
+
+`VitalsOnly`, `WithProjectAnalysis`, `WithSynthesis`.
+
+### AnalysisClusterProjection
+
+`Overview`, `Graph`.
+
+### AnalysisViewBinding
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `viewDigest` | `Digest` |
+| `snapshot` | `RepositorySnapshot` |
+
+### AnalysisPhaseStatus
+
+| Field | Type |
+| --- | --- |
+| `phase` | `Label` |
+| `state` | `OperationState` |
+| `diagnostic` | `?Label` |
+| `completedAtMs` | `?Counter` |
+
+### AnalysisTrendPoint
+
+| Field | Type |
+| --- | --- |
+| `view` | `AnalysisViewBinding` |
+| `computedAtMs` | `Counter` |
+| `baseScore` | `Finite` |
+| `adjustedScore` | `?Finite` |
+
+### AnalysisFileMetrics
+
+| Field | Type |
+| --- | --- |
+| `health` | `Finite` |
+| `risk` | `Finite` |
+| `concern` | `Finite` |
+| `trust` | `Finite` |
+| `complexity` | `Counter` |
+| `maxNesting` | `Counter` |
+| `deepLines` | `Counter` |
+| `functionCount` | `Counter` |
+| `longestFunction` | `Counter` |
+| `branches` | `Counter` |
+| `linesAdded_90d` | `Counter` |
+| `linesRemoved_90d` | `Counter` |
+| `changes_90d` | `Counter` |
+| `churn_30d` | `Finite` |
+| `churn_90d` | `Finite` |
+| `churn_365d` | `Finite` |
+| `lastChangeAtMs` | `?Counter` |
+| `bugFixRatio` | `Finite` |
+| `recurringChurn` | `Finite` |
+| `couplingStrength` | `Finite` |
+| `couplingPartners` | `Counter` |
+| `truckFactor` | `Counter` |
+| `lintErrors` | `?Counter` |
+| `lintWarnings` | `?Counter` |
+| `role` | `Label` |
+| `dotnetProject` | `?Label` |
+
+### AnalysisHealthSummary
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `dotnetProject` | `?Label` |
+| `baseScore` | `Finite` |
+| `adjustedScore` | `?Finite` |
+| `files` | `Counter` |
+| `hotspots` | `Counter` |
+| `alerts` | `Counter` |
+
+### AnalysisSecuritySummary
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `score` | `Finite` |
+| `complete` | `bool` |
+| `critical` | `Counter` |
+| `high` | `Counter` |
+| `medium` | `Counter` |
+| `low` | `Counter` |
+| `scannedFiles` | `Counter` |
+
+### AnalysisNarrative
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `project` | `?Label` |
+| `summary` | `Content` |
+| `confidence` | `Label` |
+| `model` | `Label` |
+| `computedAtMs` | `Counter` |
+| `evidence` | `ArtifactRef` |
+
+### AnalysisObservation
+
+| Field | Type |
+| --- | --- |
+| `availability` | `AnalysisAvailability` |
+| `bindings` | `Rows<AnalysisViewBinding>` |
+| `computedAtMs` | `?Counter` |
+| `coverage` | `Coverage` |
+| `diagnostics` | `Items<Label>` |
+| `phases` | `?Items<AnalysisPhaseStatus>` |
+| `baseScore` | `?Finite` |
+| `adjustedScore` | `?Finite` |
+| `trends` | `?Items<AnalysisTrendPoint>` |
+| `relatedWorkIds` | `?Items<Id>` |
+| `topHotspots` | `?Rows<AnalysisMetricItem>` |
+| `health` | `?Rows<AnalysisHealthSummary>` |
+| `security` | `?Rows<AnalysisSecuritySummary>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `?bool` |
+| `missingRepositories` | `?Rows<Id>` |
+| `indexedBindings` | `?Rows<AnalysisViewBinding>` |
+| `narratives` | `?Rows<AnalysisNarrative>` |
+
+### AnalysisLinkEndpoint
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `nodeId` | `Id` |
+
+### AnalysisLinkEvidence
+
+| Field | Type |
+| --- | --- |
+| `relationship` | `Label` |
+| `source` | `AnalysisLinkEndpoint` |
+| `target` | `?AnalysisLinkEndpoint` |
+| `targetLabel` | `?Label` |
+| `resolution` | `Label` |
+| `confidence` | `Finite` |
+| `matchedBy` | `Label` |
+
+### AnalysisMetricItem
+
+| Field | Type |
+| --- | --- |
+| `metric` | `MetricRecord` |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `path` | `?RelativePath` |
+| `computedAtMs` | `?Counter` |
+| `namespace` | `?Label` |
+| `language` | `?Label` |
+| `languageIndexed` | `?bool` |
+| `historyCoverage` | `?Label` |
+| `link` | `?AnalysisLinkEvidence` |
+| `fileMetrics` | `?AnalysisFileMetrics` |
+
+### AnalysisFleetTotals
+
+| Field | Type |
+| --- | --- |
+| `repositoryCount` | `Counter` |
+| `averageHealth` | `?Finite` |
+| `hotspotCount` | `Counter` |
+| `alertCount` | `Counter` |
+| `belowHotspot` | `Counter` |
+| `belowAlert` | `Counter` |
+
+### AnalysisMetricPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<AnalysisMetricItem>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `observation` | `AnalysisObservation` |
+| `fleet` | `?AnalysisFleetTotals` |
+| `found` | `?bool` |
+| `language` | `?Label` |
+| `languageIndexed` | `?bool` |
+
+### AnalysisMetricPageResult
+
+Before revision 3: exact legacy `Page<MetricRecord>`. Revision 3 and later: `AnalysisMetricPage`. Each item projects to its `metric` member, keeping item order and the continuation.
+
+### AnalysisClusterMember
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `viewId` | `Id` |
+| `name` | `Label` |
+| `centrality` | `Finite` |
+| `internalEdges` | `Counter` |
+| `externalEdges` | `Counter` |
+| `foundational` | `?bool` |
+| `sourceGroup` | `?Label` |
+| `language` | `?Label` |
+| `framework` | `?Label` |
+| `clusterId` | `?Id` |
+
+### AnalysisClusterConnection
+
+| Field | Type |
+| --- | --- |
+| `clusterId` | `Id` |
+| `edgeCount` | `Counter` |
+| `types` | `Items<Label>` |
+
+### AnalysisClusterDetails
+
+| Field | Type |
+| --- | --- |
+| `legacyOrdinal` | `Counter` |
+| `internalEdges` | `Counter` |
+| `externalEdges` | `Counter` |
+| `density` | `Finite` |
+| `members` | `Rows<AnalysisClusterMember>` |
+| `bridges` | `Items<Id>` |
+| `connections` | `Rows<AnalysisClusterConnection>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `?bool` |
+
+### AnalysisClusterItem
+
+| Field | Type |
+| --- | --- |
+| `cluster` | `ClusterRecord` |
+
+### AnalysisClusterRelationshipCount
+
+| Field | Type |
+| --- | --- |
+| `relationship` | `Label` |
+| `count` | `Counter` |
+
+### AnalysisClusterGraphEdge
+
+| Field | Type |
+| --- | --- |
+| `sourceRepositoryId` | `Id` |
+| `sourceViewId` | `Id` |
+| `targetRepositoryId` | `Id` |
+| `targetViewId` | `Id` |
+| `edgeCount` | `Counter` |
+| `relationshipCounts` | `Items<AnalysisClusterRelationshipCount>` |
+| `crossCluster` | `bool` |
+
+### AnalysisClusterPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<AnalysisClusterItem>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `observation` | `AnalysisObservation` |
+| `modularity` | `?Finite` |
+| `totalRepositories` | `?Counter` |
+| `clusteredRepositories` | `?Counter` |
+| `repositories` | `?Rows<AnalysisClusterMember>` |
+| `links` | `?Rows<AnalysisLinkEvidence>` |
+| `graphEdges` | `?Rows<AnalysisClusterGraphEdge>` |
+
+### AnalysisClusterPageResult
+
+Before revision 3: exact legacy `Page<ClusterRecord>`. Revision 3 and later: `AnalysisClusterPage`. Each item projects to its `cluster` member, keeping item order and the continuation.
 
 ### SchemaConnection
 
@@ -1516,6 +1825,50 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | --- | --- |
 | `cells` | `Items<DbScalar>` |
 
+### DatabaseLegacyRows
+
+| Field | Type |
+| --- | --- |
+| `rows` | `Rows<DynamicJson>` |
+| `rowCount` | `i32` |
+| `columns` | `?Items<DbColumn>` · *revision 10+* |
+| `truncated` | `?bool` · *revision 10+* |
+
+### DatabaseSensitiveColumnRule
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `catalog` | `?Label` |
+| `schema` | `?Label` |
+| `table` | `?Label` |
+| `column` | `Label` |
+| `allow` | `bool` |
+| `reason` | `?Content` |
+
+### DatabaseSensitiveRuleSet
+
+| Field | Type |
+| --- | --- |
+| `connectionId` | `?Id` |
+| `revision` | `Revision` |
+| `rules` | `Rows<DatabaseSensitiveColumnRule>` |
+
+### DatabaseSensitiveRuleEdit
+
+| Kind | Fields |
+| --- | --- |
+| `Upsert` | `rule`: `DatabaseSensitiveColumnRule` |
+| `Delete` | `id`: `Id` |
+
+### DatabaseMigrationSource
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `commit` | `GitOid` |
+| `path` | `RelativePath` |
+
 ### DbReadResult
 
 | Field | Type |
@@ -1525,6 +1878,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `truncated` | `bool` |
 | `nextCursor` | `?Cursor` |
 | `sourceRevision` | `?Revision` |
+| `schemaDigest` | `?Digest` · *revision 9+* |
 
 ### DbWriteResult
 
@@ -1792,6 +2146,83 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `desktopEnabled` | `bool` |
 | `kinds` | `Items<Label>` |
 
+### CodeReviewSeverity
+
+`Blocker`, `Major`, `Minor`, `Informational`.
+
+### CodeReviewResolution
+
+| Kind | Fields |
+| --- | --- |
+| `FixVerified` | `candidateHead`: `GitOid`<br>`focusedCheckIds`: `Items<Id>` |
+| `NotActionable` | No caller fields |
+| `Followup` | `bugId`: `Id`<br>`reviewThreadReply`: `Url` |
+| `NeedsHuman` | `decisionId`: `Id` |
+
+### LocalReviewDiff
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `worktreeId` | `Id` |
+| `base` | `GitOid` |
+| `head` | `GitOid` |
+
+### LocalReviewTarget
+
+| Field | Type |
+| --- | --- |
+| `taskId` | `Id` |
+| `diffs` | `Items<LocalReviewDiff>` |
+
+### LocalReviewEvidence
+
+| Field | Type |
+| --- | --- |
+| `target` | `LocalReviewTarget` |
+| `diffDigest` | `Digest` |
+| `state` | `ReviewObservationState` |
+| `reviewerActorId` | `?Id` |
+| `reviewerSessionId` | `?Id` |
+| `completedAt` | `?Counter` |
+| `findingCount` | `Counter` |
+| `report` | `?ArtifactRef` |
+
+### ReviewCheckDiagnosis
+
+| Field | Type |
+| --- | --- |
+| `failedCheckId` | `Id` |
+| `diagnosis` | `Content` |
+
+### ReviewChangeReason
+
+| Kind | Fields |
+| --- | --- |
+| `RequiredCheck` | `failedCheckId`: `Id` |
+| `Finding` | `findingId`: `Id` |
+
+### ReviewClassifiedChange
+
+| Field | Type |
+| --- | --- |
+| `changeDigest` | `Digest` |
+| `reason` | `ReviewChangeReason` |
+
+### ReviewCandidateRepair
+
+| Field | Type |
+| --- | --- |
+| `originalReviewId` | `Id` |
+| `expectedReviewRevision` | `Revision` |
+| `repositoryId` | `Id` |
+| `reviewedHead` | `GitOid` |
+| `candidateHead` | `GitOid` |
+| `diagnoses` | `Items<ReviewCheckDiagnosis>` |
+| `changes` | `Rows<ReviewClassifiedChange>` |
+| `focusedCheckIds` | `Items<Id>` |
+| `verificationReport` | `ArtifactRef` |
+
 ### ReviewRecord
 
 | Field | Type |
@@ -1804,6 +2235,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `findingIds` | `Items<Id>` |
 | `headDigest` | `Digest` |
 | `sources` | `Items<ReviewSourceEvidence>` |
+| `localReview` | `?LocalReviewEvidence` · *revision 15+* |
+| `candidateRepair` | `?ReviewCandidateRepair` · *revision 15+* |
 
 ### ReviewFinding
 
@@ -1818,6 +2251,8 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `actionable` | `bool` |
 | `response` | `?Content` |
 | `evidence` | `Items<ArtifactRef>` |
+| `codeSeverity` | `?CodeReviewSeverity` · *revision 15+* |
+| `resolution` | `?CodeReviewResolution` · *revision 15+* |
 
 ### ReviewReadiness
 
@@ -1828,6 +2263,7 @@ Reference names reused from earlier shared/provider/data contracts retain their 
 | `blockerIds` | `Items<Id>` |
 | `headDigest` | `Digest` |
 | `policyRevision` | `Revision` |
+| `candidateRepairs` | `?Items<ReviewCandidateRepair>` · *revision 15+* |
 
 ### GitInspection
 
@@ -5671,11 +6107,33 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 
 ### WatchSourceKind
 
-`Process`, `Probe`, `Timer`, `File`.
+`Process`, `Probe`, `Timer`, `File`, `GitHub`, `AttachedProcess`, `Assignment`.
+
+### WatchAssignmentSource
+
+| Field | Type |
+| --- | --- |
+| `assignmentId` | `AssignmentId` |
+| `sessionId` | `Id` |
+
+### WatchAttachedProcess
+
+| Field | Type |
+| --- | --- |
+| `pid` | `u32` |
+| `birthToken` | `Label` |
+
+### WatchGithubTarget
+
+| Field | Type |
+| --- | --- |
+| `repositoryId` | `Id` |
+| `workflowRunId` | `?Counter` |
+| `pullRequestNumber` | `?Counter` |
 
 ### WatchOutcomeKind
 
-`Succeeded`, `Failed`, `Cancelled`, `TimedOut`, `Interrupted`, `Lost`, `Uncertain`.
+`Succeeded`, `Failed`, `Cancelled`, `TimedOut`, `Interrupted`, `Lost`, `Uncertain`, `Exited`.
 
 ### WatchOutcome
 
@@ -5778,6 +6236,7 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `state` | `WatcherState` |
 | `sourceKind` | `WatchSourceKind` |
 | `process` | `?WatchProcessSource` |
+| `github` | `?WatchGithubTarget` · *revision 9+* |
 | `probe` | `?WatchProbeStatus` |
 | `dueAtMs` | `?Counter` |
 | `expiresAtMs` | `?Counter` |
@@ -5795,6 +6254,8 @@ Before revision 3: exact legacy `MutationSummary`. Revision 3 and later: `Conven
 | `outputTruncated` | `bool` |
 | `stopRequested` | `bool` |
 | `event` | `?WatchEvent` |
+| `attachedPid` | `?u32` · *revision 18+* |
+| `assignment` | `?WatchAssignmentSource` · *revision 18+* |
 
 ## Machine sources
 
