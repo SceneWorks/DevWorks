@@ -3054,3 +3054,59 @@ fn a_redirect_draft_edited_during_its_send_is_kept() {
         .unwrap_or_default();
     assert_eq!(redirects, 1);
 }
+
+/// Each redirect stage reads as itself in the run controls. A real redirect is sent through the
+/// gateway (Received); the Acknowledged and Incorporated records the runtime returns once a
+/// coordinator handles it (driven through the substrate in the engine test
+/// `revision_20_shows_each_redirect_stage`) are rendered from that same wire record.
+#[test]
+fn every_redirect_stage_is_shown_with_its_outcome() {
+    use devworks_core::protocol::records::RedirectStage;
+    let root = Root::new("work-redirect-stages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let feature =
+        features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]).remove(0);
+    let id = feature.id.as_str().to_owned();
+    let s = snapshot(&*backend, &id);
+    wops::run_redirected(backend.command(
+        "runs.redirect",
+        &wops::run_redirect(&*backend, &id, &s, "Ship the CLI first"),
+    ))
+    .unwrap();
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    let sent = "Redirect “Ship the CLI first”: sent, waiting for the coordinator";
+    assert!(has_text(&h, sent), "the runtime's Received record is shown");
+    let received = h.state().work.runs[&id].clone();
+    for (stage, outcome, text) in [
+        (
+            RedirectStage::Acknowledged,
+            None,
+            "Redirect “Ship the CLI first”: acknowledged by the coordinator",
+        ),
+        (
+            RedirectStage::Incorporated,
+            Some("CLI moved ahead of the GUI"),
+            "Redirect “Ship the CLI first”: incorporated · CLI moved ahead of the GUI",
+        ),
+    ] {
+        let mut s = received.clone();
+        let r = &mut s.redirects.as_mut().unwrap().0[0];
+        r.stage = stage;
+        r.outcome = outcome.map(|o| devworks_core::protocol::support::BoundedText(o.into()));
+        h.state_mut().work.runs.insert(id.clone(), s);
+        h.step();
+        h.step();
+        assert!(has_text(&h, text), "{text}");
+    }
+}
