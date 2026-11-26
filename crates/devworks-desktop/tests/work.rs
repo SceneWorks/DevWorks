@@ -165,15 +165,21 @@ fn overview_can_enable_and_stop_keep_working_without_taking_a_manual_reservation
         .click();
     settle(&mut h);
     // Under load the stop's reply can land after the shell first settles; wait for the control.
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
     while h
         .query_by_role_and_label(Role::Button, "Enable keep-working")
         .is_none()
     {
+        h.step();
+        if h.query_by_role_and_label(Role::Button, "Enable keep-working")
+            .is_some()
+        {
+            break;
+        }
         assert!(
-            std::time::Instant::now() < deadline + SETTLE_BOUND,
+            std::time::Instant::now() < deadline,
             "keep-working control returns to Enable"
         );
-        h.step();
         std::thread::yield_now();
     }
     let result = backend.query(
@@ -1141,10 +1147,12 @@ fn save_plan_now(
             .values()
             .any(|p| p.snapshot.title.0 == title)
     };
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
     loop {
         assert!(
             std::time::Instant::now() < deadline,
-            "the plan save of {title} never started"
+            "the plan save of {title} never started: {:?}",
+            h.state().work.message
         );
         let clicked = h
             .query_by_role_and_label(Role::Button, "Save plan draft")
