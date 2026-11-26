@@ -59,6 +59,11 @@ pub enum WorkSlot {
     CodeReviewFindings(String, String, bool),
     CodeReviewFindingCommand(String, String),
     ReadinessHistory(String, u64),
+    /// A page of one root's linked history: its lineage, evidence links and model and tool
+    /// usage (the list request's generation).
+    WorkLineage(String, u64),
+    WorkEvidence(String, u64),
+    WorkToolUsage(String, u64),
     WorkGitInspect(String, String),
     /// A change of one work item (one at a time per item).
     WorkCommand(String),
@@ -455,18 +460,23 @@ pub fn run_changed(outcome: CommandOutcome) -> Result<RootSnapshot, Failure> {
     }
 }
 
-pub fn readiness_history(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+/// Lines of linked history one page request asks for.
+pub const LINKED_PAGE: u32 = 50;
+
+/// A page of a root's linked history (`history.work_lineage`): its related work, its links and
+/// its events, in committed order.
+pub fn work_lineage(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::History(history::Input::WorkLineage(
             history::WorkLineageInput {
                 root_id: RootId(frame::id(root)?),
-                page: frame::page(50, cursor)?,
+                page: frame::page(LINKED_PAGE, cursor)?,
             },
         )))
     })
 }
 
-pub fn readiness_history_result(
+pub fn work_lineage_result(
     outcome: QueryOutcome,
 ) -> Result<
     devworks_core::protocol::support::HistoryPage<devworks_core::protocol::records::LineageRecord>,
@@ -500,6 +510,76 @@ pub fn git_links_result(
     match query_result(outcome)? {
         (OperationResult::HistoryGitLinks { value }, _) => Ok(value),
         (other, _) => Err(unexpected("history.git_links", &other)),
+    }
+}
+
+/// A page of a root's evidence links (`history.evidence_links`).
+pub fn evidence_links(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::History(history::Input::EvidenceLinks(
+            history::EvidenceLinksInput {
+                root_id: RootId(frame::id(root)?),
+                page: frame::page(LINKED_PAGE, cursor)?,
+            },
+        )))
+    })
+}
+pub fn evidence_links_result(
+    outcome: QueryOutcome,
+) -> Result<
+    devworks_core::protocol::support::HistoryPage<devworks_core::protocol::records::EvidenceLink>,
+    Failure,
+> {
+    match query_result(outcome)? {
+        (OperationResult::HistoryEvidenceLinks { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("history.evidence_links", &other)),
+    }
+}
+
+/// One fact of a root's usage page: a model request or a completed tool call.
+#[derive(Clone, Debug)]
+pub enum UsageRow {
+    Model(devworks_core::protocol::records::UsageItem),
+    Tool(devworks_core::protocol::records::ToolInvocation),
+}
+/// A page of a root's model and tool usage (`history.tool_usage`).
+pub fn tool_usage(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::History(history::Input::ToolUsage(
+            history::ToolUsageInput {
+                root_id: Some(RootId(frame::id(root)?)),
+                project_id: None,
+                workspace: None,
+                page: frame::page(LINKED_PAGE, cursor)?,
+            },
+        )))
+    })
+}
+/// The rows of a usage page (model requests, then tool calls) and the cursor of the next one,
+/// present only while more exist.
+pub fn tool_usage_result(
+    outcome: QueryOutcome,
+) -> Result<(Vec<UsageRow>, Option<String>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::HistoryToolUsage { value }, _) => {
+            let next = value.next_cursor.map(|c| c.0).filter(|_| value.has_more);
+            let rows = value
+                .items
+                .0
+                .into_iter()
+                .map(UsageRow::Model)
+                .chain(
+                    value
+                        .tool_invocations
+                        .map(|t| t.0)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(UsageRow::Tool),
+                )
+                .collect();
+            Ok((rows, next))
+        }
+        (other, _) => Err(unexpected("history.tool_usage", &other)),
     }
 }
 

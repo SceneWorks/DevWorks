@@ -112,6 +112,8 @@ pub struct WorkUi {
     pub detail: BTreeMap<String, WorkRecord>,
     pub(crate) readiness_history:
         BTreeMap<String, Paged<devworks_core::protocol::records::LineageRecord>>,
+    /// Each root's linked history (HISTORY-01), read when a person asks for it.
+    pub linked: BTreeMap<String, LinkedHistory>,
     /// Each root's source-control links: a re-read keeps the list on screen until every page
     /// arrived, so a refresh never shifts the controls beneath it.
     pub code_reviews: BTreeMap<String, reviews::ReviewPane>,
@@ -324,6 +326,8 @@ pub(crate) enum Action {
     RefreshGit(String),
     CodeReview(reviews::ReviewAction),
     ReadinessHistory(String, bool),
+    /// Reads a root's linked history again (`None`), or the next page of one part of it.
+    LinkedHistory(String, Option<LinkedPart>),
     InspectGit(String, String),
     OpenGitSession(String),
     PublishGithubIssue {
@@ -531,4 +535,22 @@ impl WorkCtl<'_, '_> {
 
     // -----------------------------------------------------------------------------------------
     // Replies
+}
+
+/// One part of a root's linked history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkedPart {
+    Lineage,
+    Evidence,
+    Usage,
+}
+
+/// A root's linked history: every related work item, link and event (`history.work_lineage`),
+/// its evidence links (`history.evidence_links`) and its model and tool usage
+/// (`history.tool_usage`). A refresh keeps the rows shown until its replies replace them.
+#[derive(Default)]
+pub struct LinkedHistory {
+    pub lineage: Paged<devworks_core::protocol::records::LineageRecord>,
+    pub evidence: Paged<devworks_core::protocol::records::EvidenceLink>,
+    pub usage: Paged<wops::UsageRow>,
 }

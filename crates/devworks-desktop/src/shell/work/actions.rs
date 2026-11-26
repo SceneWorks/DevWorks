@@ -262,6 +262,7 @@ impl WorkCtl<'_, '_> {
                 }
                 Action::RefreshGit(root) => self.load_git_links(&root),
                 Action::ReadinessHistory(root, more) => self.load_readiness_history(&root, more),
+                Action::LinkedHistory(root, part) => self.load_linked_history(&root, part),
                 Action::OpenGitSession(session) => {
                     self.cx.effects.push(Effect::OpenGitSession(session));
                 }
