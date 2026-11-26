@@ -633,3 +633,26 @@ fn scanner_treats_only_test_gates_as_test_only() {
         [0; 4]
     );
 }
+
+#[test]
+fn only_the_artifact_owner_mints_the_archive_pin_capability() {
+    let mut files = Vec::new();
+    rust_files(&src(), &mut files);
+    let minted: Vec<String> = files
+        .iter()
+        .map(|path| relative(path))
+        .filter(|name| {
+            !name.starts_with("services/artifacts/") && name != "kernel/workspace_archive.rs"
+        })
+        .filter(|name| {
+            fs::read_to_string(src().join(name))
+                .expect("read source")
+                .contains("ArchivePinAuthority::artifact_owner(")
+        })
+        .collect();
+    assert!(
+        minted.is_empty(),
+        "only services::artifacts mints the archive pin capability:\n{}",
+        minted.join("\n")
+    );
+}

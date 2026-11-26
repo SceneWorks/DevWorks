@@ -332,14 +332,27 @@ mod tests {
             InstallOwner::LinuxStandalone
         };
         let install = Installation::at(owner, &installed).unwrap();
-        let first = install.gate(false).unwrap();
-        let second = install.gate(false).unwrap();
+        // A process another test is spawning can hold an inherited copy of a released lock until
+        // it execs, so an acquisition that must succeed waits briefly, as startup does.
+        let acquire = |exclusive: bool| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            loop {
+                match install.gate(exclusive) {
+                    Err(TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    other => return other.unwrap(),
+                }
+            }
+        };
+        let first = acquire(false);
+        let second = acquire(false);
         drop(first);
         assert!(matches!(install.gate(true), Err(TryLockError::WouldBlock)));
         drop(second);
-        let update = install.gate(true).unwrap();
+        let update = acquire(true);
         assert!(matches!(install.gate(false), Err(TryLockError::WouldBlock)));
         drop(update);
-        assert!(install.gate(false).is_ok());
+        drop(acquire(false));
     }
 }
