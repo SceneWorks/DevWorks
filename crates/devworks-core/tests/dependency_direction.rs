@@ -647,7 +647,7 @@ fn only_the_artifact_owner_mints_the_archive_pin_capability() {
         .filter(|name| {
             fs::read_to_string(src().join(name))
                 .expect("read source")
-                .contains("ArchivePinAuthority::artifact_owner(")
+                .contains("artifact_owner(")
         })
         .collect();
     assert!(
