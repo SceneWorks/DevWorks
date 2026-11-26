@@ -1145,12 +1145,12 @@
 </thead>
 <tbody><tr>
 <td><code>artifacts.save</code></td>
-<td><strong>Command</strong><br><a href="contracts/artifact-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Save&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3, 4 (<a href="contracts/artifact-command-request.r3.schema.json">revision 4 input</a>)</td>
+<td><strong>Command</strong><br><a href="contracts/artifact-command-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/command/kind&#39;, &#39;equals&#39;: &#39;Save&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3, 4, 19 (<a href="contracts/artifact-command-request.r3.schema.json">revision 19 input</a>)</td>
 <td><code>ArtifactRecord</code></td>
 </tr>
 <tr>
 <td><code>artifacts.list</code></td>
-<td><strong>Query</strong><br><a href="contracts/artifact-query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;List&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3, 4 (<a href="contracts/artifact-query-request.r3.schema.json">revision 4 input</a>)</td>
+<td><strong>Query</strong><br><a href="contracts/artifact-query-request.schema.json">Existing input schema</a><br>{&#39;pointer&#39;: &#39;/query/kind&#39;, &#39;equals&#39;: &#39;List&#39;}<br><br><strong>Schema revisions</strong> 1, 2, 3, 4, 19 (<a href="contracts/artifact-query-request.r3.schema.json">revision 19 input</a>)</td>
 <td><code>Page&lt;ArtifactRecord&gt;</code></td>
 </tr>
 <tr>
@@ -10575,6 +10575,18 @@
 <tr>
 <td><code>testedRepository</code></td>
 <td><code>?TestedRepositoryRevision</code> · <em>revision 4+</em></td>
+</tr>
+<tr>
+<td><code>revision</code></td>
+<td><code>?Revision</code> · <em>revision 19+</em></td>
+</tr>
+<tr>
+<td><code>referenceRevision</code></td>
+<td><code>?Revision</code> · <em>revision 19+</em></td>
+</tr>
+<tr>
+<td><code>versionsDigest</code></td>
+<td><code>?Digest</code> · <em>revision 19+</em></td>
 </tr>
 </tbody></table>
 <h3 id="artifactreadcontent">ArtifactReadContent</h3>

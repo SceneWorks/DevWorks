@@ -4,7 +4,7 @@ These scripts generate planning artifacts; they are not application runtime depe
 
 - `requirements_content.py`: base requirement sections.
 - `requirements_expansion.py`: interview additions and reconciled requirements.
-- `build_requirements.py`: builds HTML, Word, structured JSON and the architecture figure.
+- `build_requirements.py`: builds HTML, Markdown, structured JSON and the architecture figure.
 - `build_gallery.py`: rebuilds the gallery and its screen coverage metadata from the existing UI previews.
 - `build_architecture.cjs`: builds the architecture HTML reader, requirement traceability, capability catalog and structural validation record.
 
@@ -14,7 +14,7 @@ Run everything from the repository root. A rebuild of unchanged sources must lea
 
 **Dependencies (authoring only, never application dependencies).**
 
-- Python 3 with `python-docx` and `Pillow` (`requirements.txt`). The requirements builder also needs Arial or DejaVu Sans fonts.
+- Python 3 with `Pillow` (`requirements.txt`). The requirements builder also needs Arial or DejaVu Sans fonts.
 - Node.js with `marked` 15.0.12 (architecture builder; later majors escape `&` in link URLs and change `ui-reference.html`) and `playwright` plus its Chromium (`npx playwright install chromium`) for the `verify_*.cjs` reader and prototype checks. Make both resolvable, for example with `NODE_PATH` pointing at an authoring `node_modules`.
 - Rust (stable) for the contracts-eval steps.
 - `pypdf` is needed only by the retired verifiers listed below; no current script imports it.
@@ -38,7 +38,7 @@ python3 tools/planning/build_implementation_plan.py
 node tools/planning/build_architecture.cjs
 ```
 
-Steps are numbered 1–14 in the order listed. The architecture builder runs twice because the implementation plan reads the catalog and traceability it writes, and the plan reader it renders reads the plan. `build_requirements.py` writes the Word package with fixed entry timestamps so unchanged sources give identical bytes. Cargo resolves a workspace from the nearest parent `Cargo.toml`; in a worktree nested inside another checkout, run the cargo step from a worktree outside it.
+Steps are numbered 1–14 in the order listed. The architecture builder runs twice because the implementation plan reads the catalog and traceability it writes, and the plan reader it renders reads the plan. Cargo resolves a workspace from the nearest parent `Cargo.toml`; in a worktree nested inside another checkout, run the cargo step from a worktree outside it.
 
 `inventory_codegraph.py` and `map_codegraph_inventory.py` need a CodeGraph checkout and parser packages, and `verify_domain_contracts.py`/`audit_domain_sources.py` write dated evidence; run them only when that evidence is being refreshed (see below and the contracts-eval README).
 
@@ -66,15 +66,15 @@ These verifiers rewrite evidence records under `docs/architecture/validation/` a
 
 ## Outputs and review
 
-Generated files live in `docs/planning/`; temporary diagram input lives in ignored `.planning-build/`. The builder resolves paths relative to its own file rather than a specific checkout or working directory. Diagram generation needs Arial or DejaVu Sans fonts. Word rendering and visual inspection are still required after document edits; generation alone does not verify page layout.
+Generated files live in `docs/planning/`; temporary diagram input lives in ignored `.planning-build/`. The builder resolves paths relative to its own file rather than a specific checkout or working directory. Diagram generation needs Arial or DejaVu Sans fonts. The requirements are published as HTML and Markdown; the Word copy was dropped (DW-448) because nothing read edits back into the sources.
 
-The optional `--export-dir PATH` argument also mirrors the planning artifacts into another directory, preserving legacy `superharness-requirements.html` and `.docx` aliases there for earlier local links. Repository artifacts use the confirmed DevWorks name.
+The optional `--export-dir PATH` argument also mirrors the planning artifacts into another directory, preserving legacy `superharness-requirements.html` and `.md` aliases there for earlier local links. Repository artifacts use the confirmed DevWorks name.
 
 Keep confirmed requirements, proposed details, the interview record, UI limitations and source provenance aligned. CodeGraph feature requirements and delivery items are the operational source of truth; these versioned sources and generated readers publish the same approved decisions. No Shortcut records are created by these scripts.
 
 ## Architecture review artifacts
 
-Edit `docs/architecture/devworks-architecture.md` and `architecture-contracts.json`. The latter maps requirement ID prefixes and explicit exceptions to design sections, owners and validation assignments. It also owns the proposed capability families. The builder consumes the generated requirements JSON without altering confirmed requirements or the Word edition.
+Edit `docs/architecture/devworks-architecture.md` and `architecture-contracts.json`. The latter maps requirement ID prefixes and explicit exceptions to design sections, owners and validation assignments. It also owns the proposed capability families. The builder consumes the generated requirements JSON without altering confirmed requirements or their generated editions.
 
 `docs/architecture/devworks-storage-evaluation.md` is the editable storage comparison protocol; the same builder creates its offline HTML edition. Evidence in `helix-embedding-validation.json` preserves the historical registry/source probes and subsequent local native runtime qualification. Comparative results, correctness failures and remaining acceptance gates live in `storage-evaluation-status.json`, `storage-evaluation-results.json` and the evaluation reader. `validation/helix-direct-engine/` preserves the minimal probe inputs, lockfile and a path-redacted compilation log; it is not native application scaffolding or a benchmark implementation.
 
@@ -125,4 +125,4 @@ Baseline 1.0: `architecture-feasibility-review.md` and `architecture-handoff.md`
 
 `node tools/planning/verify_baseline_prototype.cjs` checks the separate Anthropic forms, mock opt-in/out, selected storage text and absence of the removed Helix reader selector; it refreshes the two affected current gallery previews. `node tools/planning/verify_document_links.cjs` checks all top-level architecture/planning HTML local links/images and page errors, including runtime-created prototype anchors. Both use an isolated headless authoring browser and no real provider/database access.
 
-The approved routing amendments live in `docs/planning/auto-routing-plan.json` and `latest-model-plan.json` under DW-F6. `auto_routing_requirements.py` publishes their exact requirement deltas through the requirements builder. DW-108 owns hourly inventories, latest aliases, conversational allocation/pins and selection inputs; DW-22 retains SystemOne decisions and availability; DW-107 consumes latest-aware first-session classification and generation affinity; DW-61 reuses their evidence. Run `python3 tools/planning/build_latest_model_plan.py` to render the latest-plan reader, then regenerate requirements, architecture, implementation coverage, and architecture again. Render Word into `.planning-build/latest-model/word/`, inspect its pages and record the actual review in `.planning-build/latest-model/word-review.json`. Run `node tools/planning/verify_auto_routing_readers.cjs`. The amendment's consistency check `verify_auto_routing_plan.py` is retired (see above); its `latest-model-plan-review.json` distinguishes document consistency from native acceptance; the earlier Auto review remains a historical checkpoint. These authoring checks perform no model inference. Use the bundled authoring runtimes and libraries.
+The approved routing amendments live in `docs/planning/auto-routing-plan.json` and `latest-model-plan.json` under DW-F6. `auto_routing_requirements.py` publishes their exact requirement deltas through the requirements builder. DW-108 owns hourly inventories, latest aliases, conversational allocation/pins and selection inputs; DW-22 retains SystemOne decisions and availability; DW-107 consumes latest-aware first-session classification and generation affinity; DW-61 reuses their evidence. Run `python3 tools/planning/build_latest_model_plan.py` to render the latest-plan reader, then regenerate requirements, architecture, implementation coverage, and architecture again. Run `node tools/planning/verify_auto_routing_readers.cjs`. The amendment's consistency check `verify_auto_routing_plan.py` is retired (see above); its `latest-model-plan-review.json` distinguishes document consistency from native acceptance; the earlier Auto review remains a historical checkpoint. These authoring checks perform no model inference. Use the bundled authoring runtimes and libraries.
