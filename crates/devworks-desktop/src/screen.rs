@@ -320,6 +320,20 @@ impl Cx<'_> {
             frame,
         )
     }
+    /// Runs a multi-step task off the UI thread; `false` when nothing was submitted.
+    pub fn task(
+        &mut self,
+        slot: impl Into<Slot>,
+        label: &str,
+        task: impl FnOnce(&dyn Backend) -> Result<crate::backend::TaskOutput, String> + Send + 'static,
+    ) -> bool {
+        if self.online.is_err() {
+            return false;
+        }
+        self.client
+            .as_deref_mut()
+            .is_some_and(|c| c.task(slot.into(), label, task))
+    }
     /// Reports a reply its screen has no handling for (`slot` is the screen's own slot).
     pub fn unhandled(&mut self, slot: &dyn Debug, reply: Reply) {
         *self.status = Some(match reply {

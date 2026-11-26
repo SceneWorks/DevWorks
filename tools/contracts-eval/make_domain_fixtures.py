@@ -1078,6 +1078,15 @@ for kind in ['Text','Binary']:
  value['testedRepository']=source
  case('r4-result-artifacts.read-'+kind,'operation-result.r4',{'kind':'artifacts.read','value':value})
  case('reject-r3-artifact-read-source-'+kind,'operation-result.r3',{'kind':'artifacts.read','value':value},False,False)
+# DW-181 revision 19: the artifact, reference and live-version identities tag and delete expect.
+current={**record,'revision':'3','referenceRevision':'2','versionsDigest':'c'*64}
+for name in ['artifacts.save','artifacts.list']:
+ value=current if name=='artifacts.save' else {'items':[current],'hasMore':False}
+ case('r19-result-'+name,'operation-result.r19',{'kind':name,'value':value})
+ case('reject-r4-result-'+name+'-revisions','operation-result.r4',{'kind':name,'value':value},False,False)
+saved19=copy.deepcopy(POS['r3-save-workspace']);saved19['schemaRevision']=19
+case('r19-input-artifacts.save','artifact-command-request.r3',saved19)
+case('r19-input-artifacts.list','artifact-query-request.r3',{'protocol':'1.0-draft.1','schemaRevision':19,'queryId':'query-a','query':{'kind':'List','workspace':True},'limit':20})
 # DW-182 revision 20: the gate, cause and reason of every condition holding a root.
 conditions=[{'holdId':'hold-a','gate':'Pause','cause':'HumanPause','rateLimited':False,'reason':'Paused by you'},
  {'holdId':'hold-b','gate':'Hold','cause':'Capacity','rateLimited':True,'reason':'Provider rate limit until 12:00'},

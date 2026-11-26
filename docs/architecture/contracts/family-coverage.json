@@ -10045,6 +10045,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r4.schema.json",
               "completionSchema": "operation-completion.r4.schema.json"
+            },
+            {
+              "revision": 19,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r19.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r19.schema.json",
+              "completionSchema": "operation-completion.r19.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -10113,6 +10121,14 @@
               "inputSchema": "artifact-query-request.r3.schema.json",
               "resultSchema": "operation-result.r4.schema.json",
               "queryReplySchema": "domain-query-reply.r4.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 19,
+              "inputSchema": "artifact-query-request.r3.schema.json",
+              "resultSchema": "operation-result.r19.schema.json",
+              "queryReplySchema": "domain-query-reply.r19.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
