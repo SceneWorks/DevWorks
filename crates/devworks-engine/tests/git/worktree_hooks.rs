@@ -105,7 +105,7 @@ pub(super) fn assert_reviewed_create(
             source,
             &[
                 "config",
-                "includeIf.gitdir:**/worktrees/**.path",
+                "includeIf.gitdir:**/.git/worktrees/**.path",
                 conditional.to_str().unwrap(),
             ],
         );

@@ -450,12 +450,25 @@ fn the_retention_settings_bound_the_log() {
     assert!(pruned.over_cap >= 5, "{pruned:?}");
     let records = read(&*parts.sqlite, |s| s.diagnostics().diagnostic_stats()).records;
     assert_eq!(records, 1_000);
-    // A day later everything recorded before then has expired.
+    // A day later everything recorded before then has expired. Each pass removes a bounded
+    // batch, so the monitor's later passes finish the backlog.
     h.advance(2 * 86_400_000);
-    let pruned = app.diagnostics().prune().unwrap();
-    assert!(pruned.expired >= 999, "{pruned:?}");
+    let (mut expired, mut passes) = (0, 0);
+    loop {
+        let pruned = app.diagnostics().prune().unwrap();
+        if pruned.expired == 0 {
+            break;
+        }
+        expired += pruned.expired;
+        passes += 1;
+        assert!(
+            passes <= 3,
+            "a bounded pass removes hundreds of records: {pruned:?}"
+        );
+    }
+    assert!(expired >= 999, "{expired}");
     let left = read(&*parts.sqlite, |s| s.diagnostics().diagnostic_stats()).records;
-    assert_eq!(left, 1, "only this pass's own record remains");
+    assert_eq!(left, passes, "only the removing passes' own records remain");
     rt.block_on(app.shutdown());
 }
 
