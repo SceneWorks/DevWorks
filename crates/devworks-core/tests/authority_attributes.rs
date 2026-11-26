@@ -118,6 +118,8 @@ fn old_input_check(op: &str) -> InputCheck {
                 | "knowledge.diagnostics"
                 | "knowledge.import_user_data"
         )
+        // DW-55 retention maintenance is checked like the other assignment-denied operations.
+        || F12_ASSIGNMENT_DENIED.contains(&op)
     {
         InputCheck::Assignment
     } else {
@@ -143,7 +145,8 @@ fn command_only(d: &OperationDescriptor) -> bool {
 
 /// The recorded native-execution decisions that changed behaviour (each now needs a reviewed
 /// native grant under Project scope). `git.pull_request` was reviewed and stays non-native.
-const NEWLY_NATIVE: [&str; 8] = [
+/// DW-53 generates repository documentation natively in an owned worktree.
+const NEWLY_NATIVE: [&str; 9] = [
     "git.integrate",
     "git.cleanup",
     "desktop.input",
@@ -152,10 +155,46 @@ const NEWLY_NATIVE: [&str; 8] = [
     "database.apply_migration",
     "database.direct_schema_change",
     "addons.run_workflow",
+    "repository_docs.generate",
 ];
 
 /// DW-37 gives only a human administrator control of database sensitive-column policy.
 const HUMAN_DATABASE_POLICY: &str = "database.edit_sensitive_column_rules";
+
+/// DW-F12 lets only a human administrator approve a signed application update install.
+const HUMAN_UPDATE_APPROVAL: &str = "workspace.approve_install";
+
+/// DW-F12 operations only a human uses: DW-54 work imports other than the scheduled sync,
+/// inspecting and cancelling DW-55 retention maintenance, and approving an update install.
+const F12_HUMAN_ONLY: [&str; 11] = [
+    "imports.preview",
+    "imports.configure",
+    "imports.apply",
+    "imports.runs",
+    "imports.inspect",
+    "imports.settings",
+    "imports.history",
+    "imports.cancel",
+    "maintenance.inspect",
+    "maintenance.cancel",
+    HUMAN_UPDATE_APPROVAL,
+];
+
+/// DW-F12 commands refused to a root-bound agent: configuring, applying and cancelling a work
+/// import, and approving an update install.
+const F12_ADMINISTRATION: [&str; 4] = [
+    "imports.configure",
+    "imports.apply",
+    "imports.cancel",
+    HUMAN_UPDATE_APPROVAL,
+];
+
+/// DW-55 retention maintenance is refused to an agent with an assignment.
+const F12_ASSIGNMENT_DENIED: [&str; 3] = [
+    "maintenance.inspect",
+    "maintenance.cancel",
+    "maintenance.scheduled_prune",
+];
 
 #[test]
 fn descriptor_attributes_reproduce_the_former_name_lists() {
@@ -165,12 +204,14 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         assert_eq!(d.native_execution, native, "{op} native execution");
         assert_eq!(
             d.approval_required,
-            OLD_APPROVAL_REQUIRED.contains(&op),
+            OLD_APPROVAL_REQUIRED.contains(&op) || op == HUMAN_UPDATE_APPROVAL,
             "{op} approval required"
         );
         assert_eq!(
             d.human_only,
-            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY,
+            OLD_HUMAN_ONLY.contains(&op)
+                || op == HUMAN_DATABASE_POLICY
+                || F12_HUMAN_ONLY.contains(&op),
             "{op} human only"
         );
         let scope = d.assignment_scope;
@@ -181,7 +222,7 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         );
         assert_eq!(
             scope == AssignmentScope::AssignmentDenied,
-            old_assignment_denied(op),
+            old_assignment_denied(op) || F12_ASSIGNMENT_DENIED.contains(&op),
             "{op} assignment denied"
         );
         assert_eq!(
@@ -193,7 +234,9 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         if d.binding(Mode::Command).is_some() {
             assert_eq!(
                 scope == AssignmentScope::Administration,
-                old_administration(op) || op == HUMAN_DATABASE_POLICY,
+                old_administration(op)
+                    || op == HUMAN_DATABASE_POLICY
+                    || F12_ADMINISTRATION.contains(&op),
                 "{op} administration"
             );
         } else {

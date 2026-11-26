@@ -91,6 +91,14 @@ fn scope(project: &Option<String>) -> DataScope {
         })
 }
 
+/// The screen's integrated header, as the route registry describes it.
+const HEADER: crate::widgets::Header<'static> = crate::widgets::Header {
+    title: "Dreaming",
+    summary: "Knowledge consolidation runs and their proposals.",
+    tabs: &[],
+    tab: 0,
+};
+
 impl DreamingScreen {
     fn reset_project(&mut self, cx: &Cx<'_>) {
         let project = cx.selected_project().map(str::to_owned);
@@ -409,60 +417,38 @@ impl Screen for DreamingScreen {
     }
 
     fn ui(&mut self, cx: &mut Cx<'_>, _: Route, ui: &mut Ui) {
-        self.reset_project(cx);
-        ui.horizontal(|ui| {
-            ui.heading("Dreaming");
-            if ui.button("Refresh").clicked() {
-                self.load(cx, Route::Dreaming);
-            }
-            if ui
-                .add_enabled(
-                    self.settings.is_some()
-                        && !cx.waiting(&DreamingSlot::DreamRunCommand(self.project.clone())),
-                    egui::Button::new("Run now"),
-                )
-                .clicked()
-            {
-                self.run(cx, None, None);
-            }
-        });
-        if let Some(message) = &self.message {
-            ui.label(message);
+        if let Err(reason) = cx.online() {
+            let reason = reason.to_owned();
+            crate::widgets::pane(
+                ui,
+                HEADER,
+                &mut (),
+                |_, _| {},
+                |ui, _, _| {
+                    crate::widgets::state_block(ui, &crate::widgets::ViewState::Offline { reason });
+                },
+            );
+            return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.collapsing("Settings", |ui| self.settings_ui(cx, ui));
-            ui.collapsing("Instructions", |ui| self.instructions_ui(cx, ui));
-            ui.separator();
-            ui.heading("Run history");
-            let mut open = None;
-            for run in &self.runs {
-                let state = run
-                    .detail
-                    .as_ref()
-                    .map(|detail| format!("{:?}", detail.status))
-                    .unwrap_or_else(|| format!("{:?}", run.state));
-                if ui
-                    .selectable_label(
-                        self.selected.as_ref() == Some(&run.id),
-                        format!("{}  {state}", run.id.as_str()),
-                    )
-                    .clicked()
-                {
-                    open = Some(run.id.clone());
-                }
-            }
-            if let Some(id) = open {
-                self.selected = Some(id.clone());
-                self.report = None;
-                self.report_text = None;
-                self.confirm_revert = false;
-                self.load_report(cx, id);
-            }
-            if self.runs_cursor.is_some() && ui.button("More runs").clicked() {
-                self.load_runs(cx, true);
-            }
-            self.report_ui(cx, ui);
-        });
+        self.reset_project(cx);
+        let mut state = (self, cx);
+        crate::widgets::with_right_sidebar(
+            ui,
+            crate::theme::SIDEBAR,
+            &mut state,
+            |ui, state| {
+                crate::widgets::pane(
+                    ui,
+                    HEADER,
+                    state,
+                    |ui, (screen, cx)| screen.header_actions(cx, ui),
+                    |ui, (screen, cx), _| screen.primary_ui(cx, ui),
+                );
+            },
+            |ui, (screen, cx)| {
+                crate::widgets::secondary_pane(ui, "Run history", |ui| screen.history_ui(cx, ui));
+            },
+        );
     }
 
     fn context(&self, _: Route, memory: &crate::memory::RouteMemory) -> ScreenContext {
@@ -480,6 +466,67 @@ impl Screen for DreamingScreen {
 }
 
 impl DreamingScreen {
+    fn header_actions(&mut self, cx: &mut Cx<'_>, ui: &mut Ui) {
+        if ui
+            .add_enabled(
+                self.settings.is_some()
+                    && !cx.waiting(&DreamingSlot::DreamRunCommand(self.project.clone())),
+                egui::Button::new("Run now"),
+            )
+            .clicked()
+        {
+            self.run(cx, None, None);
+        }
+        if ui.button("Refresh").clicked() {
+            self.load(cx, Route::Dreaming);
+        }
+    }
+
+    fn primary_ui(&mut self, cx: &mut Cx<'_>, ui: &mut Ui) {
+        if let Some(message) = &self.message {
+            ui.label(message);
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.collapsing("Settings", |ui| self.settings_ui(cx, ui));
+            ui.collapsing("Instructions", |ui| self.instructions_ui(cx, ui));
+            self.report_ui(cx, ui);
+        });
+    }
+
+    fn history_ui(&mut self, cx: &mut Cx<'_>, ui: &mut Ui) {
+        egui::ScrollArea::vertical()
+            .id_salt("dreaming-run-history")
+            .show(ui, |ui| {
+                let mut open = None;
+                for run in &self.runs {
+                    let state = run
+                        .detail
+                        .as_ref()
+                        .map(|detail| format!("{:?}", detail.status))
+                        .unwrap_or_else(|| format!("{:?}", run.state));
+                    if ui
+                        .selectable_label(
+                            self.selected.as_ref() == Some(&run.id),
+                            format!("{}  {state}", run.id.as_str()),
+                        )
+                        .clicked()
+                    {
+                        open = Some(run.id.clone());
+                    }
+                }
+                if let Some(id) = open {
+                    self.selected = Some(id.clone());
+                    self.report = None;
+                    self.report_text = None;
+                    self.confirm_revert = false;
+                    self.load_report(cx, id);
+                }
+                if self.runs_cursor.is_some() && ui.button("More runs").clicked() {
+                    self.load_runs(cx, true);
+                }
+            });
+    }
+
     fn settings_ui(&mut self, cx: &mut Cx<'_>, ui: &mut Ui) {
         let Some(settings) = &self.settings else {
             ui.label("Settings are unavailable.");

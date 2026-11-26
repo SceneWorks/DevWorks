@@ -70,7 +70,7 @@ fn check(
     if &tx.store().store_id != ctx.store_id()
         || tx.store().restore_epoch != ctx.restore_epoch().get()
         || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-        || !crate::authority::fences_hold(tx, fences)?
+        || !crate::services::fences::fences_hold(tx, fences)?
     {
         return Err(StorageError::ScopeDenied);
     }

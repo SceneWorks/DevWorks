@@ -208,7 +208,7 @@ pub(super) fn validate(
         &job.source_context,
     )?;
     if tx.actors().actor_kind(&job.actor)? != Some(principal_kind(&job.actor_kind)?)
-        || !crate::authority::fences_hold(tx, &job.fences)?
+        || !crate::services::fences::fences_hold(tx, &job.fences)?
     {
         return Err(StorageError::ScopeDenied);
     }

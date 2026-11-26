@@ -300,7 +300,7 @@ pub(super) fn qualification_current_read(
     let current = probe.store_id==read.stamp().store_id && probe.restore_epoch==read.stamp().restore_epoch
         && read.actors().actor_kind(&probe.actor_id)?==Some(PrincipalKind::Human)
         // This only rechecks original facts; it is never returned as a permission.
-        && crate::authority::service::authorization_holds(read,&crate::ports::Authorization::direct().fenced_by(probe.authority_fences.clone()))?;
+        && crate::services::fences::authorization_holds(read,&crate::ports::Authorization::direct().fenced_by(probe.authority_fences.clone()))?;
     Ok(current && evidence_current(read.artifacts(), q)?)
 }
 
@@ -367,7 +367,7 @@ pub fn resolve_selected_in(
             probe.store_id == tx.store().store_id
                 && probe.restore_epoch == tx.store().restore_epoch
                 && tx.actors().actor_kind(&probe.actor_id)? == Some(PrincipalKind::Human)
-                && crate::authority::service::fences_hold(tx, &probe.authority_fences)?
+                && crate::services::fences::fences_hold(tx, &probe.authority_fences)?
         }
         None => false,
     };

@@ -1070,8 +1070,7 @@ fn read_refusal(r: ReadRefusal) -> Result<Refusal, StorageError> {
 // ---------------------------------------------------------------------------------------------
 // The service
 
-/// Capability held by the artifact owner for its backup-specific protected writes.
-pub struct ArchivePinAuthority(());
+pub use crate::kernel::workspace_archive::ArchivePinAuthority;
 
 pub(crate) fn pin_checkpoint_blob(
     tx: &mut dyn WriteTransaction,
@@ -1086,14 +1085,18 @@ pub(crate) fn pin_checkpoint_blob(
     }) {
         return Err(StorageError::ScopeDenied);
     }
-    tx.archive_pin(&ArchivePinAuthority(()), holder, &blob.content.sha256)
+    tx.archive_pin(
+        &ArchivePinAuthority::artifact_owner(),
+        holder,
+        &blob.content.sha256,
+    )
 }
 
 pub(crate) fn release_checkpoint_blobs(
     tx: &mut dyn WriteTransaction,
     holder: &Id,
 ) -> Result<i64, StorageError> {
-    tx.archive_release_pins(&ArchivePinAuthority(()), holder)
+    tx.archive_release_pins(&ArchivePinAuthority::artifact_owner(), holder)
 }
 
 /// The artifact domain service.

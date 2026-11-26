@@ -11,7 +11,7 @@ use crate::ports::storage::{
     WorkImportRun, WriteOptions, WriteTransaction, run_write,
 };
 use crate::ports::{
-    CommandHandler, Decided, HandlerFailure, IdKind, Preparation, Prepared, QueryAnswer,
+    Clock, CommandHandler, Decided, HandlerFailure, IdKind, Preparation, Prepared, QueryAnswer,
     QueryHandler,
 };
 use crate::protocol::provider::{ArtifactRef, Digest};
@@ -49,6 +49,7 @@ pub struct ImportService {
     pub(super) store: Arc<dyn ApplicationStore>,
     pub(super) sources: ImportSources,
     pub(super) artifacts: Arc<ArtifactService>,
+    pub(super) clock: Arc<dyn Clock>,
 }
 
 pub(super) struct Preview {
@@ -72,11 +73,13 @@ impl ImportService {
         store: Arc<dyn ApplicationStore>,
         sources: ImportSources,
         artifacts: Arc<ArtifactService>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             store,
             sources,
             artifacts,
+            clock,
         }
     }
 
@@ -90,7 +93,7 @@ impl ImportService {
         human(ctx)?;
         let capture = self
             .sources
-            .capture(&input.config.source, None, &|| stopped(env))
+            .capture(&input.config.source, None, &|| stopped(&*self.clock, env))
             .map_err(source_failure)?;
         let mode = match input.mode {
             None | Some(ImportIntentMode::Full) => WorkImportMode::Full,
@@ -107,7 +110,7 @@ impl ImportService {
                 &input.config,
                 mode,
                 input.updated_since_ms.as_ref().map(|time| time.get()),
-                &|| stopped(env),
+                &|| stopped(&*self.clock, env),
             ))
         })??;
         self.record_preview(
@@ -157,7 +160,7 @@ impl ImportService {
         // The sole side effect of preview is recording its evidence. It never edits live work,
         // configures an import, or queues it. Recheck the same grant just before publication.
         let result = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
-            if !crate::authority::authorization_holds_in(tx, &actor, &auth)? {
+            if !crate::services::fences::authorization_holds_in(tx, &actor, &auth)? {
                 return Err(StorageError::ScopeDenied);
             }
             if let Some(existing) = tx.work_imports()?.import_preview(&owner, &preview_digest)? {
@@ -468,7 +471,7 @@ impl CommandHandler for ImportService {
                 human(ctx).map_err(Failure::into_storage)?;
                 let captured = self
                     .sources
-                    .capture(&input.config.source, None, &|| stopped(env))?;
+                    .capture(&input.config.source, None, &|| stopped(&*self.clock, env))?;
                 captured
                     .snapshot
                     .select(&input.config, input.config.all_projects.unwrap_or(false))
@@ -860,9 +863,6 @@ pub(super) fn invalid(reason: &str) -> StorageError {
     StorageError::InvalidRecord(reason.into())
 }
 
-pub(super) fn stopped(env: &Preparation<'_>) -> bool {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |time| time.as_millis() as i64);
-    env.stopped(millis)
+pub(super) fn stopped(clock: &dyn Clock, env: &Preparation<'_>) -> bool {
+    env.stopped(clock.now_ms().get())
 }

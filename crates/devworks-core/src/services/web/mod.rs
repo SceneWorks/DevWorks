@@ -265,7 +265,7 @@ impl WebService {
         let current = crate::ports::storage::read_snapshot(
             &*self.store,
             &crate::ports::storage::ReadOptions::default(),
-            |read| crate::authority::service::authorization_holds(read, &authorization),
+            |read| crate::services::fences::authorization_holds(read, &authorization),
         )
         .map_err(|_| unavailable.clone())?;
         if !current

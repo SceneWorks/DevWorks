@@ -187,7 +187,7 @@ impl HelpService {
         }
         if tx.store().store_id != job.store_id
             || tx.store().restore_epoch != job.restore_epoch
-            || !crate::authority::service::fences_hold(tx, &job.fences)?
+            || !crate::services::fences::fences_hold(tx, &job.fences)?
         {
             return Err(invalid("Help generation authority changed"));
         }

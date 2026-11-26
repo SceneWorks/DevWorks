@@ -1,6 +1,7 @@
 //! Native document extraction from an already authorized, immutable artifact version.
 //! The caller owns scope checks and publication. Failed extraction yields no publishable text.
 
+pub use crate::kernel::document_evidence::{ExtractedBlock, Heading};
 use crate::{
     fingerprint::{canonical_digest, sha256_hex},
     protocol::{
@@ -102,19 +103,6 @@ pub enum ExtractionError {
     UnicodeStructureLimit,
     MarkdownStructureLimit,
     BlockLimit,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Heading {
-    pub level: u8,
-    pub title: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExtractedBlock {
-    pub citation: Citation,
-    pub headings: Arc<[Heading]>,
-    pub text: String,
 }
 
 impl ExtractedBlock {

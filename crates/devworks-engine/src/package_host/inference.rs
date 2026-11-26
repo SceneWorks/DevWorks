@@ -32,7 +32,6 @@ use super::session::{Slot, rpc_error};
 use super::{PackageHost, SlotContext};
 use crate::mcp_sampling::McpSampling;
 use crate::providers::driver::NativeProviders;
-use devworks_core::authority::authorization_holds;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::{canonical_digest, sha256_hex};
 use devworks_core::locks::LockExt;
@@ -50,6 +49,7 @@ use devworks_core::protocol::{
 use devworks_core::services::artifacts::{
     ArtifactService, host::HostArtifactPublication, version_ref,
 };
+use devworks_core::services::fences::authorization_holds;
 use devworks_core::services::mcp::SamplingGrant;
 use devworks_core::services::router::InferenceRouter;
 use devworks_extension_protocol::package::{

@@ -172,7 +172,7 @@ pub mod shell;
 
 pub use policy::{AccessProfile, DenialReason, EffectivePolicy, Verdict};
 pub use service::{
-    AdminError, Denied, EffectivePermissions, GrantBinding, HostAuthority, HostRoles,
-    authorization_holds, authorization_holds_in, fences_hold, mint_resume_grant,
-    revoke_resume_grant,
+    AdminError, AuthorityFencesOnly, Denied, EffectivePermissions, GrantBinding, HostAuthority,
+    HostRoles, ServiceFences, authorization_holds_in_with, authorization_holds_with,
+    fences_hold_with, mint_resume_grant, revoke_resume_grant,
 };

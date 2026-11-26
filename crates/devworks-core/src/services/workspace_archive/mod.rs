@@ -319,20 +319,7 @@ pub(super) fn authority_in(
     Ok(())
 }
 
-pub(crate) fn restore_effect_held(
-    tx: &mut dyn WriteTransaction,
-    root: Option<&crate::protocol::RootId>,
-    capability: Option<&str>,
-) -> Result<bool, StorageError> {
-    if tx.store().restore_epoch == 0 {
-        return Ok(false);
-    }
-    match tx.workspace_archives() {
-        Ok(read) => read.restore_effect_held(root, capability),
-        Err(StorageError::ViewUnavailable) => Ok(false),
-        Err(error) => Err(error),
-    }
-}
+pub(crate) use crate::kernel::workspace_archive::restore_effect_held;
 
 impl CommandHandler for WorkspaceArchiveService {
     fn prepare(

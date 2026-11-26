@@ -409,7 +409,7 @@ impl GitService {
                     {
                         return Err(crate::ports::storage::StorageError::Cancelled);
                     }
-                    if !crate::authority::authorization_holds_in(tx, &context, &auth)? {
+                    if !crate::services::fences::authorization_holds_in(tx, &context, &auth)? {
                         return Err(crate::ports::storage::StorageError::ScopeDenied);
                     }
                     if let Some(project) = context.project_id()

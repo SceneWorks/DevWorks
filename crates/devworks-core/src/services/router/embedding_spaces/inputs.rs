@@ -153,7 +153,7 @@ impl EmbeddingSpaceService {
                 != Some(p.operation_fence())
             || tx.store().store_id != *p.context().store_id()
             || tx.store().restore_epoch != p.context().restore_epoch().get()
-            || !crate::authority::service::fences_hold(tx, &p.probe.authority_fences)?
+            || !crate::services::fences::fences_hold(tx, &p.probe.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
         }

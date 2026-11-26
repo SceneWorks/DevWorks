@@ -381,6 +381,21 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "monotonic elapsed time and export-claim wait deadline",
     ),
     (
+        "services/documents/extraction.rs",
+        [0, 0, 1, 0],
+        "monotonic deadline check of a bounded document extraction",
+    ),
+    (
+        "services/documents/indexing/routed_vision.rs",
+        [0, 0, 2, 0],
+        "monotonic deadlines of document vision rendering and routed vision reading",
+    ),
+    (
+        "services/documents/indexing.rs",
+        [0, 0, 1, 0],
+        "monotonic deadline of a document's direct text extraction",
+    ),
+    (
         "services/git/helper.rs",
         [0, 0, 1, 0],
         "monotonic elapsed time of one helper process",
@@ -419,6 +434,11 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "services/graph/service.rs",
         [0, 0, 1, 0],
         "monotonic start of a query's time budget",
+    ),
+    (
+        "services/imports/worker.rs",
+        [0, 0, 1, 0],
+        "monotonic interval between a work import's stored cancellation checks",
     ),
     (
         "services/indexing/assigned.rs",
@@ -611,5 +631,28 @@ fn scanner_treats_only_test_gates_as_test_only() {
     assert_eq!(
         counted_text("#[cfg(test)]\nfn f() { std::env::var(\"A\"); }"),
         [0; 4]
+    );
+}
+
+#[test]
+fn only_the_artifact_owner_mints_the_archive_pin_capability() {
+    let mut files = Vec::new();
+    rust_files(&src(), &mut files);
+    let minted: Vec<String> = files
+        .iter()
+        .map(|path| relative(path))
+        .filter(|name| {
+            !name.starts_with("services/artifacts/") && name != "kernel/workspace_archive.rs"
+        })
+        .filter(|name| {
+            fs::read_to_string(src().join(name))
+                .expect("read source")
+                .contains("artifact_owner(")
+        })
+        .collect();
+    assert!(
+        minted.is_empty(),
+        "only services::artifacts mints the archive pin capability:\n{}",
+        minted.join("\n")
     );
 }
