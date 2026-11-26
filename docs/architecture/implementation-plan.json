@@ -10,24 +10,24 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "8b3d18d5b86fa2904b3ddb55ac117cfdcc93973ee2bc96bde9e32d982b14a8a4",
+    "implementation-slices.json": "25c016b75a9c713127c3b9aeec0971bff221aca5509a0d69320bc76d8c31dce2",
     "devworks-capability-catalog.json": "65cbae4c70d2f2b698dd23eccd6e2c63bf473691cb6abfdefc1063d49e51139f",
-    "devworks-requirements-traceability.json": "24555c0cb565ec79ffec089f598fbdf9e1b3eeb291f2222a58c458dd1cc8a4d6",
+    "devworks-requirements-traceability.json": "85ab62c6e3282f2ba9eaf813aa80a8cd81dc96d614a924c17fae9943e3db232d",
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
     "contracts/family-coverage.json": "52259e8fb9de7412da3dd11c018ced079ea00adc199353f35113d1734bd8481f",
     "mcp-publication-candidates.json": "b5a25fc537027913cfdff9a397eaf06fb9334d4a918222320ff3e4bc55c075a1",
-    "codegraph-work-map.json": "93c551768cd75091f954a0db1757b585b3b6fbaf21b6f6fb8dbab7527c127e25"
+    "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },
   "counts": {
-    "slices": 80,
+    "slices": 81,
     "operationFamilies": 50,
     "operations": 385,
-    "requirements": 390,
+    "requirements": 392,
     "requirementsByStatus": {
       "Confirmed": 243,
-      "Proposed": 147
+      "Proposed": 149
     },
     "inputSchemaCandidates": 385,
     "inputSchemasPending": 0,
@@ -120,6 +120,7 @@
     "DW-079",
     "DW-080",
     "DW-081",
+    "DW-445",
     "DW-082"
   ],
   "slices": [
@@ -5007,7 +5008,7 @@
         "transports",
         "eval_recorded"
       ],
-      "acceptance": "Model-graded rubrics run through the internal router with repeated votes and recorded configuration, and are calibrated against human verdicts before they can gate an approval. AC1: A model-graded rubric runs through the internal router with several votes per instance and records the judge model and settings, rubric revision, sample and population, verdict reasons and vote splits. AC2: Human verdicts on a sample produce a calibration agreement rate shown with the judge's results, and results from an uncalibrated judge are marked unable to gate approval. AC3: Tests of the judging code use scripted judges and make no live inference calls.",
+      "acceptance": "Model-graded rubrics run through the internal router with repeated votes and recorded configuration, and are calibrated against human verdicts before they can gate an approval. AC1: A model-graded rubric runs through the internal router with several votes per instance and records the judge model and settings, rubric revision, sample and population, verdict reasons and vote splits. AC2: Human verdicts on a sample produce a calibration agreement rate shown with the judge's results, and results from an uncalibrated judge are marked unable to gate approval. AC3: Tests of the judging code use scripted judges and make no live inference calls. AC4: Model-graded judges receive compared outputs without arm, revision or proposal identity and in per-instance random order; a judge verdict recorded with identity visible is marked unblinded and cannot gate approval, and calibration human verdicts record whether they were blind.",
       "gates": [
         "G11"
       ],
@@ -5045,7 +5046,7 @@
         "process_tools",
         "eval_recorded"
       ],
-      "acceptance": "Trials run agent work repeatedly against frozen snapshots in isolated workspaces, writing only to disposable copies and stand-ins, so delivery behavior can be evaluated without touching real systems. AC1: A trial case runs a configured number of times against a frozen snapshot that records its source, time, content identity and expected answer, and reports each run's score, the pass share and whether every run passed. AC2: Trials write only to throwaway repositories and remotes and to stateful tracker and GitHub stand-ins exposing the real tool schemas; production destinations and real credentials are unreachable from a trial.",
+      "acceptance": "Trials run agent work repeatedly against frozen snapshots in isolated workspaces, writing only to disposable copies and stand-ins, so delivery behavior can be evaluated without touching real systems. AC1: A trial case runs a configured number of times against a frozen snapshot that records its source, time, content identity and expected answer, and reports each run's score, the pass share and whether every run passed. AC2: Trials write only to throwaway repositories and remotes and to stateful tracker and GitHub stand-ins exposing the real tool schemas; production destinations and real credentials are unreachable from a trial. AC3: The agent under trial cannot read the case's expected answer, graders, rubrics or accepted exceptions; a run with a recorded tool call, file read or network request that resolved to one is recorded as evidence unavailable with reason contaminated, and trial results state that detection covers only recorded access.",
       "gates": [
         "G11"
       ],
@@ -5082,7 +5083,7 @@
         "eval_recorded",
         "eval_suites"
       ],
-      "acceptance": "Comparisons between revisions report declared methods, uncertainty and coverage, match settings except the subject under test, and produce evidence labels bound to exactly what was measured. AC1: A comparison reports each metric's declared method, uncertainty and minimum effect with counts, coverage and revision groups; a difference within uncertainty or below the minimum effect is inconclusive, and evidence below the suite's minimum sample or coverage is unvalidated. AC2: Both arms match every setting except the declared subject under test; production cohorts graded under different measurement revisions are regraded under one or reported non-comparable, and cohort differences and confounding changes are disclosed. AC3: Evidence is bound to immutable candidate, baseline and measurement identities, and a change to any of them returns it to unvalidated.",
+      "acceptance": "Comparisons between revisions report declared methods, uncertainty and coverage, match settings except the subject under test, and produce evidence labels bound to exactly what was measured. AC1: A comparison reports each metric's declared method, uncertainty and minimum effect with counts, coverage and revision groups; a difference within uncertainty or below the minimum effect is inconclusive, and evidence below the suite's minimum sample or coverage is unvalidated. AC2: Both arms match every setting except the declared subject under test; production cohorts graded under different measurement revisions are regraded under one or reported non-comparable, and cohort differences and confounding changes are disclosed. AC3: Evidence is bound to immutable candidate, baseline and measurement identities, and a change to any of them returns it to unvalidated. AC4: A proposal without an applicable suite can carry a paired contrast of baseline and candidate on one frozen snapshot under matched settings; each claimed change links to transcript steps in both arms or shows as unsupported, the run count per arm is shown, the evidence stays unvalidated, and a change to the candidate, baseline or snapshot marks the contrast stale.",
       "gates": [
         "G11"
       ],
@@ -5098,7 +5099,8 @@
       "ownedOperations": [],
       "primaryRequirements": [
         "EVAL-05",
-        "EVAL-09"
+        "EVAL-09",
+        "EVAL-15"
       ],
       "supportingRequirements": [
         "EVAL-14"
@@ -5206,7 +5208,7 @@
         "updates",
         "eval_comparisons"
       ],
-      "acceptance": "After a change is adopted, regressions lead to approval-gated rollback proposals through each subject's own mechanism, and recurring failures become verified improvement candidates. AC1: A regression past a metric's declared criterion notifies the user and proposes a rollback through the subject's own mechanism, never rolls back automatically, and non-comparable comparisons trigger nothing. AC2: An app-build rollback proposal requires SELF-03 approval and a stored-data compatibility check, or reports the build as not rollback-capable with the reason; every rollback keeps later unrelated edits or reports the conflict. AC3: A recurring failure becomes a candidate improvement linked to the rule it enforces and its evidence, after a recorded spot-check of sampled failing instances.",
+      "acceptance": "After a change is adopted, regressions lead to approval-gated rollback proposals through each subject's own mechanism, and recurring failures become verified improvement candidates. AC1: A regression past a metric's declared criterion notifies the user and proposes a rollback through the subject's own mechanism, never rolls back automatically, and non-comparable comparisons trigger nothing. AC2: An app-build rollback proposal requires SELF-03 approval and a stored-data compatibility check, or reports the build as not rollback-capable with the reason; every rollback keeps later unrelated edits or reports the conflict. AC3: A recurring failure becomes a candidate improvement linked to the rule it enforces and its evidence, after a recorded spot-check of sampled failing instances. AC4: A candidate improvement drafted from failures becomes separate general and project-specific proposals, each recording the drafting agent's split rationale, and the general one records which projects its applicable validation cases came from or that only the motivating project was used.",
       "gates": [
         "G11"
       ],
@@ -5350,6 +5352,40 @@
       "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
     },
     {
+      "key": "eval_skill_delivery",
+      "id": "DW-445",
+      "type": "Feature",
+      "title": "Measure skill delivery and always-on context size",
+      "operations": [],
+      "dependsOnKeys": [
+        "instructions",
+        "eval_recorded"
+      ],
+      "acceptance": "Production grading shows which skills reach sessions and get opened, and how much always-on context each role carries, so unreachable or unused skills and growing always-on text become visible improvement targets. AC1: Over a declared period, grading recorded sessions reports per skill revision how many eligible sessions received it (a context source with disposition Included or Truncated) and opened it (a recorded skills.read call), with denominators, and lists skills delivered to no eligible session as unreachable and skills opened by none as unused. AC2: Per role and revision, grading reports the token estimate of always-on context sources per session as a median and range with the session count, and sessions spanning revisions land in the mixed-revision group. AC3: Sessions where delivery or opening cannot be observed, including external MCP client records, are evidence unavailable and counted in coverage; the measurement changes nothing a session receives.",
+      "gates": [
+        "G11"
+      ],
+      "status": "Approved plan metadata; native implementation and operation-contract acceptance pending",
+      "codegraphItem": "DW-445",
+      "codegraphFeature": "DW-F13",
+      "codegraphStateAtSync": "ready",
+      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
+      "dependsOn": [
+        "DW-034",
+        "DW-071"
+      ],
+      "ownedOperations": [],
+      "primaryRequirements": [
+        "EVAL-16"
+      ],
+      "supportingRequirements": [],
+      "capabilityCases": [],
+      "sourceEntryIds": [],
+      "workloads": [],
+      "pendingInputSchemas": [],
+      "commonAcceptance": "Implement the recorded strict input/result/error schemas and selected-operation/mode binding, current authority, durable receipt/effect/cancellation/recovery behavior, and meaningful native success/fault cases. Expose the same domain service to native UI and applicable agent tools; no parallel business implementation. Preserve source arguments/results/quirks traced here. Do not advertise unqualified targets or infer product acceptance from fixture tests."
+    },
+    {
       "key": "eval_acceptance",
       "id": "DW-082",
       "type": "Chore",
@@ -5366,7 +5402,8 @@
         "eval_adoption",
         "eval_ui",
         "eval_package_suites",
-        "eval_mcp_records"
+        "eval_mcp_records",
+        "eval_skill_delivery"
       ],
       "acceptance": "Terminal integration: run the feature acceptance tests on the integrated branch, keep the architecture and plan readers covering every EVAL requirement, and own the feature-end review, the merge to main and the completion check. AC1: Every DW-F13 acceptance test passes on the integrated branch, reusing item evidence where it still applies. AC2: The architecture, requirements traceability and implementation plan readers regenerate with every EVAL requirement covered by a complete item.",
       "gates": [
@@ -5388,7 +5425,8 @@
         "DW-078",
         "DW-079",
         "DW-080",
-        "DW-081"
+        "DW-081",
+        "DW-445"
       ],
       "ownedOperations": [],
       "primaryRequirements": [],
@@ -5406,7 +5444,9 @@
         "EVAL-11",
         "EVAL-12",
         "EVAL-13",
-        "EVAL-14"
+        "EVAL-14",
+        "EVAL-15",
+        "EVAL-16"
       ],
       "capabilityCases": [],
       "sourceEntryIds": [],
@@ -11583,7 +11623,7 @@
     {
       "requirement": "EVAL-03",
       "requirementStatus": "Proposed",
-      "statement": "Support deterministic checks over the event record, outcome checks over work state, model-graded rubrics through the internal router, and human verdicts. Every grader names the requirement, skill section or rule it enforces, and a check that measures only a proxy, such as a command pattern rather than intent, says so. A model-graded result records the judge model and settings, rubric revision, sampled instances and their population, and each verdict with its reason; each instance receives several independent votes and split votes are reported. A judge verdict is never presented as a deterministic result. A judge configuration is calibrated against human verdicts on a sample before its results can gate approval under EVAL-05, and its agreement rate is shown with its results; changing the judge model, settings or rubric is a measurement change under EVAL-06. All model-based judging, including production grading, is live inference under TEST-03; tests of the eval machinery use scripted judges and fixtures under TEST-02.",
+      "statement": "Support deterministic checks over the event record, outcome checks over work state, model-graded rubrics through the internal router, and human verdicts. Every grader names the requirement, skill section or rule it enforces, and a check that measures only a proxy, such as a command pattern rather than intent, says so. A model-graded result records the judge model and settings, rubric revision, sampled instances and their population, and each verdict with its reason; each instance receives several independent votes and split votes are reported. A judge verdict is never presented as a deterministic result. A judge configuration is calibrated against human verdicts on a sample before its results can gate approval under EVAL-05, and its agreement rate is shown with its results; changing the judge model, settings or rubric is a measurement change under EVAL-06. All model-based judging, including production grading, is live inference under TEST-03; tests of the eval machinery use scripted judges and fixtures under TEST-02. Model-graded judges see the outputs they compare without the arm, revision or proposal that produced them, in an order randomized per instance; a judge verdict given with that identity visible is recorded as unblinded and cannot gate approval under EVAL-05. Human verdicts used for calibration are given blind where the evidence allows and record whether they were.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11600,7 +11640,7 @@
     {
       "requirement": "EVAL-04",
       "requirementStatus": "Proposed",
-      "statement": "Support repeatable trials that run agent work against frozen inputs, such as snapshots of work records and repository revisions, in an isolated workspace. Trials may write only to disposable copies: throwaway repositories and remotes and stateful substitutes for the tracker, GitHub and other external services, so claiming, implementation, review and delivery can be evaluated end to end. Production destinations, real accounts and real credentials are unreachable from a trial; a case may also refuse all writes. Substitute services expose the real services\u2019 tool schemas. Each case runs a configured number of times, and results report each run\u2019s score, the share of runs that passed and whether every run passed. Trials are live inference under TEST-03 and never run within unit or integration tests. Each snapshot records its source, time, content identity and expected answer.",
+      "statement": "Support repeatable trials that run agent work against frozen inputs, such as snapshots of work records and repository revisions, in an isolated workspace. Trials may write only to disposable copies: throwaway repositories and remotes and stateful substitutes for the tracker, GitHub and other external services, so claiming, implementation, review and delivery can be evaluated end to end. Production destinations, real accounts and real credentials are unreachable from a trial; a case may also refuse all writes. Substitute services expose the real services\u2019 tool schemas. Each case runs a configured number of times, and results report each run\u2019s score, the share of runs that passed and whether every run passed. Trials are live inference under TEST-03 and never run within unit or integration tests. Each snapshot records its source, time, content identity and expected answer. The agent under trial cannot read the case\u2019s expected answer, graders, rubrics or accepted exceptions through files, tools or network hosts that publish them. A run in which a recorded tool call, file read or network request resolved to any of them is recorded as evidence unavailable with the reason contaminated, so it leaves pass and fail rates and is counted in coverage under EVAL-14. Detection covers only recorded access, and trial results say so.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11670,7 +11710,7 @@
     {
       "requirement": "EVAL-08",
       "requirementStatus": "Proposed",
-      "statement": "Failing checks must trace to the rule, skill section or lesson they enforce, with links to the exact transcript, tool call or record under HISTORY-01. Recurring failures should become candidate improvements in the Knowledge and dreaming flow with their eval evidence attached, such as a skill or role edit, hook, test or harness-code task, and feed the lesson recurrence views of KNOW-04 and KNOW-05. Before a failure becomes a proposal, sampled failing instances are checked so a grader defect is not reported as agent behavior, and that check and its outcome are recorded.",
+      "statement": "Failing checks must trace to the rule, skill section or lesson they enforce, with links to the exact transcript, tool call or record under HISTORY-01. Recurring failures should become candidate improvements in the Knowledge and dreaming flow with their eval evidence attached, such as a skill or role edit, hook, test or harness-code task, and feed the lesson recurrence views of KNOW-04 and KNOW-05. Before a failure becomes a proposal, sampled failing instances are checked so a grader defect is not reported as agent behavior, and that check and its outcome are recorded. A candidate improvement drafted from observed failures is split by scope into a general fix (a skill, role instruction or override, expected to hold beyond the project that motivated it) and a project-specific fix (that project\u2019s conventions or Knowledge). Each is a separate proposal with its own evidence. A general fix is validated on cases from at least one project other than the motivating one when such cases exist; otherwise its evidence states that it was validated only on the motivating project. Applicable cases are those of a suite that measures the subject. The drafting agent proposes the split and records its rationale in each proposal.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11773,7 +11813,7 @@
     {
       "requirement": "EVAL-14",
       "requirementStatus": "Proposed",
-      "statement": "Every instance, run and suite result has one explicit outcome: passed, failed, unclear, not applicable, evidence unavailable (for example a truncated external transcript or missing record), grader error, cancelled or budget exhausted. Report coverage with every rate: eligible, graded and ungraded instances, with reasons. Only passed and failed outcomes enter pass and fail rates; incomplete evidence never counts as a pass or silently leaves a denominator. Each suite declares per metric the minimum usable sample and required coverage a result needs to count as evidence under EVAL-05.",
+      "statement": "Every instance, run and suite result has one explicit outcome: passed, failed, unclear, not applicable, evidence unavailable (for example a truncated external transcript, a missing record or a contaminated trial run), grader error, cancelled or budget exhausted. Report coverage with every rate: eligible, graded and ungraded instances, with reasons. Only passed and failed outcomes enter pass and fail rates; incomplete evidence never counts as a pass or silently leaves a denominator. Each suite declares per metric the minimum usable sample and required coverage a result needs to count as evidence under EVAL-05.",
       "sourceSection": "20 Conventions and skills",
       "architectureSection": "evals",
       "owner": "Evaluation services, grader adapters and trial runner",
@@ -11785,6 +11825,40 @@
       "supportingSlices": [
         "eval_comparisons",
         "eval_mcp_records",
+        "eval_acceptance"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "EVAL-15",
+      "requirementStatus": "Proposed",
+      "statement": "When no applicable suite exists for a proposal, the proposal may carry a paired contrast. The task is first frozen as an EVAL-04 snapshot, and the baseline and the candidate each run on it under the matched settings of EVAL-09 and the isolation of EVAL-04. Each claimed behavior change links to the transcript step in each arm that shows it; a claim without those links is shown as unsupported. The links show only that the steps exist, and the user judges whether they show the claimed change. The contrast shows its run count per arm, and a single run is labeled as one. It is live inference under TEST-03 with the spending controls of EVAL-10, and it is bound to the candidate, baseline and snapshot identities under EVAL-05, so a later change to any of them marks it stale. A paired contrast never by itself labels evidence improved: the proposal stays unvalidated under EVAL-05 unless a qualifying comparison exists, and the contrast informs the user\u2019s override decision.",
+      "sourceSection": "20 Conventions and skills",
+      "architectureSection": "evals",
+      "owner": "Evaluation services, grader adapters and trial runner",
+      "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
+      "validationGate": "G11",
+      "plannedCase": "AT-EVAL-15",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "eval_comparisons",
+      "supportingSlices": [
+        "eval_acceptance"
+      ],
+      "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
+    },
+    {
+      "requirement": "EVAL-16",
+      "requirementStatus": "Proposed",
+      "statement": "Production grading measures how skills and always-on context reach sessions, from recorded evidence only. A skill revision counts as delivered to a session when a recorded context source names it with disposition Included or Truncated, and as opened when the session made a recorded skills.read call for it. A session where neither can be observed, including the records of external MCP clients, is evidence unavailable under EVAL-14. Over a declared period, and among eligible sessions whose role and project could receive the skill, report per skill revision the delivered and opened counts with denominators under EVAL-09; a skill delivered to no eligible session is reported as unreachable, and one opened by no eligible session as unused. Per role and revision, report the token estimate of the always-on context sources delivered per session as a median and range with the session count; sessions spanning revisions go to the mixed-revision group of EVAL-02. Whether a session should have opened a skill is measured only by a model-graded rubric under EVAL-03, which is live inference with the costs of EVAL-10. These measurements read only and never change what a session receives.",
+      "sourceSection": "20 Conventions and skills",
+      "architectureSection": "evals",
+      "owner": "Evaluation services, grader adapters and trial runner",
+      "validationFamily": "Revision-attributed grading, isolated trials, evidence coverage and approval controls",
+      "validationGate": "G11",
+      "plannedCase": "AT-EVAL-16",
+      "designStatus": "Proposed architecture mapping; not an implementation/test result",
+      "primarySlice": "eval_skill_delivery",
+      "supportingSlices": [
         "eval_acceptance"
       ],
       "acceptanceStatus": "Planned AT case; requirement status is preserved, not promoted to approved"
