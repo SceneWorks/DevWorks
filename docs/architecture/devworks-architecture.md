@@ -1452,7 +1452,7 @@ Suite lifecycle and separation controls (DW-72), judges (DW-73), trials (DW-74),
 
 ![Native backend ownership and qualification](architecture-diagrams/40-native-backend-boundaries.svg)
 
-The [local implementation plan](implementation-plan.html) assigns 79 planned slices (66 native delivery slices including approved DW-107/DW-108, and 13 approved EVAL items) with concrete outcomes and dependency order. Its [machine-readable coverage](implementation-plan.json) binds all 392 requirements, 357 operations, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded entries retain their reasons. Each operation has exactly one primary slice; source entries may overlap. Proposed requirements remain Proposed. Coverage is complete ownership accounting, not completed contracts or authorization to implement.
+The [local implementation plan](implementation-plan.html) assigns 81 planned slices (68 native delivery slices including approved DW-107/DW-108, and 13 approved EVAL items) with concrete outcomes and dependency order. Its [machine-readable coverage](implementation-plan.json) binds all 392 requirements, 385 operations, 494 retained source entries, 33 acceptance groups and 12 workloads. The 64 excluded entries retain their reasons. Each operation has exactly one primary slice; source entries may overlap. Proposed requirements remain Proposed. Coverage is complete ownership accounting, not completed contracts or authorization to implement.
 
 ![Implementation coverage and acceptance gates](architecture-diagrams/41-implementation-coverage.svg)
 

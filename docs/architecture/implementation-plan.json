@@ -17,7 +17,7 @@
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
     "contracts/family-coverage.json": "6d90e78ae8b9abccbbe83e908c59bc12924a3be1b5cbbe7c2afc5584643818db",
-    "mcp-publication-candidates.json": "64a782ea1c6dc3ef8d40d799d000f143e60b8f06ff86c34b97c10c33ee598b2d",
+    "mcp-publication-candidates.json": "afc42cb504fae8c6d670d3f151433caf2514f9ef0e73fe61b17bbb227f7a3139",
     "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },
   "counts": {
@@ -36679,10 +36679,10 @@
   ],
   "mcpPublication": {
     "counts": {
-      "catalogOperations": 353,
-      "modeDispositions": 358,
-      "tools": 154,
-      "readTools": 95,
+      "catalogOperations": 386,
+      "modeDispositions": 391,
+      "tools": 161,
+      "readTools": 102,
       "commandTools": 59
     },
     "queryAdapterSlice": "mcp_server",
