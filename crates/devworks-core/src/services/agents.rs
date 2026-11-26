@@ -1173,14 +1173,17 @@ impl AgentService {
 /// The revision-one assignment inbox read: one page of the assignment's thread. An agent caller
 /// is proved against the same active-assignment rule the commands enforce.
 /// `agents.list`: the project's coordinator and worker assignments (schema revision 21), for a
-/// person or the host; an agent principal is refused by the operation's human-only authority.
+/// person or the host only. Any other principal (an agent, package, MCP client or schedule) is
+/// refused here: admission lets the host through, so the restriction is the service's.
 pub fn list_project_agents(
     snapshot: &dyn ReadSnapshot,
     ctx: &InvocationContext,
     input: &ops::ListInput,
 ) -> Result<(crate::protocol::records::AgentPage, i64), Failure> {
-    if ctx.principal_kind() == PrincipalKind::Agent
-        || ctx.project_id().is_some_and(|p| p != &input.project_id)
+    if !matches!(
+        ctx.principal_kind(),
+        PrincipalKind::Human | PrincipalKind::Host
+    ) || ctx.project_id().is_some_and(|p| p != &input.project_id)
     {
         return Err(denied("project").into());
     }

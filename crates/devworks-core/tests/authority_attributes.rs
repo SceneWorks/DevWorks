@@ -157,9 +157,6 @@ const NEWLY_NATIVE: [&str; 9] = [
 
 /// DW-37 gives only a human administrator control of database sensitive-column policy.
 const HUMAN_DATABASE_POLICY: &str = "database.edit_sensitive_column_rules";
-/// DW-183 lists a project's agent assignments for a person (the Agents screen); an agent
-/// inspects the assignments it knows through agents.inspect.
-const HUMAN_AGENT_LIST: &str = "agents.list";
 
 #[test]
 fn descriptor_attributes_reproduce_the_former_name_lists() {
@@ -174,7 +171,7 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         );
         assert_eq!(
             d.human_only,
-            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY || op == HUMAN_AGENT_LIST,
+            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY,
             "{op} human only"
         );
         let scope = d.assignment_scope;

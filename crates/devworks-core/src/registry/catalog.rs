@@ -1824,7 +1824,7 @@ pub(super) static CATALOG: [OperationDescriptor; 386] = [
         revisions: &[SchemaRevision(21)],
         native_execution: false,
         approval_required: false,
-        human_only: true,
+        human_only: false,
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {

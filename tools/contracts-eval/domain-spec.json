@@ -13616,7 +13616,7 @@
     "runs.inspect": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "runs.stop": {"assignmentScope": "coordinator", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "runs.eligibility": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
-    "agents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
+    "agents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.inspect": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.delegate": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "agents.messages": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
