@@ -795,6 +795,110 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
         other => Err(unexpected("artifacts.delete", &other)),
     }
 }
+/// `artifacts.preview` of one version: a bounded text excerpt, or image or metadata facts.
+pub fn artifact_preview(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    artifact_version_query(backend, artifact, |artifact_id, version_id| {
+        artifacts::Input::Preview(ArtifactQueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: ArtifactQuery::Preview {
+                artifact_id,
+                version_id,
+            },
+            limit: 1,
+            cursor: None,
+        })
+        .into()
+    })
+}
+pub fn artifact_previewed(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::ArtifactPreview, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsPreview { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("artifacts.preview", &other)),
+    }
+}
+/// `artifacts.export` of one version: a stream handle for its verified bytes.
+pub fn artifact_export(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    artifact_version_query(backend, artifact, |artifact_id, version_id| {
+        artifacts::Input::Export(ArtifactQueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: ArtifactQuery::Export {
+                artifact_id,
+                version_id,
+            },
+            limit: 1,
+            cursor: None,
+        })
+        .into()
+    })
+}
+pub fn artifact_exported(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::ArtifactExport, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsExport { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("artifacts.export", &other)),
+    }
+}
+fn artifact_version_query(
+    backend: &dyn Backend,
+    artifact: &ArtifactRef,
+    input: impl FnOnce(
+        devworks_core::protocol::Id,
+        devworks_core::protocol::Id,
+    ) -> Option<artifacts::Input>,
+) -> Vec<u8> {
+    let (artifact_id, version_id) = (artifact.artifact_id.clone(), artifact.version_id.clone());
+    frame::with(backend, Negotiate::Initial, || {
+        input(artifact_id, version_id).map(In::Artifacts)
+    })
+}
+/// `artifacts.tag`: replaces the tag set of the artifact listed at `revision`.
+pub fn artifact_tag(
+    backend: &dyn Backend,
+    artifact_id: &str,
+    revision: &str,
+    tags: Vec<String>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Tag(artifacts::TagInput {
+            artifact_id: frame::id(artifact_id)?,
+            expected_revision: frame::text(revision)?,
+            tags: ArtifactTags::new(tags).ok()?,
+        })))
+    })
+}
+pub fn artifact_tagged(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
+    match command_result(outcome)? {
+        OperationResult::ArtifactsTag { value } => Ok(value),
+        other => Err(unexpected("artifacts.tag", &other)),
+    }
+}
+/// `artifacts.delete` of the whole artifact under the identities `record` was listed with
+/// (schema revision 19). `None` when the record carries no identities (an earlier contract).
+pub fn delete_artifact(backend: &dyn Backend, record: &ArtifactRecord) -> Option<Vec<u8>> {
+    let revision = record.revision.clone()?;
+    let reference = record.reference_revision.clone()?;
+    let digest = record.versions_digest.clone()?;
+    let artifact_id = record.artifact.artifact_id.clone();
+    Some(frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Delete(
+            ArtifactDeletionRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                deletion: ArtifactDeletion::DeleteArtifact {
+                    artifact_id,
+                    expected_revision: revision,
+                    expected_reference_revision: reference,
+                    expected_versions_digest: digest,
+                },
+            },
+        )))
+    }))
+}
 pub fn workspace_artifacts(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     artifact_list(backend, None, true, cursor)
 }

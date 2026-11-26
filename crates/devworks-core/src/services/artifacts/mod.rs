@@ -724,6 +724,9 @@ fn label(title: &str) -> BoundedText<1, 256> {
 
 /// The schema revision that introduced artifact tags (ART-02).
 pub const TAGS_SINCE: SchemaRevision = SchemaRevision(2);
+/// The schema revision that returns the artifact, reference and live-version identities that
+/// `artifacts.tag` and `artifacts.delete` expect.
+pub const IDENTITIES_SINCE: SchemaRevision = SchemaRevision(19);
 
 /// The wire record of `a` at version `v` for a caller that negotiated `revision`. Tags are read
 /// (and their stored form validated) only for a caller that can receive them.
@@ -769,7 +772,16 @@ fn record(
     } else {
         None
     };
+    let identities = revision >= IDENTITIES_SINCE;
+    let versions_digest = if identities {
+        Some(Digest(versions_digest(&read.versions(&a.id)?)))
+    } else {
+        None
+    };
     Ok(ArtifactRecord {
+        revision: identities.then(|| rev(a.revision)),
+        reference_revision: identities.then(|| rev(a.reference_revision)),
+        versions_digest,
         tested_repository: tested_repository(v, revision)?,
         artifact: version_ref(v),
         name: label(&a.title),
