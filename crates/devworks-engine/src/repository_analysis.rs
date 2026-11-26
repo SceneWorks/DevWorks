@@ -309,7 +309,7 @@ impl Model {
                     request: subject,
                 }]);
             if tx.actors().actor_kind(&actor)? != Some(PrincipalKind::Human)
-                || !devworks_core::authority::authorization_holds_in(tx, &opened, &gate)?
+                || !devworks_core::services::fences::authorization_holds_in(tx, &opened, &gate)?
                 || project
                     .as_ref()
                     .is_some_and(|_| opened.project_id() != project.as_ref())

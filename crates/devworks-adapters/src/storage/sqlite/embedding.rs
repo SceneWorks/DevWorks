@@ -459,7 +459,7 @@ impl EmbeddingRepository for Unit<'_> {
             || p.store_id != self.info.store_id
             || p.restore_epoch != self.info.restore_epoch
             || !p.source_context.is_object()
-            || !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
+            || !devworks_core::services::fences::fences_hold(self, &p.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -536,7 +536,7 @@ impl EmbeddingRepository for Unit<'_> {
         if &p.operation_id != operation_id
             || p.store_id != self.info.store_id
             || p.restore_epoch != self.info.restore_epoch
-            || !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
+            || !devworks_core::services::fences::fences_hold(self, &p.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -602,7 +602,7 @@ impl EmbeddingRepository for Unit<'_> {
         // Recording an exact negative journal fact cannot activate a space or change proof.
         // Revoking the original proposer must prevent publication, not erase failure history.
         if state == EmbeddingQualificationState::Qualified
-            && !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
+            && !devworks_core::services::fences::fences_hold(self, &p.authority_fences)?
         {
             return Err(StorageError::ScopeDenied);
         }
@@ -725,7 +725,7 @@ impl EmbeddingRepository for Unit<'_> {
                 .ok_or_else(|| corrupt("qualified embedding probe absent"))?;
             if p.store_id != self.info.store_id
                 || p.restore_epoch != self.info.restore_epoch
-                || !devworks_core::authority::service::fences_hold(self, &p.authority_fences)?
+                || !devworks_core::services::fences::fences_hold(self, &p.authority_fences)?
             {
                 return Err(StorageError::ScopeDenied);
             }

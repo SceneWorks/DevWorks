@@ -84,7 +84,7 @@ impl AdmittedQuery {
     }
     /// What current authority established for this query (its fences and grants). A use case
     /// that writes during preparation re-checks it inside that write
-    /// ([`crate::authority::authorization_holds_in`]), as a command's unit of work does.
+    /// ([`crate::authority::authorization_holds_in_with`]), as a command's unit of work does.
     pub fn authorization(&self) -> &Authorization {
         &self.authorization
     }
@@ -532,7 +532,8 @@ impl Gateway<'_> {
             && (graph_request::is_graph_read(&admitted.input) || operation == "indexing.status");
         let recheck = handler.publication_check(&admitted);
         if let Ok(Some((Ok(answer), _))) = &answered
-            && (scoped_worktree || recheck.is_some()
+            && (scoped_worktree
+                || recheck.is_some()
                 || !authorization.fences().is_empty()
                 || !authorization.authority_grants().is_empty())
         {
@@ -542,8 +543,11 @@ impl Gateway<'_> {
                 ReadOptions::default()
             };
             let holds = read_snapshot(self.store, &fresh, |s| {
-                if !crate::authority::authorization_holds(s, &authorization)?
-                    || scoped_worktree && !checkout::live_custody(s, ctx)?
+                if !crate::authority::authorization_holds_with(
+                    s,
+                    &authorization,
+                    &crate::authority::AuthorityFencesOnly,
+                )? || scoped_worktree && !checkout::live_custody(s, ctx)?
                 {
                     return Ok((false, None));
                 }
@@ -1203,7 +1207,12 @@ fn unit_of_work(
         // Receipts and history are attributed to a host-registered principal.
         return Ok(Unit::Denied);
     }
-    if !crate::authority::fences_hold(tx, authorization.fences())? {
+    if !crate::authority::fences_hold_with(
+        tx,
+        None,
+        authorization.fences(),
+        &crate::authority::AuthorityFencesOnly,
+    )? {
         // Authority changed after it was resolved (revoked or re-bound principal, narrowed
         // policy). Checked before the receipt lookup, so a revoked caller is denied rather
         // than handed an old receipt.
@@ -1279,7 +1288,7 @@ fn unit_of_work(
     // savepoint it leaves open is discarded when this outer savepoint is unwound.
     let savepoint = tx.savepoint()?;
     let mut handler_tx = HandlerTx::new(tx, ingress);
-    let refusal = if crate::services::workspace_archive::restore_effect_held(
+    let refusal = if crate::kernel::workspace_archive::restore_effect_held(
         &mut handler_tx,
         None,
         Some(command.descriptor.name),
@@ -2224,7 +2233,7 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn archive_pin(
         &mut self,
-        authority: &crate::services::artifacts::ArchivePinAuthority,
+        authority: &crate::kernel::workspace_archive::ArchivePinAuthority,
         holder: &Id,
         digest: &str,
     ) -> Result<(), StorageError> {
@@ -2233,7 +2242,7 @@ impl WriteTransaction for HandlerTx<'_> {
 
     fn archive_release_pins(
         &mut self,
-        authority: &crate::services::artifacts::ArchivePinAuthority,
+        authority: &crate::kernel::workspace_archive::ArchivePinAuthority,
         holder: &Id,
     ) -> Result<i64, StorageError> {
         self.inner.get_mut().archive_release_pins(authority, holder)

@@ -381,6 +381,21 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "monotonic elapsed time and export-claim wait deadline",
     ),
     (
+        "services/documents/extraction.rs",
+        [0, 0, 1, 0],
+        "monotonic deadline check of a bounded document extraction",
+    ),
+    (
+        "services/documents/indexing/routed_vision.rs",
+        [0, 0, 2, 0],
+        "monotonic deadlines of document vision rendering and routed vision reading",
+    ),
+    (
+        "services/documents/indexing.rs",
+        [0, 0, 1, 0],
+        "monotonic deadline of a document's direct text extraction",
+    ),
+    (
         "services/git/helper.rs",
         [0, 0, 1, 0],
         "monotonic elapsed time of one helper process",
@@ -419,6 +434,11 @@ const ALLOWED: &[(&str, [usize; 4], &str)] = &[
         "services/graph/service.rs",
         [0, 0, 1, 0],
         "monotonic start of a query's time budget",
+    ),
+    (
+        "services/imports/worker.rs",
+        [0, 0, 1, 0],
+        "monotonic interval between a work import's stored cancellation checks",
     ),
     (
         "services/indexing/assigned.rs",

@@ -1608,22 +1608,28 @@ impl Backend for DesktopBackend {
         )
         .map_err(|error| error.to_string())?;
         let operation = "repository_docs.generate";
-        let frame = serde_json::json!({
-            "mode": "Command", "protocol": "1.0-draft.1", "schemaRevision": 14,
-            "requestKey": self.host.ids.next_id(devworks_core::ports::IdKind::Invocation),
-            "body": {
-                "kind": operation, "repositoryId": binding.repository_id,
-                "views": {"kind": "Exact", "viewIds": [binding.view_id]},
-                "expectedRevision": revision, "outputRootId": root, "topics": ["all"], "analysisRunId": run, "delivery": delivery
-            }
-        })
-        .to_string();
-        let mut reply = runtime.command(&context, operation, frame.as_bytes());
+        let frame = crate::frame::with(self, crate::frame::Negotiate::Latest, || {
+            use devworks_core::operations::{OperationInput, repository_docs};
+            Some(OperationInput::RepositoryDocs(
+                repository_docs::Input::Generate(repository_docs::GenerateInput {
+                    repository_id: binding.repository_id.clone(),
+                    views: devworks_core::protocol::data::ViewSelection::Exact {
+                        view_ids: vec![binding.view_id.clone()],
+                    },
+                    expected_revision: revision.clone(),
+                    output_root_id: root.clone(),
+                    topics: crate::frame::bounded(vec![crate::frame::text("all")?])?,
+                    analysis_run_id: Some(run.clone()),
+                    delivery: Some(delivery),
+                }),
+            ))
+        });
+        let mut reply = runtime.command(&context, operation, &frame);
         for _ in 0..crate::backend::UNKNOWN_RESUBMISSIONS {
             if !crate::backend::is_unknown(&reply) {
                 break;
             }
-            reply = runtime.command(&context, operation, frame.as_bytes());
+            reply = runtime.command(&context, operation, &frame);
         }
         if let Ok(CommandReply::Recorded { receipt, .. }) = &reply
             && let DomainDecision::Accepted { operation_id } = &receipt.decision

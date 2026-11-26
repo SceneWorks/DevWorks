@@ -87,9 +87,9 @@ impl ImportService {
             if input.source_snapshot.as_str() != preview.source_snapshot {
                 return Err(refuse(DomainErrorCode::SourceChanged, "import_preview"));
             }
-            let source = self
-                .sources
-                .capture(&settings.settings.source, None, &|| stopped(env))?;
+            let source = self.sources.capture(&settings.settings.source, None, &|| {
+                stopped(&*self.clock, env)
+            })?;
             if source.snapshot.digest != preview.source_snapshot {
                 return Err(refuse(DomainErrorCode::SourceChanged, "import_snapshot"));
             }
@@ -101,7 +101,7 @@ impl ImportService {
                     &settings.settings,
                     preview.requested_mode,
                     preview.updated_since_ms,
-                    &|| stopped(env),
+                    &|| stopped(&*self.clock, env),
                 ))
             })??;
             if computed.binding_digest != preview.binding_digest
@@ -109,7 +109,8 @@ impl ImportService {
             {
                 return Err(refuse(DomainErrorCode::SourceChanged, "import_destination"));
             }
-            let source = self.stage_selected(&source, &settings, &mut || stopped(env))?;
+            let source =
+                self.stage_selected(&source, &settings, &mut || stopped(&*self.clock, env))?;
             Ok(PreparedRun { source, preview })
         })();
         Ok(Some(Prepared::new(outcome)))
@@ -138,9 +139,9 @@ impl ImportService {
                 input.expected_revision.get(),
                 settings.revision,
             )?;
-            let source = self
-                .sources
-                .capture(&settings.settings.source, None, &|| stopped(env))?;
+            let source = self.sources.capture(&settings.settings.source, None, &|| {
+                stopped(&*self.clock, env)
+            })?;
             if source.root_identity != settings.root_identity
                 || source.snapshot.manifest.namespace != settings.source_namespace
             {
@@ -154,7 +155,7 @@ impl ImportService {
                     &settings.settings,
                     WorkImportMode::Delta,
                     None,
-                    &|| stopped(env),
+                    &|| stopped(&*self.clock, env),
                 ))
             })??;
             let recorded = self.record_preview(
@@ -165,7 +166,8 @@ impl ImportService {
                 WorkImportMode::Delta,
                 preview,
             )?;
-            let source = self.stage_selected(&source, &settings, &mut || stopped(env))?;
+            let source =
+                self.stage_selected(&source, &settings, &mut || stopped(&*self.clock, env))?;
             Ok(PreparedRun {
                 preview: recorded,
                 source,

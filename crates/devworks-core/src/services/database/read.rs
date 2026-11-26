@@ -330,7 +330,7 @@ impl DataExecutor {
         let capability = query.descriptor().name.to_owned();
         let to_commit = staged.clone();
         let result = run_write(self.store.as_ref(), WriteOptions::settlement(), move |tx| {
-            if !crate::authority::authorization_holds_in(tx, &context, &authorization)? {
+            if !crate::services::fences::authorization_holds_in(tx, &context, &authorization)? {
                 return Err(StorageError::ScopeDenied);
             }
             let source = data::transaction_source(

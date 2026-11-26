@@ -641,7 +641,7 @@ mod closure_tests {
             provenance: json!({}),
             phase: VersionPhase::Installed,
             waits: vec![],
-            approval: None,
+            approval: Some(json!({"kind": "Person", "by": "tester", "atMs": 0, "proposalId": "p"})),
             created_at_ms: 0,
             updated_at_ms: 0,
         };

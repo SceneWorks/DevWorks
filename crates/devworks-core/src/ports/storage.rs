@@ -806,7 +806,7 @@ pub trait WriteTransaction {
     /// Narrow delegation from the artifact owner for transactionally admitted archive pins.
     fn archive_pin(
         &mut self,
-        _authority: &crate::services::artifacts::ArchivePinAuthority,
+        _authority: &crate::kernel::workspace_archive::ArchivePinAuthority,
         holder: &Id,
         digest: &str,
     ) -> Result<(), StorageError> {
@@ -814,7 +814,7 @@ pub trait WriteTransaction {
     }
     fn archive_release_pins(
         &mut self,
-        _authority: &crate::services::artifacts::ArchivePinAuthority,
+        _authority: &crate::kernel::workspace_archive::ArchivePinAuthority,
         holder: &Id,
     ) -> Result<i64, StorageError> {
         self.artifacts().release_pins(holder)

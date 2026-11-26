@@ -988,6 +988,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             store.clone(),
             sources.clone(),
             artifacts.clone(),
+            clock.clone(),
         ));
         consumers.push(crate::effect_consumer::effect_consumer(
             devworks_core::services::imports::EFFECT_CONSUMER,

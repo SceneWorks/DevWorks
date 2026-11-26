@@ -25,7 +25,6 @@ use crate::package_host::{
     InvocationKind, InvokeOutcome, InvokeRefusal, InvokeRequest, PackageHost,
 };
 use crate::providers::schemas::RegisteredSchemas;
-use devworks_core::authority::authorization_holds;
 use devworks_core::authority::policy::{AccessProfile, resolve_policy};
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
@@ -40,6 +39,7 @@ use devworks_core::protocol::{
     RootId,
 };
 use devworks_core::providers::materialize::SchemaDocuments;
+use devworks_core::services::fences::authorization_holds;
 use devworks_extension_protocol::package::{InvocationOutcome, InvocationScope};
 use devworks_extension_protocol::scalars as wire;
 use serde_json::{Value, json};
@@ -286,7 +286,7 @@ fn record(
     if tx.store().store_id != *ctx.store_id()
         || tx.store().restore_epoch != ctx.restore_epoch().get()
         || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-        || !devworks_core::authority::fences_hold(tx, &request.fences)?
+        || !devworks_core::services::fences::fences_hold(tx, &request.fences)?
         || active.as_deref() != Some(request.digest.as_str())
     {
         return Err(StorageError::ScopeDenied);
@@ -554,7 +554,7 @@ impl EffectExecutor for Effects {
                 request.assignment_id.clone(),
             );
         let authorization = Authorization::direct().fenced_by(request.fences);
-        if !devworks_core::authority::service::authorization_holds_in(tx, &context, &authorization)?
+        if !devworks_core::services::fences::authorization_holds_in(tx, &context, &authorization)?
             || tx.actors().actor_kind(&request.principal)? != Some(kind)
         {
             return Ok(false);

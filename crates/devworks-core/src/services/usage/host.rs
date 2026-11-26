@@ -143,7 +143,7 @@ impl AttemptHost {
         let control = self.control.clone();
         let process = self.process.clone();
         let work = move |tx: &mut dyn WriteTransaction| {
-            if !crate::authority::service::inference_fences_hold(tx, &context, &source_fences)? {
+            if !crate::services::fences::inference_fences_hold(tx, &context, &source_fences)? {
                 return Err(StorageError::ScopeDenied);
             }
             let prior = tx.router().route_request(&logical.request_id)?;

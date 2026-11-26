@@ -817,7 +817,7 @@ impl GitService {
                 .git()
                 .git_worktree(&j.tree.id)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if tree != j.tree || !crate::authority::fences_hold(tx, &j.fences)? {
+            if tree != j.tree || !crate::services::fences::fences_hold(tx, &j.fences)? {
                 return Err(StorageError::ScopeDenied);
             }
             let work = tx
@@ -1428,7 +1428,7 @@ impl GitService {
         }
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let authorization = crate::ports::Authorization::direct().fenced_by(job.fences.clone());
-            if !crate::authority::authorization_holds(snapshot, &authorization)?
+            if !crate::services::fences::authorization_holds(snapshot, &authorization)?
                 || snapshot.git().git_worktree(&job.tree.id)?.as_ref() != Some(&job.tree)
                 || snapshot
                     .work()
@@ -1611,247 +1611,242 @@ impl GitService {
         {
             return changed("physical repository or worktree identity changed");
         }
-        let outcome =
-            match &job.action {
-                Action::Documentation(draft) => {
-                    let evidence = draft.evidence.clone();
-                    let actor = crate::services::git::context::bind_worktree(
-                        &*self.store,
-                        ctx.clone(),
-                        &job.tree.id,
-                    );
-                    let Ok(actor) = actor else {
-                        return denied("documentation worktree authority changed");
-                    };
-                    let valid = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
-                        evidence
-                            .validate_in(tx, &actor)
-                            .map_err(Failure::into_storage)
-                    });
-                    if !matches!(valid, Ok(true)) {
-                        return changed("documentation source authority changed before generation");
+        let outcome = match &job.action {
+            Action::Documentation(draft) => {
+                let evidence = draft.evidence.clone();
+                let actor = crate::services::git::context::bind_worktree(
+                    &*self.store,
+                    ctx.clone(),
+                    &job.tree.id,
+                );
+                let Ok(actor) = actor else {
+                    return denied("documentation worktree authority changed");
+                };
+                let valid = run_write(&*self.store, WriteOptions::host_state(), move |tx| {
+                    evidence
+                        .validate_in(tx, &actor)
+                        .map_err(Failure::into_storage)
+                });
+                if !matches!(valid, Ok(true)) {
+                    return changed("documentation source authority changed before generation");
+                }
+                let Some(source) = self
+                    .documentation_analysis()
+                    .and_then(|analysis| analysis.documentation_source())
+                else {
+                    return denied("repository documentation source intake is unavailable");
+                };
+                match documentation::apply(&git, source.as_ref(), path, &job, &operation.id, draft)
+                {
+                    Ok(()) => return self.observe_pending(&job, operation),
+                    Err(GitFault::SourceChanged) => {
+                        return changed("documentation source or target changed");
                     }
-                    let Some(source) = self
-                        .documentation_analysis()
-                        .and_then(|analysis| analysis.documentation_source())
-                    else {
-                        return denied("repository documentation source intake is unavailable");
-                    };
-                    match documentation::apply(
-                        &git,
-                        source.as_ref(),
-                        path,
-                        &job,
-                        &operation.id,
-                        draft,
-                    ) {
-                        Ok(()) => return self.observe_pending(&job, operation),
-                        Err(GitFault::SourceChanged) => {
-                            return changed("documentation source or target changed");
-                        }
-                        Err(_) => return EffectOutcome::Unknown(
+                    Err(_) => {
+                        return EffectOutcome::Unknown(
                             "repository documentation could not be verified after the Git effect"
                                 .into(),
-                        ),
+                        );
                     }
                 }
-                Action::Create => {
-                    if let Some(binding) = &job.reviewed_binding {
-                        match self.approval_root_witness(&job.tree.registered_root_id) {
-                            Ok(current) if binding["native"]["rootWitness"] == current => {}
-                            _ => return changed("reviewed worktree root changed before creation"),
-                        }
+            }
+            Action::Create => {
+                if let Some(binding) = &job.reviewed_binding {
+                    match self.approval_root_witness(&job.tree.registered_root_id) {
+                        Ok(current) if binding["native"]["rootWitness"] == current => {}
+                        _ => return changed("reviewed worktree root changed before creation"),
                     }
-                    if self.root_path(&job.tree.registered_root_id).is_err() {
-                        return denied("registered root changed");
+                }
+                if self.root_path(&job.tree.registered_root_id).is_err() {
+                    return denied("registered root changed");
+                }
+                let destination = match crate::services::git::client::path_argument(path) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return failed(
+                            DomainErrorCode::UnsupportedTarget,
+                            "Git worktree path is unsupported",
+                        );
                     }
-                    let destination = match crate::services::git::client::path_argument(path) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            return failed(
-                                DomainErrorCode::UnsupportedTarget,
-                                "Git worktree path is unsupported",
-                            );
-                        }
-                    };
-                    match git.worktrees(Path::new(&repository.location)) {
-                        Ok(trees)
-                            if trees
-                                .iter()
-                                .any(|t| self.same_worktree_path(Path::new(&t.path), path)) =>
-                        {
-                            return denied("worktree path is already registered");
-                        }
-                        Err(_) => return denied("repository worktrees cannot be verified"),
-                        _ => {}
+                };
+                match git.worktrees(Path::new(&repository.location)) {
+                    Ok(trees)
+                        if trees
+                            .iter()
+                            .any(|t| self.same_worktree_path(Path::new(&t.path), path)) =>
+                    {
+                        return denied("worktree path is already registered");
                     }
-                    let args = [
-                        "worktree",
-                        "add",
-                        "-b",
-                        job.tree
+                    Err(_) => return denied("repository worktrees cannot be verified"),
+                    _ => {}
+                }
+                let args = [
+                    "worktree",
+                    "add",
+                    "-b",
+                    job.tree
+                        .branch
+                        .strip_prefix("refs/heads/")
+                        .expect("validated branch"),
+                    "--",
+                    &destination,
+                    &job.tree.head.hex,
+                ];
+                if let Some(binding) = &job.reviewed_binding {
+                    // worktree add -b internally launches branch/reset children. Execute
+                    // those exact builtins separately so every step keeps the child ban.
+                    (|| -> Result<Vec<u8>, GitFault> {
+                        let repository_path = Path::new(&repository.location);
+                        let branch = job
+                            .tree
                             .branch
                             .strip_prefix("refs/heads/")
-                            .expect("validated branch"),
-                        "--",
-                        &destination,
-                        &job.tree.head.hex,
-                    ];
-                    if let Some(binding) = &job.reviewed_binding {
-                        // worktree add -b internally launches branch/reset children. Execute
-                        // those exact builtins separately so every step keeps the child ban.
-                        (|| -> Result<Vec<u8>, GitFault> {
-                            let repository_path = Path::new(&repository.location);
-                            let branch = job
-                                .tree
-                                .branch
-                                .strip_prefix("refs/heads/")
-                                .expect("validated branch");
-                            let policy = &binding["native"]["executionPolicy"];
-                            git.reviewed_mutation(
-                                repository_path,
-                                &["branch", "--", branch, &job.tree.head.hex],
-                                None,
-                                &operation.id,
-                                policy,
-                            )?;
-                            git.reviewed_mutation(
-                                repository_path,
-                                &[
-                                    "worktree",
-                                    "add",
-                                    "--no-checkout",
-                                    "--",
-                                    &destination,
-                                    branch,
-                                ],
-                                None,
-                                &operation.id,
-                                policy,
-                            )?;
-                            let location = self.resolve_location(&git, &repository, &job.tree)?;
-                            if self
-                                .approval_root_witness(&job.tree.registered_root_id)
-                                .ok()
-                                .as_ref()
-                                != Some(&binding["native"]["rootWitness"])
-                                || git.head(path)?.as_deref() != Some(job.tree.head.hex.as_str())
-                                || git.branch(path)?.as_deref() != Some(job.tree.branch.as_str())
-                            {
-                                return Err(GitFault::SourceChanged);
-                            }
-                            // Conditional config can legitimately differ in the newly created
-                            // Git directory. Preserve the qualified binary identity and bind the
-                            // current target hook policy; no hook acquires execution authority.
-                            let target_policy = git.reviewed_commit_policy(path)?;
-                            if target_policy["gitProgram"] != policy["gitProgram"]
-                                || target_policy["gitVersion"] != policy["gitVersion"]
-                            {
-                                return Err(GitFault::SourceChanged);
-                            }
-                            let result = git.reviewed_mutation(
-                                path,
-                                &["checkout", "--no-recurse-submodules", branch],
-                                None,
-                                &operation.id,
-                                &target_policy,
-                            )?;
-                            if self.resolve_location(&git, &repository, &job.tree)? != location {
-                                return Err(GitFault::SourceChanged);
-                            }
-                            Ok(result)
-                        })()
-                    } else {
-                        git.mutation(
-                            Path::new(&repository.location),
-                            &args,
+                            .expect("validated branch");
+                        let policy = &binding["native"]["executionPolicy"];
+                        git.reviewed_mutation(
+                            repository_path,
+                            &["branch", "--", branch, &job.tree.head.hex],
                             None,
                             &operation.id,
-                            false,
-                        )
-                    }
-                }
-                Action::Inspect => Ok(vec![]),
-                Action::Cleanup => return self.execute_cleanup(&job, operation, &git, &repository),
-                Action::PullRequest { .. } => {
-                    return self.execute_pull_request(&job, operation, &git, path);
-                }
-                Action::Push { .. } => return self.execute_push(&job, operation, &git, path),
-                Action::Commit { message, expected } => {
-                    if let Some(binding) = &job.reviewed_binding {
-                        match git.commit_manifest(path, &expected.hex) {
-                            Ok(manifest)
-                                if super::approval::compact_commit_manifest(&manifest)
-                                    .ok()
-                                    .as_ref()
-                                    == Some(&binding["commitManifest"]) => {}
-                            _ => return changed("reviewed commit contents changed before staging"),
-                        }
-                    }
-                    match if job.reviewed_binding.is_some() {
-                        git.reviewed_revision_observation(path)
-                    } else {
-                        git.revision_observation(path)
-                    } {
-                        Ok(o)
-                            if o.head == expected.hex
-                                && o.branch.as_deref() == Some(&job.tree.branch) =>
+                            policy,
+                        )?;
+                        git.reviewed_mutation(
+                            repository_path,
+                            &[
+                                "worktree",
+                                "add",
+                                "--no-checkout",
+                                "--",
+                                &destination,
+                                branch,
+                            ],
+                            None,
+                            &operation.id,
+                            policy,
+                        )?;
+                        let location = self.resolve_location(&git, &repository, &job.tree)?;
+                        if self
+                            .approval_root_witness(&job.tree.registered_root_id)
+                            .ok()
+                            .as_ref()
+                            != Some(&binding["native"]["rootWitness"])
+                            || git.head(path)?.as_deref() != Some(job.tree.head.hex.as_str())
+                            || git.branch(path)?.as_deref() != Some(job.tree.branch.as_str())
                         {
-                            if !o.dirty {
-                                let docs = match documentation::matching_commit(
-                                    &*self.store,
-                                    &git,
-                                    path,
-                                    &job,
-                                    &o.head,
-                                ) {
-                                    Ok(docs) => docs,
-                                    Err(error) => return storage_failure(error.into_storage()),
-                                };
-                                return self.finish_git(&job, &operation.id, o, docs);
-                            }
+                            return Err(GitFault::SourceChanged);
                         }
-                        _ => return changed("worktree head or branch changed"),
+                        // Conditional config can legitimately differ in the newly created
+                        // Git directory. Preserve the qualified binary identity and bind the
+                        // current target hook policy; no hook acquires execution authority.
+                        let target_policy = git.reviewed_commit_policy(path)?;
+                        if target_policy["gitProgram"] != policy["gitProgram"]
+                            || target_policy["gitVersion"] != policy["gitVersion"]
+                        {
+                            return Err(GitFault::SourceChanged);
+                        }
+                        let result = git.reviewed_mutation(
+                            path,
+                            &["checkout", "--no-recurse-submodules", branch],
+                            None,
+                            &operation.id,
+                            &target_policy,
+                        )?;
+                        if self.resolve_location(&git, &repository, &job.tree)? != location {
+                            return Err(GitFault::SourceChanged);
+                        }
+                        Ok(result)
+                    })()
+                } else {
+                    git.mutation(
+                        Path::new(&repository.location),
+                        &args,
+                        None,
+                        &operation.id,
+                        false,
+                    )
+                }
+            }
+            Action::Inspect => Ok(vec![]),
+            Action::Cleanup => return self.execute_cleanup(&job, operation, &git, &repository),
+            Action::PullRequest { .. } => {
+                return self.execute_pull_request(&job, operation, &git, path);
+            }
+            Action::Push { .. } => return self.execute_push(&job, operation, &git, path),
+            Action::Commit { message, expected } => {
+                if let Some(binding) = &job.reviewed_binding {
+                    match git.commit_manifest(path, &expected.hex) {
+                        Ok(manifest)
+                            if super::approval::compact_commit_manifest(&manifest)
+                                .ok()
+                                .as_ref()
+                                == Some(&binding["commitManifest"]) => {}
+                        _ => return changed("reviewed commit contents changed before staging"),
                     }
-                    let mutate = |args: &[&str], stdin| {
-                        if let Some(binding) = &job.reviewed_binding {
-                            git.reviewed_mutation(
+                }
+                match if job.reviewed_binding.is_some() {
+                    git.reviewed_revision_observation(path)
+                } else {
+                    git.revision_observation(path)
+                } {
+                    Ok(o)
+                        if o.head == expected.hex
+                            && o.branch.as_deref() == Some(&job.tree.branch) =>
+                    {
+                        if !o.dirty {
+                            let docs = match documentation::matching_commit(
+                                &*self.store,
+                                &git,
                                 path,
-                                args,
-                                stdin,
-                                &operation.id,
-                                &binding["commitManifest"]["executionPolicy"],
-                            )
-                        } else {
-                            git.mutation(path, args, stdin, &operation.id, false)
+                                &job,
+                                &o.head,
+                            ) {
+                                Ok(docs) => docs,
+                                Err(error) => return storage_failure(error.into_storage()),
+                            };
+                            return self.finish_git(&job, &operation.id, o, docs);
                         }
-                    };
-                    match mutate(&["add", "--all", "--"], None) {
-                        Ok(_) => {
-                            if let Some(binding) = &job.reviewed_binding {
-                                match git.staged_commit_manifest(path, &expected.hex) {
-                                    Ok(manifest)
-                                        if super::approval::compact_commit_manifest(&manifest)
-                                            .ok()
-                                            .as_ref()
-                                            == Some(&binding["commitManifest"]) => {}
-                                    _ => {
-                                        return changed(
-                                            "staged commit differs from the reviewed contents",
-                                        );
-                                    }
+                    }
+                    _ => return changed("worktree head or branch changed"),
+                }
+                let mutate = |args: &[&str], stdin| {
+                    if let Some(binding) = &job.reviewed_binding {
+                        git.reviewed_mutation(
+                            path,
+                            args,
+                            stdin,
+                            &operation.id,
+                            &binding["commitManifest"]["executionPolicy"],
+                        )
+                    } else {
+                        git.mutation(path, args, stdin, &operation.id, false)
+                    }
+                };
+                match mutate(&["add", "--all", "--"], None) {
+                    Ok(_) => {
+                        if let Some(binding) = &job.reviewed_binding {
+                            match git.staged_commit_manifest(path, &expected.hex) {
+                                Ok(manifest)
+                                    if super::approval::compact_commit_manifest(&manifest)
+                                        .ok()
+                                        .as_ref()
+                                        == Some(&binding["commitManifest"]) => {}
+                                _ => {
+                                    return changed(
+                                        "staged commit differs from the reviewed contents",
+                                    );
                                 }
                             }
-                            let mut args = vec!["commit", "--cleanup=verbatim", "--file=-"];
-                            if job.reviewed_binding.is_some() {
-                                args.push("--no-gpg-sign");
-                            }
-                            mutate(&args, Some(message.as_bytes().to_vec()))
                         }
-                        Err(e) => Err(e),
+                        let mut args = vec!["commit", "--cleanup=verbatim", "--file=-"];
+                        if job.reviewed_binding.is_some() {
+                            args.push("--no-gpg-sign");
+                        }
+                        mutate(&args, Some(message.as_bytes().to_vec()))
                     }
+                    Err(e) => Err(e),
                 }
-            };
+            }
+        };
         if outcome.is_err() {
             return EffectOutcome::Unknown(
                 "Git helper did not establish the requested postcondition".into(),
