@@ -1,6 +1,6 @@
 from pathlib import Path
 from html import escape
-import argparse, json, re, shutil
+import argparse, io, json, re, shutil, zipfile
 from PIL import Image, ImageDraw, ImageFont
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
@@ -167,7 +167,10 @@ for i,s in enumerate(sections,1):
 # Remove trailing empty spacer after the final table to avoid an empty final page.
 while len(DOC.element.body)>1 and DOC.element.body[-2].tag==qn('w:p') and not ''.join(DOC.element.body[-2].itertext()).strip() and not DOC.element.body[-2].xpath('.//w:drawing'):
  DOC.element.body.remove(DOC.element.body[-2])
-DOC.save(OUT/'devworks-requirements.docx')
+# Fixed entry timestamps keep the Word package byte-identical across rebuilds.
+buffer=io.BytesIO();DOC.save(buffer)
+with zipfile.ZipFile(buffer) as source,zipfile.ZipFile(OUT/'devworks-requirements.docx','w',zipfile.ZIP_DEFLATED) as target:
+ for entry in source.infolist():target.writestr(zipfile.ZipInfo(entry.filename,(1980,1,1,0,0,0)),source.read(entry),zipfile.ZIP_DEFLATED)
 nav=''.join(f'<a href="#s{i}">{escape(s["title"])}</a>' for i,s in enumerate(sections,1))
 html='''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DevWorks requirements</title><link rel="icon" href="data:,"><style>
 :root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f6f7f9;color:#17202a;font:calc(15px + 1pt)/1.7 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}a{color:#245b9c}nav{position:fixed;inset:0 auto 0 0;width:272px;padding:28px 22px;background:#e9edf2;border-right:1px solid #d5dce5;overflow:auto}nav b{display:block;margin-bottom:18px;font-size:calc(14px + 1pt);color:#111}nav a{display:block;text-decoration:none;font-size:calc(12px + 1pt);line-height:1.6;padding:6px 0;color:#3b4d62}main{margin-left:272px;padding:42px 54px 80px;max-width:1300px}header{padding-bottom:22px}h1{font-size:calc(38px + 1pt);letter-spacing:-1px;line-height:1.2;margin:12px 0 15px;color:#000}h2{font-size:calc(25px + 1pt);letter-spacing:-.4px;line-height:1.35;margin:45px 0 20px;color:#000}h3{font-size:calc(17px + 1pt);margin:28px 0 12px;color:#000}section{scroll-margin-top:25px}p{margin:0 0 16px}header .meta{font-size:calc(12px + 1pt);color:#526174}.intro{font-size:calc(17px + 1pt)}.actions{display:flex;gap:24px;margin:20px 0;font-size:calc(13px + 1pt)}.requirement{background:white;border:1px solid #dce1e8;border-radius:4px;padding:15px 18px;font-size:calc(14px + 1pt)}.requirement strong{margin-right:10px;font-size:calc(12px + 1pt)}.status{display:inline-block;font-size:calc(10px + 1pt);margin-right:10px;border:1px solid #b8c7d6;padding:1px 6px;border-radius:3px;vertical-align:1px;color:#3c5268}.status.confirmed{background:#e8f1eb;border-color:#bfd1c5;color:#315a42}.status.proposed{background:#f5f1e7;border-color:#dbceb0;color:#705b30}.table-wrap{overflow:auto;margin:18px 0 25px}table{border-collapse:collapse;width:100%;font-size:calc(13px + 1pt);background:white}th,td{padding:11px 13px;border:1px solid #ccd3dd;text-align:left;vertical-align:top}th{background:#344251;color:white;font-weight:600}tbody tr:nth-child(even){background:#eef1f5}td:first-child{min-width:100px}figure{margin:25px 0}figure img{width:100%;height:auto;border:1px solid #d5dce5}figcaption{font-size:calc(12px + 1pt);color:#526174;margin-top:8px}code{font-size:calc(12px + 1pt)}a:focus-visible{outline:2px solid #245b9c;outline-offset:3px}@media(max-width:950px){nav{display:none}main{margin:0;padding:28px 22px}h1{font-size:calc(31px + 1pt)}}@media print{nav,.actions{display:none}main{margin:0;padding:0}body{background:white}.requirement{break-inside:avoid}h2,h3{break-after:avoid}table{font-size:calc(10px + 1pt)}th,td{padding:7px}section{break-inside:auto}figure{break-inside:avoid}}

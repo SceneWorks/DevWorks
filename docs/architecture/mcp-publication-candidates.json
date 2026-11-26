@@ -3,16 +3,16 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "53a16993118c2cbec211a8c73017a208f6cadd34c6549621866034786e2231cc",
+  "sourceSha256": "9706a1ea4314ed30b24a159b407d4379fd38fcb23b5c05a159791eeda9acca1f",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
   "resourcePolicy": "Static safe devworks:// templates; object enumeration/read is an authenticated scoped tool/resource projection of these exact queries, preserving the query stamp and citations.",
   "counts": {
-    "catalogOperations": 353,
-    "modeDispositions": 358,
-    "tools": 154,
-    "readTools": 95,
+    "catalogOperations": 385,
+    "modeDispositions": 390,
+    "tools": 160,
+    "readTools": 101,
     "commandTools": 59
   },
   "tools": [
@@ -50,6 +50,48 @@
       "resultSelection": {
         "pointer": "/kind",
         "equals": "projects.get"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_projects_purge_manifest",
+      "operation": "projects.purge_manifest",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "projects.purge_manifest"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "projects.purge_manifest"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_projects_purge_status",
+      "operation": "projects.purge_status",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "projects.purge_status"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "projects.purge_status"
       },
       "authority": "Scoped",
       "effect": "Local",
@@ -731,6 +773,27 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
+      "name": "devworks_next_work_inspect_queue",
+      "operation": "next_work.inspect_queue",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "next_work.inspect_queue"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "next_work.inspect_queue"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
       "name": "devworks_runs_inspect",
       "operation": "runs.inspect",
       "mode": "Query",
@@ -785,6 +848,48 @@
       "resultSelection": {
         "pointer": "/kind",
         "equals": "agents.inspect"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_agents_history",
+      "operation": "agents.history",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "agents.history"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "agents.history"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_agents_events",
+      "operation": "agents.events",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "agents.events"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "agents.events"
       },
       "authority": "Scoped",
       "effect": "Local",
@@ -1946,6 +2051,27 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
+      "name": "devworks_schemas_code_references",
+      "operation": "schemas.code_references",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "schemas.code_references"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "schemas.code_references"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
       "name": "devworks_knowledge_search",
       "operation": "knowledge.search",
       "mode": "Query",
@@ -2902,7 +3028,7 @@
         "equals": "conventions.import"
       },
       "authority": "Scoped",
-      "effect": "Local",
+      "effect": "Journaled",
       "clientGrant": "ExplicitCommand",
       "defaultForNewRegistration": false,
       "requiresApplicationIdempotencyKey": true,
@@ -3295,6 +3421,30 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "projects.prepare_purge",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "projects.purge_manifest",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
+      "operation": "projects.purge",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "projects.purge_status",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
       "operation": "features.list",
       "mode": "Query",
       "disposition": "PublishCandidate",
@@ -3505,6 +3655,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "next_work.inspect_queue",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
       "operation": "runs.start",
       "mode": "Command",
       "disposition": "InternalOnly",
@@ -3563,6 +3719,36 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "agents.post",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "agents.receive",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "agents.ack",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "agents.history",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
+      "operation": "agents.events",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
     },
     {
       "operation": "agents.inbox",
@@ -3961,6 +4147,12 @@
       "reason": "Eligible scoped read; explicit client selection required."
     },
     {
+      "operation": "schemas.code_references",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
       "operation": "schemas.index",
       "mode": "Command",
       "disposition": "InternalOnly",
@@ -4010,6 +4202,24 @@
     },
     {
       "operation": "database.configure_sensitive_columns",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "database.mysql_readonly_query",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "database.sensitive_columns",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "database.edit_sensitive_column_rules",
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
@@ -4321,6 +4531,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "artifacts.tag",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
       "operation": "conventions.list",
       "mode": "Query",
       "disposition": "PublishCandidate",
@@ -4441,6 +4657,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "skills.set_enabled",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
       "operation": "roles.read",
       "mode": "Query",
       "disposition": "InternalOnly",
@@ -4495,6 +4717,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "approvals.review_queue",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
       "operation": "notifications.list",
       "mode": "Query",
       "disposition": "InternalOnly",
@@ -4520,6 +4748,12 @@
     },
     {
       "operation": "notifications.settings",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "notifications.mark_read",
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
@@ -5053,6 +5287,12 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "router.embedding_spaces",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
       "operation": "mcp.servers",
       "mode": "Query",
       "disposition": "InternalOnly",
@@ -5071,6 +5311,18 @@
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
     {
+      "operation": "mcp.disable",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
+      "operation": "mcp.remove",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
       "operation": "mcp.discover",
       "mode": "Command",
       "disposition": "InternalOnly",
@@ -5078,6 +5330,12 @@
     },
     {
       "operation": "mcp.select_tools",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
+      "operation": "mcp.classify_tool",
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Human/configuration authority; native administration, not an incoming context tool."
@@ -5157,6 +5415,30 @@
     {
       "operation": "addons.uninstall",
       "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "addons.invoke",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "addons.run_workflow",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "addons.read_content",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "addons.invocation",
+      "mode": "Query",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     },
@@ -5393,6 +5675,42 @@
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Human/configuration authority; native administration, not an incoming context tool."
+    },
+    {
+      "operation": "evals.grade",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "evals.results",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "watch.create",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "watch.list",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "watch.inspect",
+      "mode": "Query",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "watch.cancel",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
     }
   ]
 }
