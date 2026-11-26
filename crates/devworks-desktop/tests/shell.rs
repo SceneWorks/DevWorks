@@ -2163,3 +2163,100 @@ fn an_idle_shell_publishes_no_purge_snapshot_until_an_editor_changes_or_a_review
     h.state_mut().purge.frozen = false;
     h.state_mut().on_exit();
 }
+
+/// The operation of every recovery link written in the health checks' sources (each is a
+/// `RecoveryLink::new("<operation>", ...)` literal), so a new link is checked as soon as it is
+/// written.
+fn recovery_link_operations() -> std::collections::BTreeSet<String> {
+    fn walk(dir: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (at, _) in text.match_indices("RecoveryLink::new(") {
+                    let rest = text[at + "RecoveryLink::new(".len()..].trim_start();
+                    if let Some(literal) = rest.strip_prefix('"') {
+                        let op = &literal[..literal.find('"').unwrap()];
+                        out.insert(op.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut out = std::collections::BTreeSet::new();
+    for source in ["devworks-core/src", "devworks-engine/src"] {
+        walk(&crates.join(source), &mut out);
+    }
+    out
+}
+
+#[test]
+fn health_recovery_links_name_catalog_operations_and_surface_only_handled_ones() {
+    let operations = recovery_link_operations();
+    // The scan sees the queue, process, router, artifact and run links the checks produce.
+    for expected in [
+        "queue.inspect",
+        "queue.retry",
+        "queue.resolve",
+        "process.cancel",
+    ] {
+        assert!(operations.contains(expected), "{operations:?}");
+    }
+    // Every written link names a catalog operation; one whose handler lands later (for
+    // example on another feature branch) is filtered out of the checks until then.
+    let unknown: Vec<&String> = operations
+        .iter()
+        .filter(|op| devworks_core::registry::find(op).is_none())
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "links to no catalog operation: {unknown:?}"
+    );
+    let root = Root::new("recovery-links");
+    let engine = start(&root);
+    let runtime = engine.host().runtime();
+    // A link an earlier version recorded, to an operation this app does not run, is dropped
+    // from the health checks; a link it runs is kept.
+    let mut entry = devworks_core::services::diagnostics::LogEntry::new(
+        devworks_core::services::diagnostics::channels::REPOSITORY_INDEXING,
+        "failed",
+        devworks_core::protocol::records::Severity::Error,
+        "Indexing failed",
+    );
+    entry.outcome = Some(devworks_core::protocol::records::DiagnosticOutcome::Failed);
+    entry.recovery = vec![
+        devworks_core::services::diagnostics::RecoveryLink::new(
+            "workspace.legacy_repair",
+            "Repair the workspace",
+        ),
+        devworks_core::services::diagnostics::RecoveryLink::new(
+            "queue.inspect",
+            "Inspect the failed deliveries",
+        ),
+    ];
+    assert!(devworks_core::registry::find("workspace.legacy_repair").is_none());
+    assert!(!runtime.handles("workspace.legacy_repair"));
+    runtime.diagnostics().log(entry).expect("recorded");
+    let checks = runtime.diagnostics().health(engine.host().user()).unwrap();
+    let indexing = checks
+        .iter()
+        .find(|c| {
+            c.component == devworks_core::services::diagnostics::channels::REPOSITORY_INDEXING
+        })
+        .expect("the indexing check");
+    let linked: Vec<&str> = indexing.recovery.iter().map(|l| l.operation).collect();
+    assert_eq!(linked, ["queue.inspect"]);
+    for check in &checks {
+        for link in &check.recovery {
+            assert!(
+                runtime.handles(link.operation),
+                "{}: {}",
+                check.component,
+                link.operation
+            );
+        }
+    }
+}

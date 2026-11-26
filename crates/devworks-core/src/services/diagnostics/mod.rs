@@ -764,6 +764,9 @@ pub struct DiagnosticService {
     watch: LogWatch,
     sources: RwLock<Vec<Arc<dyn HealthSource>>>,
     consumers: RwLock<Option<Vec<String>>>,
+    /// The operations the host registered handlers for; a health check links only these
+    /// (`None`: not composed, nothing is filtered).
+    operations: RwLock<Option<std::collections::BTreeSet<&'static str>>>,
     monitor: Mutex<MonitorState>,
     /// Where exports are staged (see [`Self::set_export_staging`]).
     export_staging: RwLock<Option<Arc<dyn ExportStaging>>>,
@@ -786,6 +789,7 @@ impl DiagnosticService {
             watch: LogWatch::default(),
             sources: RwLock::new(Vec::new()),
             consumers: RwLock::new(None),
+            operations: RwLock::new(None),
             monitor: Mutex::new(MonitorState::default()),
             export_staging: RwLock::new(None),
         }
@@ -809,6 +813,12 @@ impl DiagnosticService {
     /// The durable delivery consumers whose queue health is reported.
     pub fn set_consumers(&self, consumers: Vec<String>) {
         *self.consumers.write_locked() = Some(consumers);
+    }
+    /// The operations the host registered handlers for. A recovery link to any other operation
+    /// (one an earlier version recorded, or one this host does not compose) is dropped from the
+    /// health checks: a link a person or agent cannot invoke is no recovery.
+    pub fn set_operations(&self, operations: impl IntoIterator<Item = &'static str>) {
+        *self.operations.write_locked() = Some(operations.into_iter().collect());
     }
     /// The live-inspection seam.
     pub fn watch(&self) -> &LogWatch {

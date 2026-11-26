@@ -1,5 +1,6 @@
 //! Feature and card detail: plans and their requirement editor, readiness, blockers, feature
-//! membership, acceptance, assignment, run controls, history and source control.
+//! membership, acceptance, assignment, run controls, history, linked history (lineage, evidence
+//! links and model and tool usage) and source control.
 use crate::frame;
 use crate::theme;
 use crate::widgets::{self, Tone, chip};
@@ -105,6 +106,7 @@ pub(crate) fn feature_detail(
             workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
             run_controls(ui, work, f, enabled, actions);
             source_control(ui, work, f.id.as_str(), actions);
+            linked_history(ui, work, f.id.as_str(), actions);
             ui.add_space(6.0);
             // Approval and readiness are separate facts, shown apart.
             chip(
@@ -983,6 +985,7 @@ pub(crate) fn card_detail(
                 github_issue_controls(ui, work, w, enabled, actions);
             }
             source_control(ui, work, w.id.as_str(), actions);
+            linked_history(ui, work, w.id.as_str(), actions);
             // Workflow status: moving it never starts, pauses or completes execution.
             let mut target = w.status_id.as_str().to_owned();
             egui::ComboBox::from_id_salt(("card-status", w.id.as_str()))
@@ -1255,6 +1258,155 @@ fn settled_finding_history(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut
     if ui.button("Refresh finding history").clicked() {
         actions.push(Action::ReadinessHistory(root.to_owned(), false));
     }
+}
+
+/// Shows the state of one part of the linked history (a spinner, its error, an empty note) and
+/// whether its rows are ready; its Load more control follows the rows.
+fn linked_part<T>(ui: &mut Ui, list: &crate::paged::Paged<T>, empty: &str) -> bool {
+    if let Some(error) = &list.error {
+        widgets::caption(ui, error);
+    }
+    if !list.loaded {
+        if list.loading() {
+            ui.spinner();
+        }
+        return false;
+    }
+    if list.items.is_empty() {
+        widgets::caption(ui, empty);
+    }
+    true
+}
+
+/// A root's linked history (HISTORY-01): every related work item, link and event, its evidence
+/// links and its model and tool usage, each read through its `history.*` operation when a person
+/// asks for it.
+pub(crate) fn linked_history(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
+    let Some(linked) = work.linked.get(root) else {
+        if ui.button("Show linked history").clicked() {
+            actions.push(Action::LinkedHistory(root.to_owned(), None));
+        }
+        return;
+    };
+    let busy = linked.lineage.loading() || linked.evidence.loading() || linked.usage.loading();
+    egui::CollapsingHeader::new("Linked history")
+        .id_salt(("work-linked", root))
+        .default_open(true)
+        .show(ui, |ui| {
+            if ui
+                .add_enabled(!busy, egui::Button::new("Refresh linked history"))
+                .clicked()
+            {
+                actions.push(Action::LinkedHistory(root.to_owned(), None));
+            }
+            let more = |ui: &mut Ui, label: &str, more: bool, loading: bool| {
+                more && ui.add_enabled(!loading, egui::Button::new(label)).clicked()
+            };
+            ui.label(RichText::new("Lineage").strong());
+            if linked_part(ui, &linked.lineage, "No linked work, links or events.") {
+                for r in &linked.lineage.items {
+                    let who = r
+                        .actor_id
+                        .as_ref()
+                        .map(|a| a.0.as_str())
+                        .unwrap_or("unknown");
+                    ui.label(format!(
+                        "{} · {}: {}",
+                        r.kind.0,
+                        r.related_id.as_str(),
+                        r.summary.0
+                    ));
+                    widgets::caption(
+                        ui,
+                        format!(
+                            "{who} · {}",
+                            crate::jobs_screen::local_time(r.occurred_at_ms.as_ref())
+                        ),
+                    );
+                }
+                if more(
+                    ui,
+                    "Load more lineage",
+                    linked.lineage.more(),
+                    linked.lineage.loading(),
+                ) {
+                    actions.push(Action::LinkedHistory(
+                        root.to_owned(),
+                        Some(LinkedPart::Lineage),
+                    ));
+                }
+            }
+            ui.label(RichText::new("Evidence links").strong());
+            if linked_part(ui, &linked.evidence, "No evidence links.") {
+                for e in &linked.evidence.items {
+                    ui.label(format!("Evidence: {}", e.summary.0));
+                    widgets::caption(
+                        ui,
+                        format!(
+                            "artifact {} · {}",
+                            e.artifact.artifact_id.as_str(),
+                            crate::jobs_screen::local_time(e.occurred_at_ms.as_ref())
+                        ),
+                    );
+                }
+                if more(
+                    ui,
+                    "Load more evidence",
+                    linked.evidence.more(),
+                    linked.evidence.loading(),
+                ) {
+                    actions.push(Action::LinkedHistory(
+                        root.to_owned(),
+                        Some(LinkedPart::Evidence),
+                    ));
+                }
+            }
+            ui.label(RichText::new("Tool usage").strong());
+            if linked_part(ui, &linked.usage, "No model requests or tool calls.") {
+                for u in &linked.usage.items {
+                    match u {
+                        wops::UsageRow::Model(m) => {
+                            ui.label(format!(
+                                "Model {} · {}: {} in, {} out tokens",
+                                m.model_id.as_str(),
+                                m.purpose.0,
+                                m.input_tokens.get(),
+                                m.output_tokens.get()
+                            ));
+                        }
+                        wops::UsageRow::Tool(t) => {
+                            let mut line = format!("Tool {} · {:?}", t.tool_name.0, t.outcome);
+                            if let Some(d) = &t.duration_ms {
+                                line.push_str(&format!(" · {} ms", d.get()));
+                            }
+                            if let Some(code) = &t.error_code {
+                                line.push_str(&format!(" · {}", code.0));
+                            }
+                            ui.label(line);
+                            widgets::caption(
+                                ui,
+                                format!(
+                                    "session {} · {}",
+                                    t.session_id.as_str(),
+                                    crate::widgets::local_time(t.occurred_at_ms.get())
+                                ),
+                            );
+                        }
+                    }
+                }
+                if more(
+                    ui,
+                    "Load more usage",
+                    linked.usage.more(),
+                    linked.usage.loading(),
+                ) {
+                    actions.push(Action::LinkedHistory(
+                        root.to_owned(),
+                        Some(LinkedPart::Usage),
+                    ));
+                }
+            }
+        });
 }
 
 pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
