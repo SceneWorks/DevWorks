@@ -23,10 +23,10 @@ use devworks_core::protocol::provider::{
 };
 use devworks_core::protocol::records::{
     AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
-    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, MutationSummary,
-    ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability,
-    RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord, SettingEntry,
-    ValidationReport, WebDocument, WebResult,
+    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, LeaseRecord,
+    MutationSummary, ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord,
+    RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord,
+    SettingEntry, ValidationReport, WebDocument, WebResult,
 };
 use devworks_core::protocol::records::{
     BrowserSessionAction, IndexSourceConfig, ProjectPatch, ProjectPurgeManifest,
@@ -1012,8 +1012,9 @@ pub fn agent_messages_page(
         (other, _) => Err(unexpected("agents.inbox", &other)),
     }
 }
+/// The workspace's resources at the revision that names each one's scope and project.
 pub fn resources_list(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
-    frame::with(backend, Negotiate::Initial, || {
+    frame::with(backend, Negotiate::Latest, || {
         Some(In::Resources(resources::Input::List(
             resources::ListInput {
                 scope: DataScope::Workspace,
@@ -1073,6 +1074,51 @@ pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
         CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+/// One page of a resource's held leases (`resources.holders`) or its queue
+/// (`resources.waiters`), naming the project of a project resource.
+pub fn resource_leases(
+    backend: &dyn Backend,
+    waiters: bool,
+    resource: &str,
+    project: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        let resource_id = frame::text(resource)?;
+        let project_id = frame::lift(project.map(frame::text))?;
+        let page = frame::page(PAGE_LIMIT.into(), cursor)?;
+        Some(In::Resources(if waiters {
+            resources::Input::Waiters(resources::WaitersInput {
+                resource_id,
+                page,
+                project_id,
+            })
+        } else {
+            resources::Input::Holders(resources::HoldersInput {
+                resource_id,
+                page,
+                project_id,
+            })
+        }))
+    })
+}
+pub fn resource_leases_page(outcome: QueryOutcome) -> Result<Page<LeaseRecord>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ResourcesHolders { value }, _) => page_of(
+            "resources.holders",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (OperationResult::ResourcesWaiters { value }, _) => page_of(
+            "resources.waiters",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (other, _) => Err(unexpected("resources.holders", &other)),
     }
 }
 pub fn resources(outcome: QueryOutcome) -> Result<Page<ResourceRecord>, Failure> {

@@ -140,6 +140,14 @@ fn frames() -> BTreeMap<String, String> {
         ("session_start", ops::session_start(b, "A title")),
         ("resources_list", ops::resources_list(b, None)),
         (
+            "resource_holders_project",
+            ops::resource_leases(b, false, "staging-db", Some("project-a"), None),
+        ),
+        (
+            "resource_waiters_machine",
+            ops::resource_leases(b, true, "desktop", None, Some("cursor-a")),
+        ),
+        (
             "browser_sessions_workspace",
             ops::browser_sessions_list(b, None, None),
         ),
@@ -490,6 +498,9 @@ fn the_registry_lists_the_wire_revisions_the_desktop_expects() {
         ("issues.publish", 3),
         ("watch.list", 18),
         ("watch.cancel", 18),
+        ("resources.list", 2),
+        ("resources.holders", 22),
+        ("resources.waiters", 22),
     ] {
         assert_eq!(latest_revision(operation), Some(revision), "{operation}");
     }

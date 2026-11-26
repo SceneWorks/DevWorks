@@ -21659,11 +21659,25 @@ pub enum DomainQuery {
     ResourcesHolders {
         resource_id: ResourceId,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 22))]
+        project_id: Option<ProjectId>,
     },
     #[serde(rename = "resources.waiters")]
     ResourcesWaiters {
         resource_id: ResourceId,
         page: PageRequest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "ProjectId", extend("x-since" = 22))]
+        project_id: Option<ProjectId>,
     },
     #[serde(rename = "browser.sessions")]
     BrowserSessions { scope: DataScope, page: PageRequest },
@@ -23243,13 +23257,23 @@ impl Check for DomainQuery {
                 scope.check()?;
                 page.check()?;
             }
-            Self::ResourcesHolders { resource_id, page } => {
+            Self::ResourcesHolders {
+                resource_id,
+                page,
+                project_id,
+            } => {
                 resource_id.check()?;
                 page.check()?;
+                project_id.check()?;
             }
-            Self::ResourcesWaiters { resource_id, page } => {
+            Self::ResourcesWaiters {
+                resource_id,
+                page,
+                project_id,
+            } => {
                 resource_id.check()?;
                 page.check()?;
+                project_id.check()?;
             }
             Self::BrowserSessions { scope, page } => {
                 scope.check()?;
@@ -24001,6 +24025,16 @@ impl Revisioned for DomainQuery {
             Self::GithubPollStatus { page, .. } => {
                 if revision < 3 {
                     *page = None;
+                }
+            }
+            Self::ResourcesHolders { project_id, .. } => {
+                if revision < 22 {
+                    *project_id = None;
+                }
+            }
+            Self::ResourcesWaiters { project_id, .. } => {
+                if revision < 22 {
+                    *project_id = None;
                 }
             }
             Self::JobsInspect { history, usage, .. } => {

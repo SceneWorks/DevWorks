@@ -599,6 +599,11 @@ for name in ['resources.renew','resources.release']:
  case('r2-input-'+name,'domain-request.r2',command_at(name))
 for name in ['resources.list','resources.holders','resources.waiters']:
  case('r2-input-'+name,'domain-request.r2',domain(name))
+# DW-184 revision 22: a workspace caller names the project of a project resource.
+for name in ['resources.holders','resources.waiters']:
+ case('r22-input-'+name+'-project','domain-request.r22',domain(name,22,projectId='project-a'))
+ case('r22-input-'+name,'domain-request.r22',domain(name,22))
+ case('reject-r2-input-'+name+'-project','domain-request.r2',domain(name,projectId='project-a'),False,False)
 lease_r2={**sample('LeaseRecord'),'units':1,'purpose':'Run the desktop suite','priority':'High','queuePosition':'1','requestedAtMs':'1793570000000','projectId':'project-a','rootId':'root-a','assignmentId':'assignment-a','sessionId':'session-a'}
 ended={**sample('LeaseRecord'),'state':'Released','units':1,'priority':'Medium','requestedAtMs':'1','grantedAtMs':'2','renewedAtMs':'3','endedAtMs':'4','endReason':'Expired','ownerUnreachableSinceMs':'3'}
 resource_r2={**sample('ResourceRecord'),'scope':'Machine','physical':True,'labels':['desktop'],'used':'1','available':False}

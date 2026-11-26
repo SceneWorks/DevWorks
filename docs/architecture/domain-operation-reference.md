@@ -473,8 +473,8 @@ All 386 qualified operations have typed input/result candidates. Existing input 
 | `resources.acquire` | **Command**<br>`resourceId`: `ResourceId`<br>`expectedRevision`: `Revision`<br>`units`: `Limit`<br>`leaseMs`: `PositiveCounter`<br>`purpose`: `?Text`<br>`priority`: `?ResourcePriority`<br>`capacity`: `?Limit`<br>`labels`: `?Items<Label>`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
 | `resources.renew` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br>`leaseMs`: `PositiveCounter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
 | `resources.release` | **Command**<br>`leaseId`: `Id`<br>`expectedFence`: `Counter`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `LeaseRecord` |
-| `resources.holders` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<LeaseRecord>` |
-| `resources.waiters` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `Page<LeaseRecord>` |
+| `resources.holders` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br>`projectId`: `?ProjectId`<br><br>**Schema revisions** 1, 2, 22 ([revision 22 input](contracts/domain-request.r22.schema.json)) | `Page<LeaseRecord>` |
+| `resources.waiters` | **Query**<br>`resourceId`: `ResourceId`<br>`page`: `PageRequest`<br>`projectId`: `?ProjectId`<br><br>**Schema revisions** 1, 2, 22 ([revision 22 input](contracts/domain-request.r22.schema.json)) | `Page<LeaseRecord>` |
 
 ### Browser
 
