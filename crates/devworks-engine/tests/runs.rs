@@ -1117,10 +1117,7 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
     let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
     let listed =
         serde_json::to_value(result(&fx.query(&host, "agents.list", list("list-host")))).unwrap();
-    let items = listed["items"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let items = listed["items"].as_array().cloned().unwrap_or_default();
     assert!(
         items
             .iter()
