@@ -85,10 +85,10 @@ enum Action {
     Preview(ArtifactRecord),
     Export(ArtifactRecord),
     EditTags(ArtifactRecord),
-    SaveTags(ArtifactRecord),
+    SaveTags,
     CancelTags,
-    Delete(String),
-    ConfirmDelete(ArtifactRecord),
+    Delete(ArtifactRecord),
+    ConfirmDelete,
     CancelDelete,
 }
 
@@ -108,10 +108,12 @@ pub struct ArtifactsScreen {
     project_at: u64,
     /// The preview shown, by version ID.
     preview: Option<(String, Shown)>,
-    /// The tag text being edited, by artifact ID.
-    tag_draft: Option<(String, String)>,
-    /// The artifact whose deletion waits for a second click.
-    confirm_delete: Option<String>,
+    /// The tags being edited: the record as the editor opened it (its revision is what the
+    /// save expects, so a concurrent change is refused, never overwritten) and one entry per tag.
+    tag_draft: Option<(ArtifactRecord, Vec<String>)>,
+    /// The record whose deletion waits for a second click, as it was when Delete was clicked:
+    /// its identities bind the deletion, so a version or reference added since is refused.
+    confirm_delete: Option<ArtifactRecord>,
 }
 
 impl Screen for ArtifactsScreen {
@@ -333,18 +335,19 @@ impl ArtifactsScreen {
                 );
             }
             Action::EditTags(record) => {
-                let text = record
+                let tags = record
                     .tags
                     .as_ref()
-                    .map(|t| t.0.join(", "))
+                    .map(|t| t.0.clone())
                     .unwrap_or_default();
-                self.tag_draft = Some((record.artifact.artifact_id.as_str().to_owned(), text));
+                self.tag_draft = Some((record, tags));
             }
-            Action::SaveTags(record) => {
-                let Some((_, text)) = &self.tag_draft else {
+            Action::SaveTags => {
+                let Some((record, entries)) = &self.tag_draft else {
                     return;
                 };
-                let tags = parse_tags(text);
+                let record = record.clone();
+                let tags = draft_tags(entries);
                 let Some(revision) = record.revision.as_ref().map(|r| r.as_str().to_owned()) else {
                     cx.announce("Reload the list before editing tags.");
                     return;
@@ -363,10 +366,12 @@ impl ArtifactsScreen {
                 );
             }
             Action::CancelTags => self.tag_draft = None,
-            Action::Delete(id) => self.confirm_delete = Some(id),
+            Action::Delete(record) => self.confirm_delete = Some(record),
             Action::CancelDelete => self.confirm_delete = None,
-            Action::ConfirmDelete(record) => {
-                self.confirm_delete = None;
+            Action::ConfirmDelete => {
+                let Some(record) = self.confirm_delete.take() else {
+                    return;
+                };
                 let Some(backend) = cx.backend() else {
                     return;
                 };
@@ -569,8 +574,8 @@ fn detail(
     ui: &mut Ui,
     record: &ArtifactRecord,
     preview: &mut Option<(String, Shown)>,
-    tag_draft: &mut Option<(String, String)>,
-    confirm_delete: &Option<String>,
+    tag_draft: &mut Option<(ArtifactRecord, Vec<String>)>,
+    confirm_delete: &Option<ArtifactRecord>,
     action: &mut Option<Action>,
 ) {
     let id = record.artifact.artifact_id.as_str();
@@ -595,37 +600,54 @@ fn detail(
         if widgets::secondary_button(ui, "Edit tags").clicked() {
             *action = Some(Action::EditTags(record.clone()));
         }
-        if confirm_delete.as_deref() == Some(id) {
+        let confirming = confirm_delete
+            .as_ref()
+            .is_some_and(|r| r.artifact.artifact_id.as_str() == id);
+        if confirming {
             if widgets::secondary_button(ui, "Confirm delete").clicked() {
-                *action = Some(Action::ConfirmDelete(record.clone()));
+                *action = Some(Action::ConfirmDelete);
             }
             if widgets::secondary_button(ui, "Keep artifact").clicked() {
                 *action = Some(Action::CancelDelete);
             }
         } else if widgets::secondary_button(ui, "Delete").clicked() {
-            *action = Some(Action::Delete(id.to_owned()));
+            *action = Some(Action::Delete(record.clone()));
         }
     });
-    if confirm_delete.as_deref() == Some(id) {
+    if confirm_delete
+        .as_ref()
+        .is_some_and(|r| r.artifact.artifact_id.as_str() == id)
+    {
         widgets::caption(
             ui,
             "Deleting removes every version of this artifact. A deleted version is never restored.",
         );
     }
-    if let Some((draft_id, text)) = tag_draft
-        && draft_id == id
+    // One field per tag: a tag is an opaque label (commas and spaces are kept as written).
+    if let Some((opened, entries)) = tag_draft
+        && opened.artifact.artifact_id.as_str() == id
     {
-        ui.horizontal(|ui| {
-            let r = ui.add(
-                egui::TextEdit::singleline(text)
-                    .hint_text("Comma-separated tags")
-                    .desired_width(280.0),
-            );
-            r.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Artifact tags")
+        let mut remove = None;
+        for (i, tag) in entries.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let r = ui.add(egui::TextEdit::singleline(tag).desired_width(240.0));
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("Tag {}", i + 1))
+                });
+                if widgets::secondary_button(ui, &format!("Remove tag {}", i + 1)).clicked() {
+                    remove = Some(i);
+                }
             });
+        }
+        if let Some(i) = remove {
+            entries.remove(i);
+        }
+        ui.horizontal(|ui| {
+            if widgets::secondary_button(ui, "Add tag").clicked() {
+                entries.push(String::new());
+            }
             if widgets::secondary_button(ui, "Save tags").clicked() {
-                *action = Some(Action::SaveTags(record.clone()));
+                *action = Some(Action::SaveTags);
             }
             if widgets::secondary_button(ui, "Cancel").clicked() {
                 *action = Some(Action::CancelTags);
@@ -675,12 +697,12 @@ fn detail(
     }
 }
 
-/// Tags from comma-separated text: trimmed, without empty entries or repeats.
-fn parse_tags(text: &str) -> Vec<String> {
+/// The draft's tags as written, without empty entries or repeats.
+fn draft_tags(entries: &[String]) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
-    for t in text.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-        if !tags.iter().any(|x| x == t) {
-            tags.push(t.to_owned());
+    for t in entries.iter().filter(|t| !t.is_empty()) {
+        if !tags.contains(t) {
+            tags.push(t.clone());
         }
     }
     tags
@@ -735,34 +757,12 @@ fn export(
     artifact: &ArtifactRef,
     target: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    use sha2::{Digest, Sha256};
-    use std::io::Write;
     let export =
         ops::artifact_exported(b.query("artifacts.export", &ops::artifact_export(b, artifact)))
             .map_err(|e| e.describe())?;
-    let expected = artifact.byte_length.get() as u64;
-    let bytes = b.read_stream(&export.stream_id, expected)?;
-    let digest: String = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    if bytes.len() as u64 != expected || digest != artifact.sha256.as_str() {
-        return Err("the exported bytes did not match the artifact's length and digest".into());
-    }
-    let temp = target.with_file_name(format!(".devworks-export-{}.partial", b.token("export")));
-    let written = (|| {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-        std::fs::rename(&temp, target)
-    })();
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&temp);
-        return Err(e.to_string());
-    }
+    // The platform save dialog already asked before choosing an existing file; the shared
+    // export writer applies the destination preflight (never into application data).
+    b.write_export(&export.stream_id, target, true)?;
     Ok(target.to_path_buf())
 }
 

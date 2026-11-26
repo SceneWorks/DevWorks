@@ -1025,6 +1025,10 @@ impl Shell {
         if self.route == Route::Browser {
             self.with_screen(ScreenId::Browser, |s, cx| s.load(cx, Route::Browser));
         }
+        // The Project tab follows the selection at once, never showing another project's files.
+        if self.route == Route::Artifacts {
+            self.with_screen(ScreenId::Artifacts, |s, cx| s.load(cx, Route::Artifacts));
+        }
         if matches!(
             self.route,
             Route::Overview | Route::Features | Route::Issues

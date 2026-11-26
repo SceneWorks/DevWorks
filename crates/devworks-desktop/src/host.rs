@@ -1369,6 +1369,44 @@ impl Backend for DesktopBackend {
     fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
         self.host.runtime.jobs().catalog().capabilities()
     }
+    fn write_export(
+        &self,
+        stream: &Id,
+        destination: &std::path::Path,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        use devworks_core::authority::destructive::BlockReason;
+        use devworks_core::services::artifacts::lifecycle::ExportRefusal;
+        let runtime = &self.host.runtime;
+        let destination = destination
+            .to_str()
+            .ok_or_else(|| "the destination path is not valid text".to_owned())?;
+        runtime
+            .artifacts()
+            .write_export(
+                &*self.host.authority,
+                &**runtime.store(),
+                &NativeFilesystem::new(),
+                Some(&self.host.data_root.display().to_string()),
+                &self.host.ctx,
+                stream,
+                destination,
+                overwrite,
+            )
+            .map_err(|e| match e {
+                ExportRefusal::Blocked(BlockReason::ApplicationData) => {
+                    "DevWorks' own data folder cannot hold an export; choose another folder".into()
+                }
+                ExportRefusal::Blocked(r) => format!("the destination is protected ({r:?})"),
+                ExportRefusal::DestinationExists => "a file already exists there".into(),
+                ExportRefusal::NotAFile => "the destination is not a file".into(),
+                ExportRefusal::HumanOnly => "only you can choose an export destination".into(),
+                ExportRefusal::NeedsInput(n) => format!("the destination is unclear ({n:?})"),
+                ExportRefusal::Stream(s) => format!("the export stream was refused ({s:?})"),
+                ExportRefusal::Write(f) => format!("the file could not be written ({f:?})"),
+                ExportRefusal::Storage(e) => format!("the store could not be read ({e})"),
+            })
+    }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
         use std::io::Read;
         let runtime = &self.host.runtime;

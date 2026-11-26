@@ -142,18 +142,32 @@ fn project_artifacts_are_searched_previewed_exported_tagged_and_deleted() {
     assert_eq!(std::fs::read(&target).unwrap(), text);
     assert!(h.state().status().is_some_and(|s| s.contains("Exported")));
 
-    // Tags are edited under the listed revision.
+    // Tags are edited one per field, kept exactly as written (a comma is part of a tag).
     click(&mut h, Role::Button, "Edit tags");
-    type_into(&mut h, "Artifact tags", "release, evidence");
+    click(&mut h, Role::Button, "Add tag");
+    type_into(&mut h, "Tag 1", "release, candidate");
+    click(&mut h, Role::Button, "Add tag");
+    type_into(&mut h, "Tag 2", "evidence");
     click(&mut h, Role::Button, "Save tags");
-    let after = listed(&*b, &project);
-    let tagged = after
-        .iter()
-        .find(|r| r.artifact.artifact_id == notes.artifact.artifact_id)
-        .unwrap();
+    let tags = |b: &dyn Backend| {
+        listed(b, &project)
+            .into_iter()
+            .find(|r| r.artifact.artifact_id == notes.artifact.artifact_id)
+            .unwrap()
+            .tags
+            .unwrap()
+            .0
+    };
     assert_eq!(
-        tagged.tags.as_ref().unwrap().0,
-        ["evidence".to_owned(), "release".to_owned()]
+        tags(&*b),
+        ["evidence".to_owned(), "release, candidate".to_owned()]
+    );
+    // Saving the opened tags unchanged keeps them.
+    click(&mut h, Role::Button, "Edit tags");
+    click(&mut h, Role::Button, "Save tags");
+    assert_eq!(
+        tags(&*b),
+        ["evidence".to_owned(), "release, candidate".to_owned()]
     );
 
     // Delete asks once more, then removes the whole artifact.
@@ -167,4 +181,118 @@ fn project_artifacts_are_searched_previewed_exported_tagged_and_deleted() {
     assert_eq!(left.len(), 1, "{left:?}");
     assert_eq!(left[0].name.0, "diagram.png");
     assert!(h.state().status().is_some_and(|s| s.contains("deleted")));
+}
+
+fn retag(b: &dyn Backend, record: &ArtifactRecord, tags: &[&str]) {
+    let revision = record.revision.as_ref().unwrap().as_str().to_owned();
+    ops::artifact_tagged(b.command(
+        "artifacts.tag",
+        &ops::artifact_tag(
+            b,
+            record.artifact.artifact_id.as_str(),
+            &revision,
+            tags.iter().map(|t| (*t).to_owned()).collect(),
+        ),
+    ))
+    .unwrap();
+}
+
+/// Edits and deletions are bound to what the person opened: a change another client makes in
+/// between is refused, never overwritten or swept in. The Project tab follows the selected
+/// project at once, and an export into DevWorks' own data folder is refused.
+#[test]
+fn artifact_edits_are_bound_to_what_was_opened_and_follow_the_selected_project() {
+    let root = Root::new("project-artifacts-bound");
+    let engine = start(&root);
+    let b = engine.backend();
+    let make = |name: &str| {
+        ops::project_changed(b.command("projects.create", &ops::project_create(&*b, name, "", &[])))
+            .unwrap()
+            .id
+    };
+    let (first, second) = (make("First project"), make("Second project"));
+    let report = save(
+        &*b,
+        &root,
+        &first,
+        "report.md",
+        "text/markdown",
+        b"# Report\n",
+    );
+    save(
+        &*b,
+        &root,
+        &second,
+        "other.md",
+        "text/markdown",
+        b"# Other\n",
+    );
+    let script = Script::default();
+    script
+        .saves
+        .lock()
+        .unwrap()
+        .push(root.0.join("exported.md"));
+    let mut h = harness(shell(&engine, &root, script), 1400.0, 1100.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(first.0.as_str().into()));
+    h.state_mut().navigate(Route::Artifacts);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Project");
+    select(&mut h, "report.md");
+
+    // A tag edit opened before another client's change is refused on save.
+    click(&mut h, Role::Button, "Edit tags");
+    click(&mut h, Role::Button, "Add tag");
+    type_into(&mut h, "Tag 1", "mine");
+    retag(&*b, &listed(&*b, &first)[0], &["theirs"]);
+    click(&mut h, Role::Button, "Refresh");
+    click(&mut h, Role::Button, "Save tags");
+    assert_eq!(
+        listed(&*b, &first)[0].tags.as_ref().unwrap().0,
+        ["theirs".to_owned()],
+        "the concurrent tags are kept"
+    );
+    assert!(
+        h.state().status().is_some_and(|s| s.contains("not saved")),
+        "{:?}",
+        h.state().status()
+    );
+    click(&mut h, Role::Button, "Cancel");
+
+    // A deletion confirmed after another change is refused; the artifact stays.
+    click(&mut h, Role::Button, "Delete");
+    retag(&*b, &listed(&*b, &first)[0], &["theirs", "again"]);
+    click(&mut h, Role::Button, "Refresh");
+    click(&mut h, Role::Button, "Confirm delete");
+    assert_eq!(
+        listed(&*b, &first).len(),
+        1,
+        "nothing is swept into the earlier decision"
+    );
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("not deleted")),
+        "{:?}",
+        h.state().status()
+    );
+
+    // An export into the application data folder is refused by the shared export writer.
+    select(&mut h, "report.md");
+    click(&mut h, Role::Button, "Export…");
+    assert!(!root.0.join("exported.md").exists());
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("data folder")),
+        "{:?}",
+        h.state().status()
+    );
+
+    // Selecting another project replaces the Project tab's list without a refresh.
+    h.state_mut().select_project(Some(second.0.as_str().into()));
+    settle(&mut h);
+    assert!(has_text(&h, "other.md") && !has_text(&h, "report.md"));
+    let _ = report;
 }
