@@ -111,6 +111,9 @@ pub struct ArtifactsScreen {
     /// The tags being edited: the record as the editor opened it (its revision is what the
     /// save expects, so a concurrent change is refused, never overwritten) and one entry per tag.
     tag_draft: Option<(ArtifactRecord, Vec<String>)>,
+    /// The tag entries each in-flight save submitted, by artifact ID: a reply closes the editor
+    /// only while it still shows exactly those entries for that artifact.
+    tag_submitted: HashMap<String, Vec<String>>,
     /// The record whose deletion waits for a second click, as it was when Delete was clicked:
     /// its identities bind the deletion, so a version or reference added since is refused.
     confirm_delete: Option<ArtifactRecord>,
@@ -181,10 +184,18 @@ impl Screen for ArtifactsScreen {
                 Ok(_) => cx.announce("The export did not finish."),
                 Err(e) => cx.announce(format!("The artifact could not be exported: {e}")),
             },
-            (ArtifactsSlot::ArtifactTag(_), Reply::Command(c)) => {
+            (ArtifactsSlot::ArtifactTag(id), Reply::Command(c)) => {
+                let submitted = self.tag_submitted.remove(&id);
                 match ops::artifact_tagged(c) {
                     Ok(_) => {
-                        self.tag_draft = None;
+                        // A draft opened for another artifact, or edited since, is kept.
+                        if let (Some((opened, entries)), Some(submitted)) =
+                            (&self.tag_draft, &submitted)
+                            && opened.artifact.artifact_id.as_str() == id
+                            && entries == submitted
+                        {
+                            self.tag_draft = None;
+                        }
                         cx.announce("Tags saved.");
                     }
                     Err(Failure::Unknown) => cx.announce("Saving tags: outcome not confirmed."),
@@ -347,6 +358,7 @@ impl ArtifactsScreen {
                     return;
                 };
                 let record = record.clone();
+                let submitted = entries.clone();
                 let tags = draft_tags(entries);
                 let Some(revision) = record.revision.as_ref().map(|r| r.as_str().to_owned()) else {
                     cx.announce("Reload the list before editing tags.");
@@ -358,6 +370,7 @@ impl ArtifactsScreen {
                 }
                 let id = record.artifact.artifact_id.as_str().to_owned();
                 let artifact = id.clone();
+                self.tag_submitted.insert(id.clone(), submitted);
                 cx.command(
                     ArtifactsSlot::ArtifactTag(id),
                     "Saving tags",
@@ -500,14 +513,16 @@ impl ArtifactsScreen {
                             .find(|a| a.artifact.artifact_id.as_str() == id)
                     });
                     match selected {
-                        Some(record) => detail(
-                            &mut cols[1],
-                            record,
-                            preview,
-                            tag_draft,
-                            confirm_delete,
-                            st.3,
-                        ),
+                        // The detail scrolls on its own, so a long tag list keeps its actions
+                        // reachable at the smallest window size.
+                        Some(record) => {
+                            egui::ScrollArea::vertical()
+                                .id_salt("artifact-detail")
+                                .auto_shrink([false, false])
+                                .show(&mut cols[1], |ui| {
+                                    detail(ui, record, preview, tag_draft, confirm_delete, st.3)
+                                });
+                        }
                         None => widgets::caption(
                             &mut cols[1],
                             "Select an artifact to preview, export, tag or delete it.",
@@ -630,11 +645,23 @@ fn detail(
         let mut remove = None;
         for (i, tag) in entries.iter_mut().enumerate() {
             ui.horizontal(|ui| {
-                let r = ui.add(egui::TextEdit::singleline(tag).desired_width(240.0));
+                // The field takes what the column leaves beside its Remove button, so both stay
+                // inside the column at the smallest window size.
+                let right = ui.max_rect().right().min(ui.clip_rect().right());
+                let width = (right - ui.cursor().left() - 80.0).max(60.0);
+                let r = ui.add(egui::TextEdit::singleline(tag).desired_width(width));
                 r.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::Role::TextInput, true, format!("Tag {}", i + 1))
                 });
-                if widgets::secondary_button(ui, &format!("Remove tag {}", i + 1)).clicked() {
+                let r = ui.add(egui::Button::new("Remove"));
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        true,
+                        format!("Remove tag {}", i + 1),
+                    )
+                });
+                if r.clicked() {
                     remove = Some(i);
                 }
             });

@@ -296,3 +296,156 @@ fn artifact_edits_are_bound_to_what_was_opened_and_follow_the_selected_project()
     assert!(has_text(&h, "other.md") && !has_text(&h, "report.md"));
     let _ = report;
 }
+
+/// A slow tag save closes only the draft it submitted: a draft opened for another artifact while
+/// it was in flight is kept.
+#[test]
+fn a_finished_tag_save_keeps_a_draft_opened_since() {
+    let root = Root::new("project-artifacts-slow-tag");
+    let engine = start(&root);
+    let real = engine.backend();
+    let project = ops::project_changed(real.command(
+        "projects.create",
+        &ops::project_create(&*real, "Tags project", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    save(
+        &*real,
+        &root,
+        &project,
+        "first.md",
+        "text/markdown",
+        b"# First\n",
+    );
+    save(
+        &*real,
+        &root,
+        &project,
+        "second.md",
+        "text/markdown",
+        b"# Second\n",
+    );
+    let gate = Gate::new("artifacts.tag");
+    let mut h = harness(
+        shell_with(Ok(gate.over(real.clone())), &root, Script::default(), None),
+        1400.0,
+        1100.0,
+    );
+    settle(&mut h);
+    h.state_mut()
+        .select_project(Some(project.0.as_str().into()));
+    h.state_mut().navigate(Route::Artifacts);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Project");
+    select(&mut h, "first.md");
+    click(&mut h, Role::Button, "Edit tags");
+    click(&mut h, Role::Button, "Add tag");
+    type_into(&mut h, "Tag 1", "first-tag");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save tags").click();
+    step_until(&mut h, "the save is in flight", |_| gate.has_waiter());
+    // While the save is held, frames run without waiting for requests to finish.
+    let poke = |h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>, label: &str| {
+        let node = h
+            .query_all_by_label_contains(label)
+            .find(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|l| l.starts_with(label))
+            })
+            .unwrap_or_else(|| panic!("{label}"));
+        node.scroll_to_me();
+        for _ in 0..3 {
+            h.step();
+        }
+        let node = h
+            .query_all_by_label_contains(label)
+            .find(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|l| l.starts_with(label))
+            })
+            .unwrap();
+        node.click();
+        for _ in 0..3 {
+            h.step();
+        }
+    };
+    poke(&mut h, "second.md  ·");
+    poke(&mut h, "Edit tags");
+    poke(&mut h, "Add tag");
+    h.get_by_role_and_label(Role::TextInput, "Tag 1").focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Tag 1")
+        .type_text("second-draft");
+    h.step();
+    gate.open();
+    settle(&mut h);
+    assert!(h.state().status().is_some_and(|s| s.contains("Tags saved")));
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, "Tag 1")
+            .value()
+            .as_deref(),
+        Some("second-draft"),
+        "the second artifact's unsaved draft is kept"
+    );
+}
+
+/// The detail scrolls, so the full 32-tag set can be edited and saved at the minimum window size.
+#[test]
+fn thirty_two_tags_can_be_saved_at_the_minimum_window_size() {
+    let root = Root::new("project-artifacts-many-tags");
+    let engine = start(&root);
+    let b = engine.backend();
+    let project = ops::project_changed(b.command(
+        "projects.create",
+        &ops::project_create(&*b, "Many tags", "", &[]),
+    ))
+    .unwrap()
+    .id;
+    save(
+        &*b,
+        &root,
+        &project,
+        "tagged.md",
+        "text/markdown",
+        b"# Tagged\n",
+    );
+    let names: Vec<String> = (0..32).map(|i| format!("tag-{i:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    retag(&*b, &listed(&*b, &project)[0], &refs);
+    let mut h = harness(shell(&engine, &root, Script::default()), 760.0, 520.0);
+    settle(&mut h);
+    h.state_mut()
+        .select_project(Some(project.0.as_str().into()));
+    h.state_mut().navigate(Route::Artifacts);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Project");
+    select(&mut h, "tagged.md");
+    click(&mut h, Role::Button, "Edit tags");
+    let fields = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>| {
+        h.query_all_by_role(Role::TextInput)
+            .filter(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|l| l.starts_with("Tag "))
+            })
+            .count()
+    };
+    let before = fields(&h);
+    click(&mut h, Role::Button, "Remove tag 32");
+    assert_eq!((before, fields(&h)), (32, 31));
+    assert!(
+        h.query_by_role_and_label(Role::TextInput, "Tag 32")
+            .is_none(),
+        "the last tag field is removed"
+    );
+    click(&mut h, Role::Button, "Save tags");
+    assert!(
+        h.state().status().is_some_and(|s| s.contains("Tags saved")),
+        "{:?}",
+        h.state().status()
+    );
+    assert_eq!(listed(&*b, &project)[0].tags.as_ref().unwrap().0.len(), 31);
+}
