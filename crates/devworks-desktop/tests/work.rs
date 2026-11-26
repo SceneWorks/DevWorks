@@ -164,7 +164,18 @@ fn overview_can_enable_and_stop_keep_working_without_taking_a_manual_reservation
     h.get_by_role_and_label(Role::Button, "Stop keep-working")
         .click();
     settle(&mut h);
-    h.get_by_role_and_label(Role::Button, "Enable keep-working");
+    // Under load the stop's reply can land after the shell first settles; wait for the control.
+    while h
+        .query_by_role_and_label(Role::Button, "Enable keep-working")
+        .is_none()
+    {
+        assert!(
+            std::time::Instant::now() < deadline + SETTLE_BOUND,
+            "keep-working control returns to Enable"
+        );
+        h.step();
+        std::thread::yield_now();
+    }
     let result = backend.query(
         "next_work.inspect_claim",
         &wops::allocation_inspect(&*backend, claim.id.as_str()),
@@ -1118,9 +1129,33 @@ fn save_plan_now(
         }];
     }
     h.run_steps(3);
-    // Keep uploads in flight while activating the actual Save control, even offscreen.
-    h.get_by_role_and_label(Role::Button, "Save plan draft")
-        .click_accesskit();
+    // Keep uploads in flight while activating the actual Save control, even offscreen. A detail
+    // refresh can disable Save for a frame, and a click on a disabled button is ignored, so
+    // click again until this feature's save has started. An accepted click records the save in
+    // the frame that handles it, before any reply can end it, so it is checked right after that
+    // one frame and never clicked twice.
+    let saving = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>| {
+        h.state()
+            .work
+            .plan_saving
+            .values()
+            .any(|p| p.snapshot.title.0 == title)
+    };
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the plan save of {title} never started"
+        );
+        let clicked = h
+            .query_by_role_and_label(Role::Button, "Save plan draft")
+            .filter(|node| !node.accesskit_node().is_disabled())
+            .map(|button| button.click_accesskit())
+            .is_some();
+        h.step();
+        if clicked && saving(h) {
+            break;
+        }
+    }
     h.run_steps(3);
 }
 fn pending_statement(backend: &dyn Backend, feature: &WorkRecord) -> Option<String> {
