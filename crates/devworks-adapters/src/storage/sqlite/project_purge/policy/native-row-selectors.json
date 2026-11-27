@@ -100,6 +100,7 @@
     "knowledge_claim_evidence": "claim_id IN(SELECT id FROM ownedClaims)",
     "knowledge_claim_fts": "claim_id IN(SELECT id FROM ownedClaims)",
     "knowledge_claim_tags": "claim_id IN(SELECT id FROM ownedClaims)",
+    "knowledge_claim_vectors": "claim_id IN(SELECT id FROM ownedClaims)",
     "knowledge_claims": "project_id=?1",
     "knowledge_deliveries": "claim_id IN(SELECT id FROM ownedClaims) OR session_id IN(SELECT id FROM ownedSessions)",
     "knowledge_entities": "project_id=?1",

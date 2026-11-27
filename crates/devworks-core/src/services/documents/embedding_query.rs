@@ -6,7 +6,7 @@ use crate::{
     gateway::AdmittedQuery,
     ports::{
         Preparation,
-        storage::{ReadOptions, ReadSnapshot, StorageError, WriteOptions},
+        storage::{ReadOptions, ReadSnapshot, StorageError},
     },
     protocol::{
         DomainErrorCode,
@@ -16,10 +16,7 @@ use crate::{
     services::{
         artifacts::{ArtifactService, Viewer, lifecycle::ExactReadRefusal, visible},
         conventions::indexing::{
-            IndexService,
-            configuration::resolved_configuration,
-            embedding::{EmbeddingFailure, EmbeddingOrigin, EmbeddingRequest},
-            preparation::InputPreparation,
+            IndexService, configuration::resolved_configuration, embedding::EmbeddingOrigin,
         },
         documents::indexing::same_source,
         kernel::{Failure, Refusal},
@@ -183,89 +180,19 @@ pub(super) fn prepare(
             (vector, Some(float32_le.clone()))
         }
         RetrievalInput::Text { text } if searchable => {
-            let cancel = env.cancellation.cloned().unwrap_or_default();
-            let (context, authorization, expected) = (
-                ctx.clone(),
-                query.authorization().clone(),
-                configuration.source_digest.clone(),
-            );
-            let (registered, index) = (selected.clone(), runtime.native_available());
-            runtime.write_options(
-                WriteOptions {
-                    cancellation: Some(cancel.clone()),
-                    deadline_ms: Some(deadline_ms),
-                    ..WriteOptions::host_state()
-                },
-                move |tx| {
-                    if !crate::services::fences::authorization_holds_in(
-                        tx,
-                        &context,
-                        &authorization,
-                    )? {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    let resolved = embedding_spaces::resolve_selected_in(tx, &context)?;
-                    let actual = resolved_configuration(&resolved, index);
-                    if actual.source_digest != expected
-                        || actual.space.as_ref() != Some(&registered)
-                    {
-                        return Err(StorageError::CursorExpired);
-                    }
-                    tx.conventions().put_convention_embedding_space(&registered)
-                },
-            )?;
-            let inputs = runtime.prepare_embedding_inputs(InputPreparation {
-                context: ctx,
-                origin: &origin,
-                embedding_space: &selected.id,
-                configuration_source_digest: &configuration.source_digest,
-                texts: &[text.as_str()],
-                fences: query.authorization().fences(),
-                cancellation: &cancel,
-                deadline_ms: Some(deadline_ms),
-            })?;
-            let request_id = inputs.request_id.clone();
-            let outcome = runtime.embed_batch(
-                &inputs.context,
-                EmbeddingRequest {
-                    request_id: request_id.clone(),
-                    origin,
-                    space: selected.clone(),
-                    configuration_source_digest: configuration.source_digest.clone(),
-                    preparation_operation: inputs.operation_id,
-                    input_refs: inputs.input_refs,
-                    fences: query.authorization().fences().to_vec(),
-                    cancellation: cancel,
-                    deadline_ms: Some(deadline_ms),
-                },
-            );
-            match outcome {
-                Ok(embedding)
-                    if embedding.request_id == request_id
-                        && embedding.space == selected
-                        && embedding.vectors.len() == 1 =>
-                {
-                    (
-                        embedding.vectors.into_iter().next().expect("one vector"),
-                        None,
-                    )
-                }
-                Err(EmbeddingFailure::Cancelled) => return Err(StorageError::Cancelled.into()),
-                Err(EmbeddingFailure::Storage(error)) => return Err(error.into()),
-                Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::Unknown { .. })
-                    if allow_fallback =>
-                {
-                    return Ok(prepared);
-                }
-                Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::Unknown { .. }) => {
-                    return Err(unavailable().into());
-                }
-                _ => {
-                    return Err(StorageError::InvalidRecord(
-                        "document query embedding custody".into(),
-                    )
-                    .into());
-                }
+            match runtime.embed_query_text(
+                ctx,
+                query,
+                origin,
+                &selected,
+                &configuration.source_digest,
+                text,
+                env.cancellation.cloned().unwrap_or_default(),
+                Some(deadline_ms),
+            )? {
+                Some(vector) => (vector, None),
+                None if allow_fallback => return Ok(prepared),
+                None => return Err(unavailable().into()),
             }
         }
         RetrievalInput::Text { .. } => {

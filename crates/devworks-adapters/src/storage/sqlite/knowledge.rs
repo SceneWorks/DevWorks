@@ -393,18 +393,24 @@ fn effective_state_sql(thresholds: &[(String, i64)], p: &mut Vec<Sql>) -> String
     )
 }
 
-fn claims_page(
-    conn: &Connection,
-    q: &ClaimQuery,
-    after: Option<(ClaimRank, &str)>,
-    limit: u16,
-) -> Result<Vec<RankedClaim>, StorageError> {
-    let limit = page_limit(limit)?;
+/// The SQL filters of a claim query (alias `c`) and their values: `w` every filter but the
+/// words, `lexical` one condition per query word (a text match needs all of them), `subjects`
+/// the matching subject entities (with words) and `sort` the time order's key.
+struct ClaimFilters {
+    p: Vec<Sql>,
+    w: Vec<String>,
+    lexical: Vec<String>,
+    subjects: Option<String>,
+    sort: String,
+}
+
+fn claim_filters(q: &ClaimQuery) -> Result<ClaimFilters, StorageError> {
     if q.scopes.is_empty() {
         return Err(invalid("a claim query reads at least one scope"));
     }
     let mut p: Vec<Sql> = Vec::new();
     let mut w: Vec<String> = Vec::new();
+    let mut lexical: Vec<String> = Vec::new();
     let scopes = placeholders(&mut p, q.scopes.iter().cloned());
     w.push(format!("c.scope_key IN ({scopes})"));
     for (col, values) in [
@@ -456,7 +462,7 @@ fn claims_page(
         for word in &q.words {
             p.push(Sql::Text(fts_query(std::slice::from_ref(word))));
             let m = p.len();
-            w.push(format!(
+            lexical.push(format!(
                 "(c.rowid IN (SELECT rowid FROM knowledge_claim_fts WHERE knowledge_claim_fts \
                  MATCH ?{m}) OR c.subject_id IN (SELECT f.entity_id FROM knowledge_entity_fts f \
                  WHERE knowledge_entity_fts MATCH ?{m} AND f.entity_id IN ({matching})))"
@@ -510,6 +516,30 @@ fn claims_page(
             Some(other) => return Err(invalid(format!("unknown lesson view {other}"))),
         }
     }
+    Ok(ClaimFilters {
+        p,
+        w,
+        lexical,
+        subjects,
+        sort,
+    })
+}
+
+fn claims_page(
+    conn: &Connection,
+    q: &ClaimQuery,
+    after: Option<(ClaimRank, &str)>,
+    limit: u16,
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let limit = page_limit(limit)?;
+    let ClaimFilters {
+        mut p,
+        mut w,
+        lexical,
+        subjects,
+        sort,
+    } = claim_filters(q)?;
+    w.extend(lexical);
     if let Some(subjects) = subjects {
         return relevance_page(conn, q, &w, p, &subjects, after, limit);
     }
@@ -764,6 +794,138 @@ fn relevance_page(
             })
         })
         .collect()
+}
+
+/// [`KnowledgeRead::knowledge_claim_neighbors`]: the scope and every other filter are in the
+/// `WHERE` of the one statement that computes a similarity, so sqlite-vec scores only the
+/// claims the query may read, and only the page is materialized.
+fn claim_neighbors(
+    conn: &Connection,
+    q: &ClaimQuery,
+    near: &ClaimVectorQuery<'_>,
+    after: Option<(f64, &str)>,
+    limit: u16,
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let limit = page_limit(limit)?;
+    if q.words.is_empty() || near.neighbors == 0 || near.neighbors > KNOWLEDGE_PAGE_MAX {
+        return Err(invalid(
+            "a vector match query has words and 1..=128 neighbors",
+        ));
+    }
+    let dimensions = super::documents::cosine_dimensions(conn, near.space)?;
+    let ClaimFilters {
+        mut p,
+        mut w,
+        lexical,
+        ..
+    } = claim_filters(q)?;
+    w.push(format!("NOT ({})", lexical.join(" AND ")));
+    p.push(Sql::Text(near.space.as_str().to_owned()));
+    let space = p.len();
+    p.push(Sql::Blob(super::documents::vector_blob(
+        near.vector,
+        dimensions,
+    )?));
+    let vector = p.len();
+    p.push(Sql::Integer(i64::from(near.neighbors)));
+    let neighbors = p.len();
+    let position = match after {
+        None => "1".to_owned(),
+        Some((s, id)) => {
+            p.push(Sql::Real(s));
+            let a = p.len();
+            p.push(Sql::Text(id.to_owned()));
+            format!(
+                "(n.similarity<?{a} OR (n.similarity=?{a} AND n.id<?{}))",
+                p.len()
+            )
+        }
+    };
+    p.push(Sql::Integer(limit));
+    let sql = format!(
+        "WITH scored AS MATERIALIZED (SELECT c.id, \
+         1.0-vec_distance_cosine(v.vector,?{vector}) AS similarity FROM knowledge_claims c \
+         JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?{space} WHERE {}), \
+         nearest AS (SELECT id, similarity FROM scored WHERE similarity>0 \
+         ORDER BY similarity DESC, id DESC LIMIT ?{neighbors}) \
+         SELECT n.id, n.similarity FROM nearest n WHERE {position} \
+         ORDER BY n.similarity DESC, n.id DESC LIMIT ?{}",
+        w.join(" AND "),
+        p.len()
+    );
+    let scored = rows(conn, &sql, p, |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+    })?;
+    let ids: Vec<&str> = scored.iter().map(|(id, _)| id.as_str()).collect();
+    let mut found: HashMap<String, StoredClaim> = claims_where(
+        conn,
+        "WHERE c.id IN (SELECT value FROM json_each(?1))",
+        vec![Sql::Text(serde_json::to_string(&ids).expect("claim ids"))],
+    )?
+    .into_iter()
+    .map(|c| (c.id.as_str().to_owned(), c))
+    .collect();
+    scored
+        .into_iter()
+        .map(|(id, similarity)| {
+            let claim = found
+                .remove(&id)
+                .ok_or_else(|| corrupt("a vector match was not read back"))?;
+            Ok(RankedClaim {
+                rank: ClaimRank::Similarity(similarity),
+                claim,
+            })
+        })
+        .collect()
+}
+
+/// The SHA-256 of the text a claim's vector embeds.
+fn text_digest(text: &str) -> String {
+    devworks_core::fingerprint::sha256_hex(text.as_bytes())
+}
+
+fn vector_coverage(
+    conn: &Connection,
+    scopes: &[String],
+    space: &Id,
+) -> Result<(i64, i64), StorageError> {
+    let scopes = serde_json::to_string(scopes).expect("scope keys");
+    db(conn.query_row(
+        "SELECT count(v.claim_id), count(*) FROM knowledge_claims c \
+         LEFT JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?2 \
+         WHERE c.scope_key IN (SELECT value FROM json_each(?1)) AND c.lifecycle<>'Deleted'",
+        params![scopes, space.as_str()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ))
+}
+
+fn pending_vectors(
+    conn: &Connection,
+    scope: &KnowledgeScope,
+    space: &Id,
+    limit: u16,
+) -> Result<Vec<(Id, String)>, StorageError> {
+    if !(1..=32).contains(&limit) {
+        return Err(invalid("claim vector batch limit"));
+    }
+    let pending = claims_where(
+        conn,
+        "WHERE c.scope_key=?1 AND c.lifecycle<>'Deleted' AND NOT EXISTS(SELECT 1 FROM \
+         knowledge_claim_vectors v WHERE v.claim_id=c.id AND v.space_id=?2) \
+         ORDER BY c.created_at, c.id LIMIT ?3",
+        vec![
+            Sql::Text(scope.key()),
+            Sql::Text(space.as_str().to_owned()),
+            Sql::Integer(i64::from(limit)),
+        ],
+    )?;
+    Ok(pending
+        .into_iter()
+        .map(|c| {
+            let text = claim_text(&c);
+            (c.id, text)
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1205,6 +1367,30 @@ macro_rules! knowledge_reads {
                 limit: u16,
             ) -> Result<Vec<RankedClaim>, StorageError> {
                 claims_page(self.conn, query, after, limit)
+            }
+            fn knowledge_claim_neighbors(
+                &self,
+                query: &ClaimQuery,
+                near: &ClaimVectorQuery<'_>,
+                after: Option<(f64, &str)>,
+                limit: u16,
+            ) -> Result<Vec<RankedClaim>, StorageError> {
+                claim_neighbors(self.conn, query, near, after, limit)
+            }
+            fn knowledge_vector_coverage(
+                &self,
+                scopes: &[String],
+                space: &Id,
+            ) -> Result<(i64, i64), StorageError> {
+                vector_coverage(self.conn, scopes, space)
+            }
+            fn pending_knowledge_claim_vectors(
+                &self,
+                scope: &KnowledgeScope,
+                space: &Id,
+                limit: u16,
+            ) -> Result<Vec<(Id, String)>, StorageError> {
+                pending_vectors(self.conn, scope, space, limit)
             }
             fn knowledge_claims_about(
                 &self,
@@ -1993,6 +2179,39 @@ impl KnowledgeRepository for Unit<'_> {
         Ok(stored)
     }
 
+    fn insert_knowledge_claim_vectors(
+        &mut self,
+        space: &Id,
+        vectors: &[(Id, String, Vec<f32>)],
+    ) -> Result<usize, StorageError> {
+        if !(1..=32).contains(&vectors.len()) {
+            return Err(invalid("claim vector batch population"));
+        }
+        let dimensions = super::documents::cosine_dimensions(self.conn, space)?;
+        let mut stored = 0;
+        for (id, text, vector) in vectors {
+            let current = claim(self.conn, id)?
+                .filter(|c| c.lifecycle != "Deleted")
+                .map(|c| claim_text(&c));
+            if current.as_deref() != Some(text.as_str()) {
+                continue;
+            }
+            stored += db(self.conn.execute(
+                "INSERT INTO knowledge_claim_vectors(claim_id,space_id,dimensions,text_digest,\
+                 vector) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(claim_id,space_id) DO UPDATE SET \
+                 text_digest=excluded.text_digest, vector=excluded.vector",
+                params![
+                    id.as_str(),
+                    space.as_str(),
+                    dimensions,
+                    text_digest(text),
+                    super::documents::vector_blob(vector, dimensions)?
+                ],
+            ))?;
+        }
+        Ok(stored)
+    }
+
     fn put_knowledge_claim(
         &mut self,
         c: &StoredClaim,
@@ -2107,12 +2326,19 @@ impl KnowledgeRepository for Unit<'_> {
             "DELETE FROM knowledge_claim_fts WHERE rowid=?1",
             params![rowid],
         ))?;
+        let text = claim_text(c);
         if c.lifecycle != "Deleted" {
             db(self.conn.execute(
                 "INSERT INTO knowledge_claim_fts(rowid,claim_id,text) VALUES(?1,?2,?3)",
-                params![rowid, id, claim_text(c)],
+                params![rowid, id, text],
             ))?;
         }
+        // A vector embeds one exact text: a deleted claim keeps none, a changed text none of
+        // the old one.
+        db(self.conn.execute(
+            "DELETE FROM knowledge_claim_vectors WHERE claim_id=?1 AND (?2 OR text_digest<>?3)",
+            params![id, c.lifecycle == "Deleted", text_digest(&text)],
+        ))?;
         claim(self.conn, &c.id)?.ok_or_else(|| corrupt("claim vanished inside its transaction"))
     }
 

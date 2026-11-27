@@ -6777,3 +6777,237 @@ fn claims_about_claims_spend_no_edge_budget() {
         entity_labels(&graph)
     );
 }
+
+/// One qualified cosine space for claim vectors (qualification records it in the router).
+fn vector_space(fx: &Fx) -> Id {
+    fx.h.raw()
+        .execute(
+            "INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) \
+             VALUES('space-1','model-1',2,'Cosine','Float32')",
+            [],
+        )
+        .unwrap();
+    id("space-1")
+}
+
+/// Stores the vector of `claim`'s current pending text.
+fn embed(fx: &Fx, space: &Id, scope: KnowledgeScope, claim: &str, vector: [f32; 2]) -> usize {
+    let (space, claim) = (space.clone(), id(claim));
+    fx.write(move |tx| {
+        let pending = tx
+            .knowledge()
+            .pending_knowledge_claim_vectors(&scope, &space, 32)?;
+        let (_, text) = pending.into_iter().find(|(c, _)| *c == claim).unwrap();
+        tx.knowledge()
+            .insert_knowledge_claim_vectors(&space, &[(claim, text, vector.to_vec())])
+    })
+}
+
+fn neighbors(
+    fx: &Fx,
+    scopes: &[&str],
+    words: &[&str],
+    vector: [f32; 2],
+    count: u16,
+    after: Option<(f64, String)>,
+) -> Vec<(String, f64)> {
+    let query = ClaimQuery {
+        scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        lifecycles: vec!["Active".into()],
+        words: words.iter().map(|w| w.to_string()).collect(),
+        entity_limit: Some(50),
+        ..ClaimQuery::default()
+    };
+    fx.read(|s| {
+        let space = id("space-1");
+        s.knowledge().knowledge_claim_neighbors(
+            &query,
+            &ClaimVectorQuery {
+                space: &space,
+                vector: &vector,
+                neighbors: count,
+            },
+            after.as_ref().map(|(s, id)| (*s, id.as_str())),
+            50,
+        )
+    })
+    .into_iter()
+    .map(|c| {
+        let ClaimRank::Similarity(s) = c.rank else {
+            panic!("{:?}", c.rank)
+        };
+        (c.id.as_str().to_owned(), s)
+    })
+    .collect()
+}
+
+#[test]
+fn vector_matches_are_scored_only_inside_the_read_scopes_and_exclude_text_matches() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let space = vector_space(&fx);
+    let a = KnowledgeScope::Project(project("project-a"));
+    let near = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Garage",
+        draft("Fact", "vehicle parked"),
+    );
+    let text = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Kitchen",
+        draft("Fact", "kitchen recipe"),
+    );
+    let general = fx.claim_id(&user, ws(), "Street", draft("Fact", "parked car"));
+    let other = fx.claim_id(
+        &user,
+        proj("project-b"),
+        "Garage",
+        draft("Fact", "vehicle parked"),
+    );
+    let pending = fx.read(|s| {
+        s.knowledge()
+            .pending_knowledge_claim_vectors(&a, &id("space-1"), 32)
+    });
+    let pending: BTreeSet<_> = pending
+        .into_iter()
+        .map(|(c, _)| c.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        pending,
+        BTreeSet::from([near.as_str().to_owned(), text.as_str().to_owned()])
+    );
+    assert_eq!(embed(&fx, &space, a.clone(), near.as_str(), [0.9, 0.1]), 1);
+    assert_eq!(embed(&fx, &space, a.clone(), text.as_str(), [0.5, 0.5]), 1);
+    assert_eq!(
+        embed(
+            &fx,
+            &space,
+            KnowledgeScope::Workspace,
+            general.as_str(),
+            [0.8, 0.2]
+        ),
+        1
+    );
+    let b = KnowledgeScope::Project(project("project-b"));
+    // The nearest vector of all belongs to another project.
+    assert_eq!(embed(&fx, &space, b, other.as_str(), [1.0, 0.0]), 1);
+    let read_a = ["project:project-a", "workspace"];
+    let found = neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 20, None);
+    let order: Vec<&str> = found.iter().map(|(c, _)| c.as_str()).collect();
+    assert_eq!(order, [near.as_str(), general.as_str(), text.as_str()]);
+    assert!(found.windows(2).all(|w| w[0].1 > w[1].1), "{found:?}");
+    // A text match (every word) is never also a vector match.
+    let found = neighbors(&fx, &read_a, &["kitchen"], [1.0, 0.0], 20, None);
+    assert!(found.iter().all(|(c, _)| c != text.as_str()), "{found:?}");
+    assert_eq!(found.len(), 2);
+    // At most the nearest `neighbors`, and a page resumes strictly after its last row.
+    assert_eq!(
+        neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 1, None).len(),
+        1
+    );
+    let first = neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 20, None)[0].clone();
+    let rest = neighbors(
+        &fx,
+        &read_a,
+        &["automobile"],
+        [1.0, 0.0],
+        20,
+        Some((first.1, first.0)),
+    );
+    let rest: Vec<&str> = rest.iter().map(|(c, _)| c.as_str()).collect();
+    assert_eq!(rest, [general.as_str(), text.as_str()]);
+    // A vector with no positive similarity is no match.
+    assert!(neighbors(&fx, &["project:project-a"], &["x"], [-1.0, 0.0], 20, None).is_empty());
+    let coverage = fx.read(|s| {
+        s.knowledge().knowledge_vector_coverage(
+            &["project:project-a".into(), "workspace".into()],
+            &id("space-1"),
+        )
+    });
+    assert_eq!(coverage, (3, 3));
+}
+
+#[test]
+fn a_claims_vector_follows_its_current_text_scope_and_deletion() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let space = vector_space(&fx);
+    let a = KnowledgeScope::Project(project("project-a"));
+    let claim = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Garage",
+        draft("Fact", "vehicle parked"),
+    );
+    let old_text = fx.read(|s| {
+        s.knowledge()
+            .pending_knowledge_claim_vectors(&a, &id("space-1"), 32)
+    })[0]
+        .1
+        .clone();
+    assert_eq!(embed(&fx, &space, a.clone(), claim.as_str(), [1.0, 0.0]), 1);
+    let vectors = |fx: &Fx| -> i64 {
+        fx.h.raw()
+            .query_row("SELECT count(*) FROM knowledge_claim_vectors", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(vectors(&fx), 1);
+    // A revised text drops the old vector and is pending again; the old text is never stored.
+    let rev = fx.revision(&claim);
+    let c = claim.clone();
+    let subject = fx
+        .read(move |s| s.knowledge().knowledge_claim(&c))
+        .unwrap()
+        .subject_id;
+    receipt(fx.cmd(
+        &user,
+        "knowledge.revise",
+        json!({"scope": proj("project-a"), "claimId": claim,
+        "expectedRevision": rev.to_string(),
+        "replacement": with(draft("Fact", "truck parked"), json!({"subjectId": subject}))}),
+    ));
+    assert_eq!(vectors(&fx), 0);
+    let (stale, c, s) = (old_text, claim.clone(), space.clone());
+    let stored = fx.write(move |tx| {
+        tx.knowledge()
+            .insert_knowledge_claim_vectors(&s, &[(c, stale, vec![1.0, 0.0])])
+    });
+    assert_eq!(
+        stored, 0,
+        "a vector of a text the claim no longer has is skipped"
+    );
+    assert_eq!(embed(&fx, &space, a, claim.as_str(), [1.0, 0.0]), 1);
+    // A scope move keeps the vector: the claim's scope is read when searching.
+    let rev = fx.revision(&claim);
+    receipt(fx.cmd(
+        &user,
+        "knowledge.scope",
+        json!({"claimIds": [{"id": claim, "revision": rev.to_string()}], "destination": ws()}),
+    ));
+    assert_eq!(vectors(&fx), 1);
+    let found = neighbors(
+        &fx,
+        &["project:project-b", "workspace"],
+        &["x"],
+        [1.0, 0.0],
+        20,
+        None,
+    );
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, claim.as_str());
+    // Deletion keeps no vector.
+    let rev = fx.revision(&claim);
+    assert!(
+        summary(fx.cmd(
+            &user,
+            "knowledge.delete_selected",
+            json!({"scope": ws(), "claims": [{"id": claim, "revision": rev.to_string()}]}),
+        ))
+        .changed
+    );
+    assert_eq!(vectors(&fx), 0);
+}

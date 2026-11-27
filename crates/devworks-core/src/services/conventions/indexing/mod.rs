@@ -8,6 +8,7 @@ pub mod lifecycle;
 pub mod preparation;
 pub mod publisher;
 pub mod query;
+mod query_vector;
 pub mod rank;
 pub mod selection;
 mod status;

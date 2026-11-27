@@ -263,7 +263,9 @@ impl IndexService {
                 fingerprint,
                 ..
             } => Some(query_key(context, query_id, fingerprint)?),
-            EmbeddingOrigin::Index { .. } | EmbeddingOrigin::DocumentIndex { .. } => None,
+            EmbeddingOrigin::Index { .. }
+            | EmbeddingOrigin::DocumentIndex { .. }
+            | EmbeddingOrigin::KnowledgeIndex { .. } => None,
         };
         let document_source = match origin {
             EmbeddingOrigin::DocumentIndex { source, .. } => Some(source.clone()),
@@ -307,6 +309,16 @@ impl IndexService {
                 "extractionId": extraction_id,
                 "source": source,
                 "firstBlockId": first_block
+            }),
+            EmbeddingOrigin::KnowledgeIndex {
+                delivery_id,
+                scope,
+                first_claim,
+            } => json!({
+                "kind": "KnowledgeIndex",
+                "deliveryId": delivery_id,
+                "scope": scope,
+                "firstClaimId": first_claim
             }),
         };
         let args_digest = digest(&json!({

@@ -29,6 +29,12 @@ pub enum EmbeddingOrigin {
         source: ArtifactRef,
         first_block: Id,
     },
+    /// A batch of Knowledge claim texts of one scope, embedded by one queued delivery.
+    KnowledgeIndex {
+        delivery_id: Id,
+        scope: String,
+        first_claim: Id,
+    },
 }
 #[derive(Clone, Debug)]
 pub struct EmbeddingRequest {

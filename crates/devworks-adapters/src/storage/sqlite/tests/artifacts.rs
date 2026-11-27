@@ -6102,11 +6102,8 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
     assert_eq!(violations, 0);
 }
 
-/// Purging project A removes the links between its lessons or skills and the workspace's, child
-/// first, without a foreign-key error and without touching the workspace skill, its revision or
-/// the workspace lesson.
-#[test]
-fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
+/// Marks project A deleted and runs its reviewed purge to completion.
+fn execute_project_a_purge(fx: &Fx) {
     use devworks_core::services::projects::purge::PurgeCoordinator;
     use devworks_core::{
         operations::projects::{PreparePurgeInput, PurgeInput},
@@ -6139,50 +6136,7 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
             }
         }
     }
-    let fx = Fx::new();
     let c = fx.h.raw();
-    for (lesson, project) in [("lesson-ws", None), ("lesson-a", Some("project-a"))] {
-        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-        c.execute(
-            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
-            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
-            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
-            rusqlite::params![format!("entity-{lesson}"), scope, project],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
-            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
-            updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
-            'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate',\
-            'Prompt')",
-            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
-        )
-        .unwrap();
-    }
-    for (skill, project) in [("skill-ws", None), ("skill-a", Some("project-a"))] {
-        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-        c.execute(
-            "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
-            root_path,source_path,latest_revision,active_revision,enabled,present,\
-            version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
-            ?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
-            rusqlite::params![skill, scope, project, format!("/r/{skill}")],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
-            content_digest,state,author,origin_json,resources_json,\
-            applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,\
-            'Approved','user-a','{}','[]','[]',0,NULL)",
-            rusqlite::params![skill, "a".repeat(64)],
-        )
-        .unwrap();
-    }
-    for (skill, lesson) in [("skill-ws", "lesson-a"), ("skill-a", "lesson-ws")] {
-        c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,1,?2)",
-            rusqlite::params![skill, lesson]).unwrap();
-    }
     c.execute(
         "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
         [],
@@ -6230,6 +6184,58 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
             .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
         tx.projects().apply_project_purge(&permit)
     });
+}
+
+/// Purging project A removes the links between its lessons or skills and the workspace's, child
+/// first, without a foreign-key error and without touching the workspace skill, its revision or
+/// the workspace lesson.
+#[test]
+fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
+    let fx = Fx::new();
+    let c = fx.h.raw();
+    for (lesson, project) in [("lesson-ws", None), ("lesson-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
+            rusqlite::params![format!("entity-{lesson}"), scope, project],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+            updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
+            'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate',\
+            'Prompt')",
+            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
+        )
+        .unwrap();
+    }
+    for (skill, project) in [("skill-ws", None), ("skill-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+            root_path,source_path,latest_revision,active_revision,enabled,present,\
+            version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+            ?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+            rusqlite::params![skill, scope, project, format!("/r/{skill}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+            content_digest,state,author,origin_json,resources_json,\
+            applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,\
+            'Approved','user-a','{}','[]','[]',0,NULL)",
+            rusqlite::params![skill, "a".repeat(64)],
+        )
+        .unwrap();
+    }
+    for (skill, lesson) in [("skill-ws", "lesson-a"), ("skill-a", "lesson-ws")] {
+        c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,1,?2)",
+            rusqlite::params![skill, lesson]).unwrap();
+    }
+    execute_project_a_purge(&fx);
     let count = |sql: &str| -> i64 { fx.h.raw().query_row(sql, [], |r| r.get(0)).unwrap() };
     assert_eq!(
         count("SELECT count(*) FROM instruction_revision_lessons"),
@@ -6254,6 +6260,63 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
     assert_eq!(
         count("SELECT count(*) FROM knowledge_claims WHERE id='lesson-a'"),
         0
+    );
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+}
+
+/// Purging project A removes its claims' vectors before the claims, and keeps the vector of a
+/// general claim and the shared embedding space.
+#[test]
+fn executed_project_purge_removes_the_projects_claim_vectors_only() {
+    let fx = Fx::new();
+    let c = fx.h.raw();
+    c.execute(
+        "INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) \
+         VALUES('space-1','m',2,'Cosine','Float32')",
+        [],
+    )
+    .unwrap();
+    for (claim, project) in [("claim-ws", None), ("claim-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
+            rusqlite::params![format!("entity-{claim}"), scope, project],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+            updated_at,body_json) VALUES(?1,?2,?3,1,'Fact','Fact','Active',?4,'states',\
+            'user-a',1,1,'{}')",
+            rusqlite::params![claim, scope, project, format!("entity-{claim}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claim_vectors(claim_id,space_id,dimensions,text_digest,\
+            vector) VALUES(?1,'space-1',2,?2,zeroblob(8))",
+            rusqlite::params![claim, "a".repeat(64)],
+        )
+        .unwrap();
+    }
+    execute_project_a_purge(&fx);
+    let count = |sql: &str| -> i64 { fx.h.raw().query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claim_vectors WHERE claim_id='claim-a'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claims WHERE id='claim-a'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claim_vectors WHERE claim_id='claim-ws'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM embedding_spaces WHERE id='space-1'"),
+        1
     );
     assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
 }

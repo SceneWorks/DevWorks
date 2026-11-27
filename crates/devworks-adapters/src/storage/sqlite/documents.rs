@@ -360,7 +360,7 @@ fn ranked(
     Ok(batch)
 }
 
-fn cosine_dimensions(conn: &Connection, space: &Id) -> Result<u32, StorageError> {
+pub(super) fn cosine_dimensions(conn: &Connection, space: &Id) -> Result<u32, StorageError> {
     db(conn
         .query_row(
             "SELECT dimensions FROM embedding_spaces WHERE id=?1
@@ -369,17 +369,17 @@ fn cosine_dimensions(conn: &Connection, space: &Id) -> Result<u32, StorageError>
             |row| row.get(0),
         )
         .optional())?
-    .ok_or_else(|| invalid("unknown document embedding space"))
+    .ok_or_else(|| invalid("unknown cosine Float32 embedding space"))
 }
 
-fn vector_blob(vector: &[f32], dimensions: u32) -> Result<Vec<u8>, StorageError> {
+pub(super) fn vector_blob(vector: &[f32], dimensions: u32) -> Result<Vec<u8>, StorageError> {
     let square_norm = vector
         .iter()
         .map(|value| f64::from(*value).powi(2))
         .sum::<f64>();
     if vector.len() != dimensions as usize || !square_norm.is_finite() || square_norm == 0.0 {
         return Err(invalid(
-            "document vector must match its space and have a finite nonzero norm",
+            "a vector must match its space and have a finite nonzero norm",
         ));
     }
     // Use a unit vector for the rebuildable cosine index. The native journal keeps the
