@@ -297,6 +297,8 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     ));
     assert!(recorded.is_ok(), "{recorded:?}");
     h.state_mut().knowledge.lessons_only = false;
+    // The lesson view controls leave with Lessons: render that before clicking below them.
+    settle(&mut h);
     h.get_by_label("Clean up by source").click();
     settle(&mut h);
     type_into(&mut h, "Cleanup source", "test-run-9");
