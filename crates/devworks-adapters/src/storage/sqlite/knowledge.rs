@@ -393,9 +393,9 @@ fn effective_state_sql(thresholds: &[(String, i64)], p: &mut Vec<Sql>) -> String
 fn claims_page(
     conn: &Connection,
     q: &ClaimQuery,
-    after: Option<(i64, &str)>,
+    after: Option<(ClaimRank, &str)>,
     limit: u16,
-) -> Result<Vec<StoredClaim>, StorageError> {
+) -> Result<Vec<RankedClaim>, StorageError> {
     let limit = page_limit(limit)?;
     if q.scopes.is_empty() {
         return Err(invalid("a claim query reads at least one scope"));
@@ -431,6 +431,7 @@ fn claims_page(
             p.len()
         ));
     }
+    let mut relevance: Option<String> = None;
     if !q.words.is_empty() {
         // The matching subjects: visible entities that match any word, limited after their
         // scope filter, never before it.
@@ -458,6 +459,16 @@ fn claims_page(
                  WHERE knowledge_entity_fts MATCH ?{m} AND f.entity_id IN ({subjects})))"
             ));
         }
+        // Relevance: the bm25 score of the words in the claim's own text plus, when its subject
+        // is a matching subject, in the subject's text. It is computed only for claims that
+        // pass every filter above, so no out-of-scope claim is ranked.
+        relevance = Some(format!(
+            "(coalesce((SELECT bm25(knowledge_claim_fts) FROM knowledge_claim_fts WHERE \
+             knowledge_claim_fts MATCH ?{any_match} AND rowid=c.rowid),0.0) + \
+             coalesce((SELECT bm25(knowledge_entity_fts) FROM knowledge_entity_fts WHERE \
+             knowledge_entity_fts MATCH ?{any_match} AND rowid=(SELECT e.rowid FROM \
+             knowledge_entities e WHERE e.id=c.subject_id AND e.id IN ({subjects}))),0.0))"
+        ));
     }
     if let Some(stale) = q.stale {
         w.push(format!(
@@ -505,19 +516,50 @@ fn claims_page(
             Some(other) => return Err(invalid(format!("unknown lesson view {other}"))),
         }
     }
-    if let Some((t, id)) = after {
-        p.push(Sql::Integer(t));
-        let a = p.len();
-        p.push(Sql::Text(id.to_owned()));
-        w.push(format!("({sort},c.id) < (?{a},?{})", p.len()));
-    }
+    // The ranked rows of the filtered claims; the position and order apply to the rank.
+    let by_relevance = relevance.is_some();
+    let rank = relevance.unwrap_or(sort);
+    let position = match after {
+        None => "1".to_owned(),
+        Some((ClaimRank::Time(t), id)) if !by_relevance => {
+            p.push(Sql::Integer(t));
+            let a = p.len();
+            p.push(Sql::Text(id.to_owned()));
+            format!("(c.rank,c.id) < (?{a},?{})", p.len())
+        }
+        Some((ClaimRank::Relevance(s), id)) if by_relevance => {
+            p.push(Sql::Real(s));
+            let a = p.len();
+            p.push(Sql::Text(id.to_owned()));
+            format!("(c.rank > ?{a} OR (c.rank = ?{a} AND c.id < ?{}))", p.len())
+        }
+        Some(_) => return Err(invalid("a claim position of another order")),
+    };
     p.push(Sql::Integer(limit));
-    let tail = format!(
-        "WHERE {} ORDER BY {sort} DESC, c.id DESC LIMIT ?{}",
+    let sql = format!(
+        "SELECT * FROM (SELECT {CLAIM_COLUMNS},{rank} AS rank FROM knowledge_claims c WHERE {}) c \
+         WHERE {position} ORDER BY c.rank {}, c.id DESC LIMIT ?{}",
         w.join(" AND "),
+        if by_relevance { "ASC" } else { "DESC" },
         p.len()
     );
-    claims_where(conn, &tail, p)
+    let ranked = rows(conn, &sql, p, |r| {
+        let rank = if by_relevance {
+            ClaimRank::Relevance(r.get(21)?)
+        } else {
+            ClaimRank::Time(r.get(21)?)
+        };
+        Ok((rank, raw_claim(r)?))
+    })?;
+    ranked
+        .into_iter()
+        .map(|(rank, r)| {
+            Ok(RankedClaim {
+                rank,
+                claim: claim_of(conn, r)?,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -955,9 +997,9 @@ macro_rules! knowledge_reads {
             fn knowledge_claims(
                 &self,
                 query: &ClaimQuery,
-                after: Option<(i64, &str)>,
+                after: Option<(ClaimRank, &str)>,
                 limit: u16,
-            ) -> Result<Vec<StoredClaim>, StorageError> {
+            ) -> Result<Vec<RankedClaim>, StorageError> {
                 claims_page(self.conn, query, after, limit)
             }
             fn knowledge_claims_about(

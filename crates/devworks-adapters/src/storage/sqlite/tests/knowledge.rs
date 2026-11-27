@@ -16,6 +16,7 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
+use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{
@@ -1405,6 +1406,109 @@ fn pages_cover_every_row_once_and_cursors_expire_with_the_scope() {
     };
     assert_eq!(page.items.0.len(), 2);
     assert!(page.has_more);
+}
+
+/// Records `text` about `subject` at `at` (ms); returns the claim id.
+fn fact_at(fx: &Fx, user: &InvocationContext, at: i64, subject: &str, text: &str) -> String {
+    fx.h.set_now(at);
+    fx.claim_id(user, proj("project-a"), subject, draft("Fact", text))
+        .as_str()
+        .to_owned()
+}
+
+#[test]
+fn a_search_with_words_lists_the_best_match_before_a_newer_weak_one() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let t0 = fx.h.now();
+    let strong = fact_at(
+        &fx,
+        &user,
+        t0 + 1_000,
+        "Alpha",
+        "router tiers rotate router tiers",
+    );
+    let weak = fact_at(
+        &fx,
+        &user,
+        t0 + 2_000,
+        "Beta",
+        "the nightly build log mentions a router once and later, among many unrelated notes \
+         about caches, queues, workers and dashboards, also mentions tiers",
+    );
+    let page = fx.search(&user, proj("project-a"), "router tiers", json!({}));
+    assert_eq!(ids(&page), vec![strong, weak]);
+    // A word may match the subject's label instead of the claim's text, and every word must
+    // still match one of them.
+    let about = fact_at(&fx, &user, t0 + 3_000, "Gamma", "tiers rotate");
+    let named = fact_at(&fx, &user, t0 + 500, "Router", "tiers rotate");
+    let page = ids(&fx.search(&user, proj("project-a"), "router tiers", json!({})));
+    assert_eq!(page.len(), 3);
+    assert!(page.contains(&named));
+    assert!(!page.contains(&about));
+}
+
+#[test]
+fn relevance_pages_cover_every_match_once_in_the_order_of_one_page() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let t0 = fx.h.now();
+    // Distinct scores and ties (identical texts score alike and fall back to the id).
+    let texts = [
+        "cache",
+        "cache cache cache",
+        "a cache of many other words here",
+        "cache cache",
+        "cache",
+        "cache entries expire",
+        "cache",
+        "the cache",
+        "unrelated words only",
+    ];
+    let recorded: Vec<String> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| fact_at(&fx, &user, t0 + 1_000 * (i as i64 + 1), &format!("S{i}"), t))
+        .collect();
+    let whole = ids(&fx.search(&user, proj("project-a"), "cache", json!({})));
+    assert_eq!(whole.len(), 8);
+    // The order is relevance, not time: the repeated word outranks every newer single mention.
+    assert_eq!(whole[0], recorded[1]);
+    let body = |cursor: Option<&str>| {
+        let mut page = json!({"limit": 2});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        json!({"scope": proj("project-a"), "text": "cache", "tags": [], "kinds": [],
+            "page": page, "entityLimit": 50, "claimLimit": 50})
+    };
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = match result(fx.q(&user, "knowledge.search", body(cursor.as_deref()))) {
+            OperationResult::KnowledgeSearch { value } => value,
+            other => panic!("{other:?}"),
+        };
+        assert!(page.items.0.len() <= 2);
+        seen.extend(ids(&page));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    assert_eq!(seen, whole, "each match exactly once, in relevance order");
+}
+
+#[test]
+fn a_search_without_words_lists_the_newest_first() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let t0 = fx.h.now();
+    let first = fact_at(&fx, &user, t0 + 1_000, "A", "cache cache cache");
+    let second = fact_at(&fx, &user, t0 + 2_000, "B", "queue");
+    let third = fact_at(&fx, &user, t0 + 3_000, "C", "cache");
+    let page = fx.search(&user, proj("project-a"), " ", json!({}));
+    assert_eq!(ids(&page), vec![third, second, first]);
 }
 
 #[test]

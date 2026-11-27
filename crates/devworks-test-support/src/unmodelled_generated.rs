@@ -2450,9 +2450,9 @@ impl KnowledgeRead for Unmodelled {
     fn knowledge_claims(
         &self,
         _: &ClaimQuery,
-        _: Option<(i64, &str)>,
+        _: Option<(ClaimRank, &str)>,
         _: u16,
-    ) -> Result<Vec<StoredClaim>, StorageError> {
+    ) -> Result<Vec<RankedClaim>, StorageError> {
         unmodelled()
     }
     fn knowledge_claims_about(

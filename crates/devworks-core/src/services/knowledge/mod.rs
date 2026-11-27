@@ -70,9 +70,9 @@ use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::operations::{OperationInput, knowledge as ops};
 use crate::ports::files::ArtifactFiles;
 use crate::ports::storage::{
-    ArtifactRead, AuthorityRead, ClaimQuery, ConfigScope, ConfigurationRead, KNOWLEDGE_PAGE_MAX,
-    KnowledgeRead, KnowledgeScope, LessonFilter, ReadSnapshot, StorageError, StoredClaim,
-    StoredEntity, StoredEvidence, StoredHistory, WriteTransaction,
+    ArtifactRead, AuthorityRead, ClaimQuery, ClaimRank, ConfigScope, ConfigurationRead,
+    KNOWLEDGE_PAGE_MAX, KnowledgeRead, KnowledgeScope, LessonFilter, RankedClaim, ReadSnapshot,
+    StorageError, StoredClaim, StoredEntity, StoredEvidence, StoredHistory, WriteTransaction,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -623,34 +623,38 @@ fn claims(
     query: &ClaimQuery,
     after: Option<&str>,
     n: u16,
-) -> Result<Vec<StoredClaim>, StorageError> {
-    let after = after.map(parse_position).transpose()?;
-    read.knowledge_claims(query, after.as_ref().map(|(t, id)| (*t, id.as_str())), n)
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let after = after.map(|at| parse_position(query, at)).transpose()?;
+    read.knowledge_claims(query, after.as_ref().map(|(r, id)| (*r, id.as_str())), n)
 }
 
-/// A claim's position in `query`'s order.
-fn claim_position(query: &ClaimQuery, c: &StoredClaim) -> String {
-    format!("{}|{}", sort_key(query, c), c.id.as_str())
-}
-
-/// The sort time of a claim in `query`'s order.
-fn sort_key(query: &ClaimQuery, c: &StoredClaim) -> i64 {
-    match query.lesson.as_ref().and_then(|l| l.view.as_deref()) {
-        Some("RecentlyLearned") => c
-            .lesson
-            .as_ref()
-            .and_then(|l| l.effective_at_ms)
-            .unwrap_or(c.updated_at_ms),
-        _ => c.updated_at_ms,
+/// A claim's position in `query`'s order: its sort key as the store ranked it, and its id. A
+/// relevance key is the exact bm25 score (Rust's shortest round-tripping decimal), so the next
+/// page resumes strictly after the last row as it was read.
+fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
+    debug_assert_eq!(
+        query.words.is_empty(),
+        matches!(c.rank, ClaimRank::Time(_)),
+        "the store ranks by relevance exactly when the query has words"
+    );
+    match c.rank {
+        ClaimRank::Time(t) => format!("{t}|{}", c.id.as_str()),
+        ClaimRank::Relevance(s) => format!("{s}|{}", c.id.as_str()),
     }
 }
 
-fn parse_position(at: &str) -> Result<(i64, String), StorageError> {
-    let (t, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
-    Ok((
-        t.parse().map_err(|_| StorageError::CursorExpired)?,
-        id.to_owned(),
-    ))
+fn parse_position(query: &ClaimQuery, at: &str) -> Result<(ClaimRank, String), StorageError> {
+    let (key, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
+    let rank = if query.words.is_empty() {
+        ClaimRank::Time(key.parse().map_err(|_| StorageError::CursorExpired)?)
+    } else {
+        let s: f64 = key.parse().map_err(|_| StorageError::CursorExpired)?;
+        if !s.is_finite() {
+            return Err(StorageError::CursorExpired);
+        }
+        ClaimRank::Relevance(s)
+    };
+    Ok((rank, id.to_owned()))
 }
 
 // ---------------------------------------------------------------------------------------------
