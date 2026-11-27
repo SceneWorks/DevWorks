@@ -531,8 +531,9 @@ impl Run<'_> {
         });
     }
 
-    /// Deletes `c` (or records that it would) unless a liveness rule keeps it. With
-    /// `recheck_age`, a build slot whose stamp was refreshed since the scan is kept.
+    /// Deletes `c` (or records that it would) unless a liveness rule keeps it. A build slot
+    /// whose stamp is newer than the scan saw (handed out since) is kept; with `recheck_age`,
+    /// so is one whose stamp is now within the age limit.
     fn try_remove(&mut self, c: &mut Candidate, why: String, recheck_age: bool) -> bool {
         if let Some(root) = &self.confine
             && !inside(&c.path, root)
@@ -561,15 +562,19 @@ impl Run<'_> {
                 .then_some("its cargo lock is held")),
             Some((key_dir, slot)) => {
                 let busy = self.busy;
-                let (now, limit) = (self.now, self.age_limit());
+                let (now, limit, scanned) = (self.now, self.age_limit(), c.last_used);
                 let mut kept = None;
                 slots::remove_slot(key_dir, *slot, &mut |dir| {
                     if busy.is_busy(dir) {
                         kept = Some("its cargo lock is held");
                         return Ok(false);
                     }
+                    // `dev-host env` rewrites the stamp on every assignment, so a stamp newer
+                    // than the scan means the slot was handed out since: budget eviction too.
                     let stamp = mtime(&dir.join(slots::STAMP_FILE));
-                    if recheck_age && stamp.is_some_and(|s| idle_for(s, now) <= limit) {
+                    if stamp.is_some_and(|s| s > scanned)
+                        || (recheck_age && stamp.is_some_and(|s| idle_for(s, now) <= limit))
+                    {
                         kept = Some("reassigned since the scan");
                         return Ok(false);
                     }
@@ -990,10 +995,21 @@ mod tests {
             .unwrap();
     }
 
+    /// The cargo lock probe, with every (made-up) worktree present so each gets its own slot.
+    struct Present;
+    impl slots::BusyProbe for Present {
+        fn is_busy(&self, slot_dir: &Path) -> bool {
+            slots::BusyProbe::is_busy(&CargoLockProbe, slot_dir)
+        }
+        fn worktree_gone(&self, _: &str) -> bool {
+            false
+        }
+    }
+
     /// A slot under `<own>/build/demo/key/` with a payload file, stamped `stamp_age` days ago.
     fn slot(own: &Path, worktree: &str, warm: bool, stamp_age: u64, bytes: usize) -> PathBuf {
         let key = own.join("build/demo/key");
-        let dir = slots::assign(&key, worktree, 8, 0, warm, &CargoLockProbe).unwrap();
+        let dir = slots::assign(&key, worktree, 8, 0, warm, &Present).unwrap();
         write_aged(&dir.join("debug/payload"), bytes, days_ago(stamp_age));
         set_mtime(&dir.join(slots::STAMP_FILE), days_ago(stamp_age));
         dir
@@ -1610,6 +1626,39 @@ mod tests {
         let order: Vec<_> = report.removed.iter().map(|r| r.path.clone()).collect();
         assert_eq!(order, vec![older, newer], "{text}");
         assert!(text.contains("GB budget"), "{text}");
+    }
+
+    #[test]
+    fn budget_eviction_keeps_a_slot_handed_out_after_the_scan() {
+        let scratch = Scratch::new("cleanup-rescan");
+        let (_, own) = host(&scratch);
+        let dir = slot(&own, "/w/old", false, 30, 1000);
+        let stamp = dir.join(slots::STAMP_FILE);
+        let scanned = || {
+            let mut c = plain_candidate(dir.clone(), Area::Build);
+            c.last_used = mtime(&stamp).unwrap();
+            c.slot = Some((own.join("build/demo/key"), 0));
+            c
+        };
+        let b = budgets(|_| {});
+        let mut run = Run {
+            budgets: &b,
+            confine: None,
+            now: SystemTime::now(),
+            open: Vec::new(),
+            busy: &CargoLockProbe,
+            report: Report::default(),
+        };
+        // `dev-host env` hands the slot out between the scan and the budget pass.
+        let mut c = scanned();
+        set_mtime(&stamp, SystemTime::now());
+        assert!(!run.try_remove(&mut c, "over budget".into(), false));
+        assert!(dir.exists());
+        assert!(run.report.render().contains("reassigned since the scan"));
+        // Untouched since the scan: the budget pass removes it.
+        let mut c = scanned();
+        assert!(run.try_remove(&mut c, "over budget".into(), false));
+        assert!(!dir.exists());
     }
 
     #[test]

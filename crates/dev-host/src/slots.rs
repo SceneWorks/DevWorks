@@ -2,8 +2,10 @@
 //!
 //! Each worktree path gets one slot per build key, recorded in `slots.json` beside the slots
 //! and guarded by an exclusive lock on `slots.lock`. The same worktree gets the same slot on
-//! every call; a second worktree gets a different one. When all `cap` slots are taken, the
-//! least recently used slot whose cargo lock is free is reassigned. Every assignment rewrites
+//! every call; a second worktree gets a different one. A new worktree first takes the most
+//! recently used idle slot whose worktree folder no longer exists, so it starts from a warm
+//! build instead of an empty slot; then an unused slot number; and when all `cap` slots are
+//! taken, the least recently used slot whose cargo lock is free. Every assignment rewrites
 //! the slot's stamp file, which the cleanup job reads for age. A slot marked `warm` (a CI
 //! checkout's deliberately kept build) is reassigned and evicted last.
 
@@ -45,9 +47,15 @@ pub struct SlotInfo {
     pub warm: bool,
 }
 
-/// Decides whether a build is running in a slot.
+/// Decides whether a build is running in a slot, and whether a slot's worktree is gone.
 pub trait BusyProbe {
     fn is_busy(&self, slot_dir: &Path) -> bool;
+
+    /// True only when the worktree folder certainly no longer exists. An error checking it
+    /// (permissions, I/O) counts as present, so the worktree keeps its slot.
+    fn worktree_gone(&self, worktree: &str) -> bool {
+        matches!(Path::new(worktree).try_exists(), Ok(false))
+    }
 }
 
 /// Looks for cargo's `.cargo-lock` files (`<slot>/<profile>/` and `<slot>/<triple>/<profile>/`)
@@ -236,6 +244,24 @@ fn choose(
         entry.warm |= warm;
         return Ok(entry.slot);
     }
+    // A slot whose worktree is gone holds a build nobody comes back to. Reusing it gives the new
+    // worktree warm dependencies where an unused slot number would start empty. The most
+    // recently used one is the closest to current code. A warm slot is kept for its CI checkout,
+    // whose folder may be wiped between jobs, so it is left to the least-recently-used pass.
+    let mut gone: Vec<&mut Entry> = registry
+        .slots
+        .iter_mut()
+        .filter(|e| !e.warm && busy.worktree_gone(&e.worktree))
+        .collect();
+    gone.sort_by_key(|e| std::cmp::Reverse((e.last_used, e.slot)));
+    for entry in gone {
+        if !busy.is_busy(&slot_dir(key_dir, entry.slot)) {
+            entry.worktree = worktree.to_owned();
+            entry.last_used = now;
+            entry.warm = warm;
+            return Ok(entry.slot);
+        }
+    }
     if let Some(free) = (0..cap).find(|n| registry.slots.iter().all(|e| e.slot != *n)) {
         registry.slots.push(Entry {
             slot: free,
@@ -273,6 +299,112 @@ mod tests {
             self.0
                 .iter()
                 .any(|n| slot_dir.ends_with(format!("slot-{n}")))
+        }
+        fn worktree_gone(&self, _: &str) -> bool {
+            false
+        }
+    }
+
+    /// Busy slots by number, gone worktrees by path.
+    struct Gone(Vec<u32>, Vec<&'static str>);
+    impl BusyProbe for Gone {
+        fn is_busy(&self, slot_dir: &Path) -> bool {
+            Busy(self.0.clone()).is_busy(slot_dir)
+        }
+        fn worktree_gone(&self, worktree: &str) -> bool {
+            self.1.contains(&worktree)
+        }
+    }
+
+    #[test]
+    fn gone_worktrees_slot_is_reused_before_an_unused_number() {
+        let scratch = Scratch::new("gone");
+        let key = scratch.path().join("key");
+        let a = assign(&key, "/w/a", 8, 10, false, &Busy(vec![])).unwrap();
+        let b = assign(&key, "/w/b", 8, 20, false, &Busy(vec![])).unwrap();
+        assign(&key, "/w/c", 8, 30, true, &Busy(vec![])).unwrap();
+        // a and b are gone; b's build is the more recent, so d takes it, not slot-3.
+        let d = assign(
+            &key,
+            "/w/d",
+            8,
+            40,
+            false,
+            &Gone(vec![], vec!["/w/a", "/w/b"]),
+        )
+        .unwrap();
+        assert_eq!(d, b);
+        let e = assign(&key, "/w/e", 8, 50, false, &Gone(vec![], vec!["/w/a"])).unwrap();
+        assert_eq!(e, a);
+        let listed = entries(&key).unwrap();
+        assert_eq!(listed.len(), 3);
+        assert!(
+            listed
+                .iter()
+                .all(|s| s.worktree != "/w/a" && s.worktree != "/w/b")
+        );
+        // A present worktree is never displaced: f gets an unused number.
+        let f = assign(&key, "/w/f", 8, 60, false, &Gone(vec![], vec![])).unwrap();
+        assert_eq!(f, slot_dir(&key, 3));
+    }
+
+    #[test]
+    fn warm_slot_of_a_gone_worktree_is_not_reused_early() {
+        let scratch = Scratch::new("gone-warm");
+        let key = scratch.path().join("key");
+        let ci = assign(&key, "/ci/checkout", 8, 50, true, &Busy(vec![])).unwrap();
+        let a = assign(&key, "/w/a", 8, 10, false, &Busy(vec![])).unwrap();
+        let gone = vec!["/ci/checkout", "/w/a"];
+        // The CI checkout is gone and more recent, but warm: b takes a's slot instead.
+        let b = assign(&key, "/w/b", 8, 60, false, &Gone(vec![], gone.clone())).unwrap();
+        assert_eq!(b, a);
+        // With no other gone slot, c takes an unused number and the warm slot stays.
+        let c = assign(&key, "/w/c", 8, 70, false, &Gone(vec![], gone)).unwrap();
+        assert_eq!(c, slot_dir(&key, 2));
+        assert!(entries(&key).unwrap().iter().any(|e| e.slot == 0 && e.warm));
+        assert_eq!(ci, slot_dir(&key, 0));
+    }
+
+    #[test]
+    fn busy_slot_of_a_gone_worktree_is_left_alone() {
+        let scratch = Scratch::new("gone-busy");
+        let key = scratch.path().join("key");
+        let a = assign(&key, "/w/a", 8, 10, false, &Busy(vec![])).unwrap();
+        assign(&key, "/w/b", 8, 20, false, &Busy(vec![])).unwrap();
+        let gone = vec!["/w/a", "/w/b"];
+        // b's slot is building: c takes a's, the older gone one.
+        let c = assign(&key, "/w/c", 8, 30, false, &Gone(vec![1], gone.clone())).unwrap();
+        assert_eq!(c, a);
+        // Both gone slots building (c is present, so slot-0 is not a candidate either way).
+        let d = assign(&key, "/w/d", 8, 40, false, &Gone(vec![0, 1], gone)).unwrap();
+        assert_eq!(d, slot_dir(&key, 2));
+    }
+
+    #[test]
+    fn worktree_gone_by_default_only_when_certainly_missing() {
+        let scratch = Scratch::new("gone-default");
+        let present = scratch.path().join("present");
+        std::fs::create_dir_all(&present).unwrap();
+        assert!(!CargoLockProbe.worktree_gone(&present.to_string_lossy()));
+        let missing = scratch.path().join("missing");
+        assert!(CargoLockProbe.worktree_gone(&missing.to_string_lossy()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_worktree_counts_as_present() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new("gone-unreadable");
+        let locked = scratch.path().join("locked");
+        std::fs::create_dir_all(locked.join("wt")).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let inside = locked.join("wt");
+        // Root reads through any mode; only an unprivileged run can observe the error.
+        let errors = inside.try_exists().is_err();
+        let gone = CargoLockProbe.worktree_gone(&inside.to_string_lossy());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if errors {
+            assert!(!gone);
         }
     }
 
