@@ -684,25 +684,63 @@ fn screen_context_notices_are_a_host_operation_with_a_receipt() {
     let cases = UseCases::new().with_sessions(Arc::new(
         SessionService::new(fx.h.ids.clone(), fx.store.clone()).with_artifacts(artifacts.clone()),
     ));
-    let send = |ctx: &InvocationContext, key: &str, revision: u32, session: &str| {
-        let authority = fx.authority();
-        let gateway = Gateway {
-            authority: &authority,
-            store: &*fx.store,
-            ids: &*fx.h.ids,
-        };
-        let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key,
+    let send_text =
+        |ctx: &InvocationContext, key: &str, revision: u32, session: &str, text: &str| {
+            let authority = fx.authority();
+            let gateway = Gateway {
+                authority: &authority,
+                store: &*fx.store,
+                ids: &*fx.h.ids,
+            };
+            let frame = json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key,
             "schemaRevision": revision,
             "body": {"kind": "sessions.append_screen_context", "sessionId": session,
-                "screenId": "features", "context": "Current screen: Features"}});
-        cases
-            .command(
-                &gateway,
-                ctx,
-                "sessions.append_screen_context",
-                frame.to_string().as_bytes(),
+                "screenId": "features", "context": text}});
+            cases
+                .command(
+                    &gateway,
+                    ctx,
+                    "sessions.append_screen_context",
+                    frame.to_string().as_bytes(),
+                )
+                .expect("addressable")
+        };
+    let send = |ctx: &InvocationContext, key: &str, revision: u32, session: &str| {
+        send_text(ctx, key, revision, session, "Current screen: Features")
+    };
+    // Every staging of a notice text, in order: its operation ID and journal state.
+    let stagings = || -> Vec<(String, String)> {
+        let c = fx.h.raw();
+        let mut q = c
+            .prepare(
+                "SELECT id, state FROM operations \
+                 WHERE payload_json LIKE '%CoordinatorScreenContext%' ORDER BY rowid",
             )
-            .expect("addressable")
+            .unwrap();
+        q.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    // Whether any file of a staging is left: its `.part` or a blob generation it named.
+    let leftover = |op: &str| -> bool {
+        fn walk(dir: &std::path::Path, op: &str) -> bool {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|e| {
+                    let path = e.path();
+                    if path.is_dir() {
+                        walk(&path, op)
+                    } else {
+                        path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                            n == format!("{op}.part") || n.ends_with(&format!(".{op}"))
+                        })
+                    }
+                })
+        }
+        walk(fx.h.root.path(), op)
     };
     let session = fx.work_session();
     let sid = session.id.as_str().to_owned();
@@ -738,9 +776,15 @@ fn screen_context_notices_are_a_host_operation_with_a_receipt() {
     assert!(replayed);
     assert_eq!(notices().len(), 1);
 
-    // The user and an agent may not write the host's notice; nothing is written.
+    // The user and an agent may not write the host's notice; nothing is written or staged.
+    let staged_before = stagings().len();
     let human = refused(send(&fx.user(), "notice-human", 23, &sid));
     assert_eq!(human.code, DomainErrorCode::PermissionDenied);
+    assert_eq!(
+        stagings().len(),
+        staged_before,
+        "a refused caller stages nothing"
+    );
     let agent = fx.worker("agent-p", &sid);
     assert_eq!(
         rejected(send(&agent, "notice-agent", 23, &sid)),
@@ -760,10 +804,23 @@ fn screen_context_notices_are_a_host_operation_with_a_receipt() {
         "sessions.end",
         json!({"sessionId": sid, "expectedRevision": "1"}),
     ));
-    let closed = refused(send(&host, "notice-closed", 23, &sid));
-    assert_eq!(
-        (closed.code, kind_of(&closed)),
-        (DomainErrorCode::Conflict, SESSION_CLOSED)
+    // New bytes (a generation of their own), refused, then the identical frame retried: each
+    // staging is abandoned and its files removed.
+    for _ in 0..2 {
+        let closed = refused(send_text(&host, "notice-closed", 23, &sid, "Closed screen"));
+        assert_eq!(
+            (closed.code, kind_of(&closed)),
+            (DomainErrorCode::Conflict, SESSION_CLOSED)
+        );
+        let (op, state) = stagings().pop().expect("the closed notice was staged");
+        assert_eq!(state, "Failed", "the unpublished staging is abandoned");
+        assert!(!leftover(&op), "the abandoned staging leaves no file");
+    }
+    let all = stagings();
+    assert_eq!(all[0].1, "ObservedComplete", "{all:?}");
+    assert!(
+        all[1..].iter().all(|(_, state)| state == "Failed"),
+        "{all:?}"
     );
     assert_eq!(notices().len(), 1);
     let published: i64 =

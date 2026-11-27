@@ -3,6 +3,9 @@
 //! then the artifact and its transcript entry commit together in the command's own unit of work,
 //! with its receipt and history. Old notices remain immutable so provider history keeps its
 //! original prefix. Only the host may append one; any other caller is refused.
+//!
+//! The operation contract bounds the text: `context` is a `Text`, 1 to 4096 characters, and
+//! admission refuses anything outside that before this service runs. No second bound applies.
 use super::{SESSION_CLOSED, SessionService, append_refusal, record_from};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedCommand;
@@ -20,9 +23,6 @@ use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionW
 use crate::services::sessions::turn;
 use serde_json::json;
 
-/// Largest notice text in bytes.
-pub const MAX_NOTICE_BYTES: usize = 8_000;
-
 /// The notice text staged for one command.
 pub(super) struct StagedNotice(StagedFile);
 
@@ -34,21 +34,9 @@ fn provenance(input: &ops::AppendScreenContextInput) -> serde_json::Value {
     })
 }
 
-fn refusal(input: &ops::AppendScreenContextInput, ctx: &InvocationContext) -> Option<Refusal> {
-    if ctx.principal_kind() != PrincipalKind::Host {
-        return Some(Refusal::new(
-            DomainErrorCode::PermissionDenied,
-            "session_writer",
-            None,
-        ));
-    }
-    (input.context.0.len() > MAX_NOTICE_BYTES).then(|| {
-        Refusal::new(
-            DomainErrorCode::InvalidArgument,
-            "screen_context",
-            Some(input.session_id.clone()),
-        )
-    })
+fn refusal(ctx: &InvocationContext) -> Option<Refusal> {
+    (ctx.principal_kind() != PrincipalKind::Host)
+        .then(|| Refusal::new(DomainErrorCode::PermissionDenied, "session_writer", None))
 }
 
 impl SessionService {
@@ -61,7 +49,7 @@ impl SessionService {
         let Some(artifacts) = &self.artifacts else {
             return Ok(None);
         };
-        if refusal(input, ctx).is_some() {
+        if refusal(ctx).is_some() {
             return Ok(None);
         }
         let staged = artifacts
@@ -79,7 +67,7 @@ impl SessionService {
         command: &AdmittedCommand,
         input: &ops::AppendScreenContextInput,
     ) -> Result<DomainDecision, Failure> {
-        if let Some(refused) = refusal(input, ctx) {
+        if let Some(refused) = refusal(ctx) {
             return Err(refused.into());
         }
         let (Some(artifacts), Some(StagedNotice(staged))) =

@@ -836,8 +836,13 @@ impl ChatCtl<'_, '_> {
 
     fn send(&mut self) {
         let Some(session) = self.chat.selected_session().cloned() else {
-            // The first message starts the conversation, then is sent.
-            if self.chat.draft().is_some_and(|d| !d.is_empty()) {
+            // The first message starts the conversation, then is sent (never before a pasted
+            // image is written).
+            if self
+                .chat
+                .draft()
+                .is_some_and(|d| !d.is_empty() && !d.pasting())
+            {
                 self.chat.send_after_start = true;
                 self.start_session(StartReason::ForDraft);
             }
@@ -928,13 +933,28 @@ impl ChatCtl<'_, '_> {
     }
 
     /// Attaches a pasted image: it is written as a PNG beside the store, attached, and the
-    /// temporary file removed once the artifact service holds its copy.
-    /// Encoding and staging run as a task; the image joins the draft it was pasted into.
+    /// temporary file removed once the artifact service holds its copy. Encoding and staging run
+    /// as a task. The image is in the draft it was pasted into from the start (`Pasting`, which
+    /// holds that draft's Send), so it stays with that draft wherever the draft goes.
     fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
+        if self.online().is_err() {
+            return;
+        }
         let session = self.chat.selected.clone();
         let image = image.clone();
-        let slot = ChatSlot::PastedImage(self.chat.draft_key(), self.chat.next_local());
-        self.task(slot, "Attaching a pasted image", move |b| {
+        let local = self.chat.next_local();
+        let slot = ChatSlot::PastedImage(self.chat.draft_key(), local);
+        self.chat.draft_mut().attachments.push(Attachment {
+            local,
+            name: "Pasted image".into(),
+            media_type: "image/png".into(),
+            path: None,
+            owned: true,
+            state: AttachState::Pasting,
+            preview: None,
+            preview_note: None,
+        });
+        let submitted = self.task(slot, "Attaching a pasted image", move |b| {
             let session = session
                 .map(devworks_core::protocol::Id::new)
                 .transpose()
@@ -943,6 +963,58 @@ impl ChatCtl<'_, '_> {
             b.stage_pasted_image(session.as_ref(), &png)
                 .map(TaskOutput::PastedImage)
         });
+        if !submitted {
+            self.chat.take_attachment(local);
+        }
+    }
+
+    /// A pasted image's file is ready: it waits for its own draft's conversation like any file.
+    fn pasted(&mut self, local: u64, result: Result<TaskOutput, String>) {
+        let path = match result {
+            Ok(TaskOutput::PastedImage(path)) => path,
+            other => {
+                let e = match other {
+                    Err(e) => e,
+                    _ => "unexpected reply".into(),
+                };
+                if let Some(a) = self.chat.attachment_mut(local) {
+                    a.state = AttachState::Failed(e.clone());
+                }
+                self.announce(format!("The pasted image could not be attached: {e}"));
+                return;
+            }
+        };
+        let Some(key) = self.chat.attachment_draft(local) else {
+            // Removed while it was being written: only the shell's own file is left.
+            self.remove_owned(Some(&path));
+            return;
+        };
+        let media = attachments::media_type(&path).to_owned();
+        if let Some(a) = self.chat.attachment_mut(local) {
+            a.name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("attachment")
+                .to_owned();
+            a.media_type = media.clone();
+            a.path = Some(path.clone());
+            a.state = AttachState::WaitingForConversation;
+        }
+        if attachments::previewable(&media)
+            && let Some(c) = &mut self.client
+        {
+            c.task(
+                ChatSlot::Preview(key.clone(), local).into(),
+                "Preparing a preview",
+                move |_| attachments::preview(&path),
+            );
+        }
+        if key != chat::NEW_DRAFT {
+            self.store_waiting(&key);
+        } else if self.chat.draft_key() == key {
+            self.start_session(StartReason::ForDraft);
+        }
+        // A new draft not shown now starts its conversation when it is sent.
     }
 
     /// Removes a pending attachment from its draft. One already stored is deleted through
@@ -953,6 +1025,8 @@ impl ChatCtl<'_, '_> {
         };
         let owned = a.path.clone().filter(|_| a.owned);
         match a.state {
+            // Being written: its reply finds it removed and removes the file it wrote.
+            AttachState::Pasting => {}
             // Nothing was admitted: only a file the shell created is left to remove.
             AttachState::WaitingForConversation | AttachState::Failed(_) => {
                 self.remove_owned(owned.as_deref());
@@ -1931,6 +2005,7 @@ impl ChatCtl<'_, '_> {
                         }
                         // Not saved: the shell's own file is no longer needed.
                         AttachState::Failed(_)
+                        | AttachState::Pasting
                         | AttachState::Storing
                         | AttachState::Saving(_)
                         | AttachState::WaitingForConversation => {
@@ -1998,18 +2073,7 @@ impl ChatCtl<'_, '_> {
                     self.chat.reconcile_text_preview();
                 }
             }
-            (ChatSlot::PastedImage(key, _), Reply::Task(result)) => match result {
-                Ok(TaskOutput::PastedImage(path)) if key == self.chat.draft_key() => {
-                    self.attach_files(vec![(path, true)]);
-                }
-                Ok(TaskOutput::PastedImage(path)) => {
-                    // The conversation changed while it was staged: nothing is attached.
-                    self.remove_owned(Some(&path));
-                    self.announce("The pasted image was not attached: the conversation changed.");
-                }
-                Ok(_) => self.announce("The pasted image could not be attached."),
-                Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
-            },
+            (ChatSlot::PastedImage(_, local), Reply::Task(result)) => self.pasted(local, result),
             (ChatSlot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
                 Ok(()) => {
                     self.cx.effects.push(Effect::ArtifactsChanged);

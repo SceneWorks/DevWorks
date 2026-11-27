@@ -877,6 +877,66 @@ fn index_sources_are_read_off_the_frame_thread() {
     assert!(has_text(&h, "Section revision"));
 }
 
+/// The re-read after a save never replaces what was typed while it was in flight; an explicit
+/// reload does.
+#[test]
+fn edits_typed_during_the_re_read_after_a_save_are_kept() {
+    let root = Root::new("index-sources-edits");
+    let engine = start(&root);
+    let gate = Gate::new("index_sources");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Indexing);
+    settle(&mut h);
+    let revision = h
+        .state()
+        .projects
+        .indexing
+        .sources
+        .as_ref()
+        .expect("the sources form")
+        .revision;
+    type_into(&mut h, "Exclusions", "\n**/saved/**");
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Save indexing sources")
+        .click();
+    step_until(&mut h, "the re-read after the save", |_| gate.has_waiter());
+    let saved = h.state().projects.indexing.sources.clone().unwrap();
+    assert_eq!(
+        saved.revision,
+        revision + 1,
+        "the form names the saved revision"
+    );
+    type_into(&mut h, "Exclusions", "\n**/typed/**");
+    gate.open();
+    settle(&mut h);
+    let form = h.state().projects.indexing.sources.clone().unwrap();
+    assert!(
+        form.excludes.ends_with("**/typed/**"),
+        "{:?}",
+        form.excludes
+    );
+    assert_eq!(form.revision, revision + 1);
+    // An explicit reload shows the saved configuration.
+    click(&mut h, Role::Button, "Reload sources");
+    let form = h.state().projects.indexing.sources.clone().unwrap();
+    assert!(
+        !form.excludes.contains("**/typed/**"),
+        "{:?}",
+        form.excludes
+    );
+    assert!(form.excludes.contains("**/saved/**"), "{:?}", form.excludes);
+}
+
 #[test]
 fn a_pasted_image_is_staged_off_the_frame_thread() {
     let root = Root::new("paste-held");
@@ -907,11 +967,11 @@ fn a_pasted_image_is_staged_off_the_frame_thread() {
         move || open.open(),
     );
     assert!(
-        h.state()
-            .chat
-            .draft()
-            .is_none_or(|d| d.attachments.is_empty()),
-        "the image joins the draft once it is staged"
+        h.state().chat.draft().is_some_and(|d| matches!(
+            d.attachments.as_slice(),
+            [a] if matches!(a.state, devworks_desktop::chat::AttachState::Pasting)
+        )),
+        "the image is in its draft while its file is written"
     );
     held.assert_frames_advanced("pasted image");
     settle(&mut h);
@@ -923,6 +983,78 @@ fn a_pasted_image_is_staged_off_the_frame_thread() {
         matches!(a.state, devworks_desktop::chat::AttachState::Stored(_)),
         "{:?}",
         a.state
+    );
+}
+
+/// A message is never sent without an image pasted into its draft whose file is still being
+/// written; once written, the image is stored with that draft's conversation and sent with it.
+#[test]
+fn send_waits_for_an_image_pasted_into_a_new_draft() {
+    let root = Root::new("paste-then-send");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let gate = Gate::new("stage_pasted_image");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    assert!(h.state().chat.selected.is_none(), "a new draft");
+    type_into(&mut h, COMPOSER_LABEL, "see this");
+    gate.close();
+    let pasted = egui::ColorImage::new([3, 3], vec![egui::Color32::GREEN; 9]);
+    h.event(egui::Event::PasteImage(Arc::new(pasted)));
+    step_until(&mut h, "the paste is being written", |_| gate.has_waiter());
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(
+        h.get_by_role_and_label(Role::Button, SEND_LABEL)
+            .accesskit_node()
+            .is_disabled(),
+        "Send waits for the pasted image"
+    );
+    h.get_by_role_and_label(Role::Button, SEND_LABEL).click();
+    h.key_press(Key::Enter);
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(
+        h.state().chat.selected.is_none() && h.state().chat.sending.is_none(),
+        "nothing was sent or started without the image"
+    );
+    gate.open();
+    settle(&mut h);
+    let session = h
+        .state()
+        .chat
+        .selected
+        .clone()
+        .expect("started for the image");
+    let draft = h.state().chat.draft().expect("draft");
+    let [a] = draft.attachments.as_slice() else {
+        panic!("one attachment: {:?}", draft.attachments.len())
+    };
+    assert!(
+        matches!(a.state, devworks_desktop::chat::AttachState::Stored(_)),
+        "{:?}",
+        a.state
+    );
+    assert_eq!(draft.text, "see this");
+    click(&mut h, Role::Button, SEND_LABEL);
+    let bodies = transcript(&*backend, &session);
+    assert!(
+        bodies.iter().any(|b| matches!(b,
+            TranscriptBody::UserMessage { content }
+                if content.iter().any(|c| matches!(c, UserContent::Text { text } if text == "see this"))
+                    && content.iter().any(|c| matches!(c, UserContent::Attachment { .. })))),
+        "{bodies:?}"
     );
 }
 

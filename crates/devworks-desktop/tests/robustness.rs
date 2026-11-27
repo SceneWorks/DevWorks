@@ -318,10 +318,15 @@ fn an_artifact_list_read_before_an_attachment_was_stored_is_requeried() {
                 .any(|a| matches!(a.state, AttachState::Stored(_)))
         })
     });
+    // Opening the sidebar appended a screen-context notice, whose text is also a workspace
+    // artifact: let it commit before the held listing is released and re-read.
+    step_until(&mut h, "the screen-context notice was stored", |s| {
+        !in_flight(s, "Telling the coordinator about this screen")
+    });
     gate.open();
     settle(&mut h);
-    // The listing holds the attachment and the text of the screen-context notice that opening
-    // the sidebar appended (both stored after the held listing read its snapshot).
+    // The listing holds the attachment and the notice text (both stored after the held listing
+    // read its snapshot).
     assert!(
         has_text(&h, "2 of 2 shown"),
         "the stale empty listing was re-queried"

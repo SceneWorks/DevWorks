@@ -25,7 +25,7 @@ impl Screen for IndexingScreen {
     fn load(&mut self, cx: &mut Cx, _route: Route) {
         let mut ctl = IndexingCtl { indexing: self, cx };
         if ctl.indexing.sources.is_none() {
-            ctl.load_index_sources();
+            ctl.load_index_sources(false);
         }
         ctl.act(vec![IndexAction::Runs]);
     }
@@ -173,7 +173,7 @@ impl IndexingCtl<'_, '_> {
                         move |b| ops::retire_view(b, &o, &revision),
                     );
                 }
-                IndexAction::LoadSources => self.load_index_sources(),
+                IndexAction::LoadSources => self.load_index_sources(false),
                 IndexAction::SaveSources => {
                     let Some(form) = self.indexing.sources.clone() else {
                         continue;
@@ -220,8 +220,10 @@ impl IndexingCtl<'_, '_> {
     }
 
     /// Reads the workspace section's sources off the frame thread; a newer read supersedes an
-    /// older one, so the form shows the latest configuration.
-    fn load_index_sources(&mut self) {
+    /// older one, so the form shows the latest configuration. With `keep_edits` (the re-read
+    /// after a save), the reply does not replace a form edited since the read was submitted.
+    fn load_index_sources(&mut self, keep_edits: bool) {
+        self.indexing.sources_at_read = keep_edits.then(|| self.indexing.sources.clone());
         self.task(
             IndexingSlot::IndexSources,
             "Reading indexing sources",
@@ -230,7 +232,14 @@ impl IndexingCtl<'_, '_> {
     }
 
     fn apply_index_sources(&mut self, result: Result<TaskOutput, String>) {
+        let edited = self
+            .indexing
+            .sources_at_read
+            .take()
+            .is_some_and(|at| at != self.indexing.sources);
         match result {
+            // Typed since the read was submitted: the edits stay (their revision is current).
+            Ok(TaskOutput::IndexSources(_)) if edited => {}
             Ok(TaskOutput::IndexSources(c)) => {
                 self.indexing.sources = Some(SourcesForm {
                     project: None,
@@ -317,10 +326,14 @@ impl IndexingCtl<'_, '_> {
                             Tone::Good,
                             format!("Indexing sources saved (revision {})", m.revision.get()),
                         ));
+                        // The form holds what was saved (and anything typed since).
+                        if let Some(form) = &mut ix.sources {
+                            form.revision = m.revision.get();
+                        }
                     }
                     Err(e) => ix.sources_error = Some(failure_text(e)),
                 }
-                self.load_index_sources();
+                self.load_index_sources(true);
             }
             (IndexingSlot::IndexDiscover, Reply::Query(q)) => {
                 ix.discovered = Some(match ops::discover_result(q) {
