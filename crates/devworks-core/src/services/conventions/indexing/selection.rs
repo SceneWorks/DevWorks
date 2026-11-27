@@ -256,6 +256,10 @@ impl IndexService {
             return Err(StorageError::ScopeDenied);
         }
         narrow(tx, ctx, &bound_scope(ctx))?;
+        let fences = commands::source_fences(tx, ctx)?;
+        for listener in self.selection_listeners() {
+            listener.selection_changed(tx, ctx, &fences)?;
+        }
         let key = format!("{}:{selected_revision}", event_id.0.as_str());
         let operation = OperationId(identity("csel_fanout_", &key));
         let delivery = identity("csel_fanout_delivery_", &key);

@@ -845,7 +845,7 @@ fn claim_neighbors(
     let sql = format!(
         "WITH scored AS MATERIALIZED (SELECT c.id, \
          1.0-vec_distance_cosine(v.vector,?{vector}) AS similarity FROM knowledge_claims c \
-         JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?{space} WHERE {}), \
+         JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?{space} AND v.vector IS NOT NULL WHERE {}), \
          nearest AS (SELECT id, similarity FROM scored WHERE similarity>0 \
          ORDER BY similarity DESC, id DESC LIMIT ?{neighbors}) \
          SELECT n.id, n.similarity FROM nearest n WHERE {position} \
@@ -884,6 +884,33 @@ fn text_digest(text: &str) -> String {
     devworks_core::fingerprint::sha256_hex(text.as_bytes())
 }
 
+/// [`ArtifactRead::live_claim_text_digest`].
+pub(super) fn live_claim_text_digest(
+    conn: &Connection,
+    id: &Id,
+) -> Result<Option<String>, StorageError> {
+    Ok(claim(conn, id)?
+        .filter(|c| c.lifecycle != "Deleted")
+        .map(|c| text_digest(&claim_text(&c))))
+}
+
+fn pending_vector_scopes(
+    conn: &Connection,
+    space: &Id,
+) -> Result<Vec<KnowledgeScope>, StorageError> {
+    let keys = rows(
+        conn,
+        "SELECT DISTINCT c.scope_key, c.project_id FROM knowledge_claims c WHERE \
+         c.lifecycle<>'Deleted' AND NOT EXISTS(SELECT 1 FROM knowledge_claim_vectors v WHERE \
+         v.claim_id=c.id AND v.space_id=?1) ORDER BY c.scope_key",
+        vec![Sql::Text(space.as_str().to_owned())],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+    )?;
+    keys.into_iter()
+        .map(|(key, project)| scope_of(&key, project))
+        .collect()
+}
+
 fn vector_coverage(
     conn: &Connection,
     scopes: &[String],
@@ -891,7 +918,7 @@ fn vector_coverage(
 ) -> Result<(i64, i64), StorageError> {
     let scopes = serde_json::to_string(scopes).expect("scope keys");
     db(conn.query_row(
-        "SELECT count(v.claim_id), count(*) FROM knowledge_claims c \
+        "SELECT count(v.vector), count(*) FROM knowledge_claims c \
          LEFT JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?2 \
          WHERE c.scope_key IN (SELECT value FROM json_each(?1)) AND c.lifecycle<>'Deleted'",
         params![scopes, space.as_str()],
@@ -1383,6 +1410,12 @@ macro_rules! knowledge_reads {
                 space: &Id,
             ) -> Result<(i64, i64), StorageError> {
                 vector_coverage(self.conn, scopes, space)
+            }
+            fn pending_knowledge_vector_scopes(
+                &self,
+                space: &Id,
+            ) -> Result<Vec<KnowledgeScope>, StorageError> {
+                pending_vector_scopes(self.conn, space)
             }
             fn pending_knowledge_claim_vectors(
                 &self,
@@ -2226,7 +2259,11 @@ impl KnowledgeRepository for Unit<'_> {
             if current.as_deref() != Some(text.as_str()) {
                 continue;
             }
-            stored += db(self.conn.execute(
+            // A vector the space cannot hold (wrong length, not finite, zero) is recorded
+            // without a vector, so the same text is not embedded again; its batch is kept.
+            let blob = super::documents::vector_blob(vector, dimensions).ok();
+            let usable = blob.is_some();
+            db(self.conn.execute(
                 "INSERT INTO knowledge_claim_vectors(claim_id,space_id,dimensions,text_digest,\
                  vector) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(claim_id,space_id) DO UPDATE SET \
                  text_digest=excluded.text_digest, vector=excluded.vector",
@@ -2235,9 +2272,10 @@ impl KnowledgeRepository for Unit<'_> {
                     space.as_str(),
                     dimensions,
                     text_digest(text),
-                    super::documents::vector_blob(vector, dimensions)?
+                    blob
                 ],
             ))?;
+            stored += usize::from(usable);
         }
         Ok(stored)
     }
@@ -2365,9 +2403,21 @@ impl KnowledgeRepository for Unit<'_> {
         }
         // A vector embeds one exact text: a deleted claim keeps none, a changed text none of
         // the old one.
+        let (deleted, digest) = (c.lifecycle == "Deleted", text_digest(&text));
         db(self.conn.execute(
             "DELETE FROM knowledge_claim_vectors WHERE claim_id=?1 AND (?2 OR text_digest<>?3)",
-            params![id, c.lifecycle == "Deleted", text_digest(&text)],
+            params![id, deleted, digest],
+        ))?;
+        // The same holds for the claim's captured embedding inputs (its text): their versions
+        // are retired in this write, so no artifact keeps a deleted or replaced text readable
+        // and the blob is reclaimed once nothing else references it.
+        db(self.conn.execute(
+            "UPDATE artifact_versions SET deleted_at=?4 WHERE deleted_at IS NULL AND \
+             artifact_id IN (SELECT a.id FROM artifacts a WHERE \
+             json_extract(a.provenance_json,'$.derived.kind')='KnowledgeEmbeddingInput' AND \
+             json_extract(a.provenance_json,'$.derived.knowledgeClaimId')=?1 AND \
+             (?2 OR json_extract(a.provenance_json,'$.derived.textDigest')<>?3))",
+            params![id, deleted, digest, c.updated_at_ms],
         ))?;
         claim(self.conn, &c.id)?.ok_or_else(|| corrupt("claim vanished inside its transaction"))
     }

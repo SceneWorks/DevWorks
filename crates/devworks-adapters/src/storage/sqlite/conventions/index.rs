@@ -730,7 +730,8 @@ impl ConventionIndexRepository for Unit<'_> {
                 || !matches!(
                     devworks_core::services::artifacts::derivation::DerivedKind::of(&provenance),
                     Some(devworks_core::services::artifacts::derivation::DerivedKind::ConventionEmbeddingInput
-                        | devworks_core::services::artifacts::derivation::DerivedKind::DocumentEmbeddingInput)
+                        | devworks_core::services::artifacts::derivation::DerivedKind::DocumentEmbeddingInput
+                        | devworks_core::services::artifacts::derivation::DerivedKind::KnowledgeEmbeddingInput)
                 )
                 || derived["requestId"].as_str() != Some(r.request_id.as_str())
                 || derived["contextDigest"] != r.context_digest

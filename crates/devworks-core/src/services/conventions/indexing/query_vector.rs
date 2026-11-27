@@ -90,7 +90,11 @@ impl IndexService {
             }
             Err(EmbeddingFailure::Cancelled) => Err(StorageError::Cancelled.into()),
             Err(EmbeddingFailure::Storage(error)) => Err(error.into()),
-            Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::Unknown { .. }) => Ok(None),
+            Err(
+                EmbeddingFailure::Unavailable(_)
+                | EmbeddingFailure::InvalidVectors { .. }
+                | EmbeddingFailure::Unknown { .. },
+            ) => Ok(None),
             _ => Err(StorageError::InvalidRecord("query embedding custody".into()).into()),
         }
     }

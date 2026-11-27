@@ -424,6 +424,12 @@ fn content_partitions(
         ),
         (
             "artifacts",
+            "id IN(SELECT id FROM ownedKnowledgeInferenceArtifacts)",
+            Action::Delete,
+            Reason::OwnedLineage,
+        ),
+        (
+            "artifacts",
             "id IN(SELECT id FROM retainedVisionEvidence) AND id NOT IN(SELECT id FROM ownedDocumentInferenceArtifacts)",
             Action::Keep,
             Reason::SharedContent,

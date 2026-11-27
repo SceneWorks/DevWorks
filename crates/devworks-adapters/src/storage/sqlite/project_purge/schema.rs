@@ -90,9 +90,13 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// Migration 78 adds knowledge_claim_vectors (schema78 extension): the rebuildable vector of a
 /// claim's text follows its claim (claim_id in ownedClaims), so a project's purge removes the
 /// vectors of its claims and keeps every other. It adds one foreign key to knowledge_claims
-/// and one to the shared embedding_spaces row, which it does not own.
+/// and one to the shared embedding_spaces row, which it does not own; a row without a vector
+/// records an unusable provider vector. It also adds the partial expression index
+/// artifacts_knowledge_embedding_input on artifacts (no table, column or ownership edge); the
+/// Host KnowledgeEmbeddingInput artifacts it finds are deleted with the project's claims
+/// (ownedKnowledgeInferenceArtifacts).
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "16b64d4e1b1ab5cd12f88961777f73d00f5bb0c5d0a58dcf89c3550cda2ec452";
+    "6b3c8bc81195b1370860c456645b85de8716def92489d39894501270c7ef0635";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

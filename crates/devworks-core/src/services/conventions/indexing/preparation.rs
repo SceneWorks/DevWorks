@@ -271,6 +271,15 @@ impl IndexService {
             EmbeddingOrigin::DocumentIndex { source, .. } => Some(source.clone()),
             _ => None,
         };
+        let knowledge_claims = match origin {
+            EmbeddingOrigin::KnowledgeIndex { claims, .. } => {
+                if claims.len() != texts.len() {
+                    return Err(invalid("one claim per knowledge embedding input"));
+                }
+                Some(claims.clone())
+            }
+            _ => None,
+        };
         let origin = match origin {
             EmbeddingOrigin::Query {
                 query_id,
@@ -313,12 +322,12 @@ impl IndexService {
             EmbeddingOrigin::KnowledgeIndex {
                 delivery_id,
                 scope,
-                first_claim,
+                claims,
             } => json!({
                 "kind": "KnowledgeIndex",
                 "deliveryId": delivery_id,
                 "scope": scope,
-                "firstClaimId": first_claim
+                "claims": claims
             }),
         };
         let args_digest = digest(&json!({
@@ -455,6 +464,11 @@ impl IndexService {
                 DerivedKind::DocumentEmbeddingInput.as_str(),
                 "Document embedding input",
             )
+        } else if knowledge_claims.is_some() {
+            (
+                DerivedKind::KnowledgeEmbeddingInput.as_str(),
+                "Knowledge embedding input",
+            )
         } else {
             (
                 DerivedKind::ConventionEmbeddingInput.as_str(),
@@ -534,6 +548,10 @@ impl IndexService {
                 });
                 if let Some(source) = &document_source {
                     provenance["documentSource"] = json!(source);
+                }
+                if let Some((claim, text)) = knowledge_claims.as_ref().and_then(|c| c.get(index)) {
+                    provenance["knowledgeClaimId"] = json!(claim);
+                    provenance["textDigest"] = json!(text);
                 }
                 let version = artifacts.commit_host_bytes_in_scope(
                     tx,

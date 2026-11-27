@@ -1658,6 +1658,12 @@ impl ArtifactRead for HandlerTx<'_> {
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
         self.inner.borrow_mut().artifacts().project_exists(project)
     }
+    fn live_claim_text_digest(&self, claim: &Id) -> Result<Option<String>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .live_claim_text_digest(claim)
+    }
     fn subject_exists(
         &self,
         project: &ProjectId,

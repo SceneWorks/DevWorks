@@ -817,10 +817,21 @@ impl KnowledgeService {
         };
         let limit = i.page.limit.get().min(i.claim_limit.get()) as usize;
         let k = knowledge_read(snapshot);
-        // The prepared query vector, while the selection it was embedded under is current.
-        let vector = match (self.embeddings(), prepared) {
+        // The selected space binds the cursor; this page's query vector is used while the
+        // selection it was embedded under is current. A page without one (the route failed at
+        // query time) lists text matches only ([`vectors`]).
+        let runtime = self.embeddings().filter(|_| !words.is_empty());
+        let selected = match &runtime {
+            Some(runtime) => runtime
+                .configuration_read(snapshot, ctx)?
+                .space
+                .map(|space| space.id),
+            None => None,
+        };
+        let vector = match (&runtime, prepared) {
             (Some(runtime), Some(v))
-                if !words.is_empty() && v.current(&runtime, snapshot, ctx)? =>
+                if selected.as_deref() == Some(v.space.as_str())
+                    && v.current(runtime, snapshot, ctx)? =>
             {
                 Some(v)
             }
@@ -834,8 +845,8 @@ impl KnowledgeService {
         let (mut parts, exact_revision) = Self::revision_parts(k, &scoped)?;
         parts.push(format!("{query:?}"));
         parts.push(limit.to_string());
-        parts.push(match &near {
-            Some(near) => format!("vectors={}", near.space.as_str()),
+        parts.push(match &selected {
+            Some(space) => format!("vectors={space}"),
             None => "lexical".into(),
         });
         let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
@@ -2013,6 +2024,32 @@ pub(crate) fn no_applicability() -> Applicability {
     }
 }
 
+impl crate::services::conventions::indexing::SelectionListener for KnowledgeService {
+    /// A newly selected space queues the embedding of every scope with claims it has no
+    /// vector for, so claims written before it was selected need no other write.
+    fn selection_changed(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        fences: &[crate::ports::AuthorityFence],
+    ) -> Result<(), StorageError> {
+        if self.embeddings().is_none() {
+            return Ok(());
+        }
+        vectors::queue_selection(tx, ctx, fences)
+    }
+}
+
+/// Queues the embedding of `scope`'s pending claims as `ctx` after a Knowledge change made
+/// outside the Knowledge commands (Dreaming), in its unit of work.
+pub(crate) fn queue_claim_vectors(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+) -> Result<(), StorageError> {
+    vectors::queue_scope(tx, ctx, &[], scope, None)
+}
+
 impl QueryHandler for KnowledgeService {
     /// `knowledge.render_summary` renders from one snapshot and publishes the text as an
     /// artifact of the invocation's scope before the answer (bounded, recoverable publication).
@@ -2230,9 +2267,9 @@ impl CommandHandler for KnowledgeService {
             return decided(tx, refused);
         };
         let mut outcome = writes::decide(ctx, command, input, tx);
-        if let (Some(runtime), Ok(crate::protocol::results::DomainDecision::Applied { result })) =
+        if let (Some(_), Ok(crate::protocol::results::DomainDecision::Applied { result })) =
             (self.embeddings(), &outcome)
-            && let Err(error) = vectors::queue_after_write(&runtime, tx, ctx, command, result)
+            && let Err(error) = vectors::queue_after_write(tx, ctx, command, result)
         {
             outcome = Err(error.into());
         }

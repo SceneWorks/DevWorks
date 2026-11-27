@@ -311,6 +311,9 @@ pub struct ListPosition {
 
 pub trait ArtifactRead {
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError>;
+    /// The SHA-256 of the text a Knowledge claim's vector embeds, while the claim exists and
+    /// is not deleted (it gates the claim's captured embedding inputs).
+    fn live_claim_text_digest(&self, claim: &Id) -> Result<Option<String>, StorageError>;
     /// Whether `subject` exists and belongs to `project` (roots, assignments, operations,
     /// resources and blockers through their owning work item where they have one).
     fn subject_exists(

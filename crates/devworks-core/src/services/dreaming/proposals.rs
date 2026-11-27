@@ -363,6 +363,7 @@ pub(crate) fn decide_effect(
                 change,
                 &proposed.rationale,
             )?;
+            crate::services::knowledge::queue_claim_vectors(tx, ctx, &run.scope)?;
         }
     }
     Ok(())

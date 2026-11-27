@@ -389,6 +389,25 @@ pub(crate) fn visible_in(
                     && version.media_type == source.media_type
             }));
     }
+    // A claim's captured embedding input is the claim's text: readable only by its owner while
+    // the claim is live with exactly that text (a deletion or a new text retires it); the
+    // ordinary scope and owner rules below still apply.
+    if artifact.provenance["principalKind"] == "Host"
+        && DerivedKind::KnowledgeEmbeddingInput.is_in(&artifact.provenance)
+    {
+        let derived = &artifact.provenance["derived"];
+        let (Some(claim), Some(text)) = (
+            derived["knowledgeClaimId"]
+                .as_str()
+                .and_then(|s| crate::protocol::Id::new(s).ok()),
+            derived["textDigest"].as_str(),
+        ) else {
+            return Ok(false);
+        };
+        if read.live_claim_text_digest(&claim)?.as_deref() != Some(text) {
+            return Ok(false);
+        }
+    }
     if database_intent(artifact) {
         return Ok(false);
     }
@@ -656,6 +675,17 @@ pub(crate) fn retained_convention(
             id("requestId")
                 && digest("contextDigest")
                 && digest("inputDigest")
+                && derived["embeddingSpace"]
+                    .as_str()
+                    .is_some_and(|s| !s.is_empty())
+                && derived["inputIndex"].as_u64().is_some_and(|n| n < 32)
+        }
+        DerivedKind::KnowledgeEmbeddingInput => {
+            id("requestId")
+                && digest("contextDigest")
+                && digest("inputDigest")
+                && id("knowledgeClaimId")
+                && digest("textDigest")
                 && derived["embeddingSpace"]
                     .as_str()
                     .is_some_and(|s| !s.is_empty())

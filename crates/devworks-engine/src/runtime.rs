@@ -995,6 +995,12 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     consumers.push(crate::conventions_import::consumer(conventions.imports()));
     // Knowledge embeds claims and searches their vectors through the same qualified runtime.
     knowledge.set_embeddings(Some(conventions.indexing()));
+    conventions
+        .indexing()
+        .add_selection_listener(Arc::downgrade(&knowledge)
+            as std::sync::Weak<
+                dyn devworks_core::services::conventions::indexing::SelectionListener,
+            >);
     consumers.push(crate::knowledge::claim_vector_consumer(knowledge.clone()));
     let use_cases = use_cases.with_conventions(conventions.clone());
     let schemas = config.schemas.as_ref().map(|ports| {

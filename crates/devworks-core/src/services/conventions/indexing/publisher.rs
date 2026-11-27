@@ -593,7 +593,9 @@ impl IndexService {
                     Err(EmbeddingFailure::NotStarted { .. }) => {
                         return Err(invalid("native send returned observer-only absence"));
                     }
-                    Err(EmbeddingFailure::Unavailable(_)) => dense = false,
+                    Err(
+                        EmbeddingFailure::Unavailable(_) | EmbeddingFailure::InvalidVectors { .. },
+                    ) => dense = false,
                     Err(EmbeddingFailure::Cancelled) => return Err(StorageError::Cancelled),
                     Err(EmbeddingFailure::Storage(error)) => return Err(error),
                 }

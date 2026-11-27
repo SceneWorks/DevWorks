@@ -969,7 +969,11 @@ impl DocumentIndexer {
                 Err(EmbeddingFailure::Unknown { .. }) => {
                     return Ok(VectorPublication::Held);
                 }
-                Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::NotStarted { .. }) => {
+                Err(
+                    EmbeddingFailure::Unavailable(_)
+                    | EmbeddingFailure::InvalidVectors { .. }
+                    | EmbeddingFailure::NotStarted { .. },
+                ) => {
                     return Ok(VectorPublication::Partial(code(
                         "EmbeddingRouteUnavailable",
                     )));

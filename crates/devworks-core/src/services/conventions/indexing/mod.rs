@@ -24,7 +24,7 @@ use crate::{
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex, RwLock,
+        Arc, Mutex, RwLock, Weak,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -37,7 +37,21 @@ pub struct IndexService {
     closed: Arc<lifecycle::PublicationFence>,
     active: Mutex<BTreeMap<u64, crate::ports::storage::Cancellation>>,
     next_active: AtomicU64,
+    /// Other users of the selected space, told of a selection change in its unit of work.
+    selection_listeners: RwLock<Vec<Weak<dyn SelectionListener>>>,
 }
+
+/// A service that keeps derived vectors of the selected embedding space (Knowledge claims) and
+/// queues their production when the selection changes, inside the selection's unit of work.
+pub trait SelectionListener: Send + Sync {
+    fn selection_changed(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &crate::context::InvocationContext,
+        fences: &[crate::ports::AuthorityFence],
+    ) -> Result<(), StorageError>;
+}
+
 impl IndexService {
     pub fn new(
         store: Arc<dyn ApplicationStore>,
@@ -53,7 +67,19 @@ impl IndexService {
             closed: Arc::new(lifecycle::PublicationFence::default()),
             active: Mutex::new(BTreeMap::new()),
             next_active: AtomicU64::new(0),
+            selection_listeners: RwLock::new(Vec::new()),
         }
+    }
+    /// Registers a [`SelectionListener`] (held weakly: the composition owns it).
+    pub fn add_selection_listener(&self, listener: Weak<dyn SelectionListener>) {
+        self.selection_listeners.write_locked().push(listener);
+    }
+    pub(crate) fn selection_listeners(&self) -> Vec<Arc<dyn SelectionListener>> {
+        self.selection_listeners
+            .read_locked()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect()
     }
     /// Native composition installs only an actual qualified executor before exposing the gateway.
     pub fn set_embeddings(&self, executor: Option<Arc<dyn embedding::ConventionEmbeddings>>) {

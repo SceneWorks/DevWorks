@@ -103,6 +103,9 @@ pub fn claim_vector_consumer(service: Arc<KnowledgeService>) -> Consumer {
         effect: None,
         eligibility: None,
         stop_grace_ms: 5_000,
+        // A route-down period or an unestablished outcome retries with backoff (bounded: a
+        // delivery that exhausts it fails without blocking any other, and the scope's next
+        // write or selection change queues its pending claims again).
         retry: STANDARD_RETRY,
         // One delivery at a time: two writes of a scope never embed the same claim twice.
         max_in_flight: Some(1),

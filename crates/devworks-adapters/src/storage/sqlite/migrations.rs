@@ -853,7 +853,7 @@ pub const MIGRATIONS: &[Migration] = &[
         minimum_reader: 70,
         minimum_writer: 78,
         sql: include_str!("migrations/0078_knowledge_claim_vectors.sql"),
-        expected_sha256: "b842565a5f97a23e62ee0bc9459a29ce1dbd49d3e26a1ca837e513bef280d38e",
+        expected_sha256: "74ed5afacd1d0e2ad09016af8c9621b0b164d68c42cf458c3506f324693c33c6",
         rebuilds_tables: false,
     },
 ];

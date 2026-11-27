@@ -351,6 +351,8 @@ fn reverse_component<'a>(
     })();
     if matches!(&result, Ok(Component::Reverted(_))) {
         tx.release(point)?;
+        // Restored claim texts get vectors without another write.
+        crate::services::knowledge::queue_claim_vectors(tx, ctx, &run.scope)?;
     } else {
         tx.rollback_to(point)?;
     }

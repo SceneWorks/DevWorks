@@ -29,11 +29,12 @@ pub enum EmbeddingOrigin {
         source: ArtifactRef,
         first_block: Id,
     },
-    /// A batch of Knowledge claim texts of one scope, embedded by one queued delivery.
+    /// A batch of Knowledge claim texts of one scope, embedded by one queued delivery: each
+    /// input's claim and the SHA-256 of its text, in input order.
     KnowledgeIndex {
         delivery_id: Id,
         scope: String,
-        first_claim: Id,
+        claims: Vec<(Id, String)>,
     },
 }
 #[derive(Clone, Debug)]
@@ -62,8 +63,20 @@ pub struct EmbeddedBatch {
 #[derive(Debug)]
 pub enum EmbeddingFailure {
     Unavailable(String),
-    Unknown { request_id: Id, reason: String },
-    NotStarted { request_id: Id },
+    /// The exact request completed, but some of its vectors cannot be used in a cosine space
+    /// (all zero): one entry per input, in input order, `None` for each unusable vector. A
+    /// caller that cannot use part of a batch treats it as [`EmbeddingFailure::Unavailable`].
+    InvalidVectors {
+        request_id: Id,
+        vectors: Vec<Option<Vec<f32>>>,
+    },
+    Unknown {
+        request_id: Id,
+        reason: String,
+    },
+    NotStarted {
+        request_id: Id,
+    },
     Cancelled,
     Storage(StorageError),
 }

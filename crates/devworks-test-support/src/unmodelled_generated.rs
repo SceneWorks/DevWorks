@@ -91,6 +91,9 @@ impl ArtifactRead for Unmodelled {
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
         unmodelled()
     }
+    fn live_claim_text_digest(&self, _: &Id) -> Result<Option<String>, StorageError> {
+        unmodelled()
+    }
     fn subject_exists(&self, _: &ProjectId, _: &SubjectKey) -> Result<bool, StorageError> {
         unmodelled()
     }
@@ -2465,6 +2468,9 @@ impl KnowledgeRead for Unmodelled {
         unmodelled()
     }
     fn knowledge_vector_coverage(&self, _: &[String], _: &Id) -> Result<(i64, i64), StorageError> {
+        unmodelled()
+    }
+    fn pending_knowledge_vector_scopes(&self, _: &Id) -> Result<Vec<KnowledgeScope>, StorageError> {
         unmodelled()
     }
     fn pending_knowledge_claim_vectors(

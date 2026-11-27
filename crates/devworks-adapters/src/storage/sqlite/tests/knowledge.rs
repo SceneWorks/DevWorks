@@ -7011,3 +7011,58 @@ fn a_claims_vector_follows_its_current_text_scope_and_deletion() {
     );
     assert_eq!(vectors(&fx), 0);
 }
+
+#[test]
+fn an_unusable_vector_is_recorded_without_a_vector_and_never_matched() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let space = vector_space(&fx);
+    let a = KnowledgeScope::Project(project("project-a"));
+    let bad = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Garage",
+        draft("Fact", "vehicle parked"),
+    );
+    let good = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Street",
+        draft("Fact", "parked car"),
+    );
+    let (texts, s) = (
+        fx.read(|r| {
+            r.knowledge()
+                .pending_knowledge_claim_vectors(&a, &id("space-1"), 32)
+        }),
+        space.clone(),
+    );
+    let rows: Vec<(Id, String, Vec<f32>)> = texts
+        .into_iter()
+        .map(|(c, t)| {
+            let v = if c == bad {
+                vec![0.0, 0.0]
+            } else {
+                vec![1.0, 0.0]
+            };
+            (c, t, v)
+        })
+        .collect();
+    let stored = fx.write(move |tx| tx.knowledge().insert_knowledge_claim_vectors(&s, &rows));
+    assert_eq!(stored, 1, "the batch keeps its usable vector");
+    assert!(
+        fx.read(|r| r
+            .knowledge()
+            .pending_knowledge_claim_vectors(&a, &id("space-1"), 32))
+            .is_empty(),
+        "the unusable text is not offered again"
+    );
+    let found = neighbors(&fx, &["project:project-a"], &["x"], [1.0, 0.0], 20, None);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, good.as_str());
+    let coverage = fx.read(|r| {
+        r.knowledge()
+            .knowledge_vector_coverage(&["project:project-a".into()], &id("space-1"))
+    });
+    assert_eq!(coverage, (1, 2));
+}

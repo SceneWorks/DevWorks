@@ -556,6 +556,11 @@ pub trait KnowledgeRead {
         scopes: &[String],
         space: &Id,
     ) -> Result<(i64, i64), StorageError>;
+    /// The scopes with a claim that is not deleted and has no vector in `space`.
+    fn pending_knowledge_vector_scopes(
+        &self,
+        space: &Id,
+    ) -> Result<Vec<KnowledgeScope>, StorageError>;
     /// Up to `limit` (1..=32) claims of `scope` that are not deleted and have no vector in
     /// `space`, oldest first, each with the text its vector embeds.
     fn pending_knowledge_claim_vectors(
@@ -754,8 +759,10 @@ pub trait KnowledgeRepository: KnowledgeRead {
     ) -> Result<StoredEntity, StorageError>;
     /// Stores the vectors (1..=32) in the cosine Float32 `space`, each of the claim text it
     /// embeds, as unit vectors. A claim that is deleted, or whose current text is no longer
-    /// that text, is skipped (its next pending read offers the current text). Returns how many
-    /// were stored.
+    /// that text, is skipped (its next pending read offers the current text). A vector the
+    /// space cannot hold (wrong length, not finite, zero) is recorded without a vector, so that
+    /// text is no longer pending and is never matched. Returns how many usable vectors were
+    /// stored.
     fn insert_knowledge_claim_vectors(
         &mut self,
         space: &Id,
