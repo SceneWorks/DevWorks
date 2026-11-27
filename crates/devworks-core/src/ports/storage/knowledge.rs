@@ -447,8 +447,9 @@ pub struct ClaimQuery {
 pub enum ClaimRank {
     /// The sort time (a query without words), listed descending.
     Time(i64),
-    /// The FTS5 bm25 score of the query words over the claim's text plus its subject entity's
-    /// (a query with words), listed ascending: bm25 is negative and lower is a better match.
+    /// The BM25 score (k1 1.2, b 0.75) of the query words over the claim's text plus its
+    /// subject entity's (a query with words), listed descending: higher is a better match.
+    /// Every statistic comes from the query's own scopes.
     Relevance(f64),
 }
 
@@ -513,10 +514,11 @@ pub trait KnowledgeRead {
     /// Claims matching `query`, strictly after `after`, at most `limit`
     /// (1..=[`KNOWLEDGE_PAGE_MAX`]). A query without words is ordered by `(sort time, id)`
     /// descending; the sort time is the update time, or for the `RecentlyLearned` view the time
-    /// a rule took effect. A query with words is ordered by relevance ascending (best match
+    /// a rule took effect. A query with words is ordered by relevance descending (best match
     /// first), then id descending. Scores are computed only for claims that pass the query's
-    /// filters. bm25 reads whole-index statistics, so a write in another scope between two reads
-    /// may shift scores; `after` is the last row's key as it was read.
+    /// filters, and their statistics (record count, mean length, document frequency) only from
+    /// the query's scopes, so a write elsewhere never changes a score; a write in a read scope
+    /// advances its revision. `after` is the last row's key as it was read.
     fn knowledge_claims(
         &self,
         query: &ClaimQuery,

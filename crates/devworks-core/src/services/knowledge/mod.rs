@@ -629,8 +629,9 @@ fn claims(
 }
 
 /// A claim's position in `query`'s order: its sort key as the store ranked it, and its id. A
-/// relevance key is the exact bm25 score (Rust's shortest round-tripping decimal), so the next
-/// page resumes strictly after the last row as it was read.
+/// relevance key is `r` and the exact score (Rust's shortest round-tripping decimal), so the
+/// next page resumes strictly after the last row as it was read; the prefix keeps a time
+/// position issued before relevance ranking from resuming a relevance listing.
 fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
     debug_assert_eq!(
         query.words.is_empty(),
@@ -639,7 +640,7 @@ fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
     );
     match c.rank {
         ClaimRank::Time(t) => format!("{t}|{}", c.id.as_str()),
-        ClaimRank::Relevance(s) => format!("{s}|{}", c.id.as_str()),
+        ClaimRank::Relevance(s) => format!("r{s}|{}", c.id.as_str()),
     }
 }
 
@@ -648,10 +649,11 @@ fn parse_position(query: &ClaimQuery, at: &str) -> Result<(ClaimRank, String), S
     let rank = if query.words.is_empty() {
         ClaimRank::Time(key.parse().map_err(|_| StorageError::CursorExpired)?)
     } else {
-        let s: f64 = key.parse().map_err(|_| StorageError::CursorExpired)?;
-        if !s.is_finite() {
-            return Err(StorageError::CursorExpired);
-        }
+        let s: f64 = key
+            .strip_prefix('r')
+            .and_then(|s| s.parse().ok())
+            .filter(|s: &f64| s.is_finite())
+            .ok_or(StorageError::CursorExpired)?;
         ClaimRank::Relevance(s)
     };
     Ok((rank, id.to_owned()))
@@ -2066,5 +2068,66 @@ mod tests {
             &Reach::Project(ProjectId(Id::new("project-b").unwrap())),
             &KnowledgeScope::Workspace
         ));
+    }
+
+    #[test]
+    fn a_time_position_never_resumes_a_relevance_listing() {
+        let words = ClaimQuery {
+            words: vec!["cache".into()],
+            ..ClaimQuery::default()
+        };
+        // A cursor issued for a search with words before relevance ranking carried a time.
+        assert!(matches!(
+            parse_position(&words, "1700000000000|knowledgeclaim-1"),
+            Err(StorageError::CursorExpired)
+        ));
+        for bad in [
+            "rNaN|knowledgeclaim-1",
+            "rinf|knowledgeclaim-1",
+            "r|knowledgeclaim-1",
+        ] {
+            assert!(matches!(
+                parse_position(&words, bad),
+                Err(StorageError::CursorExpired)
+            ));
+        }
+        let claim = RankedClaim {
+            rank: ClaimRank::Relevance(1.234_567_890_123_456_7),
+            claim: StoredClaim {
+                id: Id::new("knowledgeclaim-7").unwrap(),
+                scope: KnowledgeScope::Workspace,
+                revision: 1,
+                kind: "Fact".into(),
+                entry_kind: "Fact".into(),
+                lifecycle: "Active".into(),
+                subject_id: Id::new("knowledgeentity-1").unwrap(),
+                predicate: "fact".into(),
+                object_id: None,
+                source: None,
+                author: ActorId(Id::new("user-a").unwrap()),
+                session_id: None,
+                tags: vec![],
+                basis: vec![],
+                lesson: None,
+                body: crate::ports::storage::ClaimBody::default(),
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                deleted_at_ms: None,
+            },
+        };
+        let at = claim_position(&words, &claim);
+        assert_eq!(
+            parse_position(&words, &at).unwrap(),
+            (claim.rank, claim.id.as_str().to_owned())
+        );
+        // A search without words keeps the time position.
+        let none = ClaimQuery::default();
+        assert_eq!(
+            parse_position(&none, "1700000000000|knowledgeclaim-1").unwrap(),
+            (
+                ClaimRank::Time(1_700_000_000_000),
+                "knowledgeclaim-1".to_owned()
+            )
+        );
     }
 }
