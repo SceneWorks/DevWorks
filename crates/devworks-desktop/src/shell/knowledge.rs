@@ -542,9 +542,10 @@ impl KnowledgeCtl<'_, '_> {
                 },
                 KnowledgeAction::Relate => match self.knowledge.relate_input() {
                     Ok(body) => {
-                        let submitted = knowledge_screen::Submitted::Relation(
-                            self.knowledge.relate_object.clone(),
-                        );
+                        let submitted = knowledge_screen::Submitted::Relation {
+                            object: self.knowledge.relate_object.clone(),
+                            predicate: self.knowledge.relate_predicate_wire(),
+                        };
                         self.knowledge_write("Relate", "knowledge.relate", body, submitted)
                     }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),

@@ -35,11 +35,14 @@ fn pick(h: &mut H, combo: &str, option: &str) {
 /// Records, as an agent tool does, three entities linked by two claims:
 /// Storage uses SQLite, and SQLite provides FTS5 search.
 fn record_graph(backend: &dyn Backend) -> (String, String) {
+    record_graph_in(backend, json!({"kind": "Workspace"}))
+}
+fn record_graph_in(backend: &dyn Backend, scope: Value) -> (String, String) {
     let frame = knowledge_screen::command(
         backend,
         fixture::command_input(
             "knowledge.record",
-            json!({"scope": {"kind": "Workspace"}, "batch": {"evidence": [], "entities": [
+            json!({"scope": scope, "batch": {"evidence": [], "entities": [
                 {"clientId": "s", "label": "Storage", "entityType": "topic", "aliases": []},
                 {"clientId": "d", "label": "SQLite", "entityType": "component", "aliases": []},
                 {"clientId": "f", "label": "FTS5", "entityType": "feature", "aliases": []}],
@@ -126,7 +129,10 @@ fn a_person_opens_bundles_follows_the_graph_one_step_and_reads_its_summary() {
 
     // One frontier step reaches SQLite's claim and FTS5; what was shown stays.
     click(&mut h, Role::Button, "Expand one step");
-    assert!(has_text(&h, "Expanded 1 steps"));
+    assert!(
+        h.query_by_label("Expanded 1 step").is_some(),
+        "one step, singular"
+    );
     assert!(
         h.query_by_role_and_label(Role::Link, "Open claim SQLite provides FTS5 search")
             .is_some()
@@ -293,4 +299,122 @@ fn a_lesson_view_lists_tagged_lessons_by_view_and_rule_state() {
     );
     pick(&mut h, "Rule state", "Effective");
     assert_eq!(h.state().knowledge.claims.items.len(), 1);
+}
+
+#[test]
+fn a_claim_a_frontier_step_reached_stays_shown_after_relating_it() {
+    let root = Root::new("knowledge-graph-refresh");
+    let engine = start(&root);
+    let backend = engine.backend();
+    record_graph(&*backend);
+    let mut h = open_knowledge(&engine, &root);
+    h.get_by_label("Fact  ·  Storage uses SQLite").click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Open subject entity");
+    click(&mut h, Role::Button, "Expand one step");
+    let reached = "Open claim SQLite provides FTS5 search";
+    assert!(h.query_by_role_and_label(Role::Link, reached).is_some());
+    // Relating the entry the step reached re-reads the graph after the write.
+    pick(&mut h, "Relation", "Depends on");
+    pick(&mut h, "Related entry", "SQLite provides FTS5 search");
+    click(&mut h, Role::Button, "Relate entries");
+    assert!(has_text(&h, "Relate recorded."));
+    assert!(
+        h.query_by_role_and_label(Role::Link, reached).is_some(),
+        "the expanded claim stays after the refresh"
+    );
+    assert_eq!(graph_title(&h).as_deref(), Some("Entity bundle: Storage"));
+    assert!(h.query_by_label("Expanded 1 step").is_some());
+    assert!(has_text(
+        &h,
+        "\"Storage uses SQLite\" depends on \"SQLite provides FTS5 search\""
+    ));
+}
+
+#[test]
+fn a_write_still_running_is_read_again_on_refresh_until_it_is_complete() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let root = Root::new("knowledge-write-status");
+    let engine = start(&root);
+    let spy = LoseAcks::over(engine.backend(), "no.such.command", 0);
+    // While `running`, the runtime reports the write as a delete by source still dispatching.
+    let running = Arc::new(AtomicBool::new(true));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let (r, n) = (running.clone(), reads.clone());
+    spy.rewrite_queries(move |reply| {
+        if reply["result"]["kind"] == json!("knowledge.write_status") {
+            n.fetch_add(1, Ordering::SeqCst);
+            if r.load(Ordering::SeqCst) {
+                reply["result"]["value"]["state"] = json!("Dispatching");
+            }
+        }
+    });
+    let mut h = harness(
+        shell_with(Ok(spy.clone()), &root, Script::default(), None),
+        1440.0,
+        1000.0,
+    );
+    settle(&mut h);
+    h.state_mut().navigate(Route::Knowledge);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New entry");
+    type_into(&mut h, "Entry text", "A write that keeps running");
+    click(&mut h, Role::Button, "Save entry");
+    assert!(has_text(&h, "Last change: Entry · still running"));
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    h.state_mut().refresh_visible();
+    settle(&mut h);
+    assert_eq!(reads.load(Ordering::SeqCst), 2, "a refresh reads it again");
+    running.store(false, Ordering::SeqCst);
+    h.state_mut().refresh_visible();
+    settle(&mut h);
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    assert!(has_text(&h, "Last change: Entry · complete"));
+    h.state_mut().refresh_visible();
+    settle(&mut h);
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        3,
+        "a complete write is not read again"
+    );
+}
+
+#[test]
+fn a_project_graph_renders_and_reads_its_summary() {
+    let root = Root::new("knowledge-graph-project");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let made = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Engine", "", &[]),
+    ))
+    .unwrap();
+    let project = made.id.0.as_str().to_owned();
+    record_graph_in(
+        &*backend,
+        json!({"kind": "Project", "projectId": project.clone()}),
+    );
+    let mut h = open_knowledge(&engine, &root);
+    h.state_mut().select_project(Some(project));
+    settle(&mut h);
+    assert_eq!(h.state().knowledge.claims.items.len(), 2);
+    h.get_by_label("Fact  ·  Storage uses SQLite").click();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Open claim bundle");
+    click(&mut h, Role::Button, "Render summary");
+    let summary = h
+        .state()
+        .knowledge
+        .graph
+        .view
+        .as_ref()
+        .and_then(|v| v.summary.clone());
+    assert!(
+        summary
+            .as_deref()
+            .is_some_and(|s| s.contains("**SQLite** (component)")),
+        "{summary:?} {:?}",
+        h.state().knowledge.graph.summary
+    );
 }

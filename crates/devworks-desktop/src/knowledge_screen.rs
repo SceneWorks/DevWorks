@@ -270,8 +270,11 @@ pub enum Submitted {
     Reason(String),
     /// Nothing typed is consumed (tags are re-read from the entry, a cleanup keeps its source).
     Nothing,
-    /// A relation to the entry picked (cleared once recorded, if still picked).
-    Relation(Option<Id>),
+    /// A relation (its predicate) to the entry picked (cleared once recorded, if still picked).
+    Relation {
+        object: Option<Id>,
+        predicate: &'static str,
+    },
 }
 
 /// The last recorded write and its receipt as `knowledge.write_status` reads it back.
@@ -331,7 +334,7 @@ fn receipt_words(r: &KnowledgeWriteReceipt) -> (String, bool) {
 }
 
 /// A relation's refusal in plain words.
-fn relate_refusal(e: &Failure) -> String {
+fn relate_refusal(e: &Failure, predicate: &str) -> String {
     let Failure::Refused(f) = e else {
         return e.describe();
     };
@@ -349,7 +352,10 @@ fn relate_refusal(e: &Failure) -> String {
             "One of the lessons is not active, or is not merged into the other. Read them again."
                 .into()
         }
-        (DomainErrorCode::PermissionDenied, Some("knowledge_scope")) => {
+        // Only a merge or unmerge of two lessons needs both in the exact scope shown.
+        (DomainErrorCode::PermissionDenied, Some("knowledge_scope"))
+            if matches!(predicate, "same_as" | "unmerge") =>
+        {
             "Both lessons must belong to the scope shown to merge them.".into()
         }
         (DomainErrorCode::PermissionDenied, _) => {
@@ -815,6 +821,12 @@ impl KnowledgeScreen {
                 },
             )))
         })())
+    }
+    /// The predicate the relation form sends.
+    pub fn relate_predicate_wire(&self) -> &'static str {
+        RELATIONS
+            .get(self.relate_predicate)
+            .map_or("related_to", |(_, p)| *p)
     }
     /// The entries the selected one can be related to: the listing's and the graph view's,
     /// without the selected entry.
@@ -1704,7 +1716,7 @@ impl KnowledgeScreen {
                         }
                     }
                     Some(Submitted::Reason(r)) if self.reason == r => self.reason.clear(),
-                    Some(Submitted::Relation(picked)) if self.relate_object == picked => {
+                    Some(Submitted::Relation { object, .. }) if self.relate_object == object => {
                         self.relate_object = None;
                     }
                     _ => {}
@@ -1746,7 +1758,7 @@ impl KnowledgeScreen {
             }
             Err(e) => {
                 let words = match self.submitted.take() {
-                    Some(Submitted::Relation(_)) => relate_refusal(&e),
+                    Some(Submitted::Relation { predicate, .. }) => relate_refusal(&e, predicate),
                     _ => e.describe(),
                 };
                 self.message = Some((Tone::Bad, format!("{label} was not recorded. {words}")));
@@ -2719,6 +2731,69 @@ mod tests {
             json!({"kind": "Project", "projectId": "project-x"}),
             "the listed scope"
         );
+    }
+
+    fn refused(code: &str, target_kind: &str) -> Failure {
+        Failure::Refused(
+            serde_json::from_value(json!({"code": code, "retry": "Never",
+                "correlationId": "c", "targetKind": target_kind, "blockerIds": []}))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_scope_refusal_reads_as_a_lesson_merge_only_for_a_merge() {
+        let scope = refused("PermissionDenied", "knowledge_scope");
+        for merge in ["same_as", "unmerge"] {
+            assert_eq!(
+                relate_refusal(&scope, merge),
+                "Both lessons must belong to the scope shown to merge them."
+            );
+        }
+        for other in ["related_to", "supports", "contradicts"] {
+            assert_eq!(
+                relate_refusal(&scope, other),
+                "You cannot change Knowledge in this scope."
+            );
+        }
+    }
+
+    fn receipt(state: &str) -> QueryOutcome {
+        Ok(
+            serde_json::from_value(json!({"kind": "Result", "protocol": "1.0-draft.1",
+            "queryId": "q", "stamp": {"storeId": "store", "restoreEpoch": "1", "sequence": "1",
+                "policyRevision": "1", "scopeRevision": "1"},
+            "result": {"kind": "knowledge.write_status", "value": {"writeId": "write-1",
+                "state": state, "entityIds": [], "claimIds": ["c1"], "revision": "3",
+                "diagnostics": []}}}))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_write_still_running_is_marked_until_its_receipt_says_it_is_done() {
+        let mut s = KnowledgeScreen::new();
+        s.last_write = Some(LastWrite {
+            label: "Delete by source".into(),
+            write_id: Id::new("write-1").unwrap(),
+            status: None,
+            running: false,
+        });
+        let (id, input) = s.write_status_input().unwrap();
+        assert_eq!(body_of(input)["writeId"], json!("write-1"));
+        s.write_status_reply(&id, receipt("Dispatching"));
+        let w = s.last_write.as_ref().unwrap();
+        assert!(w.running, "a refresh reads it again");
+        assert!(w.status.as_deref().unwrap().starts_with("still running"));
+        s.write_status_reply("write-other", receipt("ObservedComplete"));
+        assert!(
+            s.last_write.as_ref().unwrap().running,
+            "another write's receipt"
+        );
+        s.write_status_reply(&id, receipt("ObservedComplete"));
+        let w = s.last_write.as_ref().unwrap();
+        assert!(!w.running, "no more re-reads");
+        assert!(w.status.as_deref().unwrap().starts_with("complete"));
     }
 
     #[test]
