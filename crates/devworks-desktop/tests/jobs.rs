@@ -83,6 +83,17 @@ fn jobs(backend: &dyn Backend) -> Vec<JobRecord> {
         .0
 }
 
+/// The nightly Dreaming job every new store installs. It sorts after the `Job NNNN` titles.
+const NIGHTLY: &str = "Nightly Dreaming";
+
+/// The listed job titled `title`.
+fn listed(backend: &dyn Backend, title: &str) -> JobRecord {
+    jobs(backend)
+        .into_iter()
+        .find(|job| job.title.0 == title)
+        .unwrap_or_else(|| panic!("{title} is listed"))
+}
+
 #[test]
 fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     let root = Root::new("jobs-screen");
@@ -115,14 +126,14 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     assert!(has_text(&h, "Enabled"));
     // Run now: this build has no inference pipeline, so the run fails before dispatch and says so.
     click(&mut h, Role::Button, "Run now");
-    let job = jobs(&*backend).pop().unwrap();
+    let job = listed(&*backend, "Issue triage");
     assert!(
         job.last_run_id.is_some(),
         "Run now recorded a run through jobs.run_now"
     );
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
     loop {
-        let job = jobs(&*backend).pop().unwrap();
+        let job = listed(&*backend, "Issue triage");
         if job.active_run_id.is_none() {
             break;
         }
@@ -137,17 +148,20 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     assert!(has_text(&h, "Nothing was sent to a model"));
     click(&mut h, Role::Button, "Schedules");
     click(&mut h, Role::Button, "Disable");
-    assert!(!jobs(&*backend).pop().unwrap().enabled);
+    assert!(!listed(&*backend, "Issue triage").enabled);
     click(&mut h, Role::Button, "Enable");
-    assert!(jobs(&*backend).pop().unwrap().enabled);
+    assert!(listed(&*backend, "Issue triage").enabled);
     // Delete asks first; Keep leaves it.
     click(&mut h, Role::Button, "Delete…");
     assert!(has_text(&h, "its run history is kept"));
+    let titles = |backend: &dyn Backend| -> Vec<String> {
+        jobs(backend).into_iter().map(|job| job.title.0).collect()
+    };
     click(&mut h, Role::Button, "Keep");
-    assert_eq!(jobs(&*backend).len(), 1);
+    assert_eq!(titles(&*backend), ["Issue triage", NIGHTLY]);
     click(&mut h, Role::Button, "Delete…");
     click(&mut h, Role::Button, "Delete");
-    assert!(jobs(&*backend).is_empty());
+    assert_eq!(titles(&*backend), [NIGHTLY]);
 }
 
 #[test]
@@ -735,7 +749,7 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
     assert_eq!(h.state().jobs.list.items.len(), page);
     click(&mut h, Role::Button, "Load more");
     settle(&mut h);
-    assert_eq!(h.state().jobs.list.items.len(), page + 5);
+    assert_eq!(h.state().jobs.list.items.len(), page + 6);
     // A job created elsewhere sorts first: its change hint refreshes the screen.
     create_job(&*backend, &title(0));
     step_until(&mut h, "the hint-driven refresh", |s| {
@@ -750,7 +764,8 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
         .iter()
         .map(|j| j.title.0.clone())
         .collect();
-    assert_eq!(titles, (0..=page + 5).map(title).collect::<Vec<_>>());
+    let expected: Vec<String> = (0..=page + 5).map(title).chain([NIGHTLY.into()]).collect();
+    assert_eq!(titles, expected);
     assert!(!h.state().jobs.list.more() && h.state().jobs.list.pages() == 2);
     assert!(
         has_text(&h, &title(page)),
@@ -809,7 +824,7 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
     });
     gate.open();
     settle(&mut h);
-    assert_eq!(h.state().jobs.list.items.len(), page + 5);
+    assert_eq!(h.state().jobs.list.items.len(), page + 6);
     let titles: Vec<String> = h
         .state()
         .jobs
@@ -818,7 +833,8 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
         .iter()
         .map(|j| j.title.0.clone())
         .collect();
-    assert_eq!(titles, (1..=page + 5).map(title).collect::<Vec<_>>());
+    let expected: Vec<String> = (1..=page + 5).map(title).chain([NIGHTLY.into()]).collect();
+    assert_eq!(titles, expected);
     assert_eq!(h.state().jobs.list.pages(), 2);
     assert!(!h.state().jobs.list.more() && !h.state().jobs.list.loading());
 }
