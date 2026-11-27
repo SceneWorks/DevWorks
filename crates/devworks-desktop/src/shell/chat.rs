@@ -397,19 +397,26 @@ impl Chat {
         if self.last_coordinator_notice.as_ref() == Some(&(session.clone(), key.clone())) {
             return;
         }
-        let Some(backend) = cx.backend() else {
-            return;
-        };
-        let screen = cx.route().screen();
-        match devworks_core::protocol::Id::new(session.clone()) {
-            Ok(id) => match backend.append_coordinator_notice(&id, screen.id, &context) {
-                Ok(()) => {
-                    self.last_coordinator_notice = Some((session.clone(), key));
-                    self.load_transcript(cx, &session);
-                }
-                Err(error) => cx.announce(error),
+        // Each context is sent once, off the frame thread: a failure is reported once, and the
+        // next different context is sent as usual.
+        let screen = cx.route().screen().id;
+        let sid = session.clone();
+        let submitted = cx.task(
+            ChatSlot::ScreenContext(session.clone()),
+            "Telling the coordinator about this screen",
+            move |b| {
+                ops::append_screen_context(b, &sid, screen, &context)
+                    .map(|_| TaskOutput::ScreenContextNoticed)
+                    .map_err(|e| {
+                        format!(
+                            "The coordinator could not be told about this screen: {}",
+                            e.describe()
+                        )
+                    })
             },
-            Err(_) => cx.announce("Coordinator conversation identity is invalid"),
+        );
+        if submitted {
+            self.last_coordinator_notice = Some((session, key));
         }
     }
     /// The frame's conversation input: images and file paths pasted into a composer.
@@ -922,22 +929,20 @@ impl ChatCtl<'_, '_> {
 
     /// Attaches a pasted image: it is written as a PNG beside the store, attached, and the
     /// temporary file removed once the artifact service holds its copy.
+    /// Encoding and staging run as a task; the image joins the draft it was pasted into.
     fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
-        let Some(b) = self.backend() else { return };
-        let session = self
-            .chat
-            .selected
-            .as_deref()
-            .map(devworks_core::protocol::Id::new)
-            .transpose();
-        let result = session.map_err(|e| e.to_string()).and_then(|session| {
-            let png = attachments::encode_paste(image)?;
+        let session = self.chat.selected.clone();
+        let image = image.clone();
+        let slot = ChatSlot::PastedImage(self.chat.draft_key(), self.chat.next_local());
+        self.task(slot, "Attaching a pasted image", move |b| {
+            let session = session
+                .map(devworks_core::protocol::Id::new)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            let png = attachments::encode_paste(&image)?;
             b.stage_pasted_image(session.as_ref(), &png)
+                .map(TaskOutput::PastedImage)
         });
-        match result {
-            Ok(path) => self.attach_files(vec![(path, true)]),
-            Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
-        }
     }
 
     /// Removes a pending attachment from its draft. One already stored is deleted through
@@ -1740,14 +1745,20 @@ impl ChatCtl<'_, '_> {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        if let Some(backend) = self.backend() {
-                            for artifact in notices {
-                                if let Ok(text) = backend.read_coordinator_notice(&artifact) {
-                                    self.chat
-                                        .notice_texts
-                                        .insert(artifact.version_id.as_str().into(), text);
-                                }
+                        // Each text is read once, off the frame thread; it shows when it lands.
+                        for artifact in notices {
+                            let slot = ChatSlot::NoticeText(artifact.version_id.as_str().into());
+                            if self.pending(&slot) {
+                                continue;
                             }
+                            self.task(slot, "Reading a conversation notice", move |b| {
+                                b.read_coordinator_notice(&artifact).map(|text| {
+                                    TaskOutput::NoticeText(
+                                        artifact.version_id.as_str().into(),
+                                        text,
+                                    )
+                                })
+                            });
                         }
                         self.chat.reconcile_text_preview();
                         if more {
@@ -1880,7 +1891,11 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::AnalysisEvidence(_)
                         | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
-                        | TaskOutput::RepositoryDeleted(_),
+                        | TaskOutput::RepositoryDeleted(_)
+                        | TaskOutput::ScreenContextNoticed
+                        | TaskOutput::NoticeText(..)
+                        | TaskOutput::PastedImage(_)
+                        | TaskOutput::IndexSources(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -1958,12 +1973,43 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::AnalysisEvidence(_)
                             | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
-                            | TaskOutput::RepositoryDeleted(_),
+                            | TaskOutput::RepositoryDeleted(_)
+                            | TaskOutput::ScreenContextNoticed
+                            | TaskOutput::NoticeText(..)
+                            | TaskOutput::PastedImage(_)
+                            | TaskOutput::IndexSources(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
                 }
             }
+            (ChatSlot::ScreenContext(id), Reply::Task(result)) => match result {
+                Ok(_) => {
+                    if self.chat.selected.as_deref() == Some(id.as_str()) {
+                        self.load_transcript(&id);
+                    }
+                }
+                Err(e) => self.announce(e),
+            },
+            (ChatSlot::NoticeText(_), Reply::Task(result)) => {
+                // A text that cannot be read is not shown; the next transcript read asks again.
+                if let Ok(TaskOutput::NoticeText(version, text)) = result {
+                    self.chat.notice_texts.insert(version, text);
+                    self.chat.reconcile_text_preview();
+                }
+            }
+            (ChatSlot::PastedImage(key, _), Reply::Task(result)) => match result {
+                Ok(TaskOutput::PastedImage(path)) if key == self.chat.draft_key() => {
+                    self.attach_files(vec![(path, true)]);
+                }
+                Ok(TaskOutput::PastedImage(path)) => {
+                    // The conversation changed while it was staged: nothing is attached.
+                    self.remove_owned(Some(&path));
+                    self.announce("The pasted image was not attached: the conversation changed.");
+                }
+                Ok(_) => self.announce("The pasted image could not be attached."),
+                Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
+            },
             (ChatSlot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
                 Ok(()) => {
                     self.cx.effects.push(Effect::ArtifactsChanged);

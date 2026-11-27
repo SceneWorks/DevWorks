@@ -1,6 +1,6 @@
 //! Repository indexing requests and replies: index status, runs, the section's sources and
 //! discovery. Every change is the same `indexing.*` command an agent submits.
-use crate::backend::Reply;
+use crate::backend::{Reply, TaskOutput};
 use crate::indexing_ops::IndexingSlot;
 pub use crate::indexing_screen::{
     IndexAction, IndexingScreen, SourcesForm, StatusState, index_block, run_state_label,
@@ -219,10 +219,19 @@ impl IndexingCtl<'_, '_> {
         self.indexing.sources.as_ref().map_or(1, |f| f.revision)
     }
 
+    /// Reads the workspace section's sources off the frame thread; a newer read supersedes an
+    /// older one, so the form shows the latest configuration.
     fn load_index_sources(&mut self) {
-        let Some(b) = self.backend() else { return };
-        match b.index_sources(None) {
-            Ok(c) => {
+        self.task(
+            IndexingSlot::IndexSources,
+            "Reading indexing sources",
+            |b| b.index_sources(None).map(TaskOutput::IndexSources),
+        );
+    }
+
+    fn apply_index_sources(&mut self, result: Result<TaskOutput, String>) {
+        match result {
+            Ok(TaskOutput::IndexSources(c)) => {
                 self.indexing.sources = Some(SourcesForm {
                     project: None,
                     revision: c.revision,
@@ -233,6 +242,7 @@ impl IndexingCtl<'_, '_> {
                 });
                 self.indexing.sources_error = None;
             }
+            Ok(_) => self.indexing.sources_error = Some("Unexpected reply".into()),
             Err(e) => self.indexing.sources_error = Some(e),
         }
     }
@@ -245,6 +255,10 @@ impl IndexingCtl<'_, '_> {
     ) -> Option<(IndexingSlot, Reply)> {
         let ix = &mut *self.indexing;
         match (slot, reply) {
+            (IndexingSlot::IndexSources, Reply::Task(result)) => {
+                self.apply_index_sources(result);
+                return None;
+            }
             (IndexingSlot::IndexStatus(r), Reply::Query(q)) => {
                 let state = match ops::index_status_result(q) {
                     Ok(s) => StatusState::Ready(Box::new(s)),

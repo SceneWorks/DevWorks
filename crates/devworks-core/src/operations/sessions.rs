@@ -166,6 +166,26 @@ impl Revisioned for EndInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `sessions.append_screen_context` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendScreenContextInput {
+    pub session_id: Id,
+    pub screen_id: Id,
+    pub context: Text,
+}
+impl Check for AppendScreenContextInput {
+    fn check(&self) -> Result<(), String> {
+        self.session_id.check()?;
+        self.screen_id.check()?;
+        self.context.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for AppendScreenContextInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `sessions` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -185,6 +205,8 @@ pub enum Input {
     Start(StartInput),
     /// `sessions.end` (Command).
     End(EndInput),
+    /// `sessions.append_screen_context` (Command).
+    AppendScreenContext(AppendScreenContextInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -197,6 +219,7 @@ impl Input {
             Self::ContextSources(_) => "sessions.context_sources",
             Self::Start(_) => "sessions.start",
             Self::End(_) => "sessions.end",
+            Self::AppendScreenContext(_) => "sessions.append_screen_context",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -209,6 +232,7 @@ impl Input {
             Self::ContextSources(_) => Mode::Query,
             Self::Start(_) => Mode::Command,
             Self::End(_) => Mode::Command,
+            Self::AppendScreenContext(_) => Mode::Command,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -222,6 +246,7 @@ impl Input {
             Self::ContextSources(i) => serde_json::to_value(i),
             Self::Start(i) => serde_json::to_value(i),
             Self::End(i) => serde_json::to_value(i),
+            Self::AppendScreenContext(i) => serde_json::to_value(i),
         }
     }
 }

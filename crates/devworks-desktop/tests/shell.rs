@@ -707,6 +707,226 @@ fn the_coordinator_sidebar_is_the_home_conversation_and_stays_open_until_closed_
 }
 
 // ---------------------------------------------------------------------------------------------
+// F-017: store calls never run on the frame thread
+
+/// A conversation with the coordinator sidebar open beside Settings (one notice appended).
+fn sidebar_beside_settings(
+    h: &mut egui_kittest::Harness<'_, devworks_desktop::shell::Shell>,
+) -> String {
+    settle(h);
+    click(h, Role::Button, "New Chat");
+    let session = h.state().chat.selected.clone().expect("a conversation");
+    click_nav(h, "Settings");
+    click(h, Role::Button, "Workspace coordinator");
+    session
+}
+
+const NOTICE_LABEL: &str = "Telling the coordinator about this screen";
+
+#[test]
+fn a_screen_context_notice_waits_for_the_store_writer_off_the_frame_thread() {
+    let root = Root::new("notice-writer-held");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    let session = sidebar_beside_settings(&mut h);
+    assert_eq!(transcript(&*backend, &session).len(), 1);
+
+    let writer = WriterHold::new(engine.host().runtime().store().clone());
+    let held = Held::run(
+        &mut h,
+        |h| nav(h, "Artifacts").click(),
+        |s| in_flight(s, NOTICE_LABEL),
+        move || drop(writer),
+    );
+    assert_eq!(
+        transcript(&*backend, &session).len(),
+        1,
+        "the notice waits for the writer"
+    );
+    held.assert_frames_advanced("screen-context notice");
+    settle(&mut h);
+    let bodies = transcript(&*backend, &session);
+    assert!(
+        matches!(
+            &bodies[..],
+            [
+                TranscriptBody::HostNotice { .. },
+                TranscriptBody::HostNotice { .. }
+            ]
+        ),
+        "{bodies:?}"
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Artifacts")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_failed_screen_context_notice_is_sent_once_per_screen_context() {
+    let root = Root::new("notice-fails-once");
+    let engine = start(&root);
+    let gate = Gate::new("sessions.append_screen_context").refusing_queries();
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    sidebar_beside_settings(&mut h);
+    assert_eq!(gate.calls(), 1);
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("could not be told about this screen")),
+        "{:?}",
+        h.state().status()
+    );
+    for _ in 0..10 {
+        h.step();
+        assert!(h.state().wait_idle());
+    }
+    assert_eq!(gate.calls(), 1, "a failed notice is not resent on repaint");
+    // The next screen context is sent, once.
+    click_nav(&mut h, "Artifacts");
+    for _ in 0..10 {
+        h.step();
+        assert!(h.state().wait_idle());
+    }
+    assert_eq!(gate.calls(), 2);
+}
+
+#[test]
+fn a_notice_text_is_read_off_the_frame_thread() {
+    let root = Root::new("notice-text-held");
+    let engine = start(&root);
+    let gate = Gate::new("read_coordinator_notice");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    click_nav(&mut h, "Settings");
+    gate.close();
+    let open = gate.clone();
+    let held = Held::run(
+        &mut h,
+        |h| {
+            h.get_by_role_and_label(Role::Button, "Workspace coordinator")
+                .click()
+        },
+        |_| gate.has_waiter(),
+        move || open.open(),
+    );
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Settings")
+            .count(),
+        0,
+        "the text shows once it is read"
+    );
+    held.assert_frames_advanced("notice text");
+    settle(&mut h);
+    assert_eq!(
+        h.query_all_by_label_contains("Current screen: Settings")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn index_sources_are_read_off_the_frame_thread() {
+    let root = Root::new("index-sources-held");
+    let engine = start(&root);
+    let gate = Gate::new("index_sources");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    gate.close();
+    let open = gate.clone();
+    let held = Held::run(
+        &mut h,
+        |h| h.state_mut().navigate(Route::Indexing),
+        |_| gate.has_waiter(),
+        move || open.open(),
+    );
+    assert!(h.state().projects.indexing.sources.is_none());
+    held.assert_frames_advanced("index sources");
+    settle(&mut h);
+    assert!(h.state().projects.indexing.sources.is_some());
+    assert!(has_text(&h, "Section revision"));
+}
+
+#[test]
+fn a_pasted_image_is_staged_off_the_frame_thread() {
+    let root = Root::new("paste-held");
+    let engine = start(&root);
+    let gate = Gate::new("stage_pasted_image");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click(&mut h, Role::Button, "New Chat");
+    h.get_by_role_and_label(Role::TextInput, COMPOSER_LABEL)
+        .focus();
+    h.step();
+    gate.close();
+    let pasted = egui::ColorImage::new([3, 3], vec![egui::Color32::GREEN; 9]);
+    let open = gate.clone();
+    let held = Held::run(
+        &mut h,
+        |h| h.event(egui::Event::PasteImage(Arc::new(pasted))),
+        |_| gate.has_waiter(),
+        move || open.open(),
+    );
+    assert!(
+        h.state()
+            .chat
+            .draft()
+            .is_none_or(|d| d.attachments.is_empty()),
+        "the image joins the draft once it is staged"
+    );
+    held.assert_frames_advanced("pasted image");
+    settle(&mut h);
+    let draft = h.state().chat.draft().expect("draft");
+    let [a] = draft.attachments.as_slice() else {
+        panic!("one attachment: {:?}", draft.attachments.len())
+    };
+    assert!(
+        matches!(a.state, devworks_desktop::chat::AttachState::Stored(_)),
+        "{:?}",
+        a.state
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // UI-08 / UI-09: attachments
 
 #[test]

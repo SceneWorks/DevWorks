@@ -24769,6 +24769,13 @@ pub enum DomainCommand {
         session_id: Id,
         expected_revision: Revision,
     },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "sessions.append_screen_context")]
+    SessionsAppendScreenContext {
+        session_id: Id,
+        screen_id: Id,
+        context: Text,
+    },
     #[serde(rename = "indexing.index")]
     IndexingIndex {
         scope: DataScope,
@@ -26398,6 +26405,7 @@ impl DomainCommand {
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
             Self::SessionsStart { .. } => "sessions.start",
             Self::SessionsEnd { .. } => "sessions.end",
+            Self::SessionsAppendScreenContext { .. } => "sessions.append_screen_context",
             Self::IndexingIndex { .. } => "indexing.index",
             Self::IndexingReindex { .. } => "indexing.reindex",
             Self::IndexingRetireView { .. } => "indexing.retire_view",
@@ -27037,6 +27045,15 @@ impl Check for DomainCommand {
             } => {
                 session_id.check()?;
                 expected_revision.check()?;
+            }
+            Self::SessionsAppendScreenContext {
+                session_id,
+                screen_id,
+                context,
+            } => {
+                session_id.check()?;
+                screen_id.check()?;
+                context.check()?;
             }
             Self::IndexingIndex {
                 scope,
@@ -29163,6 +29180,9 @@ impl Revisioned for DomainCommand {
             Self::AgentsAck { .. } if revision < 7 => {
                 Err("operation predates its introduction".into())
             }
+            Self::SessionsAppendScreenContext { .. } if revision < 23 => {
+                Err("operation predates its introduction".into())
+            }
             Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
                 Err("operation predates its introduction".into())
             }
@@ -29405,6 +29425,9 @@ pub enum OperationResult {
     SessionsStart { value: SessionRecord },
     #[serde(rename = "sessions.end")]
     SessionsEnd { value: SessionRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "sessions.append_screen_context")]
+    SessionsAppendScreenContext { value: SessionRecord },
     #[serde(rename = "ui.current_screen")]
     UiCurrentScreen { value: ScreenContext },
     #[serde(rename = "history.work_lineage")]
@@ -30146,6 +30169,7 @@ impl OperationResult {
             Self::SessionsContextSources { .. } => "sessions.context_sources",
             Self::SessionsStart { .. } => "sessions.start",
             Self::SessionsEnd { .. } => "sessions.end",
+            Self::SessionsAppendScreenContext { .. } => "sessions.append_screen_context",
             Self::UiCurrentScreen { .. } => "ui.current_screen",
             Self::HistoryWorkLineage { .. } => "history.work_lineage",
             Self::HistoryGitLinks { .. } => "history.git_links",
@@ -30542,6 +30566,7 @@ impl Check for OperationResult {
             Self::SessionsContextSources { value } => value.check()?,
             Self::SessionsStart { value } => value.check()?,
             Self::SessionsEnd { value } => value.check()?,
+            Self::SessionsAppendScreenContext { value } => value.check()?,
             Self::UiCurrentScreen { value } => value.check()?,
             Self::HistoryWorkLineage { value } => value.check()?,
             Self::HistoryGitLinks { value } => value.check()?,
@@ -30911,6 +30936,7 @@ impl Revisioned for OperationResult {
             Self::SessionsGet { value } => value.retain_revision(revision),
             Self::SessionsStart { value } => value.retain_revision(revision),
             Self::SessionsEnd { value } => value.retain_revision(revision),
+            Self::SessionsAppendScreenContext { value } => value.retain_revision(revision),
             Self::HistoryWorkLineage { value } => value.retain_revision(revision),
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
             Self::HistoryEvidenceLinks { value } => value.retain_revision(revision),
@@ -31123,6 +31149,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsEvents { .. } if revision < 7 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SessionsAppendScreenContext { .. } if revision < 23 => {
                 Err("operation result predates its introduction".into())
             }
             Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {

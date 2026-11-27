@@ -533,6 +533,52 @@ pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
         other => Err(unexpected("sessions.start", &other)),
     }
 }
+/// The `sessions.append_screen_context` notice of `screen` for `session`.
+pub fn screen_context(
+    backend: &dyn Backend,
+    session: &str,
+    screen: &str,
+    context: &str,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::AppendScreenContext(
+            sessions::AppendScreenContextInput {
+                session_id: frame::id(session)?,
+                screen_id: frame::id(screen)?,
+                context: frame::text(context)?,
+            },
+        )))
+    })
+}
+/// Tells `session`'s coordinator that the user is on `screen`, described by `context` and the
+/// version of the screen's local Help topic when Help has one. Blocking: run it as a task.
+pub fn append_screen_context(
+    backend: &dyn Backend,
+    session: &str,
+    screen: &str,
+    context: &str,
+) -> Result<SessionRecord, Failure> {
+    let topic = crate::help_ops::topics(backend.query(
+        "help.topic_for_screen",
+        &crate::help_ops::context(backend, screen, None),
+    ))
+    .ok()
+    .and_then(|page| {
+        page.items
+            .0
+            .into_iter()
+            .find(|topic| topic.id.as_str() == screen)
+    });
+    let context = topic.map_or_else(
+        || context.to_owned(),
+        |topic| format!("{context} ({})", topic.version.0),
+    );
+    let frame = screen_context(backend, session, screen, &context);
+    match command_result(crate::backend::resolve_screen_context(backend, &frame))? {
+        OperationResult::SessionsAppendScreenContext { value } => Ok(value),
+        other => Err(unexpected("sessions.append_screen_context", &other)),
+    }
+}
 /// One transcript page after `after` (the projection's tail cursor).
 pub fn transcript(backend: &dyn Backend, session: &str, after: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {

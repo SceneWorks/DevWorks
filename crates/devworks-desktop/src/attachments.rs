@@ -398,7 +398,11 @@ mod tests {
             | TaskOutput::SystemOneCompletion(_)
             | TaskOutput::AnalysisEvidence(_)
             | TaskOutput::RepositoryDeletionPreview(_)
-            | TaskOutput::RepositoryDeleted(_) => {
+            | TaskOutput::RepositoryDeleted(_)
+            | TaskOutput::ScreenContextNoticed
+            | TaskOutput::NoticeText(..)
+            | TaskOutput::PastedImage(_)
+            | TaskOutput::IndexSources(_) => {
                 panic!("expected a preview")
             }
         }

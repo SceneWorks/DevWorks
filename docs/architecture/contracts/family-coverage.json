@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-24",
-  "catalogSha256": "4f063eb85a76dc96c6e5f41e7a91a239d4d8455418bb17b3cb7dba1320b84104",
+  "catalogSha256": "c83885a6e3484c9dd0650774135eb01561bc6d50c482041528221241e8bb4fb4",
   "familyCount": 50,
-  "operationCount": 386,
-  "concreteInputCandidates": 386,
+  "operationCount": 387,
+  "concreteInputCandidates": 387,
   "domainInputsPending": 0,
   "families": [
     {
@@ -4053,6 +4053,53 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Closes selected conversation at a safe boundary; active root work requires ordinary root stop/pause controls, never silent termination.",
+          "familyRules": "Session identity, context epoch and native continuation belong to service. Query or conversation creation never starts/resumes work.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "sessions.append_screen_context",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "sessions.append_screen_context",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "sessions.append_screen_context"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "HostMaintenance",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "sessions.append_screen_context"
+          },
+          "resultValueType": "SessionRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r23.schema.json",
+              "completionSchema": "operation-completion.r23.schema.json"
+            }
+          ],
+          "authority": "HostMaintenance",
+          "effect": "Local",
+          "semanticRules": "The host appends one bounded notice describing the screen the user is on to an open conversation: the text is stored as a host artifact and the transcript entry names it, in one unit of work. Only the host may append it; agents and other callers are refused, and a closed or unknown session is refused without a partial write.",
           "familyRules": "Session identity, context epoch and native continuation belong to service. Query or conversation creation never starts/resumes work.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

@@ -55,6 +55,12 @@ pub enum ChatSlot {
     RoutePin(String),
     /// The first routed request of a conversation (session ID): its selection becomes its pin.
     RouteFirst(String),
+    /// The screen-context notice of a coordinator conversation (session ID).
+    ScreenContext(String),
+    /// The text of a host notice shown in a transcript (artifact version ID).
+    NoticeText(String),
+    /// A pasted image being staged for a draft (draft key, its paste number).
+    PastedImage(String, u64),
 }
 crate::backend::screen_slot!(ChatSlot, Chat);
 

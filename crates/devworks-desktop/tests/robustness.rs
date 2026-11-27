@@ -320,8 +320,10 @@ fn an_artifact_list_read_before_an_attachment_was_stored_is_requeried() {
     });
     gate.open();
     settle(&mut h);
+    // The listing holds the attachment and the text of the screen-context notice that opening
+    // the sidebar appended (both stored after the held listing read its snapshot).
     assert!(
-        has_text(&h, "1 of 1 shown"),
+        has_text(&h, "2 of 2 shown"),
         "the stale empty listing was re-queried"
     );
 }
