@@ -120,29 +120,34 @@ pub(crate) async fn assign(
     let session = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
     check_cancel(cancel)?;
 
-    let owner_context = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-        let owner = auxiliary::ownership(read, &engine.store().info(), ctx)
-            .map_err(|_| StorageError::ScopeDenied)?;
-        let mut context = format!("Assigned role: {}", owner.role);
-        if let (Some(project_id), Some(root_id)) = (ctx.project_id(), ctx.root_id()) {
-            let project = read
-                .projects()
-                .project(project_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let root = read
-                .work()
-                .work(&root_id.0)?
-                .ok_or(StorageError::ScopeDenied)?;
-            if root.project_id != *project_id || project.lifecycle != "Active" {
-                return Err(StorageError::ScopeDenied);
+    let owner_context = {
+        let (info, owner_ctx) = (engine.store().info(), ctx.clone());
+        crate::store::read(engine.store(), move |read| {
+            let ctx = &owner_ctx;
+            let owner =
+                auxiliary::ownership(read, &info, ctx).map_err(|_| StorageError::ScopeDenied)?;
+            let mut context = format!("Assigned role: {}", owner.role);
+            if let (Some(project_id), Some(root_id)) = (ctx.project_id(), ctx.root_id()) {
+                let project = read
+                    .projects()
+                    .project(project_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                let root = read
+                    .work()
+                    .work(&root_id.0)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                if root.project_id != *project_id || project.lifecycle != "Active" {
+                    return Err(StorageError::ScopeDenied);
+                }
+                context.push_str(&format!(
+                    "\nProject: {}\nWork: {}",
+                    project.name, root.title
+                ));
             }
-            context.push_str(&format!(
-                "\nProject: {}\nWork: {}",
-                project.name, root.title
-            ));
-        }
-        Ok(context)
-    })?;
+            Ok(context)
+        })
+        .await?
+    };
     let saved_role = std::mem::take(&mut material.instructions)
         .into_iter()
         .map(|block| block.text)
@@ -177,31 +182,42 @@ pub(crate) async fn assign(
     // The common encoder applies the request's response headroom as the output limit on
     // endpoints that support it. A Codex subscription must omit that wire parameter.
     material.parameters = GenerationParameters::default();
-    let source = capture_source(engine, ctx, origin, material, cancel)?;
-    let record = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-        read.router()
-            .auto_route(session)?
-            .ok_or(StorageError::ScopeDenied)
-    })?;
-    if record.decision.is_some() {
+    let (source, bytes) = {
+        let (engine, ctx, session, cancel) =
+            (engine.clone(), ctx.clone(), session.clone(), cancel.clone());
+        crate::store::blocking(move || {
+            let source = capture_source(&engine, &ctx, origin, material, &cancel)?;
+            let record = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+                read.router()
+                    .auto_route(&session)?
+                    .ok_or(StorageError::ScopeDenied)
+            })?;
+            if record.decision.is_some() {
+                return Ok((source, None));
+            }
+            let (bytes, _) = engine
+                .artifacts()
+                .read_exact(
+                    engine.store().as_ref(),
+                    &ctx,
+                    &source.material,
+                    8 * 1024 * 1024,
+                )
+                .map_err(|_| StorageError::ScopeDenied)?;
+            Ok::<_, StorageError>((source, Some(bytes)))
+        })
+        .await?
+    };
+    let Some(bytes) = bytes else {
         return check_cancel(cancel);
-    }
-    let (bytes, _) = engine
-        .artifacts()
-        .read_exact(
-            engine.store().as_ref(),
-            ctx,
-            &source.material,
-            8 * 1024 * 1024,
-        )
-        .map_err(|_| StorageError::ScopeDenied)?;
+    };
     let material: ProviderContext = serde_json::from_slice(&bytes).map_err(invalid)?;
     let (text, media) = material_for_decision(&material)?;
 
     if let Some(classification) =
         classify_systemone(engine, ctx, &source, &text, &media, cancel, capacity).await?
     {
-        return commit_assignment(engine, ctx, &source, classification, cancel);
+        return commit_assignment(engine, ctx, &source, classification, cancel).await;
     }
     let mut required = vec![format!(
         "context:{}",
@@ -310,7 +326,7 @@ pub(crate) async fn assign(
             .await?
             {
                 LowResult::Assigned(classification) => {
-                    return commit_assignment(engine, ctx, &source, classification, cancel);
+                    return commit_assignment(engine, ctx, &source, classification, cancel).await;
                 }
                 LowResult::Cooling(until) if candidate.ordinal == 0 => {
                     cooling.insert(candidate.model_id, until);
@@ -319,12 +335,15 @@ pub(crate) async fn assign(
             }
         }
     }
-    if read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
+    let session = session.clone();
+    if crate::store::read(engine.store(), move |read| {
         Ok(read
             .router()
-            .auto_route(session)?
+            .auto_route(&session)?
             .is_some_and(|record| record.decision.is_some()))
-    })? {
+    })
+    .await?
+    {
         return check_cancel(cancel);
     }
     Err(failure(
@@ -537,13 +556,20 @@ async fn wait_for_systemone(
     loop {
         let before = wake.generation();
         check_cancel(cancel)?;
-        match crate::providers::systemone::completion(engine.store().as_ref(), ctx, operation)
-            .map_err(|fault| {
-                failure(
-                    format!("SystemOne classification: {:?}", fault.code),
-                    fault.retry,
-                )
-            })? {
+        let completion = {
+            let (store, ctx, operation) = (engine.store().clone(), ctx.clone(), operation.clone());
+            tokio::task::spawn_blocking(move || {
+                crate::providers::systemone::completion(store.as_ref(), &ctx, &operation)
+            })
+            .await
+            .map_err(|error| TurnError::Worker(format!("SystemOne completion worker: {error}")))?
+        };
+        match completion.map_err(|fault| {
+            failure(
+                format!("SystemOne classification: {:?}", fault.code),
+                fault.retry,
+            )
+        })? {
             Some(OperationCompletion::Succeeded {
                 result: OperationResult::RouterDecide { value },
                 ..
@@ -611,7 +637,7 @@ fn assignment(
     }
 }
 
-fn commit_assignment(
+async fn commit_assignment(
     engine: &TurnEngine,
     ctx: &InvocationContext,
     source: &Source,
@@ -626,26 +652,23 @@ fn commit_assignment(
         source.material.clone(),
         cancel.clone(),
     );
-    run_write(
-        engine.store().as_ref(),
-        WriteOptions::observed(),
-        move |tx| {
-            if cancelling.is_cancelled() {
-                return Err(StorageError::Cancelled);
-            }
-            auto_routing::current_authority(tx, &ctx)?;
-            let current = tx
-                .router()
-                .auto_route(&session)?
-                .ok_or(StorageError::ScopeDenied)?;
-            let saved: Source = serde_json::from_value(current.source).map_err(invalid)?;
-            if material.sha256 != saved.material.sha256 {
-                return Err(StorageError::ScopeDenied);
-            }
-            tx.router().finish_auto_route(&session, &encoded)?;
-            Ok(())
-        },
-    )?;
+    crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
+        if cancelling.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        auto_routing::current_authority(tx, &ctx)?;
+        let current = tx
+            .router()
+            .auto_route(&session)?
+            .ok_or(StorageError::ScopeDenied)?;
+        let saved: Source = serde_json::from_value(current.source).map_err(invalid)?;
+        if material.sha256 != saved.material.sha256 {
+            return Err(StorageError::ScopeDenied);
+        }
+        tx.router().finish_auto_route(&session, &encoded)?;
+        Ok(())
+    })
+    .await?;
     // Cancellation after the decision commits must still stop the generation of this request.
     check_cancel(cancel)
 }
@@ -680,33 +703,49 @@ async fn classify_low(
         )
         .as_bytes(),
     );
-    let (request_id, recorded) = recover_low_attempt(engine, &identity)?;
+    let (request_id, recorded) = recover_low_attempt_off_runtime(engine, &identity).await?;
     let result = if let Some(result) = recorded {
         result
     } else {
-        let Some(invocation) = low_invocation(
-            engine,
-            ctx,
-            source,
-            candidate,
-            required,
-            has_images,
-            &request_id,
-        )?
-        else {
+        let invocation = {
+            let (engine, ctx, source, candidate, required, request) = (
+                engine.clone(),
+                ctx.clone(),
+                source.clone(),
+                candidate.clone(),
+                required.to_vec(),
+                request_id.clone(),
+            );
+            crate::store::blocking(move || {
+                low_invocation(
+                    &engine, &ctx, &source, &candidate, &required, has_images, &request,
+                )
+            })
+            .await?
+        };
+        let Some(invocation) = invocation else {
             return Ok(LowResult::Unusable);
         };
-        let produced = match providers
-            .produce_cancellable(invocation, Some(cancel.clone()))
+        // The driver does synchronous store and transport work, as on the agent turn's own
+        // provider call.
+        let produced = {
+            let (providers, stopped) = (std::sync::Arc::clone(providers), cancel.clone());
+            let handle = tokio::runtime::Handle::current();
+            tokio::task::spawn_blocking(move || {
+                handle.block_on(providers.produce_cancellable(invocation, Some(stopped)))
+            })
             .await
-        {
+            .map_err(|error| TurnError::Worker(format!("Low classifier worker: {error}")))?
+        };
+        let produced = match produced {
             Ok(produced) => produced,
             Err(StorageError::Cancelled) => return Err(StorageError::Cancelled.into()),
-            Err(error) => match recover_low_attempt(engine, &identity)? {
+            Err(error) => match recover_low_attempt_off_runtime(engine, &identity).await? {
                 (_, Some(result)) => {
-                    return low_classification_from_result(
+                    return low_classification_off_runtime(
                         engine, ctx, source, candidate, request_id, result,
-                    );
+                    )
+                    .await;
                 }
                 _ if !matches!(error, StorageError::CommitUnknown | StorageError::Busy) => {
                     // A source that failed before the durable transport boundary is safe to skip.
@@ -738,7 +777,37 @@ async fn classify_low(
             _ => produced.result,
         }
     };
-    low_classification_from_result(engine, ctx, source, candidate, request_id, result)
+    low_classification_off_runtime(engine, ctx, source, candidate, request_id, result).await
+}
+
+/// [`recover_low_attempt`] off the runtime thread.
+async fn recover_low_attempt_off_runtime(
+    engine: &TurnEngine,
+    identity: &str,
+) -> Result<(Id, Option<ProviderResult>), TurnError> {
+    let (engine, identity) = (engine.clone(), identity.to_owned());
+    crate::store::blocking(move || recover_low_attempt(&engine, &identity)).await
+}
+
+/// [`low_classification_from_result`] off the runtime thread: it reads the classifier output.
+async fn low_classification_off_runtime(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    source: &Source,
+    candidate: &LowCandidate,
+    request_id: Id,
+    result: ProviderResult,
+) -> Result<LowResult, TurnError> {
+    let (engine, ctx, source, candidate) = (
+        engine.clone(),
+        ctx.clone(),
+        source.clone(),
+        candidate.clone(),
+    );
+    crate::store::blocking(move || {
+        low_classification_from_result(&engine, &ctx, &source, &candidate, request_id, result)
+    })
+    .await
 }
 
 /// A logical receipt may precede admission. Only an attempt that could have dispatched

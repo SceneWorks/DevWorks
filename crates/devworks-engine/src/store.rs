@@ -63,6 +63,23 @@ where
         })
 }
 
+/// Runs synchronous store work that [`read`] and [`write`] cannot express (several snapshots, a
+/// blocking `run_write`, artifact files) on the blocking pool, so a busy writer or a slow read
+/// does not stall the runtime thread.
+pub(crate) async fn blocking<T, E, F>(work: F) -> Result<T, E>
+where
+    T: Send + 'static,
+    E: From<StorageError> + Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|_| {
+        Err(
+            StorageError::unavailable(Unavailable::HandlerPanicked, "blocking store task failed")
+                .into(),
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------------------------
 // Queue primitives used by the engine
 
