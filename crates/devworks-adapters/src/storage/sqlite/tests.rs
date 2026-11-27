@@ -1519,6 +1519,8 @@ fn feature_document_prefix_converges(
 
 /// F8 builds recorded F8 operations at revisions 9–14, which main now owns. Reconciliation moves
 /// only the F8 operations' stored revisions; main's operations at the same numbers keep theirs.
+/// Published reply schema references are covered with a real reply in
+/// `artifacts::renumbered_f8_receipt_replies_stay_purgeable`.
 #[test]
 fn feature_ledger_reconciliation_renumbers_only_f8_operation_revisions() {
     for base in [63, 66] {
@@ -1557,6 +1559,17 @@ fn feature_ledger_reconciliation_renumbers_only_f8_operation_revisions() {
             )
             .unwrap();
         }
+        // A purged receipt keeps only its contract, revision and purge outcome.
+        conn.execute(
+            "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,\
+                payload_digest,result_json,created_at) VALUES(?1,'scope','purged-dream',\
+                'dreaming.run','digest',?2,0)",
+            params![
+                actor,
+                json!({"contract": "fixture", "schemaRevision": 9, "purged": {}}).to_string()
+            ],
+        )
+        .unwrap();
         // The nightly Dreaming job an F8 build installed names its old argument schema revision.
         let current = devworks_core::services::jobs::argument_schema(
             "dreaming.run",
@@ -1577,6 +1590,15 @@ fn feature_ledger_reconciliation_renumbers_only_f8_operation_revisions() {
         drop(conn);
         drop(SqliteStore::open_with(h.config(), MIGRATIONS).unwrap());
         let conn = h.raw();
+        let purged: i64 = conn
+            .query_row(
+                "SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                    WHERE idempotency_key='purged-dream'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(purged, 24, "{base}");
         let job: String = conn
             .query_row(
                 "SELECT definition_json FROM schedules WHERE id='nightly'",

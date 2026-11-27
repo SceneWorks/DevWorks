@@ -80,9 +80,11 @@ pub fn import(
     save_frame: &[u8],
 ) -> Vec<u8> {
     // Keep this receipt identical if the upload journal is recovered after import committed.
-    let built = frame::with(
+    let digest = devworks_core::fingerprint::sha256_hex(save_frame);
+    frame::with_request_key(
         b,
         Negotiate::pinned(25, "Stable import replay after upload"),
+        &format!("document-import-{digest}"),
         || {
             let (replace_document_id, expected_revision) = plan.replacement.unzip();
             Some(In::Documents(ops::Input::Import(ops::ImportInput {
@@ -93,9 +95,7 @@ pub fn import(
                 expected_revision,
             })))
         },
-    );
-    let digest = devworks_core::fingerprint::sha256_hex(save_frame);
-    frame::with_request_key(built, &format!("document-import-{digest}"))
+    )
 }
 
 pub struct Search {

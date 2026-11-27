@@ -1535,17 +1535,45 @@ const FEATURE_OPERATION_REVISIONS: &[(&str, &[i64])] = &[
 const FEATURE_REVISION_SHIFT: i64 = 15;
 
 /// Renumbers the schema revision an F8 build stored with an F8 operation: the operation journal,
-/// command receipts and their decision events, approval resumes and saved native job
-/// definitions. Rows are selected by operation name, so main's operations at the same numbers
-/// keep theirs. Published reply artifacts and job run snapshots are immutable evidence and keep
-/// the bytes they were written with.
-fn remap_feature_revisions(conn: &Connection) -> Result<(), StorageError> {
+/// command receipts (purged receipts included), their published reply schema references and
+/// decision events, and saved native job definitions. Rows are selected by operation name, so
+/// main's operations at the same numbers keep theirs.
+///
+/// Published reply bytes stay as written: a reply carries no revision, and the F8 members' gates
+/// moved by the same 15, so the reply projected at the new revision is the same bytes. Only the
+/// reply's schema reference, whose revision and digest name the revision, is rewritten.
+///
+/// Known limits. A receipt's request digest was computed under the old revision and is not
+/// recomputed, so a client that retries across the upgrade with the old request key receives
+/// `IdempotencyConflict`. A queued or running job run keeps the definition snapshot it started
+/// with, is refused once at the old revision, and later runs use the remapped schedule. No F8
+/// operation has a saved-operation owner, so none is approvable and no approval resume can name
+/// one; an F8 operation that becomes approvable must also renumber `approval_resumes`, whose
+/// resume preparation checks the request fingerprint.
+pub(super) fn remap_feature_revisions(conn: &Connection) -> Result<(), StorageError> {
+    use devworks_core::registry::SchemaRevision;
+    let invalid = || StorageError::InvalidRecord("F8 reply schema does not form".into());
     for (operation, revisions) in FEATURE_OPERATION_REVISIONS {
+        let descriptor = devworks_core::registry::find(operation).ok_or_else(invalid)?;
         for &old in *revisions {
             let new = old + FEATURE_REVISION_SHIFT;
+            let schema = devworks_core::services::artifacts::replies::reply_schema(
+                descriptor,
+                SchemaRevision(u32::try_from(new).map_err(|_| invalid())?),
+            )
+            .ok_or_else(invalid)?;
+            let schema = serde_json::to_string(&schema).map_err(|_| invalid())?;
             db(conn.execute(
                 "UPDATE operations SET schema_version=?1 WHERE capability=?2 AND schema_version=?3",
                 params![new, operation, old],
+            ))?;
+            // Rewrite the published reply's schema reference while its receipt still names `old`.
+            db(conn.execute(
+                "UPDATE receipt_replies SET schema_json=?1 WHERE EXISTS(SELECT 1 FROM command_receipts r \
+                 WHERE r.actor_id=receipt_replies.actor_id AND r.scope_key=receipt_replies.scope_key \
+                 AND r.idempotency_key=receipt_replies.idempotency_key AND r.command_kind=?2 \
+                 AND json_extract(r.result_json,'$.schemaRevision')=?3)",
+                params![schema, operation, old],
             ))?;
             db(conn.execute(
                 "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',?1) \
@@ -1556,10 +1584,6 @@ fn remap_feature_revisions(conn: &Connection) -> Result<(), StorageError> {
                 "UPDATE events SET payload_json=json_set(payload_json,'$.schemaRevision',?1) \
                  WHERE kind='CommandDecided' AND json_extract(payload_json,'$.operation')=?2 \
                  AND json_extract(payload_json,'$.schemaRevision')=?3",
-                params![new, operation, old],
-            ))?;
-            db(conn.execute(
-                "UPDATE approval_resumes SET schema_revision=?1 WHERE operation=?2 AND schema_revision=?3",
                 params![new, operation, old],
             ))?;
         }
