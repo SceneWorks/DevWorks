@@ -331,7 +331,8 @@ impl NativeDreaming {
         if !matches {
             return Ok(None);
         }
-        let source_ref = format!("repo:{}/{unit_key}", repository.as_str());
+        let source_ref =
+            devworks_core::services::knowledge::repository_source_ref(repository, unit_key);
         let reference = source.node_id.as_ref().map_or_else(
             || format!("dream-source-{}", sha256_hex(source_ref.as_bytes())),
             |node| node.as_str().to_owned(),

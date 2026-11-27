@@ -828,7 +828,8 @@ impl Exec<'_> {
         .unwrap_or_default();
         let texts = stage_texts(&env, &repo_id, readme_bytes, summary);
         let staged_files: Vec<_> = texts.iter().map(|t| t.2.clone()).collect();
-        let published = self.publish_baseline(&generation, &head, head_ref, pointer, texts);
+        let gone = cited_files_gone(&env, &repo_id, &entries).map_err(Stop::storage)?;
+        let published = self.publish_baseline(&generation, &head, head_ref, pointer, texts, gone);
         if let Some(a) = &env.artifacts {
             for f in &staged_files {
                 a.settle_host_bytes(&*env.store, f, published.is_ok());
@@ -970,6 +971,7 @@ impl Exec<'_> {
         head_ref: Option<String>,
         pointer: i64,
         texts: Vec<(TextKind, String, crate::services::artifacts::StagedFile)>,
+        gone: BTreeSet<String>,
     ) -> Result<(), Stop> {
         let env = self.w.env.clone();
         let view_id = env.ids.next_id(IdKind::View);
@@ -1025,6 +1027,8 @@ impl Exec<'_> {
             };
             tx.indexing().insert_view(&view)?;
             let revision = tx.indexing().publish(&repo, &view_id, pointer)?;
+            // Claims citing a file this publication changed read stale from the same commit.
+            observe_cited_sources(tx, &repo, &g, &gone)?;
             let now = tx.now_ms();
             tx.projects().publish_index_view(&StoredIndexView {
                 view_id: view_id.clone(),
@@ -1118,4 +1122,84 @@ impl Exec<'_> {
             Err(s) => Err(s),
         }
     }
+}
+
+/// The revision a cited repository file has when the published commit no longer holds it.
+const ABSENT_SOURCE_REVISION: &str = "absent";
+
+/// The repository files claims cite (normalized `repo:` citations) that the commit tree being
+/// published does not hold: deleted, never present, or renamed away. A cited file that is still
+/// in the tree but has no unit (excluded by configuration) is not among them.
+fn cited_files_gone(
+    env: &IndexEnv,
+    repository: &Id,
+    entries: &[crate::services::git::client::TreeEntry],
+) -> Result<BTreeSet<String>, StorageError> {
+    let cited = read_snapshot(&*env.store, &ReadOptions::default(), |s| {
+        cited_files(s.knowledge(), repository)
+    })?;
+    let mut gone = cited;
+    if gone.is_empty() {
+        return Ok(gone);
+    }
+    for entry in entries {
+        gone.remove(&entry.path);
+    }
+    Ok(gone)
+}
+
+/// The normalized paths of `repository` that claims cite, read by an index range.
+fn cited_files(
+    knowledge: &dyn crate::ports::storage::KnowledgeRead,
+    repository: &Id,
+) -> Result<BTreeSet<String>, StorageError> {
+    use crate::ports::storage::KNOWLEDGE_PAGE_MAX;
+    use crate::services::knowledge::{repository_source, repository_source_prefix};
+    let prefix = repository_source_prefix(repository);
+    let mut out = BTreeSet::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page =
+            knowledge.knowledge_basis_sources(&prefix, after.as_deref(), KNOWLEDGE_PAGE_MAX)?;
+        for source in &page {
+            // A citation in another spelling of the path is left unobserved.
+            if let Some((_, Some(path))) = repository_source(source)
+                && source[prefix.len()..] == path
+            {
+                out.insert(path);
+            }
+        }
+        if page.len() < usize::from(KNOWLEDGE_PAGE_MAX) {
+            return Ok(out);
+        }
+        after = page.last().cloned();
+    }
+}
+
+/// Records, for every repository file a knowledge claim cites, the revision `generation` (the
+/// baseline being published) holds: its unit's content digest, or [`ABSENT_SOURCE_REVISION`]
+/// when the file is in `gone` (not in the published commit). A cited file with no unit that is
+/// still in the commit (excluded or not yet known as gone) is left unobserved. Only cited files
+/// whose recorded revision differs are observed, so the work is bounded by the repository's
+/// cited files, never its size or its claims (KNOW-03).
+fn observe_cited_sources(
+    tx: &mut dyn WriteTransaction,
+    repository: &Id,
+    generation: &Id,
+    gone: &BTreeSet<String>,
+) -> Result<(), StorageError> {
+    use crate::services::knowledge::{observe_source, repository_source_ref};
+    let cited = cited_files(tx.knowledge(), repository)?;
+    for path in &cited {
+        let revision = match tx.indexing().unit(generation, path)? {
+            Some(unit) => unit.content_digest,
+            None if gone.contains(path) => ABSENT_SOURCE_REVISION.to_owned(),
+            None => continue,
+        };
+        let source = repository_source_ref(repository, path);
+        if tx.knowledge().knowledge_source_head(&source)?.as_deref() != Some(revision.as_str()) {
+            observe_source(tx, &source, &revision)?;
+        }
+    }
+    Ok(())
 }

@@ -638,15 +638,31 @@ fn basis_of(
     mut basis: Vec<(String, String)>,
 ) -> Result<Vec<(String, String)>, Failure> {
     for id in evidence {
-        if let Some(e) = w.k().knowledge_evidence(id)?
-            && let Some(r) = e.source_revision.as_deref().or(default_revision)
-        {
+        let Some(e) = w.k().knowledge_evidence(id)? else {
+            continue;
+        };
+        // A repository file takes no default: its revision is its published index digest.
+        let default = match default_revision {
+            Some(d) if !repository_file(w.tx, &e.source_ref)? => Some(d),
+            _ => None,
+        };
+        if let Some(r) = e.source_revision.as_deref().or(default) {
             basis.retain(|(s, _)| *s != e.source_ref);
             basis.push((e.source_ref.clone(), r.to_owned()));
         }
     }
     basis.sort();
     Ok(basis)
+}
+
+/// Whether `source` is the normalized citation of a file of a registered repository (see
+/// `evidence_source`).
+fn repository_file(tx: &mut dyn WriteTransaction, source: &str) -> Result<bool, StorageError> {
+    let Some((repository, Some(path))) = super::repository_source(source) else {
+        return Ok(false);
+    };
+    Ok(super::repository_source_ref(&repository, &path) == source
+        && tx.projects().repository(&repository)?.is_some())
 }
 
 /// A claim's baselines after evidence is attached to it: a source it has no baseline for gains
@@ -955,6 +971,57 @@ fn note_conflicts(w: &mut Writer<'_>, scoped: &Scoped, c: &StoredClaim) -> Resul
 // ---------------------------------------------------------------------------------------------
 // knowledge.record
 
+/// The source and revision new evidence is recorded with. A citation of a file of a registered
+/// repository (`repo:<repository-id>/<path>`, see [`super::repository_source_ref`]) is stored
+/// normalized, with the file's content digest in the repository's published index baseline as
+/// its revision whatever revision the writer stated, so an index publication that changes the
+/// file makes the claims citing it read stale (KNOW-03). A file the published baseline does not
+/// hold, or a repository outside the write's scope, is recorded without a revision (no claim
+/// takes a baseline from it until verified) and noted; a path that cannot be normalized is
+/// refused. Any other source, including `repo:` naming no registered repository, is kept as
+/// written with its stated revision.
+fn evidence_source(
+    w: &mut Writer<'_>,
+    scope: &KnowledgeScope,
+    ev: &crate::protocol::records::SourceEvidence,
+) -> Result<(String, Option<String>), Failure> {
+    let written = (
+        ev.source.source_ref.0.clone(),
+        ev.source_revision.as_ref().map(|r| r.0.clone()),
+    );
+    let Some((repository, path)) = super::repository_source(&written.0) else {
+        return Ok(written);
+    };
+    if w.tx.projects().repository(&repository)?.is_none() {
+        return Ok(written);
+    }
+    let path = path.ok_or_else(|| invalid("evidence_repository_path"))?;
+    let source_ref = super::repository_source_ref(&repository, &path);
+    let in_scope = match scope {
+        KnowledgeScope::Project(project) => {
+            w.tx.projects()
+                .repository_projects(&repository)?
+                .contains(project)
+        }
+        KnowledgeScope::Workspace => true,
+    };
+    let indexed = if in_scope {
+        let indexing: &dyn crate::ports::storage::IndexRead = w.tx.indexing();
+        super::published_source_revision(indexing, &repository, &path)?
+    } else {
+        None
+    };
+    if indexed.is_none() {
+        let message = format!(
+            "Evidence {} cites {source_ref}, which no published index of a repository in this \
+             scope holds; it is recorded without a source revision.",
+            ev.id.as_str()
+        );
+        w.note(Severity::Info, "evidence_not_indexed", &message);
+    }
+    Ok((source_ref, indexed))
+}
+
 fn record(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
@@ -1046,12 +1113,13 @@ fn record_with_origin(
             };
             import_version(w.tx.artifacts(), &viewer, a)?;
         }
+        let (source_ref, source_revision) = evidence_source(&mut w, &scoped.exact, ev)?;
         let id = w.tx.new_id(IdKind::KnowledgeEvidence);
         let stored = StoredEvidence {
             id: id.clone(),
             scope: scoped.exact.clone(),
             kind: wire(&ev.source.kind),
-            source_ref: ev.source.source_ref.0.clone(),
+            source_ref,
             artifact: ev
                 .source
                 .artifact
@@ -1067,7 +1135,7 @@ fn record_with_origin(
                 .map(serde_json::to_value)
                 .transpose()
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
-            source_revision: ev.source_revision.as_ref().map(|r| r.0.clone()),
+            source_revision,
             author: ctx.principal().clone(),
             recorded_at_ms: w.now,
             deleted_at_ms: None,
@@ -2036,14 +2104,32 @@ fn verify_at_sources(
     }
     let revision = i.source_revision.as_ref().map(|r| r.0.clone());
     // The new baseline: every cited source at the stated revision, otherwise its latest
-    // observed revision, otherwise the revision its evidence names.
-    let mut basis = Vec::new();
+    // observed revision, otherwise the revision its evidence names. A repository file's
+    // revision is its published index digest, never a stated one (see `evidence_source`).
     let cited = next.body.evidence_ids.clone();
+    let mut repository_files = BTreeSet::new();
+    for id in &cited {
+        if let Some(e) = w.k().knowledge_evidence(id)?
+            && repository_file(w.tx, &e.source_ref)?
+        {
+            repository_files.insert(e.source_ref);
+        }
+    }
+    for (source, _) in &c.basis {
+        if repository_file(w.tx, source)? {
+            repository_files.insert(source.clone());
+        }
+    }
+    let stated = |source: &str| {
+        revision
+            .clone()
+            .filter(|_| !repository_files.contains(source))
+    };
+    let mut basis = Vec::new();
     for id in &cited {
         if let Some(e) = w.k().knowledge_evidence(id)? {
             let head = w.k().knowledge_source_head(&e.source_ref)?;
-            if let Some(r) = revision
-                .clone()
+            if let Some(r) = stated(&e.source_ref)
                 .or_else(|| verified_sources.get(&e.source_ref).cloned())
                 .or(head)
                 .or(e.source_revision.clone())
@@ -2058,8 +2144,7 @@ fn verify_at_sources(
             let head = w.k().knowledge_source_head(source)?;
             basis.push((
                 source.clone(),
-                revision
-                    .clone()
+                stated(source)
                     .or_else(|| verified_sources.get(source).cloned())
                     .or(head)
                     .unwrap_or_else(|| old.clone()),

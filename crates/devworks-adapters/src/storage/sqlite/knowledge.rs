@@ -1874,6 +1874,36 @@ macro_rules! knowledge_reads {
                     )
                     .optional())
             }
+            fn knowledge_basis_sources(
+                &self,
+                prefix: &str,
+                after: Option<&str>,
+                limit: u16,
+            ) -> Result<Vec<String>, StorageError> {
+                let limit = page_limit(limit)?;
+                // The range [prefix, prefix with its last character advanced) keeps the read on
+                // the knowledge_basis_source index; the substr test covers any other prefix.
+                let upper = prefix
+                    .char_indices()
+                    .last()
+                    .filter(|(_, c)| c.is_ascii() && *c < '\x7f')
+                    .map(|(at, c)| format!("{}{}", &prefix[..at], (c as u8 + 1) as char));
+                rows(
+                    self.conn,
+                    "SELECT DISTINCT source_ref FROM knowledge_claim_basis \
+                     WHERE source_ref >= ?1 AND source_ref > ?2 \
+                     AND (?3 IS NULL OR source_ref < ?3) \
+                     AND substr(source_ref, 1, length(?1)) = ?1 \
+                     ORDER BY source_ref LIMIT ?4",
+                    vec![
+                        Sql::Text(prefix.into()),
+                        Sql::Text(after.unwrap_or("").into()),
+                        upper.map_or(Sql::Null, Sql::Text),
+                        Sql::Integer(limit),
+                    ],
+                    |r| r.get::<_, String>(0),
+                )
+            }
             fn knowledge_source_claims(
                 &self,
                 scope: &KnowledgeScope,

@@ -384,6 +384,7 @@ fn plan(
         }],
         instruction_stamps: Vec::new(),
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {
