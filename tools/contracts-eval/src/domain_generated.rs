@@ -2929,6 +2929,9 @@ impl Revisioned for AnalysisClusterPageResult {
                 *self = Self::Legacy(legacy);
             }
         }
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
+        }
         if let Self::Current(value) = self {
             value.retain_revision(revision);
         }
@@ -4774,7 +4777,11 @@ impl Check for DreamRevertResult {
     }
 }
 impl Revisioned for DreamRevertResult {
-    fn retain_revision(&mut self, _revision: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
+        }
+    }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
             Self::Legacy(_) if revision >= 24 => {
@@ -14981,7 +14988,6 @@ impl Revisioned for KnowledgeSearchResult {
                 *self = Self::Legacy(legacy);
             }
         }
-        // A legacy page read at an earlier revision keeps only that revision's item members.
         if let Self::Legacy(value) = self {
             value.retain_revision(revision);
         }
@@ -19701,6 +19707,9 @@ impl Revisioned for ConventionRecordResult {
                 *self = Self::Legacy(legacy);
             }
         }
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
+        }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
         match self {
@@ -19771,6 +19780,9 @@ impl Revisioned for ConventionReadResult {
             if let Some(legacy) = legacy {
                 *self = Self::Legacy(legacy);
             }
+        }
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
         }
     }
     fn check_revision(&self, revision: u32) -> Result<(), String> {
@@ -19848,6 +19860,9 @@ impl Revisioned for ConventionPageResult {
             if let Some(legacy) = legacy {
                 *self = Self::Legacy(legacy);
             }
+        }
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
         }
         if let Self::Current(value) = self {
             value.retain_revision(revision);
@@ -19963,6 +19978,9 @@ impl Revisioned for ConventionResourcePageResult {
                 *self = Self::Legacy(legacy);
             }
         }
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
+        }
         if let Self::Current(value) = self {
             value.retain_revision(revision);
         }
@@ -20042,6 +20060,9 @@ impl Revisioned for ConventionSearchPageResult {
             if let Some(legacy) = legacy {
                 *self = Self::Legacy(legacy);
             }
+        }
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
         }
         if let Self::Current(value) = self {
             value.retain_revision(revision);

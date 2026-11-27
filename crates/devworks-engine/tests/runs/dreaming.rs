@@ -639,6 +639,23 @@ fn direct_consolidation_records_exact_citation_and_human_revert_keeps_the_audit(
         assert_eq!(after.lifecycle, "Retracted");
         assert_eq!(after.body.evidence_ids, saved.body.evidence_ids);
         assert_eq!(after.revision, saved.revision + 1);
+        // A revision-1 caller replaying that action's revert receives the legacy receipt with
+        // only revision-1 members: the counts and cursor arrived at revision 2.
+        let canonical = devworks_core::jcs::canonicalize(&json!({
+            "id": action.id, "position": action.position, "record": action.action,
+        })).unwrap();
+        let digest = devworks_core::fingerprint::sha256_hex(
+            &[&(canonical.len() as u64).to_be_bytes()[..], canonical.as_bytes()].concat(),
+        );
+        let run_revision = read(&*fx.store, |r| r.dreaming()?.dream_runs(&scope, None, 5))[0].revision;
+        let legacy = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":1,"requestKey":fx.key(),
+            "body":{"kind":"dreaming.revert","runId":completed.id,"expectedRevision":run_revision.to_string(),
+                "proposalId":action.id,"expectedChangeDigest":digest}});
+        let legacy = applied(&app.command(&fx.user, "dreaming.revert", legacy.to_string().as_bytes()).unwrap());
+        assert!(legacy["claimIds"].is_array(), "{legacy}");
+        for member in ["entityCount", "claimCount", "nextCursor"] {
+            assert!(legacy.get(member).is_none(), "revision 1 carries {member}: {legacy}");
+        }
         assert_eq!(wire.round.load(Ordering::SeqCst), 4);
         app.shutdown().await;
     });

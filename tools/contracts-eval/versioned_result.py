@@ -43,7 +43,9 @@ def generate(name, definition, types):
             if any(revisioned(v, seen) for v in fields):
                 return True
         return False
-    retain = '        if let Self::Current(value) = self { value.retain_revision(revision); }' if revisioned(current) else ''
+    # Whichever variant is published keeps only the members of the caller's revision.
+    retain = '\n'.join(f'        if let Self::{variant}(value) = self {{ value.retain_revision(revision); }}'
+                       for variant, ty in (('Legacy', legacy), ('Current', current)) if revisioned(ty))
     parameter = 'revision' if conversion or retain else '_revision'
     earlier = definition.get('earlierName', legacy)
     legacy_error = 'legacy allocation result requires its recorded revision' if variants else 'legacy result requires its recorded revision'
@@ -175,6 +177,4 @@ def page_members_conversion(definition):
             }};
             if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
         }}
-        // A legacy page read at an earlier revision keeps only that revision's item members.
-        if let Self::Legacy(value) = self {{ value.retain_revision(revision); }}
 '''
