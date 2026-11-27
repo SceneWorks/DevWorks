@@ -4,6 +4,9 @@
 //! method answers `unmodelled()`, except those `tools/core-codegen/stubs.py` gives behaviour.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 use crate::{Unmodelled, unmodelled};
+use devworks_core::kernel::document_evidence::ExtractedBlock;
+use devworks_core::kernel::document_evidence::VisionTarget;
+use devworks_core::kernel::document_evidence::VisionUnit;
 use devworks_core::ports::GrantUse;
 use devworks_core::ports::storage::AgentMessageHistoryFilter;
 use devworks_core::ports::storage::ArtifactScope;
@@ -35,9 +38,6 @@ use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::DocumentTransferState;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
-use devworks_core::services::documents::extraction::ExtractedBlock;
-use devworks_core::services::documents::vision::VisionTarget;
-use devworks_core::services::documents::vision::VisionUnit;
 use serde_json::Value;
 
 impl AnalysisRead for Unmodelled {
