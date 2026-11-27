@@ -13,6 +13,7 @@ use devworks_core::protocol::{CommandReply, OperationState};
 use devworks_desktop::backend::Backend;
 use devworks_desktop::frame::fixture::command_input;
 use devworks_desktop::{decision_ops as dops, ops};
+use egui_kittest::kittest::Queryable;
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use serde_json::json;
 use std::io::Cursor;
@@ -705,4 +706,192 @@ fn a_control_grant_between_receipt_and_action_refuses_the_confirmation() {
     assert!(!runtime.control_quiet_since(received));
     assert!(runtime.control_quiet_since(backend.control_epoch()));
     assert!(!runtime.control_quiet_since(ControlEpoch::UNKNOWN));
+}
+
+/// An agent principal selected for desktop control and input, as a bound worker.
+fn desktop_agent(
+    engine: &devworks_desktop::host::Engine,
+) -> devworks_core::context::InvocationContext {
+    use devworks_core::authority::service::bind_principal;
+    use devworks_core::context::{HostIngress, PrincipalKind};
+    use devworks_core::ports::storage::{
+        ConfigScope, NewPrincipalBinding, WriteOptions, run_write,
+    };
+    use devworks_core::protocol::{ActorId, Counter, Id, Revision};
+    let store = engine.host().runtime().store().clone();
+    let human = engine.host().user().clone();
+    let worker = ActorId(Id::new("desktop-worker").unwrap());
+    let registered = worker.clone();
+    let schema = devworks_core::settings::catalog::descriptor("tools.overrides")
+        .unwrap()
+        .schema_ref();
+    run_write(&*store, WriteOptions::fixture(), move |tx| {
+        tx.actors()
+            .register(&registered, PrincipalKind::Agent, "desktop worker")?;
+        bind_principal(
+            tx,
+            &human,
+            NewPrincipalBinding {
+                actor: registered.clone(),
+                kind: PrincipalKind::Agent,
+                role: Some(devworks_core::settings::catalog::AgentRole::Worker),
+                project_id: None,
+                tool_families: None,
+                bound_by: human.principal().clone(),
+            },
+            None,
+        )
+        .map_err(|error| {
+            devworks_core::ports::storage::StorageError::InvalidRecord(format!("{error:?}"))
+        })?;
+        tx.configuration().append_revision(
+            &ConfigScope::Workspace,
+            "settings",
+            1,
+            1,
+            json!({"values":{"tools.overrides":{"schema":schema,
+                "value":{"devworks/desktop.request_control":true,"devworks/desktop.input":true}}}}),
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    HostIngress::new(&*store).context(
+        worker,
+        PrincipalKind::Agent,
+        Id::new("desktop-worker-invocation").unwrap(),
+        Id::new("desktop-worker-ingress").unwrap(),
+        Counter::new(store.info().restore_epoch).unwrap(),
+        Revision::new(1).unwrap(),
+    )
+}
+
+#[test]
+fn a_person_takes_desktop_control_back_from_an_agent_on_the_resources_screen() {
+    use devworks_core::ports::storage::LeasePhase;
+    use devworks_desktop::route::Route;
+    use eframe::egui::accesskit::Role;
+    let _case = native_runtime_case();
+    let root = Root::new("desktop-take-back");
+    let platform = Arc::new(ScriptedDesktop::default());
+    platform.pointer_available.store(true, Ordering::SeqCst);
+    let mut configuration = config(&root.0);
+    configuration.desktop_platform = Some(platform.clone());
+    let engine = devworks_desktop::host::Engine::start(configuration).expect("runtime boot");
+    let backend = engine.backend();
+    let runtime = engine.host().runtime().clone();
+    let agent = desktop_agent(&engine);
+
+    // The agent asks for control; the request is staged for a person, who approves it.
+    let before = inspect(&*backend);
+    let request = json!({"desktopId":before.desktop_id,"expectedRevision":before.revision,
+        "reason":"Test the local UI", "leaseMs":"30000"});
+    let decoded = devworks_core::services::approvals::requests::decode(
+        "desktop.request_control",
+        1,
+        &request,
+        true,
+    )
+    .expect("selected saved operation");
+    let held = runtime
+        .approvals()
+        .stage_held(
+            &**runtime.store(),
+            &agent,
+            "desktop.request_control",
+            1,
+            &request,
+            decoded.fingerprint.as_str(),
+        )
+        .unwrap_or_else(|e| panic!("the agent's request was not staged: {e:?}"));
+    let proposal = read_snapshot(&**runtime.store(), &ReadOptions::default(), |s| {
+        s.decisions().approval(&held.approval_id)
+    })
+    .unwrap()
+    .expect("staged approval");
+    dops::decided(backend.human_decision(
+        &dops::command(
+            &*backend,
+            command_input(
+                "approvals.record_human_decision",
+                json!({
+                    "proposalId":held.approval_id,"expectedRevision":proposal.revision.to_string(),
+                    "contentDigest":proposal.content_digest,"decision":"Approve",
+                    "rationale":"OK: the agent may test the UI"
+                }),
+            ),
+        ),
+        backend.control_epoch(),
+    ))
+    .expect("trusted Human OK");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let desktop = loop {
+        let record = inspect(&*backend);
+        if matches!(record.state, ItemState::Enabled) && record.lease_id.is_some() {
+            break record;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "approved desktop control did not resume: {record:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    let lease_id = desktop.lease_id.clone().unwrap();
+    let lease = |id: &devworks_core::protocol::Id| {
+        read_snapshot(&**runtime.store(), &ReadOptions::default(), |s| {
+            s.resources().lease(id)
+        })
+        .unwrap()
+        .expect("lease row")
+    };
+    let granted = lease(&lease_id);
+    assert_eq!(granted.owner, *agent.principal());
+    let agent_input = |revision: &devworks_core::protocol::Revision| {
+        let frame = devworks_desktop::frame::fixture::command(
+            &*backend,
+            "desktop.input",
+            json!({"desktopId":desktop.desktop_id,"leaseId":lease_id,
+                "expectedFence":granted.fence.to_string(),"consentId":held.approval_id,
+                "expectedDesktopRevision":revision,"action":{"kind":"Text","text":"hello"}}),
+        );
+        decision(
+            runtime
+                .command(&agent, "desktop.input", &frame)
+                .expect("input reply"),
+        )
+    };
+    assert!(
+        matches!(
+            agent_input(&desktop.revision),
+            DomainDecision::Accepted { .. }
+        ),
+        "the agent can send input while it holds control"
+    );
+
+    // The Resources screen shows who holds control and the desktop's permission state.
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Resources);
+    settle(&mut h);
+    assert!(has_text(&h, "desktop-worker holds desktop control."));
+    assert!(has_text(&h, "Permissions: "));
+
+    // Take back control ends the agent's lease.
+    click(&mut h, Role::Button, "Take back control");
+    step_until(&mut h, "the agent's lease ended", |_| {
+        lease(&lease_id).phase == LeasePhase::Released
+    });
+    settle(&mut h);
+    assert!(has_text(&h, "Nobody holds desktop control."));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Take back control")
+            .is_none()
+    );
+
+    // The agent can no longer send input under that lease.
+    let after = inspect(&*backend);
+    assert!(after.lease_id.is_none());
+    assert!(matches!(
+        agent_input(&after.revision),
+        DomainDecision::Refused { .. }
+    ));
 }

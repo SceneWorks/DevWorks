@@ -675,7 +675,7 @@ impl DesktopService {
             )
             .into());
         }
-        let released = self.resources.release(
+        let released = self.resources.release_desktop_control(
             tx,
             ctx,
             &resource_ops::ReleaseInput {

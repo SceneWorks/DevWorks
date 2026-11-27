@@ -12,8 +12,8 @@ use devworks_core::gateway::QueryOutcome;
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::{
-    ArtifactRecord, BrowserSession, ItemState, LeaseRecord, LeaseState, ResourcePriority,
-    ResourceRecord,
+    ArtifactRecord, BrowserObservation, BrowserSession, DesktopRecord, ItemState, LeaseRecord,
+    LeaseState, ResourcePriority, ResourceRecord,
 };
 use eframe::egui::{self, Ui};
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +44,12 @@ pub enum ResourcesSlot {
     ResourceHolders(String),
     /// The leases waiting for one resource (its canonical key).
     ResourceWaiters(String),
+    /// The desktop's control state (`desktop.inspect`).
+    DesktopControl,
+    /// The leases holding desktop control, which name each holder and fence.
+    DesktopHolders,
+    /// Taking desktop control back (the released lease's ID).
+    DesktopRelease(String),
 }
 screen_slot!(ResourcesSlot, Resources);
 
@@ -56,6 +62,12 @@ pub enum BrowserSlot {
     ProjectBrowserSessions(String),
     /// Closing a browser session (its ID).
     BrowserClose(String),
+    /// The console messages of one browser session (its ID).
+    BrowserConsole(String),
+    /// The network requests of one browser session (its ID).
+    BrowserNetwork(String),
+    /// The text of one console or network observation (its evidence version ID).
+    BrowserNotice(String),
 }
 screen_slot!(BrowserSlot, Browser);
 
@@ -842,6 +854,178 @@ pub struct BrowserScreen {
     pub list: Paged<BrowserSession>,
     /// The browser sessions per scope (`None`: the workspace), combined into `list`.
     parts: BTreeMap<Option<String>, Paged<BrowserSession>>,
+    /// The selected session's console messages and network requests.
+    notices: Option<SessionNotices>,
+}
+
+/// The views of one browser session's activity: Console and Network.
+const NOTICE_TABS: [&str; 2] = ["Console", "Network"];
+
+/// What one browser session recorded: its console messages and its network requests, each a
+/// list of evidence batches, and the batch whose text is shown.
+struct SessionNotices {
+    session: String,
+    console: Paged<BrowserObservation>,
+    network: Paged<BrowserObservation>,
+    /// The view shown: 0 Console, 1 Network.
+    tab: usize,
+    /// The batch shown (its evidence version ID) and its text.
+    shown: Option<(String, Shown)>,
+}
+
+impl SessionNotices {
+    fn new(session: String) -> Self {
+        Self {
+            session,
+            console: Paged::default(),
+            network: Paged::default(),
+            tab: 0,
+            shown: None,
+        }
+    }
+    fn slot(&self, network: bool) -> BrowserSlot {
+        if network {
+            BrowserSlot::BrowserNetwork(self.session.clone())
+        } else {
+            BrowserSlot::BrowserConsole(self.session.clone())
+        }
+    }
+    fn list(&mut self, network: bool) -> &mut Paged<BrowserObservation> {
+        if network {
+            &mut self.network
+        } else {
+            &mut self.console
+        }
+    }
+    fn send(&mut self, cx: &mut Cx, network: bool, fetch: Fetch) {
+        let slot = self.slot(network);
+        let session = self.session.clone();
+        let (label, op) = if network {
+            ("Loading network requests", "browser.network")
+        } else {
+            ("Loading console messages", "browser.console")
+        };
+        cx.paged(
+            self.list(network),
+            fetch,
+            slot,
+            label,
+            op,
+            move |b, cursor| ops::browser_notices_list(b, network, &session, cursor),
+        );
+    }
+    fn apply(&mut self, cx: &mut Cx, network: bool, q: QueryOutcome) {
+        let applied = self
+            .list(network)
+            .apply_current(ops::browser_notices(q).map_err(|e| e.describe()));
+        if let Applied::Continue(fetch) = applied {
+            self.send(cx, network, fetch);
+        }
+    }
+    /// Reads the text of one batch; the text shown stays until its reply replaces it.
+    fn show(&mut self, cx: &mut Cx, o: &BrowserObservation) {
+        let version = o.evidence.version_id.as_str().to_owned();
+        let artifact = o.evidence.clone();
+        if cx.task(
+            BrowserSlot::BrowserNotice(version.clone()),
+            "Reading browser session activity",
+            move |b| preview(b, &artifact).map(TaskOutput::ArtifactPreview),
+        ) {
+            self.shown = Some((version, Shown::Loading));
+        }
+    }
+}
+
+/// The selected session's Console and Network views: the batches it recorded, each with a Load
+/// more control, and the text of the batch picked.
+fn notices_detail(
+    ui: &mut Ui,
+    notices: &mut SessionNotices,
+    more: &mut bool,
+    picked: &mut Option<BrowserObservation>,
+) {
+    ui.strong(format!("Activity of {}", notices.session));
+    widgets::tab_row(
+        ui,
+        "Browser session activity",
+        &NOTICE_TABS,
+        &mut notices.tab,
+    );
+    let network = notices.tab == 1;
+    let (what, empty) = if network {
+        ("network requests", "No network requests recorded.")
+    } else {
+        ("console messages", "No console messages recorded.")
+    };
+    let shown = notices.shown.as_ref().map(|(v, _)| v.clone());
+    let list = if network {
+        &notices.network
+    } else {
+        &notices.console
+    };
+    match list.result() {
+        None => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(14.0));
+                ui.label(format!("Loading {what}…"));
+            });
+        }
+        Some(Err(e)) => {
+            ui.label(format!("The {what} could not be read: {e}"));
+        }
+        Some(Ok(rows)) if rows.is_empty() => {
+            ui.label(empty);
+        }
+        Some(Ok(rows)) => {
+            for o in rows {
+                let selected = shown.as_deref() == Some(o.evidence.version_id.as_str());
+                let label = format!(
+                    "Batch {}  ·  {} bytes{}",
+                    o.sequence.as_str(),
+                    o.evidence.byte_length.as_str(),
+                    if o.truncated {
+                        "  ·  some dropped"
+                    } else {
+                        ""
+                    }
+                );
+                if ui.selectable_label(selected, label).clicked() {
+                    *picked = Some(o.clone());
+                }
+            }
+        }
+    }
+    crate::paged::load_more_control(ui, list, more);
+    let Some((version, state)) = &notices.shown else {
+        widgets::caption(ui, format!("Select a batch to read its {what}."));
+        return;
+    };
+    ui.add_space(8.0);
+    match state {
+        Shown::Loading => {
+            ui.spinner();
+        }
+        Shown::Failed(e) => {
+            widgets::caption(ui, format!("The batch could not be read: {e}"));
+        }
+        Shown::Ready(PreviewView::Text { text, partial }, _) => {
+            if *partial {
+                widgets::caption(ui, "The beginning of the batch");
+            }
+            egui::ScrollArea::vertical()
+                .id_salt(("browser-notice-text", version.as_str()))
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(
+                        egui::RichText::new(text.as_str()).monospace(),
+                    ));
+                });
+        }
+        Shown::Ready(PreviewView::Facts(facts), _)
+        | Shown::Ready(PreviewView::Image { facts, .. }, _) => {
+            widgets::caption(ui, facts.as_str());
+        }
+    }
 }
 
 impl Screen for BrowserScreen {
@@ -853,6 +1037,14 @@ impl Screen for BrowserScreen {
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
         if !cx.pending(&BrowserSlot::BrowserSessions) {
             self.load(cx);
+        }
+        if let Some(notices) = &mut self.notices {
+            for network in [false, true] {
+                if !cx.pending(&notices.slot(network)) {
+                    let fetch = notices.list(network).refresh();
+                    notices.send(cx, network, fetch);
+                }
+            }
         }
     }
     fn apply(&mut self, cx: &mut Cx, slot: BrowserSlot, reply: Reply) {
@@ -879,6 +1071,27 @@ impl Screen for BrowserScreen {
                 }
                 self.load(cx);
             }
+            (BrowserSlot::BrowserConsole(s), Reply::Query(q)) => {
+                if let Some(n) = self.notices.as_mut().filter(|n| n.session == s) {
+                    n.apply(cx, false, q);
+                }
+            }
+            (BrowserSlot::BrowserNetwork(s), Reply::Query(q)) => {
+                if let Some(n) = self.notices.as_mut().filter(|n| n.session == s) {
+                    n.apply(cx, true, q);
+                }
+            }
+            (BrowserSlot::BrowserNotice(v), Reply::Task(result)) => {
+                if let Some((shown, state)) = self.notices.as_mut().and_then(|n| n.shown.as_mut())
+                    && *shown == v
+                {
+                    *state = match result {
+                        Ok(TaskOutput::ArtifactPreview(view)) => Shown::Ready(view, None),
+                        Ok(_) => Shown::Failed("unexpected reply".into()),
+                        Err(e) => Shown::Failed(e),
+                    };
+                }
+            }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
     }
@@ -889,6 +1102,7 @@ impl Screen for BrowserScreen {
         self.parts
             .remove(&Some(scope.project_id.0.as_str().to_owned()));
         self.list = Default::default();
+        self.notices = None;
     }
     fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
         route_context(mem)
@@ -1003,6 +1217,27 @@ impl BrowserScreen {
         out
     }
 
+    /// Reads the selected session's console messages and network requests when the selection
+    /// changes to a listed session.
+    fn follow_selection(&mut self, cx: &mut Cx, selected: Option<&str>) {
+        let Some(id) = selected.filter(|id| self.list.items.iter().any(|s| s.id.as_str() == *id))
+        else {
+            if selected.is_none() {
+                self.notices = None;
+            }
+            return;
+        };
+        if self.notices.as_ref().is_some_and(|n| n.session == id) {
+            return;
+        }
+        let mut notices = SessionNotices::new(id.to_owned());
+        for network in [false, true] {
+            let fetch = notices.list(network).reload();
+            notices.send(cx, network, fetch);
+        }
+        self.notices = Some(notices);
+    }
+
     /// Interrupts a browser session: Close stops its browser through the process owner.
     fn close(&mut self, cx: &mut Cx, session: &BrowserSession) {
         let (id, revision) = (
@@ -1024,9 +1259,12 @@ impl BrowserScreen {
         let mut reload = false;
         let mut more = false;
         let mut close: Option<BrowserSession> = None;
+        let mut more_notices = false;
+        let mut picked: Option<BrowserObservation> = None;
         let mut mem = cx.routes.remove(&Route::Browser).unwrap_or_default();
         let scopes = self.scope_labels(cx);
         let list = &self.list;
+        let notices = &mut self.notices;
         let scrolls = &mut *cx.scrolls;
         let mut st = (&mut reload, &mut mem, &mut close, &mut more);
         widgets::pane(
@@ -1061,8 +1299,9 @@ impl BrowserScreen {
                 let RouteMemory {
                     filter, selection, ..
                 } = mem;
+                ui.columns(2, |cols| {
                 list_body(
-                    ui,
+                    &mut cols[0],
                     &online,
                     list,
                     ListText {
@@ -1121,9 +1360,36 @@ impl BrowserScreen {
                         .clicked()
                     },
                 );
+                let ui = &mut cols[1];
+                match notices {
+                    Some(notices) => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("browser-activity")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                notices_detail(ui, notices, &mut more_notices, &mut picked)
+                            });
+                    }
+                    None => widgets::caption(
+                        ui,
+                        "Select a browser session to see its console messages and network requests.",
+                    ),
+                }
+                });
             },
         );
+        let selected = mem.selection.clone();
         cx.routes.insert(Route::Browser, mem);
+        self.follow_selection(cx, selected.as_deref());
+        if let Some(n) = &mut self.notices {
+            if let Some(o) = picked {
+                n.show(cx, &o);
+            }
+            let network = n.tab == 1;
+            if more_notices && let Some(fetch) = n.list(network).more_page() {
+                n.send(cx, network, fetch);
+            }
+        }
         if let Some(s) = close {
             self.close(cx, &s);
         }
@@ -1141,6 +1407,10 @@ pub struct ResourcesScreen {
     pub list: Paged<ResourceRecord>,
     /// The holders and waiters of the selected resource.
     pub leases: Option<ResourceLeases>,
+    /// The desktop's control state as last read (`None` until the first reply).
+    desktop: Option<Result<DesktopRecord, String>>,
+    /// The leases holding desktop control: their holders and fences.
+    desktop_holders: Paged<LeaseRecord>,
 }
 
 /// Who holds and who waits for one resource.
@@ -1165,6 +1435,7 @@ impl Screen for ResourcesScreen {
         if !cx.pending(&ResourcesSlot::ResourcesList) {
             self.load(cx);
         }
+        self.load_desktop(cx);
         if let Some(leases) = &mut self.leases {
             for waiters in [false, true] {
                 let slot = leases.slot(waiters);
@@ -1190,6 +1461,31 @@ impl Screen for ResourcesScreen {
             }
             (ResourcesSlot::ResourceWaiters(key), Reply::Query(q)) => {
                 self.apply_leases(cx, &key, true, q);
+            }
+            (ResourcesSlot::DesktopControl, Reply::Query(q)) => {
+                self.desktop = Some(ops::desktop_inspected(q).map_err(|e| e.describe()));
+            }
+            (ResourcesSlot::DesktopHolders, Reply::Query(q)) => {
+                let applied = self
+                    .desktop_holders
+                    .apply_current(ops::resource_leases_page(q).map_err(|e| e.describe()));
+                if let Applied::Continue(fetch) = applied {
+                    Self::send_desktop_holders(cx, &mut self.desktop_holders, fetch);
+                }
+            }
+            (ResourcesSlot::DesktopRelease(_), Reply::Command(c)) => {
+                match ops::desktop_released(c) {
+                    Ok(true) => cx.announce("You took back desktop control."),
+                    Ok(false) => cx.announce("Desktop control had already ended."),
+                    Err(Failure::Unknown) => {
+                        cx.announce("Taking back desktop control: outcome not confirmed.")
+                    }
+                    Err(e) => cx.announce(format!(
+                        "Desktop control could not be taken back: {}",
+                        e.describe()
+                    )),
+                }
+                self.load_desktop(cx);
             }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
@@ -1324,7 +1620,113 @@ fn lease_detail(ui: &mut Ui, leases: &ResourceLeases, more: &mut [bool; 2]) {
     }
 }
 
+/// Who holds desktop control, or who waits for it, and the desktop's permission state, with a
+/// Take back control button for a held or requested lease. The lease clicked is returned.
+fn desktop_card(
+    ui: &mut Ui,
+    desktop: Option<&Result<DesktopRecord, String>>,
+    holders: &Paged<LeaseRecord>,
+    reading: bool,
+    releasing: bool,
+) -> Option<LeaseRecord> {
+    let mut clicked = None;
+    ui.strong("Desktop control");
+    match desktop {
+        None if !reading => {
+            ui.label("Desktop control has not been read.");
+        }
+        None => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(14.0));
+                ui.label("Reading desktop control…");
+            });
+        }
+        Some(Err(e)) => {
+            ui.label(format!("Desktop control could not be read: {e}"));
+        }
+        Some(Ok(record)) => {
+            let lease = record
+                .lease_id
+                .as_ref()
+                .and_then(|id| holders.items.iter().find(|l| l.id == *id));
+            let who = lease.map_or("an agent", |l| l.owner_id.0.as_str());
+            let status = match record.state {
+                ItemState::Unavailable => {
+                    "Desktop control is unavailable on this machine.".to_owned()
+                }
+                ItemState::Enabled => format!("{who} holds desktop control."),
+                ItemState::Partial => format!("{who} is waiting for desktop control."),
+                _ => "Nobody holds desktop control.".to_owned(),
+            };
+            ui.label(status);
+            widgets::caption(
+                ui,
+                format!("Permissions: {}", record.permission_state.0.as_str()),
+            );
+            if let Some(l) =
+                lease.filter(|_| matches!(record.state, ItemState::Enabled | ItemState::Partial))
+            {
+                let button = ui.add_enabled_ui(!releasing, |ui| {
+                    widgets::secondary_button(ui, "Take back control")
+                });
+                if button.inner.clicked() {
+                    clicked = Some(l.clone());
+                }
+            }
+        }
+    }
+    clicked
+}
+
 impl ResourcesScreen {
+    /// Reads the desktop's control state and the leases holding it, unless already reading.
+    fn load_desktop(&mut self, cx: &mut Cx) {
+        if !cx.pending(&ResourcesSlot::DesktopControl) {
+            cx.query(
+                ResourcesSlot::DesktopControl,
+                "Reading desktop control",
+                "desktop.inspect",
+                ops::desktop_inspect,
+            );
+        }
+        if !cx.pending(&ResourcesSlot::DesktopHolders) {
+            let fetch = self.desktop_holders.reread();
+            Self::send_desktop_holders(cx, &mut self.desktop_holders, fetch);
+        }
+    }
+    fn send_desktop_holders(cx: &mut Cx, list: &mut Paged<LeaseRecord>, fetch: Fetch) {
+        cx.paged(
+            list,
+            fetch,
+            ResourcesSlot::DesktopHolders,
+            "Loading desktop control holders",
+            "resources.holders",
+            |b, cursor| {
+                ops::resource_leases(
+                    b,
+                    false,
+                    devworks_core::services::resources::DESKTOP,
+                    None,
+                    cursor,
+                )
+            },
+        );
+    }
+    /// Ends `lease` at its fence: the person takes desktop control back from its holder.
+    fn take_back(&mut self, cx: &mut Cx, desktop: &DesktopRecord, lease: &LeaseRecord) {
+        let (desktop_id, lease_id, fence) = (
+            desktop.desktop_id.as_str().to_owned(),
+            lease.id.as_str().to_owned(),
+            lease.fence.as_str().to_owned(),
+        );
+        let id = lease_id.clone();
+        cx.command(
+            ResourcesSlot::DesktopRelease(id),
+            "Taking back desktop control",
+            "desktop.release_control",
+            move |b| ops::desktop_release(b, &desktop_id, &lease_id, &fence),
+        );
+    }
     fn apply_leases(&mut self, cx: &mut Cx, key: &str, waiters: bool, q: QueryOutcome) {
         let Some(leases) = &mut self.leases else {
             return;
@@ -1374,6 +1776,7 @@ impl ResourcesScreen {
     fn load(&mut self, cx: &mut Cx) {
         let fetch = self.list.reread();
         self.send(cx, fetch);
+        self.load_desktop(cx);
     }
     fn send(&mut self, cx: &mut Cx, fetch: Fetch) {
         cx.paged(
@@ -1405,9 +1808,18 @@ impl ResourcesScreen {
         let mut more = false;
         let mut link = false;
         let mut more_leases = [false, false];
+        let mut take_back: Option<LeaseRecord> = None;
+        let reading_desktop = cx.pending(&ResourcesSlot::DesktopControl);
+        let releasing = self
+            .desktop_holders
+            .items
+            .iter()
+            .any(|l| cx.waiting(&ResourcesSlot::DesktopRelease(l.id.as_str().to_owned())));
         let mut mem = cx.routes.remove(&Route::Resources).unwrap_or_default();
         let list = &self.list;
         let leases = &self.leases;
+        let desktop = self.desktop.as_ref();
+        let desktop_holders = &self.desktop_holders;
         let scrolls = &mut *cx.scrolls;
         let mut st = (
             &mut reload,
@@ -1436,6 +1848,8 @@ impl ResourcesScreen {
                 }
             },
             |ui, st, _| {
+                take_back = desktop_card(ui, desktop, desktop_holders, reading_desktop, releasing);
+                ui.add_space(8.0);
                 let mem = &mut *st.1;
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut mem.filter)
@@ -1500,6 +1914,9 @@ impl ResourcesScreen {
         );
         let selected = mem.selection.clone();
         cx.routes.insert(Route::Resources, mem);
+        if let (Some(lease), Some(Ok(desktop))) = (take_back, self.desktop.clone()) {
+            self.take_back(cx, &desktop, &lease);
+        }
         self.follow_selection(cx, selected.as_deref());
         if let Some(leases) = &mut self.leases {
             for (waiters, wanted) in [(false, more_leases[0]), (true, more_leases[1])] {

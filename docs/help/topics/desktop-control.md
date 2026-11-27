@@ -8,7 +8,11 @@ DevWorks can let an agent look at your screen and operate the desktop. Reading t
 - `desktop.capture` takes a PNG screenshot and stores it as an artifact in the current scope. The request must name the desktop and its current revision. A stale revision is refused with a revision conflict.
 - `desktop.request_control` asks to take over the desktop for a stated reason and a lease length in milliseconds. It is refused as unsupported when neither input nor accessibility is available on this computer, and as a conflict when the desktop revision is stale.
 - `desktop.input` sends one action: a click at screen coordinates with a mouse button, typed text, a key with modifiers, a scroll, or an action on an accessibility target (invoke an action, set a value, or focus).
-- `desktop.release_control` ends the lease early.
+- `desktop.release_control` ends the lease early. An agent can release only its own lease; a person can release any holder's lease, and the lease's fence number must still match.
+
+## See and take back control
+
+Resources shows who holds desktop control or waits for it, and the permission state. Select Take back control to end the holder's lease at once. The agent's next input under that lease is refused, and it must ask again.
 
 ## Consent
 

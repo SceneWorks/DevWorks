@@ -647,6 +647,111 @@ fn project_browser_sessions_are_listed_and_closed_from_the_browser_view() {
         devworks_core::ports::storage::BrowserPhase::Starting
     );
 }
+/// Records one console or network observation of `session` as its evidence artifact.
+fn seed_observation(
+    engine: &devworks_desktop::host::Engine,
+    session: &str,
+    project: &Id,
+    channel: devworks_core::ports::storage::BrowserChannel,
+    document: serde_json::Value,
+) {
+    use devworks_core::ports::storage::{ArtifactScope, StoredBrowserObservation};
+    use devworks_core::protocol::{ActorId, ProjectId};
+    use devworks_core::services::artifacts::evidence::Evidence;
+    let runtime = engine.host().runtime();
+    let evidence = Evidence {
+        scope: ArtifactScope::Project(ProjectId(project.clone())),
+        producer: ActorId(Id::new(devworks_desktop::host::USER_ACTOR).unwrap()),
+        principal_kind: "Human".into(),
+        agent_session: None,
+        root: None,
+        assignment: None,
+        title: format!("Browser {} observation", channel.as_str()),
+        media_type: "application/json".into(),
+        tags: vec![],
+        source: serde_json::json!({"kind": format!("Browser{}", channel.as_str())}),
+    };
+    let sid = Id::new(session).unwrap();
+    runtime
+        .artifacts()
+        .publish_evidence(
+            &**runtime.store(),
+            evidence,
+            document.to_string().as_bytes(),
+            move |tx, r| {
+                let sequence = tx.browser().next_observation_sequence(&sid)?;
+                let recorded_at_ms = tx.now_ms();
+                tx.browser()
+                    .insert_browser_observation(&StoredBrowserObservation {
+                        tested_repository: None,
+                        session_id: sid.clone(),
+                        sequence,
+                        channel,
+                        artifact_id: r.artifact_id.clone(),
+                        version_id: r.version_id.clone(),
+                        truncated: false,
+                        recorded_at_ms,
+                    })
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn a_browser_sessions_console_messages_and_network_requests_are_read_from_the_browser_view() {
+    use devworks_core::ports::storage::BrowserChannel;
+    let root = Root::new("browser-activity");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Engine", "", &[]),
+    ))
+    .unwrap()
+    .id
+    .0;
+    seed_browser(&engine, "bs-activity", &project);
+    seed_observation(
+        &engine,
+        "bs-activity",
+        &project,
+        BrowserChannel::Console,
+        serde_json::json!({"sessionId": "bs-activity", "channel": "Console",
+            "entries": [{"level": "error", "text": "Uncaught TypeError: widget is undefined"}],
+            "dropped": 0, "protocolEventsDropped": false}),
+    );
+    seed_observation(
+        &engine,
+        "bs-activity",
+        &project,
+        BrowserChannel::Network,
+        serde_json::json!({"sessionId": "bs-activity", "channel": "Network",
+            "entries": [{"method": "GET", "url": "https://example.test/api/widgets", "status": 503}],
+            "dropped": 0, "protocolEventsDropped": false}),
+    );
+    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Browser);
+    settle(&mut h);
+    assert!(has_text(
+        &h,
+        "Select a browser session to see its console messages and network requests."
+    ));
+    click_row(&mut h, "bs-activity  ·  Engine");
+    assert!(has_text(&h, "Activity of bs-activity"));
+    // The Console view lists the session's console batch; picking it shows its messages.
+    assert!(h.query_by_role_and_label(Role::Button, "Console").is_some());
+    click_row(&mut h, "Batch 1  ·");
+    assert!(has_text(&h, "Uncaught TypeError: widget is undefined"));
+    assert!(!has_text(&h, "https://example.test/api/widgets"));
+    // The Network view lists its network batch; picking it shows its requests.
+    click(&mut h, Role::Button, "Network");
+    assert!(!has_text(&h, "Batch 1  ·"));
+    click_row(&mut h, "Batch 2  ·");
+    assert!(has_text(&h, "https://example.test/api/widgets"));
+    assert!(has_text(&h, "503"));
+}
+
 /// A shell over `gate` with the Engine project (member repo-a) selected in All projects.
 fn gated_engine(
     name: &str,
