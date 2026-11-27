@@ -230,6 +230,31 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertIn('if let Self::Legacy(value) = self { value.retain_revision(revision); }', rust)
         self.assertNotIn('Self::Current(value) = self', rust)
 
+    def test_every_versioned_result_with_a_gated_legacy_type_trims_its_legacy_value(self):
+        # A legacy value whose type (or page item type) has revision-gated members must be trimmed
+        # to the caller's revision, whichever versioned result carries it.
+        def gated(name):
+            name = name.strip()
+            if name.startswith('Page<') and name.endswith('>'):
+                name = name[len('Page<'):-1]
+            spec = generate.TYPES.get(name)
+            return bool(spec and spec.get('since'))
+
+        checked = 0
+        for name, spec in generate.TYPES.items():
+            if spec.get('kind') != 'versioned' or not spec.get('legacy'):
+                continue
+            if not gated(spec['legacy']):
+                continue
+            rust = generate.gen_versioned(name, spec, generate.TYPES)
+            self.assertIn(
+                'if let Self::Legacy(value) = self { value.retain_revision(revision); }',
+                rust,
+                name,
+            )
+            checked += 1
+        self.assertGreaterEqual(checked, 2, 'dreaming.revert and analysis.clusters at least')
+
     def test_skill_resources_project_each_item_to_its_artifact_below_revision_three(self):
         result = generate.DOMAIN_OPS['skills.resources']['result']
         self.assertEqual(result, 'SkillResourcePageResult')
