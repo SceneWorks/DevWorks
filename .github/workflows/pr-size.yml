@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
+      - name: Test the size check and that no compiled-in file is generated
+        run: python3 -I -m unittest discover -s tools/pr-size
       - name: Check hand-written diff size
         if: ${{ !(contains(github.event.pull_request.labels.*.name, 'large-pr-approved') || startsWith(github.event.pull_request.head.ref, 'feature/')) }}
         env:

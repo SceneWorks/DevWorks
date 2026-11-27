@@ -6,8 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, browser, features, git, history, issues, knowledge,
-    next_work, runs, sessions, tasks,
+    OperationInput, addons, approvals, artifacts, browser, features, git, history, issues,
+    knowledge, next_work, runs, sessions, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -544,6 +544,9 @@ fn agent_assignment_scope(
                 history::Input::CommandReceipt(_) => true,
             }
         }
+        OperationInput::Addons(addons::Input::RunWorkflow(input)) => {
+            coordinator && readable_artifact(&input.input.artifact_id, &input.input.version_id)?
+        }
         // Jobs have project scope and no root or assignment owner. Active assignments cannot
         // use project-wide scheduler operations through their ambient agent authority.
         OperationInput::Jobs(_) => false,
@@ -750,7 +753,41 @@ fn agent_assignment_scope(
                 _ => false,
             },
         },
-        OperationInput::Indexing(_) => false,
+        OperationInput::Indexing(input) => {
+            use crate::kernel::checkout;
+            use crate::operations::indexing::Input;
+            use crate::protocol::data::IndexCommand;
+            match input {
+                Input::RefreshOverlay(input) => match &input.command {
+                    IndexCommand::RefreshOverlay {
+                        repository_id,
+                        worktree_id,
+                        git_ref,
+                        ..
+                    } => checkout::refresh_target(
+                        s.git(),
+                        ctx,
+                        repository_id,
+                        worktree_id.as_ref(),
+                        git_ref.is_some(),
+                    )
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                    .is_some(),
+                    _ => false,
+                },
+                Input::Status(input) => match checkout::status_target(
+                    s,
+                    ctx,
+                    input.repository_id.as_ref(),
+                    input.overlay_id.as_ref(),
+                ) {
+                    Ok(_) => true,
+                    Err(StorageError::ScopeDenied) => false,
+                    Err(_) => return Err(DenialReason::AuthorityUnavailable),
+                },
+                _ => false,
+            }
+        }
         // An operation whose assignment scope needs its target checked, but that has no check
         // here, is outside every assignment.
         _ => false,
@@ -802,6 +839,9 @@ pub(crate) fn decide_in(
     {
         return Err(deny(DenialReason::UnregisteredPrincipal));
     }
+    let selected = crate::authority::database::authority_scope(ctx, request.input)
+        .map_err(|_| deny(DenialReason::OutOfProjectScope))?;
+    let ctx = selected.as_ref().unwrap_or(ctx);
     let binding = bound(s, ctx).map_err(unavailable)?;
     if binding.as_ref().and_then(|binding| binding.role)
         == Some(crate::settings::catalog::AgentRole::PlanReviewer)
@@ -850,6 +890,18 @@ pub(crate) fn decide_in(
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
+    if !matches!(verdict, Verdict::Deny(_))
+        && let Some(fence) = crate::authority::database::mutation_fence(s, ctx, request.input)
+            .map_err(|error| {
+                if matches!(error, StorageError::ScopeDenied) {
+                    deny(DenialReason::OutOfProjectScope)
+                } else {
+                    unavailable(error)
+                }
+            })?
+    {
+        fences.push(fence);
+    }
     if let Some((id, digest)) = ownership {
         fences.push(AuthorityFence::GitWorktree { id, digest });
     }
@@ -1052,6 +1104,14 @@ fn fences_hold_with_context(
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::kernel::analysis::dispatch_binding_in(tx, operation, request)?
+            }
+            AuthorityFence::DatabaseSource { id, revision } => {
+                tx.schemas().schema_source(id)?.is_some_and(|source| {
+                    !source.deleted && source.connection.revision.get() == *revision
+                })
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
@@ -1123,6 +1183,14 @@ pub fn authorization_holds(
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::kernel::analysis::dispatch_binding_snapshot(s, operation, request)?
+            }
+            AuthorityFence::DatabaseSource { id, revision } => {
+                s.schemas().schema_source(id)?.is_some_and(|source| {
+                    !source.deleted && source.connection.revision.get() == *revision
+                })
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
             }

@@ -42,6 +42,11 @@ pub enum CodecBody {
         binding: NativeBinding,
         artifact: ArtifactRef,
     },
+    #[schemars(extend("x-since" = 2))]
+    Embedding {
+        index: Counter,
+        artifact: ArtifactRef,
+    },
     Usage {
         observation: RawUsageObservation,
     },

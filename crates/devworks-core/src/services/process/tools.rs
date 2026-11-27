@@ -91,6 +91,7 @@ pub struct ProcessToolService {
     fs: Arc<dyn FilesystemResolver>,
     protected_roots: ProtectedRoots,
     ids: Arc<dyn IdSource>,
+    git: Option<Arc<crate::services::git::GitService>>,
     live_output: Mutex<HashMap<String, Arc<Mutex<BoundedOutput>>>>,
     /// Match counters of watched runs with a pattern, by process ID: stdout's and stderr's.
     live_matches: Mutex<HashMap<String, Arc<Mutex<[MatchCounter; 2]>>>>,
@@ -120,11 +121,17 @@ impl ProcessToolService {
             fs,
             protected_roots,
             ids,
+            git: None,
             live_output: Mutex::new(HashMap::new()),
             live_matches: Mutex::new(HashMap::new()),
             live_tails: Mutex::new(HashMap::new()),
             monitoring: Mutex::new(HashSet::new()),
         }
+    }
+
+    pub fn with_git_source(mut self, git: Option<Arc<crate::services::git::GitService>>) -> Self {
+        self.git = git;
+        self
     }
 
     fn correlation(&self) -> CorrelationId {

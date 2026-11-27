@@ -5,6 +5,7 @@ impl WorkCtl<'_, '_> {
     pub(crate) fn work_act(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
+                Action::CodeReview(action) => self.code_review_act(action),
                 Action::KeepWorking(enabled) => {
                     let Some(project) = self.selected_project.clone() else {
                         continue;
@@ -124,6 +125,7 @@ impl WorkCtl<'_, '_> {
                 Action::OpenWork(id) => self.open_work(&id),
                 Action::Reload => {
                     self.load_work();
+                    self.reinspect_runs();
                     self.refresh_history(self.work.activity.item.clone());
                 }
                 Action::Create(form) => {
@@ -261,10 +263,193 @@ impl WorkCtl<'_, '_> {
                 }
                 Action::RefreshGit(root) => self.load_git_links(&root),
                 Action::ReadinessHistory(root, more) => self.load_readiness_history(&root, more),
+                Action::LinkedHistory(root, part) => self.load_linked_history(&root, part),
                 Action::OpenGitSession(session) => {
                     self.cx.effects.push(Effect::OpenGitSession(session));
                 }
+                Action::PublishGithubIssue {
+                    issue_id,
+                    expected_revision,
+                    repository_id,
+                } => {
+                    self.command(
+                        WorkSlot::GithubIssuePublish(issue_id.clone()),
+                        "Publishing issue to GitHub",
+                        "issues.publish",
+                        move |be| {
+                            let input = (|| {
+                                let rev: i64 = expected_revision.parse().ok()?;
+                                Some(In::Issues(issues::Input::Publish(issues::PublishInput {
+                                    issue_id: RootId(frame::id(&issue_id)?),
+                                    expected_revision: Revision::new(rev).ok()?,
+                                    repository_id: frame::id(&repository_id)?,
+                                    expected_remote_revision: None,
+                                })))
+                            })();
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                }
+                Action::LinkGithubIssue {
+                    issue_id,
+                    expected_revision,
+                    repository_id,
+                    remote_issue_number,
+                } => {
+                    self.command(
+                        WorkSlot::GithubIssueLink(issue_id.clone()),
+                        "Linking GitHub issue",
+                        "issues.link",
+                        move |be| {
+                            use devworks_core::protocol::support::PositiveCounter;
+                            let input = (|| {
+                                let num: i64 = remote_issue_number.trim().parse().ok()?;
+                                if num <= 0 {
+                                    return None;
+                                }
+                                let rev: i64 = expected_revision.parse().ok()?;
+                                Some(In::Issues(issues::Input::Link(issues::LinkInput {
+                                    issue_id: RootId(frame::id(&issue_id)?),
+                                    expected_revision: Revision::new(rev).ok()?,
+                                    repository_id: frame::id(&repository_id)?,
+                                    remote_issue_number: PositiveCounter(num.to_string()),
+                                })))
+                            })();
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                }
+                Action::ReadGithubPullObservations {
+                    repository_id,
+                    pull_request_url,
+                    expected_head,
+                } => {
+                    use devworks_core::operations::github;
+                    use devworks_core::protocol::{
+                        data::{GitOid, ObjectFormat},
+                        records::PageRequest,
+                        support::{Limit, PositiveCounter},
+                    };
+                    let pr_number = pull_request_url
+                        .rsplit_once("/pull/")
+                        .and_then(|(_, tail)| {
+                            let digits = tail.split(['/', '?', '#']).next()?;
+                            let n: i64 = digits.parse().ok()?;
+                            (n > 0).then(|| n.to_string())
+                        });
+                    let Some(pr_number) = pr_number else {
+                        continue;
+                    };
+                    let head_oid = |hex: String| GitOid {
+                        format: if hex.len() == 64 {
+                            ObjectFormat::Sha256
+                        } else {
+                            ObjectFormat::Sha1
+                        },
+                        hex,
+                    };
+                    let repo_checks = repository_id.clone();
+                    let pr_num_checks = pr_number.clone();
+                    let head_checks = expected_head.clone();
+                    self.query(
+                        WorkSlot::GithubPullChecks(pull_request_url.clone()),
+                        "Reading GitHub checks",
+                        "github.checks",
+                        move |be| {
+                            let input = Id::new(repo_checks).ok().map(|repository_id| {
+                                In::Github(github::Input::Checks(github::ChecksInput {
+                                    repository_id,
+                                    pull_request_number: PositiveCounter(pr_num_checks),
+                                    head: head_oid(head_checks),
+                                    page: PageRequest {
+                                        limit: Limit::new(50).expect("bounded checks limit"),
+                                        cursor: None,
+                                    },
+                                }))
+                            });
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                    self.query(
+                        WorkSlot::GithubPullReviews(pull_request_url),
+                        "Reading GitHub reviews",
+                        "github.reviews",
+                        move |be| {
+                            let input = Id::new(repository_id).ok().map(|repository_id| {
+                                In::Github(github::Input::Reviews(github::ReviewsInput {
+                                    repository_id,
+                                    pull_request_number: PositiveCounter(pr_number),
+                                    head: head_oid(expected_head),
+                                    page: PageRequest {
+                                        limit: Limit::new(50).expect("bounded reviews limit"),
+                                        cursor: None,
+                                    },
+                                }))
+                            });
+                            frame::build(be, frame::Negotiate::Latest, input)
+                        },
+                    );
+                }
                 Action::Inspect(root) => self.inspect(&root),
+                Action::Redirect(w) => {
+                    let id = w.id.as_str().to_owned();
+                    let Some(snapshot) = self.work.runs.get(&id).cloned() else {
+                        self.inspect(&id);
+                        continue;
+                    };
+                    let message = self
+                        .work
+                        .redirect_drafts
+                        .get(&id)
+                        .map(|m| m.trim().to_owned())
+                        .unwrap_or_default();
+                    // A redirect already in flight for this root is never sent twice.
+                    if message.is_empty() || self.work.redirect_sent.contains_key(&id) {
+                        continue;
+                    }
+                    self.work.redirect_sent.insert(id.clone(), message.clone());
+                    let root = id.clone();
+                    let sent = self.command(
+                        WorkSlot::WorkRedirect(id.clone()),
+                        "Sending a redirect",
+                        "runs.redirect",
+                        move |be| wops::run_redirect(be, &root, &snapshot, &message),
+                    );
+                    // Nothing was submitted (offline or closing): nothing is in flight.
+                    if !sent {
+                        self.work.redirect_sent.remove(&id);
+                    }
+                }
+                Action::Stop(w) => {
+                    let id = w.id.as_str().to_owned();
+                    let Some(snapshot) = self.work.runs.get(&id).cloned() else {
+                        self.inspect(&id);
+                        continue;
+                    };
+                    let root = id.clone();
+                    self.command(
+                        WorkSlot::WorkStop(id),
+                        "Stopping work",
+                        "runs.stop",
+                        move |be| wops::run_stop(be, &root, &snapshot),
+                    );
+                }
+                Action::ContinueAllHeld => {
+                    let roots: Vec<String> = self
+                        .work
+                        .features
+                        .items
+                        .iter()
+                        .chain(self.work.cards.items.iter())
+                        // Linked tasks hold their own pauses, so they are continued too.
+                        .map(|w| w.id.as_str().to_owned())
+                        .collect();
+                    for root in roots {
+                        // Each root is continued from its current snapshot, never a remembered one.
+                        self.work.continue_all.insert(root.clone());
+                        self.inspect(&root);
+                    }
+                }
                 Action::Run(op, w) => {
                     let Some(snapshot) = self.work.runs.get(w.id.as_str()).cloned() else {
                         self.inspect(w.id.as_str());

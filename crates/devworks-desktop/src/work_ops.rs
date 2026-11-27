@@ -55,7 +55,15 @@ pub enum WorkSlot {
     /// One work item's current record (readiness included).
     WorkDetail(String),
     WorkGit(String),
+    CodeReviews(String, bool),
+    CodeReviewFindings(String, String, bool),
+    CodeReviewFindingCommand(String, String),
     ReadinessHistory(String, u64),
+    /// A page of one root's linked history: its lineage, evidence links and model and tool
+    /// usage (the list request's generation).
+    WorkLineage(String, u64),
+    WorkEvidence(String, u64),
+    WorkToolUsage(String, u64),
     WorkGitInspect(String, String),
     /// A change of one work item (one at a time per item).
     WorkCommand(String),
@@ -72,10 +80,20 @@ pub enum WorkSlot {
     /// A root's run controls (inspect) and one Start/Pause/Continue.
     WorkInspect(String),
     WorkRun(String),
+    /// The conditions holding a root (its ID).
+    WorkEligibility(String),
+    /// A redirect sent to a root (its ID).
+    WorkRedirect(String),
+    /// A stop of a root (its ID).
+    WorkStop(String),
     /// The roots and running work of a project an archival would stop (features, issues).
     ArchiveCount(String, bool),
     /// Work opened from elsewhere (a completion card): read as a card (`false`) or a feature.
     WorkOpen(String, bool),
+    GithubIssuePublish(String),
+    GithubIssueLink(String),
+    GithubPullChecks(String),
+    GithubPullReviews(String),
 }
 crate::backend::screen_slot!(WorkSlot, Work);
 
@@ -369,9 +387,10 @@ pub fn events_page(outcome: QueryOutcome) -> Result<(Vec<Event>, Option<String>,
         (other, _) => Err(unexpected("history.events", &other)),
     }
 }
-/// `runs.inspect` of a root (its control revision and holds).
+/// `runs.inspect` of a root: its control revision, holds and, from schema revision 20, each
+/// hold's gate and reason and its redirects' stages.
 pub fn run_inspect(backend: &dyn Backend, root: &str) -> Vec<u8> {
-    frame::with(backend, Negotiate::Initial, || {
+    frame::with(backend, Negotiate::Latest, || {
         Some(In::Runs(runs::Input::Inspect(QueryRequest {
             protocol: frame::protocol(),
             query_id: frame::query_id(backend)?,
@@ -385,6 +404,83 @@ pub fn run_snapshot(outcome: QueryOutcome) -> Result<RootSnapshot, Failure> {
     match query_result(outcome)? {
         (OperationResult::RunsInspect { value }, _) => Ok(value),
         (other, _) => Err(unexpected("runs.inspect", &other)),
+    }
+}
+/// `runs.eligibility` of a root for `purpose`: every stored and derived condition holding it.
+pub fn run_eligibility(
+    backend: &dyn Backend,
+    root: &str,
+    purpose: devworks_core::protocol::Purpose,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Runs(runs::Input::Eligibility(QueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: Query::Eligibility {
+                target: devworks_core::protocol::EligibilityTarget::Root(frame::text(root)?),
+                purpose,
+            },
+        })))
+    })
+}
+pub fn run_eligible(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::EligibilitySnapshot, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::RunsEligibility { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("runs.eligibility", &other)),
+    }
+}
+/// `runs.redirect`: an instruction to the root's running coordinator at its inspected revision.
+pub fn run_redirect(
+    backend: &dyn Backend,
+    root: &str,
+    snapshot: &RootSnapshot,
+    message: &str,
+) -> Vec<u8> {
+    let revision = snapshot.root.revision.clone();
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Runs(runs::Input::Redirect(runs::RedirectInput {
+            root_id: frame::text(root)?,
+            expected_control_revision: revision,
+            message: frame::text(message)?,
+            attachments: BoundedList(Vec::new()),
+        })))
+    })
+}
+pub fn run_redirected(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
+    match command_result(outcome)? {
+        OperationResult::RunsRedirect { value } => Ok(value),
+        other => Err(unexpected("runs.redirect", &other)),
+    }
+}
+/// `runs.stop` of a root at its inspected revision.
+pub fn run_stop(backend: &dyn Backend, root: &str, snapshot: &RootSnapshot) -> Vec<u8> {
+    let revision = snapshot.root.revision.clone();
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Runs(runs::Input::Stop(runs::StopInput {
+            root_id: frame::text(root)?,
+            expected_control_revision: revision,
+        })))
+    })
+}
+/// What a stop answered: applied at once, or accepted as an operation that stops the work once
+/// it reaches a safe boundary (both are a recorded stop).
+pub enum Stopped {
+    Applied,
+    Accepted,
+}
+pub fn run_stopped(outcome: CommandOutcome) -> Result<Stopped, Failure> {
+    use devworks_core::protocol::CommandReply;
+    use devworks_core::protocol::results::DomainDecision;
+    if let Ok(CommandReply::Recorded { receipt, .. }) = &outcome
+        && matches!(receipt.decision, DomainDecision::Accepted { .. })
+    {
+        return Ok(Stopped::Accepted);
+    }
+    match command_result(outcome)? {
+        OperationResult::RunsStop { .. } => Ok(Stopped::Applied),
+        other => Err(unexpected("runs.stop", &other)),
     }
 }
 /// Whether a hold is one Continue clears (a manual-resume condition).
@@ -448,18 +544,23 @@ pub fn run_changed(outcome: CommandOutcome) -> Result<RootSnapshot, Failure> {
     }
 }
 
-pub fn readiness_history(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+/// Lines of linked history one page request asks for.
+pub const LINKED_PAGE: u32 = 50;
+
+/// A page of a root's linked history (`history.work_lineage`): its related work, its links and
+/// its events, in committed order.
+pub fn work_lineage(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
         Some(In::History(history::Input::WorkLineage(
             history::WorkLineageInput {
                 root_id: RootId(frame::id(root)?),
-                page: frame::page(50, cursor)?,
+                page: frame::page(LINKED_PAGE, cursor)?,
             },
         )))
     })
 }
 
-pub fn readiness_history_result(
+pub fn work_lineage_result(
     outcome: QueryOutcome,
 ) -> Result<
     devworks_core::protocol::support::HistoryPage<devworks_core::protocol::records::LineageRecord>,
@@ -494,6 +595,92 @@ pub fn git_links_result(
         (OperationResult::HistoryGitLinks { value }, _) => Ok(value),
         (other, _) => Err(unexpected("history.git_links", &other)),
     }
+}
+
+/// A page of a root's evidence links (`history.evidence_links`).
+pub fn evidence_links(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::History(history::Input::EvidenceLinks(
+            history::EvidenceLinksInput {
+                root_id: RootId(frame::id(root)?),
+                page: frame::page(LINKED_PAGE, cursor)?,
+            },
+        )))
+    })
+}
+pub fn evidence_links_result(
+    outcome: QueryOutcome,
+) -> Result<
+    devworks_core::protocol::support::HistoryPage<devworks_core::protocol::records::EvidenceLink>,
+    Failure,
+> {
+    match query_result(outcome)? {
+        (OperationResult::HistoryEvidenceLinks { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("history.evidence_links", &other)),
+    }
+}
+
+/// One fact of a root's usage page: a model request or a completed tool call.
+#[derive(Clone, Debug)]
+pub enum UsageRow {
+    Model(devworks_core::protocol::records::UsageItem),
+    Tool(devworks_core::protocol::records::ToolInvocation),
+}
+/// A page of a root's model and tool usage (`history.tool_usage`).
+pub fn tool_usage(backend: &dyn Backend, root: &str, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::History(history::Input::ToolUsage(
+            history::ToolUsageInput {
+                root_id: Some(RootId(frame::id(root)?)),
+                project_id: None,
+                workspace: None,
+                page: frame::page(LINKED_PAGE, cursor)?,
+            },
+        )))
+    })
+}
+/// The rows of a usage page in committed order and the cursor of the next one, present only
+/// while more exist.
+pub fn tool_usage_result(
+    outcome: QueryOutcome,
+) -> Result<(Vec<UsageRow>, Option<String>), Failure> {
+    match query_result(outcome)? {
+        (OperationResult::HistoryToolUsage { value }, _) => Ok(usage_rows(value)),
+        (other, _) => Err(unexpected("history.tool_usage", &other)),
+    }
+}
+
+/// A usage page's model requests and tool calls merged by their committed sequences. Pages
+/// follow one another in that order, so appended pages stay ordered. A page without model
+/// sequences (revision 1) carries no tool calls and keeps its wire order.
+pub fn usage_rows(
+    page: devworks_core::protocol::records::UsagePage,
+) -> (Vec<UsageRow>, Option<String>) {
+    let next = page.next_cursor.map(|c| c.0).filter(|_| page.has_more);
+    let models = page.items.0;
+    let sequences = page.item_sequences.map(|s| s.0).unwrap_or_default();
+    let mut rows: Vec<(i64, UsageRow)> = if sequences.len() == models.len() {
+        sequences
+            .iter()
+            .map(|s| s.get())
+            .zip(models.into_iter().map(UsageRow::Model))
+            .collect()
+    } else {
+        models
+            .into_iter()
+            .map(|m| (0, UsageRow::Model(m)))
+            .collect()
+    };
+    rows.extend(
+        page.tool_invocations
+            .map(|t| t.0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| (t.sequence.get(), UsageRow::Tool(t))),
+    );
+    // Stable: rows without a known sequence keep their wire order.
+    rows.sort_by_key(|(sequence, _)| *sequence);
+    (rows.into_iter().map(|(_, row)| row).collect(), next)
 }
 
 /// Project workflow columns, including the backend's edit/removal fences.
@@ -589,5 +776,65 @@ pub fn inspected_claim(outcome: QueryOutcome) -> Result<AllocationClaimRecord, F
     match query_result(outcome)? {
         (OperationResult::NextWorkInspectClaim { value }, _) => Ok(value),
         (other, _) => Err(unexpected("next_work.inspect_claim", &other)),
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn page(models: &[(&str, i64)], tools: &[(&str, i64)], more: bool) -> serde_json::Value {
+        let item = |id: &str| {
+            json!({"requestId": id, "purpose": "chat", "modelId": "model-a",
+                "inputTokens": "1", "outputTokens": "1", "cacheReadTokens": "0",
+                "cacheWriteTokens": "0", "priceKind": "Untracked", "priceOrigin": "Untracked",
+                "incomplete": false})
+        };
+        let tool = |id: &str, sequence: i64| {
+            json!({"sequence": sequence.to_string(), "callId": id, "sessionId": "session-a",
+                "toolName": "fs.read", "outcome": "Completed", "actorId": "actor-a",
+                "occurredAtMs": "1"})
+        };
+        let mut value = json!({
+            "items": models.iter().map(|(id, _)| item(id)).collect::<Vec<_>>(),
+            "hasMore": more,
+            "itemSequences": models.iter().map(|(_, s)| s.to_string()).collect::<Vec<_>>(),
+            "toolInvocations": tools.iter().map(|(id, s)| tool(id, *s)).collect::<Vec<_>>(),
+        });
+        if more {
+            value["nextCursor"] = json!("next");
+        }
+        value
+    }
+
+    fn ids(rows: &[UsageRow]) -> Vec<&str> {
+        rows.iter()
+            .map(|r| match r {
+                UsageRow::Model(m) => m.request_id.as_str(),
+                UsageRow::Tool(t) => t.call_id.as_str(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn usage_pages_list_model_requests_and_tool_calls_in_committed_order() {
+        let first: devworks_core::protocol::records::UsagePage = serde_json::from_value(page(
+            &[("m-1", 1), ("m-4", 4)],
+            &[("t-2", 2), ("t-3", 3)],
+            true,
+        ))
+        .unwrap();
+        let second: devworks_core::protocol::records::UsagePage =
+            serde_json::from_value(page(&[("m-6", 6)], &[("t-5", 5), ("t-7", 7)], false)).unwrap();
+        let (mut rows, next) = usage_rows(first);
+        assert_eq!(next.as_deref(), Some("next"));
+        let (more, last) = usage_rows(second);
+        assert_eq!(last, None);
+        rows.extend(more);
+        assert_eq!(
+            ids(&rows),
+            ["m-1", "t-2", "t-3", "m-4", "t-5", "m-6", "t-7"]
+        );
     }
 }

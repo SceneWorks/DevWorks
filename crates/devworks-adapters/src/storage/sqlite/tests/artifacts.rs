@@ -6520,3 +6520,39 @@ fn purge_client_keeper_retains_only_its_exact_version_and_minimal_artifact_heade
         .is_err()
     );
 }
+
+/// Revision 19 lists the artifact, reference and live-version identities, and they are exactly
+/// what `artifacts.tag` and a whole-artifact `artifacts.delete` expect; earlier revisions omit
+/// them.
+#[test]
+fn listed_identities_are_the_ones_tag_and_delete_expect() {
+    let fx = Fx::new();
+    let user = fx.user();
+    saved(fx.save_tagged("i-1", "Report", b"report", json!(["draft"])));
+    let (items, _) = fx.listed(&list_frame(Some(4), None, None, 50));
+    for member in ["revision", "referenceRevision", "versionsDigest"] {
+        assert!(items[0].get(member).is_none(), "{member} at revision 4");
+    }
+    let (items, _) = fx.listed(&list_frame(Some(19), None, None, 50));
+    let item = &items[0];
+    let aid = id(item["artifact"]["artifactId"].as_str().unwrap());
+    let revision: i64 = item["revision"].as_str().unwrap().parse().unwrap();
+    let stored = fx.artifact(&aid);
+    assert_eq!(revision, stored.revision);
+    assert_eq!(
+        item["referenceRevision"].as_str().unwrap(),
+        stored.reference_revision.to_string()
+    );
+    // Tagging under the listed revision applies; the next list shows the advanced revision.
+    assert!(tagged(fx.retag(&user, &aid, revision, json!(["release"]))).changed);
+    let (items, _) = fx.listed(&list_frame(Some(19), None, None, 50));
+    let item = &items[0];
+    assert_eq!(item["tags"], json!(["release"]));
+    // The whole artifact is deleted under the listed identities.
+    let deletion = json!({"kind": "DeleteArtifact", "artifactId": aid,
+        "expectedRevision": item["revision"], "expectedReferenceRevision": item["referenceRevision"],
+        "expectedVersionsDigest": item["versionsDigest"]});
+    summary(fx.delete(&user, deletion));
+    let (items, _) = fx.listed(&list_frame(Some(19), None, None, 50));
+    assert!(items.is_empty(), "{items:?}");
+}

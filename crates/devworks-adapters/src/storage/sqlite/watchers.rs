@@ -2,8 +2,9 @@
 use super::conn::db;
 use super::repos::{Snapshot, Unit};
 use super::support::{corrupt, id_of, invalid, page_limit};
+use devworks_core::ports::process::NativeIdentity;
 use devworks_core::ports::storage::*;
-use devworks_core::protocol::{ActorId, Id, OperationId, ProjectId};
+use devworks_core::protocol::{ActorId, AssignmentId, Id, OperationId, ProjectId};
 use rusqlite::{Connection, Row, params, params_from_iter};
 
 const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_id,actor_id,\
@@ -13,7 +14,7 @@ const WATCHER_COLUMNS: &str = "id,revision,phase,source_kind,project_id,session_
     probe_interval_ms,probe_exit_code,probe_output_pattern,probe_runs,\
     probe_next_run_at,due_at,expires_at,match_pattern,match_each,\
     match_min_interval_ms,match_scanned,match_pending,match_total,\
-    match_last_event_at,file_path,file_scan_json";
+    match_last_event_at,file_path,file_scan_json,attached_pid,attached_birth,assignment_id,child_session_id,github_json";
 
 #[allow(clippy::type_complexity)]
 fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
@@ -56,6 +57,11 @@ fn watcher_row(row: &Row<'_>) -> rusqlite::Result<WatcherRow> {
         match_last_event_at: row.get(35)?,
         file_path: row.get(36)?,
         file_scan_json: row.get(37)?,
+        attached_pid: row.get(38)?,
+        attached_birth: row.get(39)?,
+        assignment_id: row.get(40)?,
+        child_session_id: row.get(41)?,
+        github_json: row.get(42)?,
     })
 }
 struct WatcherRow {
@@ -97,6 +103,11 @@ struct WatcherRow {
     match_last_event_at: Option<i64>,
     file_path: Option<String>,
     file_scan_json: Option<String>,
+    attached_pid: Option<i64>,
+    attached_birth: Option<String>,
+    assignment_id: Option<String>,
+    child_session_id: Option<String>,
+    github_json: Option<String>,
 }
 impl WatcherRow {
     fn into_stored(self) -> Result<StoredWatcher, StorageError> {
@@ -106,6 +117,15 @@ impl WatcherRow {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|_| corrupt("watcher file scan progress"))?;
+        let attached_process = match (self.attached_pid, self.attached_birth) {
+            (Some(pid), Some(birth)) => Some(NativeIdentity {
+                pid: u32::try_from(pid).map_err(|_| corrupt("external process pid"))?,
+                birth,
+                group: None,
+            }),
+            (None, None) => None,
+            _ => return Err(corrupt("incomplete external process identity")),
+        };
         Ok(StoredWatcher {
             id: id_of(self.id)?,
             revision: self.revision,
@@ -158,6 +178,21 @@ impl WatcherRow {
                 last_event_at_ms: self.match_last_event_at,
             }),
             file_path: self.file_path,
+            attached_process,
+            assignment: match (self.assignment_id, self.child_session_id) {
+                (Some(id), Some(session)) => Some(StoredWatchAssignment {
+                    id: AssignmentId(id_of(id)?),
+                    session_id: id_of(session)?,
+                }),
+                (None, None) => None,
+                _ => return Err(corrupt("incomplete watched assignment")),
+            },
+            github: self
+                .github_json
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|_| corrupt("watcher GitHub source"))?,
         })
     }
 }
@@ -371,6 +406,25 @@ macro_rules! watcher_reads {
                     ],
                 )
             }
+            fn delivered_watch_events(
+                &self,
+                session: &Id,
+                after_sequence: i64,
+                through_sequence: i64,
+                limit: u16,
+            ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+                events_where(
+                    self.conn,
+                    "session_id=?1 AND state='Delivered' AND transcript_sequence>?2
+                     AND transcript_sequence<=?3 ORDER BY transcript_sequence LIMIT ?4",
+                    params![
+                        session.as_str(),
+                        after_sequence,
+                        through_sequence,
+                        page_limit(limit)?
+                    ],
+                )
+            }
         }
     };
 }
@@ -394,6 +448,13 @@ fn check(watcher: &StoredWatcher) -> Result<(), StorageError> {
     {
         return Err(invalid("watcher output tail exceeds its bound"));
     }
+    if watcher
+        .attached_process
+        .as_ref()
+        .is_some_and(|a| a.group.is_some())
+    {
+        return Err(invalid("an attached watcher cannot own a process group"));
+    }
     Ok(())
 }
 fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, StorageError> {
@@ -408,6 +469,12 @@ fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, Storag
         .map(|scan| serde_json::to_string(&scan))
         .transpose()
         .map_err(|_| invalid("watcher file scan progress cannot be serialized"))?;
+    let github_json = w
+        .github
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| invalid("watcher GitHub source cannot be serialized"))?;
     Ok(vec![
         text(w.id.as_str()),
         Value::Integer(w.revision),
@@ -447,6 +514,11 @@ fn write_params(w: &StoredWatcher) -> Result<Vec<rusqlite::types::Value>, Storag
         int(w.matching.as_ref().and_then(|m| m.last_event_at_ms)),
         opt(w.file_path.as_deref()),
         opt(file_scan_json.as_deref()),
+        int(w.attached_process.as_ref().map(|a| i64::from(a.pid))),
+        opt(w.attached_process.as_ref().map(|a| a.birth.as_str())),
+        opt(w.assignment.as_ref().map(|a| a.id.0.as_str())),
+        opt(w.assignment.as_ref().map(|a| a.session_id.as_str())),
+        opt(github_json.as_deref()),
     ])
 }
 
@@ -465,7 +537,7 @@ impl WatcherRepository for Unit<'_> {
         db(self.conn.execute(
             &format!(
                 "INSERT INTO watchers({WATCHER_COLUMNS}) VALUES({})",
-                placeholders(1, 38)
+                placeholders(1, 43)
             ),
             params_from_iter(write_params(watcher)?),
         ))?;
@@ -485,8 +557,9 @@ impl WatcherRepository for Unit<'_> {
                 probe_output_pattern=?25,probe_runs=?26,probe_next_run_at=?27,\
                 due_at=?28,expires_at=?29,match_pattern=?30,match_each=?31,\
                 match_min_interval_ms=?32,match_scanned=?33,match_pending=?34,\
-                match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38 WHERE id=?1 AND \
-                revision=?39",
+                match_total=?35,match_last_event_at=?36,file_path=?37,file_scan_json=?38,\
+                attached_pid=?39,attached_birth=?40,assignment_id=?41,child_session_id=?42,github_json=?43 \
+                WHERE id=?1 AND revision=?44",
             params_from_iter(values),
         ))?;
         if changed != 1 {
@@ -539,10 +612,17 @@ impl WatcherRepository for Unit<'_> {
         ))?;
         Ok(changed == 1)
     }
-    fn carry_watch_events(&mut self, session: &Id, turn: &Id) -> Result<u64, StorageError> {
+    fn carry_watch_events(
+        &mut self,
+        session: &Id,
+        turn: &Id,
+        through_sequence: i64,
+    ) -> Result<u64, StorageError> {
         Ok(db(self.conn.execute(
-            "UPDATE watcher_events SET carried_turn_id=?2 WHERE session_id=?1 AND state='Delivered'",
-            params![session.as_str(), turn.as_str()],
+            "UPDATE watcher_events SET carried_turn_id=?2
+             WHERE session_id=?1 AND state='Delivered' AND transcript_sequence<=?3
+               AND carried_turn_id IS NOT ?2",
+            params![session.as_str(), turn.as_str(), through_sequence],
         ))? as u64)
     }
     fn release_watch_events(

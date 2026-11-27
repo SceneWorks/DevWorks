@@ -116,6 +116,16 @@ pub fn with(
     build(backend, negotiate, input())
 }
 
+/// `frame` with its request key replaced by `key`, for a command whose replay after recovery must
+/// keep one stable key. A frame that is not a JSON object stays empty, as [`build`] leaves it.
+pub fn with_request_key(frame: Vec<u8>, key: &str) -> Vec<u8> {
+    let Ok(mut envelope) = serde_json::from_slice::<serde_json::Value>(&frame) else {
+        return Vec::new();
+    };
+    envelope["requestKey"] = json!(key);
+    serde_json::to_vec(&envelope).expect("a JSON envelope serializes")
+}
+
 /// The protocol every specialized request names.
 pub const fn protocol() -> Protocol {
     Protocol::Draft1

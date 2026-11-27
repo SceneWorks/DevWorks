@@ -1153,7 +1153,11 @@ impl DecisionsCtl<'_, '_> {
                     if let Some(links) = &n.links {
                         for link in &links.0 {
                             if let Some(url) = &link.url {
-                                ui.hyperlink_to(&link.kind.0, &url.0);
+                                let label = widgets::github_link_label(&url.0).map_or_else(
+                                    || link.kind.0.clone(),
+                                    |repo| format!("{} · {repo}", link.kind.0),
+                                );
+                                ui.hyperlink_to(label, &url.0);
                             }
                             if (link.target_id.is_some() || link.artifact.is_some())
                                 && ui.button(format!("Open {}", link.kind.0)).clicked()

@@ -150,8 +150,14 @@ pub fn start(root: &Root) -> Engine {
 pub struct Script {
     pub files: Arc<Mutex<Vec<Vec<PathBuf>>>>,
     pub folders: Arc<Mutex<Vec<PathBuf>>>,
+    /// Save-dialog answers, consumed in order.
+    pub saves: Arc<Mutex<Vec<PathBuf>>>,
 }
 impl Dialogs for Script {
+    fn save_file(&mut self, _: &str) -> Option<PathBuf> {
+        let mut f = self.saves.lock().unwrap();
+        (!f.is_empty()).then(|| f.remove(0))
+    }
     fn pick_files(&mut self) -> Vec<PathBuf> {
         let mut f = self.files.lock().unwrap();
         if f.is_empty() {
@@ -322,6 +328,8 @@ pub struct Gate {
     refuse: bool,
     fail_query: Arc<std::sync::atomic::AtomicBool>,
     waiters: Arc<std::sync::atomic::AtomicUsize>,
+    /// Matching calls of a gated host method (see [`Gated`]), held or not.
+    calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 impl Gate {
     pub fn new(operation: &'static str) -> Self {
@@ -334,6 +342,7 @@ impl Gate {
             refuse: false,
             fail_query: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             waiters: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
     /// A gate that lets the request run and holds only its reply (a slow response).
@@ -374,6 +383,27 @@ impl Gate {
     }
     pub fn has_waiter(&self) -> bool {
         self.waiters.load(Ordering::SeqCst) > 0
+    }
+    /// How many matching requests are held at the gate now.
+    pub fn waiters(&self) -> usize {
+        self.waiters.load(Ordering::SeqCst)
+    }
+    /// How many times a gated host method (`sessions.append_screen_context`,
+    /// `read_coordinator_notice`, `index_sources`, `stage_pasted_image`) was called.
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+    /// Counts one call of a gated host method, waits while the gate is closed, and says whether
+    /// the call is refused ([`Self::refusing_queries`] refuses these calls too).
+    fn host_call(&self, operation: &str, frame: &[u8]) -> bool {
+        if !self.matches(operation, frame) {
+            return false;
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if !self.after {
+            self.wait(operation, frame);
+        }
+        self.refuse
     }
     pub fn open(&self) {
         *self.open.0.lock().unwrap() = true;
@@ -520,11 +550,15 @@ impl Backend for Gated {
     fn scratch_dir(&self) -> PathBuf {
         self.inner.scratch_dir()
     }
+    /// Gated as the `stage_pasted_image` operation.
     fn stage_pasted_image(
         &self,
         session: Option<&devworks_core::protocol::Id>,
         png: &[u8],
     ) -> Result<PathBuf, String> {
+        if self.gate.host_call("stage_pasted_image", b"{}") {
+            return Err("controlled staging fault".into());
+        }
         self.inner.stage_pasted_image(session, png)
     }
     fn stage_project_text(
@@ -542,6 +576,102 @@ impl Backend for Gated {
     ) -> Result<Vec<u8>, String> {
         self.inner.read_stream(stream, max)
     }
+    /// Gated as the `sessions.append_screen_context` operation.
+    fn append_screen_context(&self, frame: &[u8]) -> devworks_core::gateway::CommandOutcome {
+        if self.gate.host_call("sessions.append_screen_context", frame) {
+            return Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+                "controlled screen-context fault".into(),
+            ));
+        }
+        self.inner.append_screen_context(frame)
+    }
+    /// Gated as the `read_coordinator_notice` operation.
+    fn read_coordinator_notice(
+        &self,
+        reference: &devworks_core::protocol::provider::ArtifactRef,
+    ) -> Result<String, String> {
+        if self.gate.host_call("read_coordinator_notice", b"{}") {
+            return Err("controlled notice fault".into());
+        }
+        self.inner.read_coordinator_notice(reference)
+    }
+    /// Gated as the `index_sources` operation.
+    fn index_sources(
+        &self,
+        project: Option<&str>,
+    ) -> Result<devworks_core::ports::storage::StoredSourceConfig, String> {
+        if self.gate.host_call("index_sources", b"{}") {
+            return Err("controlled index sources fault".into());
+        }
+        self.inner.index_sources(project)
+    }
+}
+
+/// Frames run while a request is held: `release` frees it from another thread after [`HOLD`],
+/// counted from just before `trigger` (the action that makes the request) runs. Frames run until
+/// `held` says the request is waiting (at most [`HOLD`] / 2), then ten more.
+/// A frame that waited on the held request itself takes at least [`HOLD`], so a caller asserts
+/// that `elapsed` stays well under it.
+pub struct Held {
+    /// The request was seen waiting while frames ran.
+    pub reached: bool,
+    /// How long the frames took.
+    pub elapsed: Duration,
+    releaser: Option<std::thread::JoinHandle<()>>,
+}
+impl Held {
+    pub fn run(
+        h: &mut Harness<'_, Shell>,
+        trigger: impl FnOnce(&mut Harness<'_, Shell>),
+        held: impl Fn(&Shell) -> bool,
+        release: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(HOLD);
+            release();
+        });
+        let started = std::time::Instant::now();
+        trigger(h);
+        while !held(h.state()) && started.elapsed() < HOLD / 2 {
+            h.step();
+        }
+        let reached = held(h.state());
+        for _ in 0..10 {
+            h.step();
+        }
+        Self {
+            reached,
+            elapsed: started.elapsed(),
+            releaser: Some(releaser),
+        }
+    }
+    /// Asserts the frames kept running while the request waited, then waits for its release.
+    pub fn assert_frames_advanced(mut self, what: &str) {
+        assert!(self.reached, "{what}: the request was never seen waiting");
+        assert!(
+            self.elapsed < HOLD / 2,
+            "{what}: frames waited on the store ({:?})",
+            self.elapsed
+        );
+        self.releaser.take().expect("releaser").join().unwrap();
+    }
+}
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Some(releaser) = self.releaser.take() {
+            let _ = releaser.join();
+        }
+    }
+}
+
+/// How long [`Held`] keeps its request held.
+pub const HOLD: Duration = Duration::from_secs(6);
+
+/// Whether a request labelled `label` is in flight.
+pub fn in_flight(shell: &Shell, label: &str) -> bool {
+    shell
+        .client()
+        .is_some_and(|c| c.activities().iter().any(|a| a.label == label))
 }
 
 /// A real backend that loses the acknowledgment of the next `losses` admissions of one
@@ -863,4 +993,64 @@ pub fn listed_sessions(backend: &dyn Backend) -> Vec<String> {
     .into_iter()
     .map(|s| s.id.as_str().to_owned())
     .collect()
+}
+
+/// Holds the store's one writer with an owned no-op transaction until dropped: every write waits
+/// behind it, while WAL readers continue. It never completes a native producer or manufactures a
+/// reply; all reads still use the gateway.
+pub struct WriterHold {
+    release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    cancel: devworks_core::ports::storage::Cancellation,
+    worker:
+        Option<std::thread::JoinHandle<Result<(), devworks_core::ports::storage::StorageError>>>,
+}
+impl WriterHold {
+    pub fn new(store: std::sync::Arc<dyn devworks_core::ports::storage::ApplicationStore>) -> Self {
+        use devworks_core::ports::storage::{Cancellation, StorageError, WriteOptions, run_write};
+        let release =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let (entered, admitted) = std::sync::mpsc::sync_channel(1);
+        let cancel = Cancellation::new();
+        let options = WriteOptions {
+            cancellation: Some(cancel.clone()),
+            ..WriteOptions::fixture()
+        };
+        let gate = release.clone();
+        let worker = std::thread::spawn(move || {
+            run_write(&*store, options, move |_| {
+                entered.send(()).map_err(|_| StorageError::Cancelled)?;
+                let mut open = gate.0.locked();
+                while !*open {
+                    open = gate.1.wait(open).unwrap_or_else(|p| p.into_inner());
+                }
+                Ok(())
+            })
+        });
+        let hold = Self {
+            release,
+            cancel,
+            worker: Some(worker),
+        };
+        admitted
+            .recv_timeout(SETTLE_BOUND)
+            .expect("the real writer slot is admitted");
+        hold
+    }
+}
+impl Drop for WriterHold {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        *self.release.0.locked() = true;
+        self.release.1.notify_one();
+        let result = self.worker.take().expect("owned writer worker").join();
+        if !std::thread::panicking() {
+            assert!(
+                matches!(
+                    result,
+                    Ok(Ok(())) | Ok(Err(devworks_core::ports::storage::StorageError::Cancelled))
+                ),
+                "writer control finishes: {result:?}"
+            );
+        }
+    }
 }

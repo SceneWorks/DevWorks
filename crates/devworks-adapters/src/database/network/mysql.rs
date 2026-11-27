@@ -1,3 +1,5 @@
+pub(super) mod data;
+
 use super::catalog::{Catalog, MAX_ROW_BYTES, Query, profile, qualified_release};
 use super::*;
 use futures_util::TryStreamExt;
@@ -48,11 +50,11 @@ fn classify(error: sqlx::Error) -> MetadataFailure {
         _ => MetadataFailure::Unavailable,
     }
 }
-pub(super) async fn read(
-    c: Collector,
-    target: Target,
-) -> Result<MetadataSnapshot, MetadataFailure> {
-    let maria = matches!(c.request.config.engine, DbEngine::MariaDb);
+async fn open(
+    target: &Target,
+    credentials: WireCredentials<'_>,
+    catalog: Option<&str>,
+) -> Result<sqlx::MySqlConnection, MetadataFailure> {
     let mode = match target.tls {
         SchemaTlsMode::VerifyFull => MySqlSslMode::VerifyIdentity,
         SchemaTlsMode::VerifyCa => MySqlSslMode::VerifyCa,
@@ -62,20 +64,25 @@ pub(super) async fn read(
         .host(&target.host)
         .port(target.port)
         .username(&target.username)
-        .password(
-            c.request
-                .password
-                .as_ref()
-                .ok_or(MetadataFailure::CredentialsRequired)?
-                .expose(),
-        )
+        .password(credentials.password()?)
         .ssl_mode(mode)
         .statement_cache_capacity(0)
         .disable_statement_logging();
-    if let Some(pem) = &c.request.ca_certificate {
-        options = options.ssl_ca_from_pem(pem.clone());
+    if let Some(pem) = credentials.ca {
+        options = options.ssl_ca_from_pem(pem.to_owned());
     }
-    let mut conn = options.connect().await.map_err(classify)?;
+    if let Some(catalog) = catalog {
+        options = options.database(catalog);
+    }
+    options.connect().await.map_err(classify)
+}
+
+pub(super) async fn read(
+    c: Collector,
+    target: Target,
+) -> Result<MetadataSnapshot, MetadataFailure> {
+    let maria = matches!(c.request.config.engine, DbEngine::MariaDb);
+    let mut conn = open(&target, WireCredentials::metadata(&c.request), None).await?;
     let version: String = sqlx::query_scalar("SELECT VERSION()")
         .fetch_one(&mut conn)
         .await

@@ -370,7 +370,7 @@ fn default_vision_publishes_exact_page_and_reuses_the_native_attempt() {
         );
         Ok(())
     });
-    let view = inspect_document(&f, &fixture.cases, &fixture.context, source, 13);
+    let view = inspect_document(&f, &fixture.cases, &fixture.context, source, 28);
     let inspection = view.inspection.unwrap();
     assert_eq!(inspection.vision_status.as_str(), "Available");
     assert!(inspection.vision_model.is_some());
@@ -391,7 +391,7 @@ fn default_vision_publishes_exact_page_and_reuses_the_native_attempt() {
     assert_eq!(metered.purpose.as_str(), "Vision");
     assert_eq!(metered.provider_model.as_ref().unwrap().0, "fixture-model");
     assert_eq!(metered.priced_micro_usd.as_ref().unwrap().get(), 4);
-    let legacy_view = inspect_document(&f, &fixture.cases, &fixture.context, source, 10);
+    let legacy_view = inspect_document(&f, &fixture.cases, &fixture.context, source, 25);
     assert!(legacy_view.index_activity.is_none());
     assert!(legacy_view.inspection.is_none());
     let (_, raster_provenance) = f
@@ -431,7 +431,7 @@ fn default_vision_publishes_exact_page_and_reuses_the_native_attempt() {
     })
     .unwrap();
     assert_eq!(current.published.unwrap().1, index.published.unwrap().1);
-    let refresh = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":12,
+    let refresh = json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":27,
         "requestKey":"explicit-reextract","body":{"kind":"documents.index","documentId":note.id,
             "versionId":source.version_id,"expectedRevision":note.revision,"reextract":true}});
     let first_refresh = command(
@@ -483,7 +483,7 @@ fn default_vision_publishes_exact_page_and_reuses_the_native_attempt() {
             store: f.store.as_ref(),
             ids: f.h.ids.as_ref(),
         };
-        let request = json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":11,
+        let request = json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":26,
             "queryId":"old-exact","body":{"kind":"documents.resolve_citation","citation":citation}});
         let reply = fixture
             .cases
@@ -734,7 +734,7 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         &fixture.cases,
         &fixture.context,
         note.current_version.as_ref().unwrap(),
-        13,
+        28,
     )
     .index_activity
     .unwrap()
@@ -789,7 +789,7 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         &workspace,
         "documents.share",
         json!({
-            "protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"share-vision-evidence",
+            "protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"share-vision-evidence",
             "command":{"kind":"Share","artifactId":note.id,"targetProjectId":OTHER_PROJECT,
                 "expectedScopeRevision":note.scope_revision}
         }),
@@ -818,7 +818,7 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         &workspace,
         "documents.move",
         json!({
-            "protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"move-vision-evidence",
+            "protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"move-vision-evidence",
             "command":{"kind":"Move","artifactId":note.id,"targetProjectId":OTHER_PROJECT,
                 "expectedScopeRevision":shared.scope_revision}
         }),
@@ -833,7 +833,7 @@ fn vision_custody_follows_exact_source_and_usage_keeps_original_project() {
         &fixture.cases,
         &current_project,
         note.current_version.as_ref().unwrap(),
-        13,
+        28,
     )
     .index_activity
     .unwrap();
@@ -1154,7 +1154,7 @@ fn moved_source_observes_a_held_vision_attempt_without_rebasing_its_owner() {
         &workspace,
         "documents.move",
         json!({
-            "protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"move-held-vision",
+            "protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"move-held-vision",
             "command":{"kind":"Move","artifactId":note.id,"targetProjectId":OTHER_PROJECT,
                 "expectedScopeRevision":note.scope_revision}
         }),

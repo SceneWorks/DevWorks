@@ -7,7 +7,7 @@ use rusqlite::Connection;
 type Definitions = Vec<(String, String, String, Option<String>)>;
 
 /// SHA-256 of the persistent schema (every `main.sqlite_schema` row) whose ownership the project
-/// purge policy documents under `docs/architecture/validation/project-purge/` were reviewed
+/// purge policy documents under `project_purge/policy/` were reviewed
 /// against. A test rebuilds that schema from `MIGRATIONS` and fails when it no longer matches, so
 /// any schema change, including a new column on an existing table, needs a deliberate policy
 /// review before purge accepts it.
@@ -61,26 +61,34 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// without changing claim ownership. Migration 66 adds an independent cursor and an automatic
 /// routing source linked to its owning session. The linked input artifact follows the ordinary
 /// project artifact ownership and the operation journal follows its existing scope.
-/// Migration 67 adds retrieval preferences and three per-version document index tables. The
+/// Migration 67 adds analysis_runs and its four indexes. Project runs follow their recorded
+/// scope key. Workspace runs and ordinary repository index views keep their independent ownership.
+/// Migration 68 adds database_sensitive_policies. Rules follow the workspace or shared schema
+/// source. Project purge removes only the project's existing access to that shared source.
+/// Migration 69 rebuilds watchers to bind a GitHub source and preserves their existing project
+/// and session owners. The source is an observation selector and adds no ownership reference.
+/// Migration 70 gives watchers external process and direct child identities. The owning
+/// project and session are retained unchanged.
+/// Migration 71 adds retrieval preferences and three per-version document index tables. The
 /// document lineage propagates from the managed artifact version to its extraction and text.
 /// Explicit version tombstones remove derived rows, and project purge classifies each row.
-/// Migration 68 adds a published lexical row per extracted block. It is classified through
+/// Migration 72 adds a published lexical row per extracted block. It is classified through
 /// that block's retained version. FTS5 segments follow the projection and are maintained
 /// by the virtual table when a canonical lexical row changes.
-/// Migrations 69 and 70 add derivative embedding runs, vectors, and vision units and keys.
+/// Migrations 73 and 74 add derivative embedding runs, vectors, and vision units and keys.
 /// Each follows its exact extraction or version and has a separate ownership entry.
-/// Migration 71 indexes existing embedding preparation rows and keeps the publication time on
+/// Migration 75 indexes existing embedding preparation rows and keeps the publication time on
 /// the exact document index version. Both tables retain their existing purge policies, so a
 /// retained document keeps its publication time after its previous owner's events are purged.
-/// Migration 72 adds scoped Dreaming settings, immutable instruction revisions and run and
+/// Migration 76 adds scoped Dreaming settings, immutable instruction revisions and run and
 /// action records, plus scoped source observations. A project's settings and runs belong to
 /// that project; action evidence follows
 /// its parent run. Workspace/base records remain independent.
-/// Migration 73 adds document transfer proposals. Their custody follows both participating
+/// Migration 77 adds document transfer proposals. Their custody follows both participating
 /// projects and the retained artifact, as recorded in the document-transfers policy. It uses
 /// plain foreign keys so the guarded purge deletes every reviewed row explicitly.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "fa19174b0342a91c6c23cbb8ae44fec5a3d57f3a392b31e426b9ce8d7983e211";
+    "dfe2dbfe900276219ae42b98df2d6922a9cf42f7290a79ef6404455bd7199860";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(
@@ -130,7 +138,7 @@ mod tests {
             actual, REVIEWED_SCHEMA_SHA256,
             "the schema built from MIGRATIONS changed, so project purge refuses every store. \
              Review each new or changed table, column, index and trigger against the purge \
-             ownership policy (docs/architecture/validation/project-purge/ and the policy \
+             ownership policy (project_purge/policy/ and the policy \
              documents loaded in project_purge/classification.rs), add a policy document for any \
              new owning shape, then set REVIEWED_SCHEMA_SHA256 in \
              crates/devworks-adapters/src/storage/sqlite/project_purge/schema.rs to {actual}."
@@ -151,7 +159,7 @@ mod tests {
         }
         let baseline: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/architecture/validation/project-purge/schema-baseline.json"
+            "/src/storage/sqlite/project_purge/policy/schema-baseline.json"
         )))
         .unwrap();
         let mut stale = Vec::new();
@@ -205,7 +213,7 @@ mod tests {
         assert!(
             stale.is_empty(),
             "schema-baseline.json lists schema objects the migrations dropped; remove them from \
-             docs/architecture/validation/project-purge/schema-baseline.json: {stale:#?}"
+             crates/devworks-adapters/src/storage/sqlite/project_purge/policy/schema-baseline.json: {stale:#?}"
         );
     }
 }

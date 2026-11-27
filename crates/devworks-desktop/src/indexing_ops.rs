@@ -20,5 +20,7 @@ pub enum IndexingSlot {
     IndexSourcesSave,
     /// A discovery scan.
     IndexDiscover,
+    /// The workspace section's source configuration, read for its form.
+    IndexSources,
 }
 screen_slot!(IndexingSlot, Indexing);

@@ -43,7 +43,7 @@ macro_rules! policy_document {
             shape: Shape::$shape,
             text: include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../docs/architecture/validation/project-purge/",
+                "/src/storage/sqlite/project_purge/policy/",
                 $file
             )),
         }
@@ -88,19 +88,25 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema66-routing-extension.json"
     ),
-    policy_document!("documentIndexExtension", Tables, "schema67-extension.json"),
+    policy_document!("analysisRunExtension", Tables, "schema67-extension.json"),
     policy_document!(
-        "documentLexicalExtension",
+        "databaseSensitivePolicyExtension",
         Tables,
         "schema68-extension.json"
     ),
-    policy_document!("documentVectorExtension", Tables, "schema69-extension.json"),
-    policy_document!("documentVisionExtension", Tables, "schema70-extension.json"),
-    policy_document!("dreamingExtension", Tables, "schema72-extension.json"),
+    policy_document!("documentIndexExtension", Tables, "schema71-extension.json"),
+    policy_document!(
+        "documentLexicalExtension",
+        Tables,
+        "schema72-extension.json"
+    ),
+    policy_document!("documentVectorExtension", Tables, "schema73-extension.json"),
+    policy_document!("documentVisionExtension", Tables, "schema74-extension.json"),
+    policy_document!("dreamingExtension", Tables, "schema76-extension.json"),
     policy_document!(
         "documentTransferExtension",
         Tables,
-        "schema73-document-transfers-extension.json"
+        "schema77-document-transfers-extension.json"
     ),
 ];
 /// The SHA-256 of each policy document, by its digest key.
@@ -744,7 +750,7 @@ mod tests {
     fn assessment_digest_covers_every_policy_document_in_the_directory() {
         let directory = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/architecture/validation/project-purge"
+            "/src/storage/sqlite/project_purge/policy"
         );
         let mut on_disk = std::fs::read_dir(directory)
             .unwrap()

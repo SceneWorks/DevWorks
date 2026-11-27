@@ -98,15 +98,17 @@ fn the_catalog_is_typed_unique_and_self_consistent() {
 #[test]
 fn settings_nothing_reads_are_marked_not_yet_active() {
     for key in [
-        "github.pollForChanges",
         "delivery.autoMerge",
+        "delivery.finalPullRequestReview",
+        "delivery.maxReviewFixCycles",
+        "reviews.automationWaitSeconds",
+        "reviews.githubBotId",
+        "github.pollForChanges",
         "github.importOpenIssues",
         "github.syncLinkedIssueFields",
         "github.issueTriageIntervalSeconds",
-        "delivery.maxReviewFixCycles",
-        "reviews.automationWaitSeconds",
     ] {
-        assert!(descriptor(key).unwrap().not_yet_active(), "{key}");
+        assert!(!descriptor(key).unwrap().not_yet_active(), "{key}");
     }
     for key in ["knowledge.visionExtraction", "knowledge.visionModels"] {
         assert!(!descriptor(key).unwrap().not_yet_active(), "{key}");
@@ -460,8 +462,10 @@ fn only_delivery_settings_are_repository_scoped_and_the_mandate_is_not_one_of_th
         repository_scoped,
         [
             "delivery.autoMerge",
+            "delivery.finalPullRequestReview",
             "delivery.maxReviewFixCycles",
-            "reviews.automationWaitSeconds"
+            "reviews.automationWaitSeconds",
+            "reviews.githubBotId",
         ]
     );
     // Every repository-scoped setting is also a project and a workspace setting.

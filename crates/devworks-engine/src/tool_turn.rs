@@ -67,6 +67,8 @@ pub(crate) struct ContextHeadFence {
     pub epoch: i64,
     pub sequence: i64,
     pub head: Option<StoredProviderContextHead>,
+    /// The cursor of the exact source artifact, when it is still the current head.
+    pub input_sequence: Option<i64>,
     workspace_reply: bool,
 }
 
@@ -80,7 +82,7 @@ impl ContextHeadFence {
             || session.context_epoch != self.epoch
             || (session.last_durable_sequence() != self.sequence
                 && !(self.workspace_reply
-                    && workspace_input_tail(tx.sessions(), &session, self.sequence)?))
+                    && workspace_input_tail(tx.sessions(), &session, self.sequence, true)?))
             || tx.sessions().provider_context_head(&self.session_id)? != self.head
         {
             return Err(StorageError::ScopeDenied);
@@ -95,6 +97,7 @@ pub(crate) fn workspace_input_tail(
     sessions: &dyn devworks_core::ports::storage::SessionRead,
     session: &devworks_core::ports::storage::StoredSession,
     after: i64,
+    allow_watchers: bool,
 ) -> Result<bool, StorageError> {
     if session.project_id.is_some() || session.root_id.is_some() {
         return Ok(false);
@@ -109,6 +112,10 @@ pub(crate) fn workspace_input_tail(
             entry.sequence == sequence
                 && entry.context_epoch == session.context_epoch
                 && matches!(entry.kind.as_str(), "UserMessage" | "HostNotice")
+                && (allow_watchers
+                    || entry.kind != "HostNotice"
+                    || !serde_json::from_value::<TranscriptBody>(entry.body.clone())
+                        .is_ok_and(|body| crate::watch::is_notice(&body)))
         }))
 }
 
@@ -427,25 +434,39 @@ pub(crate) fn require_current_head_for_new_request(
 ) -> Result<ContextHeadFence, StorageError> {
     read_snapshot(store, &ReadOptions::default(), |read| {
         let session = authorized_session(read, ctx, session_id, SessionActors::AgentsAndHosts)?;
+        let head = read.sessions().provider_context_head(session_id)?;
+        let source_json = json!(source);
+        let active_head = head
+            .as_ref()
+            .filter(|head| head.context_epoch == session.context_epoch);
+        let input_sequence = match active_head {
+            Some(head) => (head.artifact == source_json).then_some(head.observed_sequence),
+            None if session.context_epoch > 0 => read
+                .sessions()
+                .epoch(session_id, session.context_epoch)?
+                .filter(|epoch| epoch.context == source_json)
+                .map(|epoch| epoch.sequence),
+            None => None,
+        };
         if read.router().route_request(request_id)?.is_some() {
             return Ok(ContextHeadFence {
                 session_id: session_id.clone(),
                 epoch: session.context_epoch,
                 sequence: session.last_durable_sequence(),
-                head: read.sessions().provider_context_head(session_id)?,
+                head,
+                input_sequence,
                 workspace_reply: ctx.workspace_reply().is_some(),
             });
         }
-        let head = read.sessions().provider_context_head(session_id)?;
-        if let Some(head) = &head
-            && head.context_epoch == session.context_epoch
-            && (head.artifact != json!(source)
-                || (head.observed_sequence != session.last_durable_sequence()
+        if (active_head.is_some() || session.context_epoch > 0)
+            && (input_sequence.is_none()
+                || (input_sequence != Some(session.last_durable_sequence())
                     && !(ctx.workspace_reply().is_some()
                         && workspace_input_tail(
                             read.sessions(),
                             &session,
-                            head.observed_sequence,
+                            input_sequence.unwrap_or_default(),
+                            true,
                         )?)))
         {
             return Err(StorageError::ScopeDenied);
@@ -455,6 +476,7 @@ pub(crate) fn require_current_head_for_new_request(
             epoch: session.context_epoch,
             sequence: session.last_durable_sequence(),
             head,
+            input_sequence,
             workspace_reply: ctx.workspace_reply().is_some(),
         })
     })
@@ -890,6 +912,7 @@ fn continuation_context_at_epoch(
                         if ctx
                             .workspace_reply()
                             .is_none_or(|scope| position <= scope.user_sequence)
+                            || crate::watch::is_notice(&body)
                         {
                             after_turn.push(body);
                         }
@@ -1105,7 +1128,7 @@ pub(crate) fn publish_continuation(
             || session.context_epoch != binding.context_epoch.get()
             || (session.last_durable_sequence() != observed_sequence
                 && !(ctx.workspace_reply().is_some()
-                    && workspace_input_tail(tx.sessions(), &session, observed_sequence)?))
+                    && workspace_input_tail(tx.sessions(), &session, observed_sequence, true)?))
             || attempt.session_id.as_ref() != Some(&session_id)
             || attempt.connection_id != binding.connection_id
             || attempt.catalog_model_id != binding.model_id
@@ -1136,7 +1159,6 @@ pub(crate) fn publish_continuation(
                 return Err(StorageError::ScopeDenied);
             }
         }
-        let observed_sequence = session.last_durable_sequence();
         let previous_head = tx.sessions().provider_context_head(&session_id)?;
         if let Some(head) = &previous_head {
             if head.context_epoch > binding.context_epoch.get()
@@ -1378,7 +1400,12 @@ pub(crate) fn append_context_fact(
         TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
             text: String::from_utf8(
                 artifacts
-                    .read_exact(store, ctx, &artifact, 8_000)
+                    .read_exact(
+                        store,
+                        ctx,
+                        &artifact,
+                        devworks_core::services::sessions::MAX_HOST_NOTICE_BYTES,
+                    )
                     .map_err(artifact_read_fault)?
                     .0,
             )
@@ -1477,6 +1504,7 @@ pub(crate) fn append_operation_updates(
         };
         let mut position = scan_after;
         let mut updates = Vec::new();
+        let mut ordinary_updates = 0;
         while position < session.last_durable_sequence() {
             if position - scan_after >= 10_000 {
                 return Err(invalid(
@@ -1494,12 +1522,17 @@ pub(crate) fn append_operation_updates(
                 position = entry.sequence;
                 let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
                 if let Some(reply) = ctx.workspace_reply() {
-                    let user_input = matches!(
-                        &body,
-                        TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
-                    );
-                    if (user_input
-                        && (position <= workspace_user_after || position > reply.user_sequence))
+                    let watcher_notice = crate::watch::is_notice(&body);
+                    let user_input = !watcher_notice
+                        && matches!(
+                            &body,
+                            TranscriptBody::UserMessage { .. } | TranscriptBody::HostNotice { .. }
+                        );
+                    if (watcher_notice
+                        && derived["kind"] == "ProviderInitialContext"
+                        && position <= workspace_user_after)
+                        || (user_input
+                            && (position <= workspace_user_after || position > reply.user_sequence))
                         || (!user_input && position <= after)
                     {
                         continue;
@@ -1516,12 +1549,15 @@ pub(crate) fn append_operation_updates(
                         "tool context needs a settled transcript turn",
                     ));
                 }
-                updates.push(body);
-                if updates.len() > 128 {
-                    return Err(invalid(
-                        "too many operation updates for one context revision",
-                    ));
+                if !crate::watch::is_notice(&body) {
+                    ordinary_updates += 1;
+                    if ordinary_updates > 128 {
+                        return Err(invalid(
+                            "too many operation updates for one context revision",
+                        ));
+                    }
                 }
+                updates.push(body);
             }
         }
         Ok((updates, position))
@@ -1577,7 +1613,7 @@ pub(crate) fn append_operation_updates(
         if session.context_epoch != binding_for_write.context_epoch.get()
             || (session.last_durable_sequence() != observed
                 && !(ctx_for_write.workspace_reply().is_some()
-                    && workspace_input_tail(tx.sessions(), &session, observed)?))
+                    && workspace_input_tail(tx.sessions(), &session, observed, true)?))
             || ctx_for_write.session_id() != Some(&session_for_write)
             || tx.store().store_id != *ctx_for_write.store_id()
             || tx.store().restore_epoch != ctx_for_write.restore_epoch().get()
@@ -1606,7 +1642,6 @@ pub(crate) fn append_operation_updates(
                 return Err(StorageError::ScopeDenied);
             }
         }
-        let observed = session.last_durable_sequence();
         let previous_head = tx.sessions().provider_context_head(&session_for_write)?;
         if let Some(head) = &previous_head {
             if head.context_epoch > binding_for_write.context_epoch.get() {
@@ -1989,6 +2024,32 @@ pub(crate) fn dispatch_step(
                 operation_id,
             ),
             Err(StorageError::InvalidRecord(_)) => failed("tool_invalid_arguments"),
+            Err(error) => return Err(error),
+        }
+    } else if let Some(alias) =
+        crate::analysis_tools::Alias::from_capability(call.capability_id.as_str())
+    {
+        schemas
+            .selected_analysis_alias(ctx, alias, &call.input_schema)
+            .map_err(|_| StorageError::ScopeDenied)?;
+        let raw = artifacts
+            .read_exact(store, ctx, &call.arguments, 8 * 1024 * 1024)
+            .map_err(artifact_read_fault)?
+            .0;
+        let args = devworks_core::framing::parse(&raw)
+            .map_err(|_| invalid("recorded analysis tool arguments are invalid"))?;
+        mark_dispatch_started(store, ctx, session_id, key, cancellation)?;
+        match alias.dispatch(
+            engine,
+            ctx,
+            &ReadOptions {
+                cancellation: cancellation.cloned(),
+                deadline_ms: None,
+            },
+            &args,
+        ) {
+            Ok(value) => completed(serde_json::to_vec(&value).map_err(invalid)?),
+            Err(StorageError::InvalidRecord(reason)) => failed(&reason),
             Err(error) => return Err(error),
         }
     } else if engine.packages().is_some()

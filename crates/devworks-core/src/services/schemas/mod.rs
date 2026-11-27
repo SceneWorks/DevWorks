@@ -4,6 +4,7 @@ mod access;
 mod certificates;
 mod commands;
 mod credentials;
+pub(super) mod data;
 pub mod indexing;
 mod pins;
 pub use pins::RetentionPass;

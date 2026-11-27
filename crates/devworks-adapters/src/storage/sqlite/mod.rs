@@ -25,6 +25,7 @@
 //!   the future stops waiting but never rolls back an admitted job.
 mod agent_messages;
 mod allocations;
+mod analysis;
 mod artifacts;
 mod authority;
 mod browser;
@@ -133,12 +134,21 @@ pub struct SqliteConfig {
 /// Store work counted by [`SqliteConfig::work_probe`]: read snapshots, SQLite virtual-machine
 /// steps on the read and on the write connections (one progress callback per step, so a scan
 /// costs steps in proportion to the rows it visits) and database pages the reads fetched.
+/// While [`WorkProbe::attribute_reads`] holds a thread's reads, only the reads that thread runs
+/// are counted, step by step, so a background reader on the same store adds nothing to a
+/// measured request even when its snapshot opened earlier.
 #[derive(Debug, Default)]
 pub struct WorkProbe {
     snapshots: AtomicU64,
     read_steps: AtomicU64,
     write_steps: AtomicU64,
     read_pages: AtomicU64,
+    attributed: std::sync::atomic::AtomicBool,
+}
+
+thread_local! {
+    /// Whether this thread's reads are the ones an attributed [`WorkProbe`] counts.
+    static MEASURED_READER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 /// Database pages the connection has fetched (page cache hits and misses): a large value read
 /// costs a page per overflow page, which virtual-machine steps do not show.
@@ -161,6 +171,16 @@ fn page_fetches(conn: &Connection) -> u64 {
     total
 }
 impl WorkProbe {
+    /// With `true`, counts only the reads the calling thread runs until it calls this again with
+    /// `false`, after which every read counts.
+    pub fn attribute_reads(&self, to_this_thread: bool) {
+        MEASURED_READER.with(|measured| measured.set(to_this_thread));
+        self.attributed.store(to_this_thread, Ordering::SeqCst);
+    }
+    /// Whether read work the current thread does now is counted.
+    fn counts_here(&self) -> bool {
+        !self.attributed.load(Ordering::Relaxed) || MEASURED_READER.with(std::cell::Cell::get)
+    }
     /// Database pages the read connections fetched so far.
     pub fn read_pages(&self) -> u64 {
         self.read_pages.load(Ordering::SeqCst)
@@ -597,7 +617,7 @@ impl ApplicationStore for SqliteStore {
         let cancel = options.cancellation.clone();
         let clock = self.clock.clone();
         let deadline = options.deadline_ms;
-        if let Some(probe) = &self.work_probe {
+        if let Some(probe) = self.work_probe.as_ref().filter(|probe| probe.counts_here()) {
             probe.snapshots.fetch_add(1, Ordering::SeqCst);
         }
         let probe = self.work_probe.clone();
@@ -606,7 +626,9 @@ impl ApplicationStore for SqliteStore {
             if probe.is_some() { 1 } else { 1000 },
             Some(move || {
                 if let Some(probe) = &probe {
-                    probe.read_steps.fetch_add(1, Ordering::Relaxed);
+                    if probe.counts_here() {
+                        probe.read_steps.fetch_add(1, Ordering::Relaxed);
+                    }
                     until_check += 1;
                     if until_check < 1000 {
                         return false;
@@ -635,7 +657,9 @@ impl ApplicationStore for SqliteStore {
             };
             let pages = self.work_probe.as_ref().map(|_| page_fetches(conn));
             work(&snapshot)?;
-            if let (Some(probe), Some(before)) = (&self.work_probe, pages) {
+            if let (Some(probe), Some(before)) = (&self.work_probe, pages)
+                && probe.counts_here()
+            {
                 probe
                     .read_pages
                     .fetch_add(page_fetches(conn).saturating_sub(before), Ordering::SeqCst);

@@ -407,7 +407,11 @@ mod tests {
             | TaskOutput::Prepared { .. }
             | TaskOutput::SettingSecret { .. }
             | TaskOutput::PackagePrepared { .. }
+            | TaskOutput::PackageViews { .. }
+            | TaskOutput::PackageViewData(_)
             | TaskOutput::Refreshed
+            | TaskOutput::ArtifactPreview(_)
+            | TaskOutput::ArtifactExported(_)
             | TaskOutput::TextPreview(_)
             | TaskOutput::DocumentSource(_)
             | TaskOutput::DocumentAccess(_)
@@ -416,8 +420,13 @@ mod tests {
             | TaskOutput::Instruction(_)
             | TaskOutput::McpContent(_)
             | TaskOutput::SystemOneCompletion(_)
+            | TaskOutput::AnalysisEvidence(_)
             | TaskOutput::RepositoryDeletionPreview(_)
-            | TaskOutput::RepositoryDeleted(_) => {
+            | TaskOutput::RepositoryDeleted(_)
+            | TaskOutput::ScreenContextNoticed
+            | TaskOutput::NoticeText(..)
+            | TaskOutput::PastedImage(_)
+            | TaskOutput::IndexSources(_) => {
                 panic!("expected a preview")
             }
         }

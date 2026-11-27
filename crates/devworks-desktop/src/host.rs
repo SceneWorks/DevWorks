@@ -481,6 +481,12 @@ async fn compose(
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),
         secrets: secrets.clone(),
     });
+    runtime_config.database = Some(devworks_engine::schemas::DatabaseComposition {
+        adapter: Arc::new(devworks_adapters::database::NativeDataAdapter::new(vec![
+            config.data_root.clone(),
+        ])),
+        filesystem: Arc::new(devworks_adapters::fs::NativeFilesystem::new()),
+    });
     // The configured executable names (`tools.processExecutables`), each resolved on PATH
     // when a tool first selects it: nothing scans PATH before the first frame.
     let executables = Arc::new(
@@ -1055,52 +1061,28 @@ impl Backend for DesktopBackend {
                 &**self.host.runtime.store(),
                 &self.host.ctx,
                 reference,
-                // A watcher notice carries an output tail of up to 64 KiB.
-                96_000,
+                devworks_core::services::sessions::MAX_HOST_NOTICE_BYTES,
             )
             .map_err(|error| format!("host notice read: {error:?}"))?;
         String::from_utf8(bytes).map_err(|_| "coordinator context is not UTF-8".into())
     }
-    fn append_coordinator_notice(
-        &self,
-        session: &Id,
-        screen: &str,
-        context: &str,
-    ) -> Result<(), String> {
+    fn append_screen_context(&self, frame: &[u8]) -> CommandOutcome {
         let store = self.host.runtime.store();
         let info = store.info();
+        let restore_epoch = Counter::new(info.restore_epoch).map_err(|_| {
+            devworks_core::gateway::GatewayFailure::NoUseCase("host restore epoch".into())
+        })?;
         let host = HostIngress::new(&**store).context(
             info.host_actor,
             PrincipalKind::Host,
-            self.host.ids.next_id(IdKind::Correlation),
             self.host.ids.next_id(IdKind::Invocation),
-            Counter::new(info.restore_epoch).map_err(|e| e.to_string())?,
-            Revision::new(1).map_err(|e| e.to_string())?,
+            Id::new("desktop-screen-context").expect("fixed ingress"),
+            restore_epoch,
+            Revision::new(1).expect("positive revision"),
         );
-        let topic = crate::help_ops::topics(self.query(
-            "help.topic_for_screen",
-            &crate::help_ops::context(self, screen, None),
-        ))
-        .ok()
-        .and_then(|page| {
-            page.items
-                .0
-                .into_iter()
-                .find(|topic| topic.id.as_str() == screen)
-        });
-        let context = topic.map_or_else(
-            || context.to_owned(),
-            |topic| format!("{context} ({})", topic.version.0),
-        );
-        devworks_core::services::sessions::notice::append_screen_context(
-            &**store,
-            self.host.runtime.artifacts(),
-            &host,
-            session,
-            screen,
-            &context,
-        )
-        .map_err(|e| format!("coordinator context notice: {e:?}"))
+        self.host
+            .runtime
+            .command(&host, "sessions.append_screen_context", frame)
     }
     fn purge_client_acknowledge(
         &self,
@@ -1386,6 +1368,44 @@ impl Backend for DesktopBackend {
             .ok_or("packages are not composed")?;
         host.fetch_bundle(package, digest, &self.scratch_dir().join("packages"))
     }
+    fn package_views(
+        &self,
+        package: &str,
+        digest: &str,
+    ) -> Result<devworks_engine::package_host::native_ui::NativeViews, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .native_views(&self.host.ctx, package, digest)
+    }
+    fn load_package_view_data(
+        &self,
+        package: &str,
+        digest: &str,
+        view: &str,
+        form: &serde_json::Value,
+    ) -> Result<devworks_engine::package_host::native_ui::ViewData, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .load_native_view_data(&self.host.ctx, package, digest, view, form)
+    }
+    fn prepare_package_view_action(
+        &self,
+        package: &str,
+        digest: &str,
+        view: &str,
+        action: &str,
+        form: &serde_json::Value,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
+        self.host
+            .runtime
+            .packages()
+            .ok_or("packages are not composed")?
+            .prepare_native_view_action(&self.host.ctx, package, digest, view, action, form)
+    }
     fn index_sources(
         &self,
         project: Option<&str>,
@@ -1403,6 +1423,44 @@ impl Backend for DesktopBackend {
     }
     fn native_job_capabilities(&self) -> Vec<devworks_core::services::jobs::NativeCapability> {
         self.host.runtime.jobs().catalog().capabilities()
+    }
+    fn write_export(
+        &self,
+        stream: &Id,
+        destination: &std::path::Path,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        use devworks_core::authority::destructive::BlockReason;
+        use devworks_core::services::artifacts::lifecycle::ExportRefusal;
+        let runtime = &self.host.runtime;
+        let destination = destination
+            .to_str()
+            .ok_or_else(|| "the destination path is not valid text".to_owned())?;
+        runtime
+            .artifacts()
+            .write_export(
+                &*self.host.authority,
+                &**runtime.store(),
+                &NativeFilesystem::new(),
+                Some(&self.host.data_root.display().to_string()),
+                &self.host.ctx,
+                stream,
+                destination,
+                overwrite,
+            )
+            .map_err(|e| match e {
+                ExportRefusal::Blocked(BlockReason::ApplicationData) => {
+                    "DevWorks' own data folder cannot hold an export; choose another folder".into()
+                }
+                ExportRefusal::Blocked(r) => format!("the destination is protected ({r:?})"),
+                ExportRefusal::DestinationExists => "a file already exists there".into(),
+                ExportRefusal::NotAFile => "the destination is not a file".into(),
+                ExportRefusal::HumanOnly => "only you can choose an export destination".into(),
+                ExportRefusal::NeedsInput(n) => format!("the destination is unclear ({n:?})"),
+                ExportRefusal::Stream(s) => format!("the export stream was refused ({s:?})"),
+                ExportRefusal::Write(f) => format!("the file could not be written ({f:?})"),
+                ExportRefusal::Storage(e) => format!("the store could not be read ({e})"),
+            })
     }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
         self.read_bound_stream(&self.host.ctx, stream, max)

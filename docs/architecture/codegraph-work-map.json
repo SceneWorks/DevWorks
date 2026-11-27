@@ -21,7 +21,7 @@
   "structuredSharedRequirements": 3,
   "nativeImplementationItems": 66,
   "publicationItem": "DW-64",
-  "dependencyEdges": 311,
+  "dependencyEdges": 314,
   "nativeInitialStatus": "backlog",
   "note": "CodeGraph is the operational source of truth. DW-F1 holds architecture/publication; DW-F2..DW-F12 hold native delivery. All63 native item IDs, original acceptance scope and250 dependencies are preserved; approved UI criteria are amended explicitly. Local zero-padded DW-001-style identifiers remain document IDs, mapped here to actual CodeGraph keys. All378 source requirements are individually structured across related delivery features. This file records planning amendments; the native status fields are the original planning snapshot; consult live CodeGraph for execution state. The EVAL item mappings were synchronized on 4 November 2026. Approved latest-model amendment adds DW-108 and three requirements, preserves Auto/SystemOne ownership and extends existing final acceptance; see latestModelAmendment.",
   "items": [
@@ -1082,7 +1082,7 @@
         "DW-19",
         "DW-71"
       ],
-      "acceptanceCriteria": 3,
+      "acceptanceCriteria": 4,
       "featureKey": "DW-F13"
     },
     {
@@ -1099,7 +1099,7 @@
         "DW-48",
         "DW-71"
       ],
-      "acceptanceCriteria": 2,
+      "acceptanceCriteria": 3,
       "featureKey": "DW-F13"
     },
     {
@@ -1113,7 +1113,7 @@
         "DW-71",
         "DW-72"
       ],
-      "acceptanceCriteria": 3,
+      "acceptanceCriteria": 4,
       "featureKey": "DW-F13"
     },
     {
@@ -1167,7 +1167,7 @@
         "DW-58",
         "DW-75"
       ],
-      "acceptanceCriteria": 3,
+      "acceptanceCriteria": 4,
       "featureKey": "DW-F13"
     },
     {
@@ -1216,6 +1216,20 @@
       "featureKey": "DW-F13"
     },
     {
+      "ref": "slice-eval_skill_delivery",
+      "key": "DW-445",
+      "id": "1355d4e9-6337-429e-bd99-f280fab69ff6",
+      "title": "Measure skill delivery and always-on context size",
+      "type": "story",
+      "localSliceId": "DW-445",
+      "blockedBy": [
+        "DW-34",
+        "DW-71"
+      ],
+      "acceptanceCriteria": 3,
+      "featureKey": "DW-F13"
+    },
+    {
       "ref": "slice-eval_acceptance",
       "key": "DW-82",
       "id": "de80e63b-b5d1-4ac7-a7e7-fe51af8387e6",
@@ -1233,7 +1247,8 @@
         "DW-78",
         "DW-79",
         "DW-80",
-        "DW-81"
+        "DW-81",
+        "DW-445"
       ],
       "acceptanceCriteria": 2,
       "featureKey": "DW-F13"
@@ -3283,7 +3298,7 @@
     {
       "id": "f8c0385e-f990-49bd-9139-304b519f6fc8",
       "key": "DW-F13",
-      "version": 3,
+      "version": 5,
       "title": "Evaluation and validated self-improvement",
       "items": [
         "DW-71",
@@ -3297,6 +3312,7 @@
         "DW-79",
         "DW-80",
         "DW-81",
+        "DW-445",
         "DW-82"
       ],
       "sourceRequirements": [
@@ -3369,6 +3385,16 @@
           "id": "EVAL-14",
           "codegraphRequirement": "E14",
           "status": "Proposed"
+        },
+        {
+          "id": "EVAL-15",
+          "codegraphRequirement": "E15",
+          "status": "Proposed"
+        },
+        {
+          "id": "EVAL-16",
+          "codegraphRequirement": "E16",
+          "status": "Proposed"
         }
       ]
     }
@@ -3411,7 +3437,7 @@
     ],
     "nativeAcceptance": "Not performed; native statuses and dependencies retained"
   },
-  "evaluationImplementationItems": 12,
+  "evaluationImplementationItems": 13,
   "evaluationPlanSynchronization": {
     "date": "2026-11-04",
     "source": "CodeGraph DW-F13 approved plan",
@@ -3427,12 +3453,20 @@
       "DW-79",
       "DW-80",
       "DW-81",
+      "DW-445",
       "DW-82"
     ],
-    "scope": "Existing EVAL plan metadata only; runtime and operation contracts remain in their tracked items. Baseline and EVAL terminal acceptance dependencies remain distinct."
+    "scope": "Existing EVAL plan metadata only; runtime and operation contracts remain in their tracked items. Baseline and EVAL terminal acceptance dependencies remain distinct.",
+    "amendments": [
+      {
+        "date": "2026-11-26",
+        "source": "Harness2 review amendment (decision eval_harness2_review_20261126)",
+        "change": "EVAL-03, EVAL-04, EVAL-08 and EVAL-14 text extended; EVAL-15 and EVAL-16 added; DW-445 added; DW-73, DW-74, DW-75 and DW-78 gained acceptance criteria"
+      }
+    ]
   },
   "nativeBaselineDependencyEdges": 250,
-  "evaluationDependencyEdges": 50,
+  "evaluationDependencyEdges": 53,
   "autoRoutingAmendment": {
     "date": "2026-11-05",
     "feature": "DW-F6",

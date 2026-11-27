@@ -300,12 +300,12 @@ fn document_tools_preserve_exact_history_and_refuse_revoked_evidence_on_continua
             let scope = json!({"kind":"Project","projectId":project});
             let original = markdown(&app, &fx, &context, PASSAGE);
             let imported = applied_result(&app, &user, "documents.import",
-                &frame("documents.import", "manual-import", json!({"scope":scope,"title":"Greenhouse","source":original}), 10));
+                &frame("documents.import", "manual-import", json!({"scope":scope,"title":"Greenhouse","source":original}), 25));
             let OperationResult::DocumentsImport { value: DocumentResult::Current(note) } = imported
             else { panic!("{imported:?}"); };
             let source = note.current_version.as_ref().unwrap().clone();
             applied_result(&app, &user, "documents.index",
-                &frame("documents.index", "manual-index", json!({"documentId":note.id,"versionId":source.version_id,"expectedRevision":note.revision}), 12));
+                &frame("documents.index", "manual-index", json!({"documentId":note.id,"versionId":source.version_id,"expectedRevision":note.revision}), 27));
             tokio::time::timeout(std::time::Duration::from_secs(60), async {
                 loop {
                     let ready = read(&*fx.store, |r| r.documents().document_index(&source.version_id))
@@ -340,7 +340,7 @@ fn document_tools_preserve_exact_history_and_refuse_revoked_evidence_on_continua
                 "input":{"kind":"Text","text":text},"mode":"Lexical","lexicalFallback":false,
                 "limits":{"maxResults":10,"maxVisited":1000,"deadlineMs":10000}
             });
-            let move_frame = json!({"protocol":PROTOCOL,"schemaRevision":10,"requestKey":"user-moves-source",
+            let move_frame = json!({"protocol":PROTOCOL,"schemaRevision":25,"requestKey":"user-moves-source",
                 "command":{"kind":"Move","artifactId":note.id,"expectedScopeRevision":note.scope_revision,
                     "targetProjectId":"project-b"}});
             let mut calls = vec![

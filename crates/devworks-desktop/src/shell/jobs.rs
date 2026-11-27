@@ -2,7 +2,7 @@
 //! agent tool submits, and implements [`Screen`] for [`JobsUi`]. Its state and views are in
 //! [`crate::jobs_screen`].
 use crate::backend::Reply;
-use crate::jobs_ops::JobsSlot;
+use crate::jobs_ops::{self, DeliveryResolution, JobsSlot};
 pub use crate::jobs_screen::*;
 use crate::memory::RouteMemory;
 use crate::ops::{self, Failure, JobChange, JobCommand};
@@ -28,10 +28,18 @@ impl Screen for JobsUi {
             ctl.load_projects();
         }
     }
-    /// Run status moves while the screen is open (claims, runs, cancellations).
+    /// Run status moves while the screen is open (claims, runs, cancellations), and so do
+    /// deliveries while the Deliveries subview is shown.
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
         if !cx.pending(&JobsSlot::JobsList) && !self.list.loading() {
             JobsCtl { jobs: self, cx }.load_jobs();
+        }
+        let on_deliveries = cx
+            .routes
+            .get(&Route::Jobs)
+            .is_some_and(|m| m.tab == DELIVERIES_TAB);
+        if on_deliveries && !self.deliveries.loading() {
+            JobsCtl { jobs: self, cx }.load_deliveries();
         }
     }
     fn apply(&mut self, cx: &mut Cx, slot: JobsSlot, reply: Reply) {
@@ -80,6 +88,22 @@ impl JobsUi {
 }
 
 impl JobsCtl<'_, '_> {
+    /// Re-reads the deliveries shown (every page shown stays until the reply replaces it).
+    fn load_deliveries(&mut self) {
+        let fetch = self.jobs.deliveries.refresh();
+        self.send_deliveries(fetch);
+    }
+    fn send_deliveries(&mut self, fetch: crate::paged::Fetch) {
+        let slot = JobsSlot::Deliveries(fetch.generation);
+        self.cx.paged(
+            &mut self.jobs.deliveries,
+            fetch,
+            slot,
+            "Loading deliveries",
+            "queue.inspect",
+            jobs_ops::queue_inspect,
+        );
+    }
     fn load_jobs(&mut self) {
         // A refresh re-reads every page shown (or asked for), so an expanded list stays so.
         let fetch = self.jobs.list.refresh();
@@ -247,6 +271,28 @@ impl JobsCtl<'_, '_> {
                     };
                     self.command(slot, label, op, move |b| ops::job_command(b, command, &job));
                 }
+                JobAction::ReloadDeliveries => {
+                    self.jobs.delivery_notice = None;
+                    self.load_deliveries();
+                }
+                JobAction::MoreDeliveries => {
+                    if let Some(fetch) = self.jobs.deliveries.more_page() {
+                        self.send_deliveries(fetch);
+                    }
+                }
+                JobAction::Resolve(delivery, resolution, reason) => {
+                    self.jobs.confirm_resolution = None;
+                    let slot = JobsSlot::DeliveryCommand(delivery.id.as_str().to_owned());
+                    let label = match resolution {
+                        DeliveryResolution::Retry => "Retrying the delivery",
+                        DeliveryResolution::Reconcile => "Reconciling the delivery",
+                        DeliveryResolution::Dismiss => "Dismissing the delivery",
+                        DeliveryResolution::Cancel => "Cancelling the delivery",
+                    };
+                    self.command(slot, label, resolution.operation(), move |b| {
+                        jobs_ops::queue_resolve(b, &delivery, resolution, &reason)
+                    });
+                }
                 JobAction::Cancel(run) => {
                     let slot = JobsSlot::JobCommand(run.job_id.as_str().to_owned());
                     self.command(slot, "Cancelling the run", "jobs.cancel", move |b| {
@@ -392,6 +438,42 @@ impl JobsCtl<'_, '_> {
                         self.jobs.inspection_error = Some(e.describe());
                     }
                 }
+            }
+            (JobsSlot::Deliveries(g), reply) => {
+                let page = match reply {
+                    Reply::Query(q) => jobs_ops::queue_page(q).map_err(|e| e.describe()),
+                    _ => Err("the deliveries could not be read".into()),
+                };
+                let applied = self
+                    .jobs
+                    .deliveries
+                    .apply_unique(g, page, |d| d.id.as_str().to_owned());
+                match applied {
+                    Applied::Continue(fetch) => self.send_deliveries(fetch),
+                    Applied::Stale => {}
+                    // The list was read after every answered resolution.
+                    _ => self.jobs.resolved_deliveries.clear(),
+                }
+            }
+            (JobsSlot::DeliveryCommand(id), Reply::Command(c)) => {
+                self.jobs.resolved_deliveries.insert(id);
+                self.jobs.delivery_notice = Some(match jobs_ops::queue_resolved(c) {
+                    // Only a dismissal leaves a resolved delivery failed (it is settled as such).
+                    Ok(d) if d.state == devworks_core::protocol::OperationState::Failed => (
+                        Tone::Good,
+                        format!("The {} delivery was dismissed.", d.consumer_id.as_str()),
+                    ),
+                    Ok(d) => (
+                        Tone::Good,
+                        format!(
+                            "The {} delivery is now {}.",
+                            d.consumer_id.as_str(),
+                            delivery_state(&d.state).0.to_lowercase()
+                        ),
+                    ),
+                    Err(e) => (Tone::Bad, resolution_refusal(&e)),
+                });
+                self.load_deliveries();
             }
             (slot @ (JobsSlot::JobCommand(_) | JobsSlot::JobCreate), Reply::Command(c)) => {
                 let created = slot == JobsSlot::JobCreate;
@@ -552,6 +634,26 @@ impl JobsCtl<'_, '_> {
             .as_ref()
             .is_some_and(|j| self.waiting(&JobsSlot::JobCommand(j.clone())))
             || self.waiting(&JobsSlot::JobCreate);
+        let resolving: std::collections::BTreeSet<String> = self
+            .jobs
+            .deliveries
+            .items
+            .iter()
+            .map(|d| d.id.as_str().to_owned())
+            .filter(|id| {
+                self.jobs.resolved_deliveries.contains(id)
+                    || self.waiting(&JobsSlot::DeliveryCommand(id.clone()))
+            })
+            .collect();
+        // The Deliveries subview reads its list when it is first shown.
+        if tab == DELIVERIES_TAB
+            && !self.jobs.deliveries.loaded
+            && !self.jobs.deliveries.loading()
+            && self.jobs.deliveries.error.is_none()
+            && online.is_ok()
+        {
+            actions.push(JobAction::ReloadDeliveries);
+        }
         self.load_prompt_candidates();
         let prompt_project = self.prompt_project();
         let artifacts = self.prompt_candidates();
@@ -576,7 +678,11 @@ impl JobsCtl<'_, '_> {
                         st,
                         |ui, st| {
                             if widgets::secondary_button(ui, "Refresh").clicked() {
-                                st.1.push(JobAction::Reload);
+                                st.1.push(if tab == DELIVERIES_TAB {
+                                    JobAction::ReloadDeliveries
+                                } else {
+                                    JobAction::Reload
+                                });
                             }
                             if ui
                                 .add_enabled(online.is_ok() && !busy, egui::Button::new("New job"))
@@ -593,6 +699,11 @@ impl JobsCtl<'_, '_> {
                                         reason: reason.clone(),
                                     },
                                 );
+                                return;
+                            }
+                            if t == DELIVERIES_TAB {
+                                // Deliveries belong to the workspace's consumers, not a scope.
+                                deliveries(ui, st.0, st.1, &resolving);
                                 return;
                             }
                             if let Some((tone, text)) = &st.0.notice {
@@ -661,11 +772,17 @@ impl JobsCtl<'_, '_> {
                                 FormEnd::Close => st.0.form = None,
                             }
                         }
+                    } else if tab == DELIVERIES_TAB {
+                        delivery_help(ui);
                     } else {
                         details(ui, st.0, st.1, busy);
                     }
                 },
             );
+        }
+        if tab == DELIVERIES_TAB && new_tab != tab {
+            // A resolution's outcome belongs to the visit that made it.
+            self.jobs.delivery_notice = None;
         }
         mem.tab = new_tab;
         self.routes.insert(Route::Jobs, mem);
@@ -697,6 +814,87 @@ impl JobsCtl<'_, '_> {
                 _ => {}
             }
         }
+        let mut close = false;
+        if let Some((delivery, resolution, reason)) = self.jobs.confirm_resolution.as_mut() {
+            let (title, text, confirm) = if *resolution == DeliveryResolution::Dismiss {
+                (
+                    "Dismiss delivery",
+                    format!(
+                        "Dismiss the failed {} delivery? It is never delivered again, and the deliveries after it continue.",
+                        delivery.consumer_id.as_str()
+                    ),
+                    "Dismiss",
+                )
+            } else {
+                (
+                    "Cancel delivery",
+                    format!(
+                        "Cancel the {} delivery before it is dispatched? Its work does not run.",
+                        delivery.consumer_id.as_str()
+                    ),
+                    "Cancel delivery",
+                )
+            };
+            let mut open = true;
+            let mut decided = None;
+            egui::Window::new(title)
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(&ctx, |ui| {
+                    ui.label(text);
+                    crate::jobs_screen::field(ui, reason, "Reason", false);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(!reason.trim().is_empty(), egui::Button::new(confirm))
+                            .clicked()
+                        {
+                            decided = Some(true);
+                        }
+                        if widgets::secondary_button(ui, "Keep").clicked() {
+                            decided = Some(false);
+                        }
+                    });
+                });
+            match (open, decided) {
+                (_, Some(true)) => actions.push(JobAction::Resolve(
+                    delivery.clone(),
+                    *resolution,
+                    reason.trim().to_owned(),
+                )),
+                (false, _) | (_, Some(false)) => close = true,
+                _ => {}
+            }
+        }
+        if close {
+            self.jobs.confirm_resolution = None;
+        }
         self.jobs_act(actions);
+    }
+}
+
+/// Why the queue owner refused a resolution, in words a person can act on.
+fn resolution_refusal(e: &Failure) -> String {
+    let Failure::Refused(f) = e else {
+        return e.describe();
+    };
+    if f.target_kind.as_ref().map(|k| k.0.as_str())
+        == Some(devworks_core::services::artifacts::replies::REPLY_REQUIRED)
+    {
+        return "A receipt's reply must still be delivered, so it cannot be cancelled or dismissed; retry it instead.".into();
+    }
+    match f.code {
+        DomainErrorCode::RevisionConflict | DomainErrorCode::LeaseLost => {
+            "The delivery changed meanwhile; the list was reloaded.".into()
+        }
+        DomainErrorCode::OutcomeUnknown => {
+            "Its operation may already have run; reconcile the operation before resolving the delivery.".into()
+        }
+        DomainErrorCode::NotFound => "The delivery is no longer unresolved.".into(),
+        DomainErrorCode::Conflict => {
+            "The delivery's state does not accept that resolution now; the list was reloaded."
+                .into()
+        }
+        _ => e.describe(),
     }
 }

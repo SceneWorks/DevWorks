@@ -55,6 +55,10 @@ pub trait Dialogs {
     fn pick_document(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
     }
+    /// Where to export an artifact named `name`.
+    fn save_artifact(&mut self, name: &str) -> Option<PathBuf> {
+        self.save_file(name)
+    }
     /// One portable convention manifest selected by a human.
     fn pick_convention(&mut self) -> Option<PathBuf> {
         self.pick_files().into_iter().next()
@@ -71,6 +75,12 @@ impl Dialogs for NativeDialogs {
     fn save_file(&mut self, name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_title("Save source")
+            .set_file_name(name)
+            .save_file()
+    }
+    fn save_artifact(&mut self, name: &str) -> Option<PathBuf> {
+        rfd::FileDialog::new()
+            .set_title("Export artifact")
             .set_file_name(name)
             .save_file()
     }
@@ -187,6 +197,7 @@ pub struct Shell {
     pub conventions: crate::conventions_screen::ConventionsScreen,
     pub artifacts: crate::artifacts_screen::ArtifactsScreen,
     pub resources: crate::artifacts_screen::ResourcesScreen,
+    pub agents: crate::agents_screen::AgentsScreen,
     pub browser: crate::artifacts_screen::BrowserScreen,
     pub addons: crate::addons::AddonsScreen,
     /// The project lists of the navigation's project selector, All projects and Repositories
@@ -398,6 +409,7 @@ screens!(
     Conventions => conventions,
     Artifacts => artifacts,
     Resources => resources,
+    Agents => agents,
     Browser => browser,
     Projects => projects.screen,
     Watchers => watchers,
@@ -447,6 +459,7 @@ impl Shell {
             conventions: crate::conventions_screen::ConventionsScreen::default(),
             artifacts: Default::default(),
             resources: Default::default(),
+            agents: Default::default(),
             browser: Default::default(),
             addons: Default::default(),
             projects: Default::default(),
@@ -607,6 +620,7 @@ impl Shell {
                 }
                 Effect::ForgetArchiveCount(p) => self.work.forget_archive_count(&p),
                 Effect::ReviewPurge(p) => self.start_purge_review(p),
+                Effect::OpenFleetAnalysis => self.open_fleet_analysis(),
                 Effect::OpenGraph(id, name) => self.open_repository_graph(&id, &name),
                 Effect::OpenGraphNode { repository, node } => {
                     self.open_graph_node(&repository, &node)
@@ -1032,6 +1046,14 @@ impl Shell {
         }
         if self.route == Route::Dreaming {
             self.with_screen(ScreenId::Dreaming, |s, cx| s.load(cx, Route::Dreaming));
+        }
+        // The Project tab follows the selection at once, never showing another project's files.
+        if self.route == Route::Artifacts {
+            self.with_screen(ScreenId::Artifacts, |s, cx| s.load(cx, Route::Artifacts));
+        }
+        // So does Agents: another project's agents and messages are never shown.
+        if self.route == Route::Agents {
+            self.with_screen(ScreenId::Agents, |s, cx| s.load(cx, Route::Agents));
         }
         if matches!(
             self.route,

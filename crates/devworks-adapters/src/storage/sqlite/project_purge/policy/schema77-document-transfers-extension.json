@@ -1,0 +1,14 @@
+{
+  "schema": 77,
+  "policy": "dw423-document-transfers",
+  "additionalTables": [
+    {
+      "table": "document_transfers",
+      "class": "artifact_and_derived_lineage",
+      "disposition": "owned_lineage",
+      "purpose": "Remove the proposal and coordinator identities when either participating project is purged. Otherwise, retain the record while its artifact is retained."
+    }
+  ],
+  "readerFloor": 66,
+  "writerFloor": 73
+}

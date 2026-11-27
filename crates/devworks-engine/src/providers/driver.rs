@@ -122,6 +122,8 @@ pub struct NativeProviders {
     schemas: Arc<RegisteredSchemas>,
     composition: ProviderComposition,
     live: Arc<super::live::LiveTurns>,
+    pub(crate) package_codecs:
+        std::sync::OnceLock<std::sync::Weak<crate::package_host::PackageHost>>,
 }
 /// Trusted native producer input. Cancellation is operational ownership, never wire authority.
 pub type InstructionTargets = Vec<(Id, Vec<String>)>;
@@ -145,6 +147,7 @@ pub struct NestedToolInference {
     /// The agent's dispatching tool call; `None` for a package invocation a person or an event
     /// handler started, which runs in that person's package inference session.
     pub call: Option<ToolCallKey>,
+    pub analysis_request: Option<Id>,
 }
 pub struct ProviderInvocation {
     pub accounting: DriveOutcome,
@@ -351,6 +354,7 @@ impl NativeProviders {
             schemas,
             composition,
             live: Arc::new(super::live::LiveTurns::default()),
+            package_codecs: Default::default(),
         })
     }
     pub(crate) fn verify_instruction_material(
@@ -550,24 +554,39 @@ impl NativeProviders {
                     .then_with(|| a.wire_name.cmp(&b.wire_name))
             });
             if !dreaming {
-                let mut external = Vec::new();
+                let mut selected_aliases = Vec::new();
+                let is_analysis =
+                    |id: &str| crate::analysis_tools::Alias::from_capability(id).is_some();
+                if tools
+                    .iter()
+                    .any(|tool| is_analysis(tool.capability_id.as_str()))
+                {
+                    selected_aliases.extend(
+                        self.schemas
+                            .selected_builtins(&context)?
+                            .into_iter()
+                            .filter(|tool| is_analysis(tool.capability_id.as_str())),
+                    );
+                }
                 if tools
                     .iter()
                     .any(|tool| tool.capability_id.as_str().starts_with("mcp/"))
                 {
-                    external.extend(self.schemas.selected_mcp_tools(&context)?);
+                    selected_aliases.extend(self.schemas.selected_mcp_tools(&context)?);
                 }
                 if tools.iter().any(|tool| {
                     let id = tool.capability_id.as_str();
-                    !id.starts_with("mcp/") && super::schemas::builtin_operation(id).is_none()
+                    !id.starts_with("mcp/")
+                        && !is_analysis(id)
+                        && super::schemas::builtin_operation(id).is_none()
                 }) {
-                    external.extend(self.schemas.selected_package_tools(&context)?);
+                    selected_aliases.extend(self.schemas.selected_package_tools(&context)?);
                 }
                 if tools.iter().any(|tool| {
                     self.schemas
                         .builtin_binding(&tool.capability_id, &tool.input_schema)
                         .is_none()
-                        && !external.iter().any(|selected| {
+                        && !selected_aliases.iter().any(|selected| {
                             selected.capability_id == tool.capability_id
                                 && selected.wire_name == tool.wire_name
                                 && selected.input_schema.schema_id == tool.input_schema.schema_id
@@ -575,8 +594,8 @@ impl NativeProviders {
                                 && selected.input_schema.sha256 == tool.input_schema.sha256
                         })
                 }) {
-                    // Only the exact selected MCP and installed package aliases have a durable
-                    // dispatcher. A caller cannot qualify a different wire name or schema.
+                    // An alias needs a durable dispatcher and its exact current selection, including
+                    // the wire name and schema.
                     return Err(StorageError::unavailable(
                         Unavailable::UnsupportedRuntime,
                         "external tool dispatch is unavailable",
@@ -675,7 +694,7 @@ impl NativeProviders {
                 )?;
                 // Capture before dispatch. Even an empty completion must have a cursor, and a
                 // concurrent redirect must be visible when continuation scans this turn.
-                turn_start_sequence = Some(fence.sequence);
+                turn_start_sequence = Some(fence.input_sequence.unwrap_or(fence.sequence));
                 context_head_fence = Some(fence);
             }
         }
@@ -923,6 +942,21 @@ impl NativeProviders {
         session_id: &Id,
         nested: &NestedToolInference,
     ) -> Result<(), StorageError> {
+        if let Some(request) = &nested.analysis_request {
+            return if nested.call.is_none()
+                && read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
+                    devworks_core::services::graph::repository_analysis::authorize_model_request(
+                        read,
+                        context,
+                        &nested.tool_operation,
+                        request,
+                    )
+                })? {
+                Ok(())
+            } else {
+                Err(StorageError::ScopeDenied)
+            };
+        }
         let Some(call) = &nested.call else {
             let session = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |read| {
                 read.sessions().session(session_id)
@@ -1436,7 +1470,7 @@ impl OwnedInferenceSource for LazySource {
         attempt: &StoredInferenceAttempt,
         cancellation: &Cancellation,
     ) -> Result<(), StorageError> {
-        let (prepared, connection) = self.owner.prepare(
+        let (mut prepared, connection) = self.owner.prepare(
             &self.context,
             &self.request,
             attempt,
@@ -1455,6 +1489,18 @@ impl OwnedInferenceSource for LazySource {
             max_header_bytes: 65536,
             max_headers: 128,
         };
+        let codec = match self
+            .owner
+            .package_codecs
+            .get()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            Some(host) => host.select_codec(&self.context, &prepared)?,
+            None => None,
+        };
+        if let Some(codec) = &codec {
+            prepared.body = codec.encode(&prepared, cancellation)?;
+        }
         let mut source = NativeProviderSource::new(
             prepared.clone(),
             self.owner.connections.clone(),
@@ -1462,7 +1508,8 @@ impl OwnedInferenceSource for LazySource {
             limits,
             connection.endpoint,
             connection.credential_revision,
-        );
+        )
+        .with_package_codec(codec);
         let owner = self.owner.clone();
         let context = self.context.clone();
         let captured = attempt.clone();
@@ -1554,6 +1601,33 @@ impl OwnedInferenceSource for LazySource {
                             &captured.request_id,
                             &AttemptId(captured.attempt_id.clone()),
                         )?;
+                    }
+                    if let Some(fence) = &context_head_fence
+                        && let Some(input_sequence) = fence.input_sequence
+                    {
+                        let turn = if let Some((execution, epoch)) = context.activation() {
+                            tx.runs()
+                                .session_turn(&fence.session_id)?
+                                .filter(|turn| {
+                                    &turn.execution_id == execution
+                                        && turn.owner_epoch == epoch
+                                        && context.assignment_id() == Some(&turn.assignment_id)
+                                })
+                                .map(|turn| turn.turn_id)
+                        } else if context.workspace_reply().is_some() {
+                            crate::workspace_reply::watcher_turn(tx, &context, &fence.session_id)?
+                        } else {
+                            None
+                        };
+                        if let Some(turn) = turn {
+                            // The sealed context has passed the final send fence. A notice appended
+                            // after this request belongs to a later provider input.
+                            tx.watchers().carry_watch_events(
+                                &fence.session_id,
+                                &turn,
+                                input_sequence,
+                            )?;
+                        }
                     }
                     Ok(())
                 })

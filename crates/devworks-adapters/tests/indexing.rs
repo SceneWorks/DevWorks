@@ -284,6 +284,8 @@ impl Fx {
             ids: ids.clone(),
             artifacts: Some(artifacts.clone()),
             diagnostics: None,
+            package_semantics: Default::default(),
+            run_queued: Default::default(),
             enrichers: Default::default(),
             settings,
         });

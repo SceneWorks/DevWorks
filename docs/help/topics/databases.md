@@ -1,6 +1,16 @@
 # Databases and schema capabilities
 
-The Databases destination groups database connections and schema exploration. DevWorks reads database metadata only. No registered operation runs SQL you or an agent supplies, and none writes to a source database. Operations named `database.read`, `database.execute_write` and the other row or write operations have no handler, so row browsing, queries and migrations are not available. The data access switches on a source (data read access, data write access, separately authorized writes, and the ReadOnly and ReadWrite tool exposures) are saved but change nothing yet, and the form marks them not yet active.
+Databases manages source connections, explores published schema, and runs bounded SQL through the Data tab. Enable read or write access explicitly on the selected connection and for the project that will use it. A connection can grant schema discovery independently of data access.
+
+## Run SQL
+
+Select a source and open **Data**. Choose **Read data**, enter one read statement, and run it. A read returns up to 100 rows in the desktop. **Capture schema digest** records the live schema precondition for a later schema operation. For a network database, enter the planned migration or direct schema SQL in the preview field so the digest covers the relations the change will use. Use bound parameters to pass values separately from the SQL. A binary value is returned as an immutable artifact linked to your current source access.
+
+**Write data** accepts an authorized `INSERT`, `UPDATE`, or `DELETE` when the connection allows writes. Use **Apply migration** for a versioned migration. Supply the exact artifact, repository commit, and repository-relative file, then check the captured schema digest before submitting. Use **Direct schema change** with a recorded reason when a versioned migration is unavailable. Both paths check target permissions separately from access to the migration file.
+
+After submitting a change, use **Check operation** to see the recorded outcome. An unknown outcome requires observation of the original operation. DevWorks keeps the operation identity and does not resend its SQL automatically.
+
+A workspace administrator can list, save, or delete sensitive column rules in **Data**. Rules apply to the physical source columns, including when a query uses aliases or views. The retained `mysql_readonly_query` tool uses the same checks and accepts 1–500 rows, with a default of 100.
 
 ## Schema sources
 

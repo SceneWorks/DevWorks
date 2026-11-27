@@ -39,9 +39,12 @@ pub(crate) async fn run(
             move || {
                 let current = service.clone();
                 async move {
-                    let _ =
-                        tokio::task::spawn_blocking(move || current.reconcile_cancelled()).await;
-                    false
+                    tokio::task::spawn_blocking(move || {
+                        let _ = current.reconcile_cancelled();
+                        current.schedule_completed_cleanup().unwrap_or(false)
+                    })
+                    .await
+                    .unwrap_or(false)
                 }
             },
         )

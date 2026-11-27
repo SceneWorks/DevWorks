@@ -173,7 +173,7 @@ impl<'a> Fixture<'a> {
             body["expectedRevision"] = json!(old.revision);
         }
         self.command(ctx, "documents.import",
-            json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":10,"requestKey":key,"body":body}))
+            json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":25,"requestKey":key,"body":body}))
     }
 
     fn read_ref(
@@ -282,9 +282,9 @@ fn native_document_versions_share_move_and_survive_restart() {
         assert_eq!(second.retained_version_count.get(), 2);
         let replaced = second.current_version.clone().unwrap();
         assert_ne!(replaced.sha256, retained.sha256);
-        assert!(matches!(f.read_ref(&b, "documents.read", &retained, 10),
+        assert!(matches!(f.read_ref(&b, "documents.read", &retained, 25),
             DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::NotFound));
-        let share = json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"share-document",
+        let share = json!({"protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"share-document",
             "command":{"kind":"Share","artifactId":second.id,"targetProjectId":"document-b","expectedScopeRevision":second.scope_revision}});
         let wrong = f.command(&f.human, "documents.move", share.clone());
         assert!(
@@ -305,7 +305,7 @@ fn native_document_versions_share_move_and_survive_restart() {
             panic!("{share:?}")
         };
         assert_eq!(shared.scope_revision.get(), second.scope_revision.get() + 1);
-        let mut page = json!({"protocol":"1.0-draft.1","schemaRevision":10,
+        let mut page = json!({"protocol":"1.0-draft.1","schemaRevision":25,
             "queryId":"try-version-page","limit":1,"query":{"kind":"Read",
                 "artifactId":retained.artifact_id,"versionId":retained.version_id}});
         let first_page = result(f.query(&b, "documents.read", page.clone()));
@@ -340,7 +340,7 @@ fn native_document_versions_share_move_and_survive_restart() {
         );
 
         let move_frame = |revision, key| {
-            json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":key,
+            json!({"protocol":"1.0-draft.1","schemaRevision":25,"requestKey":key,
             "command":{"kind":"Move","artifactId":second.id,"targetProjectId":"document-c","expectedScopeRevision":revision}})
         };
         let stale = f.command(
@@ -372,11 +372,11 @@ fn native_document_versions_share_move_and_survive_restart() {
         );
         assert!(matches!(f.query(&b, "documents.read", page),
             DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::CursorExpired));
-        assert!(matches!(f.read_ref(&a, "documents.read", &retained, 10),
+        assert!(matches!(f.read_ref(&a, "documents.read", &retained, 25),
             DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::NotFound));
         for other in [&b, &c] {
             assert!(
-                matches!(result(f.read_ref(other, "documents.read", &retained, 10)), OperationResult::DocumentsRead {
+                matches!(result(f.read_ref(other, "documents.read", &retained, 25)), OperationResult::DocumentsRead {
                 value: DocumentResult::Current(value)
             } if value.selected_version.as_ref().is_some_and(|ref_| ref_.version_id == retained.version_id)
                 && value.current_version.as_ref().is_some_and(|ref_| ref_.version_id == replaced.version_id))
@@ -386,7 +386,7 @@ fn native_document_versions_share_move_and_survive_restart() {
         assert_eq!(stored.origin_project_id, Some(as_project("document-a")));
         let mut missing = retained.clone();
         missing.version_id = id("unpublished-document-version");
-        assert!(matches!(f.read_ref(&c, "documents.read", &missing, 10),
+        assert!(matches!(f.read_ref(&c, "documents.read", &missing, 25),
             DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::ViewUnavailable));
         assert_eq!(
             stored.scope,
@@ -416,7 +416,7 @@ fn native_document_versions_share_move_and_survive_restart() {
     );
 
     f.delete(&replaced, "delete-document-current");
-    let latest = result(f.read_ref(&b, "documents.read", &replaced, 10));
+    let latest = result(f.read_ref(&b, "documents.read", &replaced, 25));
     assert!(
         matches!(latest, OperationResult::DocumentsRead { value: DocumentResult::Current(value) }
         if value.current_version.is_none() && value.selected_version.is_none()
@@ -426,7 +426,7 @@ fn native_document_versions_share_move_and_survive_restart() {
     assert!(matches!(f.read_ref(&b, "documents.read", &retained, 1),
         DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::ViewUnavailable));
     let listed = result(f.query(&b, "documents.list", json!({
-        "protocol":"1.0-draft.1","mode":"Query","schemaRevision":10,"queryId":"list-disabled-docs",
+        "protocol":"1.0-draft.1","mode":"Query","schemaRevision":25,"queryId":"list-disabled-docs",
         "body":{"kind":"documents.list","scope":{"kind":"Project","projectId":"document-b"},
             "retrievalEnabled":false,"page":{"limit":10}}
     })));
@@ -437,14 +437,14 @@ fn native_document_versions_share_move_and_survive_restart() {
     );
     f.delete(&retained, "delete-last-retained");
     let c = f.scoped("document-c");
-    let tombstone = result(f.read_ref(&c, "documents.read", &retained, 10));
+    let tombstone = result(f.read_ref(&c, "documents.read", &retained, 25));
     assert!(
         matches!(tombstone, OperationResult::DocumentsRead { value: DocumentResult::Current(value) }
         if value.current_version.is_none() && value.selected_version.is_none()
             && value.deleted_selected_version_id == Some(retained.version_id.clone())
             && value.retained_version_count.get() == 0)
     );
-    assert!(matches!(f.read_ref(&b, "documents.read", &retained, 10),
+    assert!(matches!(f.read_ref(&b, "documents.read", &retained, 25),
         DomainQueryReply::Rejected { fault, .. } if fault.code == DomainErrorCode::NotFound));
 }
 
@@ -501,7 +501,7 @@ fn native_document_import_and_cursors_bind_the_selected_format_scope_and_revisio
     let cursor = json!(first.next_cursor.unwrap());
     for next in [
         frame(json!({"kind":"Workspace"}), 1, Some(cursor.clone())),
-        frame(project, 10, Some(cursor)),
+        frame(project, 25, Some(cursor)),
     ] {
         assert!(matches!(
             f.query(&f.human, "documents.list", next),
@@ -562,7 +562,7 @@ fn native_document_import_and_cursors_bind_the_selected_format_scope_and_revisio
     // Admit the selected handler directly so this case reaches the library's own scope fence.
     for target in ["other-doc-project", "missing-doc-project"] {
         let response = f.command_with(&worker, "documents.share",
-            json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":format!("share-{target}"),
+            json!({"protocol":"1.0-draft.1","schemaRevision":25,"requestKey":format!("share-{target}"),
                 "command":{"kind":"Share","artifactId":original.artifact_id,
                     "targetProjectId":target,"expectedScopeRevision":"1"}}), &Authority);
         assert!(

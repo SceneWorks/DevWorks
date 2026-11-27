@@ -44,11 +44,6 @@ fn native_databases_create_sync_page_inspect_and_remove_only_indexed_metadata() 
     h.state_mut().navigate(Route::Databases);
     settle(&mut h);
     click(&mut h, Role::Button, "New database source");
-    // Data access switches are shown, but no data tool reads them yet.
-    assert!(has_text(
-        &h,
-        devworks_desktop::databases_screen::DATA_ACCESS_INACTIVE
-    ));
     replace(&mut h, "Database source name", "Native metadata fixture");
     click(&mut h, Role::Button, "Choose database file");
     click(&mut h, Role::Button, "Save database source");
@@ -1157,4 +1152,209 @@ fn native_database_review_rejected_new_source_keeps_staged_password() {
 #[test]
 fn native_database_review_rejected_edit_keeps_replacement_password() {
     corrected_password_save(true);
+}
+
+#[test]
+fn data_tab_uses_the_authorized_native_read_on_the_selected_database() {
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-native-data");
+    let path = root.file("source.sqlite", b"");
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE fixture (label TEXT); INSERT INTO fixture VALUES('DESKTOP_READ_VALUE');",
+    )
+    .unwrap();
+    drop(db);
+    let engine = start(&root);
+    let dialogs = Script::default();
+    dialogs.files.lock().unwrap().push(vec![path]);
+    let mut h = harness(shell(&engine, &root, dialogs), 1600.0, 1200.0);
+    h.state_mut().navigate(Route::Databases);
+    settle(&mut h);
+    click(&mut h, Role::Button, "New database source");
+    replace(&mut h, "Database source name", "Native data fixture");
+    click(&mut h, Role::Button, "Choose database file");
+    h.state_mut().databases.draft.as_mut().unwrap().config["exposureMode"] =
+        serde_json::json!("ReadOnly");
+    click(&mut h, Role::Button, "Save database source");
+    step_until(&mut h, "native read source is active", |s| {
+        !s.databases.busy && s.databases.source().is_some()
+    });
+    h.state_mut().databases.tab = 3;
+    settle(&mut h);
+    h.get_by_role_and_label(Role::MultilineTextInput, "SQL statement")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::MultilineTextInput, "SQL statement")
+        .type_text("SELECT label FROM fixture");
+    settle(&mut h);
+    click(&mut h, Role::Button, "Run read");
+    step_until(&mut h, "read returned from the actual SQLite source", |s| {
+        s.databases
+            .data
+            .result
+            .as_ref()
+            .is_some_and(|value| value.rows.0.len() == 1)
+    });
+    assert!(has_text(&h, "DESKTOP_READ_VALUE"));
+}
+
+#[test]
+fn sensitivity_save_reply_stays_bound_when_workspace_defaults_are_selected() {
+    use devworks_core::protocol::results::OperationResult;
+    use devworks_desktop::ops::{command_result, query_result};
+    use serde_json::json;
+
+    let _native_case = native_runtime_case();
+    let root = Root::new("database-sensitive-policy");
+    let path = root.file("source.sqlite", b"");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let source = command_result(
+        backend.command(
+            "schemas.configure",
+            json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":5,
+            "requestKey":backend.token("sensitivity-source"),
+            "body":{"kind":"schemas.configure","scope":{"kind":"Workspace"},
+                "config":{"name":"Sensitivity fixture","engine":"Sqlite","endpoint":path,
+                    "catalogs":[],"schemas":[],"includePatterns":[],"excludePatterns":[],
+                    "writesEnabled":false,"enabled":true,"workspaceExposed":false,
+                    "exposureMode":"SchemaOnly","authentication":"File"}}})
+            .to_string()
+            .as_bytes(),
+        ),
+    )
+    .unwrap();
+    let OperationResult::SchemasConfigure { value: source } = source else {
+        panic!("expected configured source");
+    };
+    let operation = "database.edit_sensitive_column_rules";
+    for (connection_id, rule) in [
+        (Some(&source.id), "connection_column"),
+        (None, "workspace_column"),
+    ] {
+        command_result(
+            backend.command(
+                operation,
+                json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":9,
+                "requestKey":backend.token("sensitivity-seed"),
+                "body":{"kind":operation,"connectionId":connection_id,"expectedRevision":"1",
+                    "edit":{"kind":"Upsert","rule":{"id":rule,"column":rule,"allow":false}}}})
+                .to_string()
+                .as_bytes(),
+            ),
+        )
+        .unwrap();
+    }
+    let held = Gate::holding_replies(operation);
+    let mut h = harness(
+        shell_with(
+            Ok(held.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1200.0,
+    );
+    h.state_mut().navigate(Route::Databases);
+    step_until(&mut h, "source inventory loaded", |s| {
+        s.databases.connections.loaded
+    });
+    h.state_mut().databases.selected = Some(source.id.as_str().into());
+    h.state_mut().databases.tab = 3;
+    settle(&mut h);
+    click(&mut h, Role::Button, "Load rules");
+    step_until(&mut h, "connection rules loaded", |s| {
+        s.databases
+            .data
+            .rules
+            .as_ref()
+            .is_some_and(|rules| rules.connection_id.as_ref() == Some(&source.id))
+    });
+    click(&mut h, Role::Button, "Deny · *.*.*.connection_column");
+    h.get_by_label("Allow this column").click_accesskit();
+    settle(&mut h);
+
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let release = Release(held.clone());
+    held.close();
+    h.get_by_role_and_label(Role::Button, "Save rule")
+        .click_accesskit();
+    step_until(
+        &mut h,
+        "connection policy committed with reply held",
+        |_| held.has_waiter(),
+    );
+    // Render the pending status before resolving the checkbox's accessibility node.
+    // The committed reply can reach the gate before the screen draws that status.
+    h.step();
+    assert!(has_text(&h, "Saving connection sensitivity rules."));
+    h.get_by_role_and_label(Role::CheckBox, "Workspace defaults")
+        .click_accesskit();
+    step_until(&mut h, "scope changed during the save", |s| {
+        s.databases.data.rules.is_none()
+    });
+    assert!(h.state().databases.busy);
+    drop(release);
+    step_until(&mut h, "the connection save is settled", |s| {
+        !s.databases.busy
+    });
+    assert!(
+        h.state().databases.data.rules.is_none(),
+        "connection reply appeared under Workspace defaults"
+    );
+    assert!(h.state().databases.notice.is_none());
+
+    click(&mut h, Role::Button, "Load rules");
+    step_until(&mut h, "workspace defaults loaded", |s| {
+        s.databases
+            .data
+            .rules
+            .as_ref()
+            .is_some_and(|rules| rules.connection_id.is_none())
+    });
+    click(&mut h, Role::Button, "Deny · *.*.*.workspace_column");
+    h.get_by_label("Allow this column").click_accesskit();
+    settle(&mut h);
+    click(&mut h, Role::Button, "Save rule");
+    step_until(
+        &mut h,
+        "workspace save applied to its visible policy",
+        |s| {
+            s.databases.data.rules.as_ref().is_some_and(|rules| {
+                rules.connection_id.is_none() && rules.rules.0.iter().any(|rule| rule.allow)
+            })
+        },
+    );
+
+    let operation = "database.sensitive_columns";
+    for (connection_id, expected) in [
+        (Some(&source.id), "connection_column"),
+        (None, "workspace_column"),
+    ] {
+        let (result, _) = query_result(
+            backend.query(
+                operation,
+                json!({"protocol":"1.0-draft.1","mode":"Query","schemaRevision":9,
+                "queryId":backend.token("sensitivity-check"),
+                "body":{"kind":operation,"connectionId":connection_id}})
+                .to_string()
+                .as_bytes(),
+            ),
+        )
+        .unwrap();
+        let OperationResult::DatabaseSensitiveColumns { value } = result else {
+            panic!("expected sensitivity policy");
+        };
+        assert_eq!(value.connection_id.as_ref(), connection_id);
+        assert_eq!(value.rules.0.len(), 1);
+        assert_eq!(value.rules.0[0].id.as_str(), expected);
+        assert!(value.rules.0[0].allow);
+    }
 }

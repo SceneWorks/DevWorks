@@ -2338,10 +2338,10 @@
       "attribute": "HttpPost(\"link\")",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "native",
-      "reason": "Retain behavior through the shared native operation boundary",
+      "reason": "Use the LinksOnly command mode for the selected graph composition",
       "acceptanceCase": "CAP-LINKING"
     },
     {
@@ -4023,10 +4023,10 @@
       "attribute": "HttpPost(\"link\")",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "native",
-      "reason": "Retain behavior through the shared native operation boundary",
+      "reason": "Use the LinksOnly command mode for the selected graph composition",
       "acceptanceCase": "CAP-LINKING"
     },
     {
@@ -6936,10 +6936,10 @@
       "bases": ": IConsumer<RepositoryIndexingCompleted>",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "adapt",
-      "reason": "Atomic local events/queue entries and native consumers replace MassTransit/RabbitMQ delivery",
+      "reason": "The native publication consumer queues deterministic links, communities, vitals and security for the exact graph view",
       "acceptanceCase": "CAP-LINKING"
     },
     {
@@ -7199,10 +7199,10 @@
       "attribute": "HttpPost(\"link\")",
       "group": "LINKING",
       "targetOperations": [
-        "analysis.cross_repo_links"
+        "analysis.link_and_detect"
       ],
       "disposition": "native",
-      "reason": "Retain behavior through the shared native operation boundary",
+      "reason": "Use the LinksOnly command mode for the selected graph composition",
       "acceptanceCase": "CAP-LINKING"
     },
     {

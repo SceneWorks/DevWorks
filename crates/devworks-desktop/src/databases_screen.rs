@@ -1,11 +1,14 @@
 //! Native database source forms and structural exploration. All records come from SchemaService.
-use crate::paged::Paged;
+mod data;
+use crate::{databases_ops::DatabasesSlot, paged::Paged};
 use devworks_core::protocol::records::*;
 use eframe::egui::{self, Ui};
 use serde_json::{Value, json};
 #[derive(Default)]
 pub struct DatabasesScreen {
     pub tab: usize,
+    pub data: data::DataScreen,
+    pub(crate) rule_command: Option<DatabasesSlot>,
     pub generated_key: Option<devworks_core::ports::secrets::Secret>,
     pub focus_object: bool,
     pub project: Option<String>,
@@ -180,6 +183,9 @@ pub enum Action {
     /// Opens a use's definition in the code graph.
     OpenCode(SchemaCodeReference),
     ConfirmOutcome,
+    Data(Box<devworks_core::operations::OperationInput>),
+    DataStatus(devworks_core::protocol::OperationId),
+    DataError(String),
 }
 // Explicit UI roots keep control identity independent of conditional metadata and live hints.
 fn button(ui: &mut Ui, label: impl AsRef<str>) -> egui::Response {
@@ -234,12 +240,6 @@ fn lines(ui: &mut Ui, label: &str, config: &mut Value, key: &str) {
         config[key] = json!(value.lines().filter(|l| !l.is_empty()).collect::<Vec<_>>());
     }
 }
-/// DB-04/DB-05 data tools are not built yet (DW-37 owns them): these switches are saved and
-/// validated, but nothing reads or writes table data, so the form says so beside them.
-pub const DATA_ACCESS_INACTIVE: &str = "Not yet active: DevWorks has no database data tools yet. Data read \
-    access, data write access, separately authorized writes and the \
-    ReadOnly and ReadWrite tool exposures are saved but change nothing; \
-    agents can read indexed schema metadata only.";
 fn toggle(ui: &mut Ui, label: &str, config: &mut Value, key: &str) {
     let mut b = config[key].as_bool().unwrap_or(false);
     if ui.checkbox(&mut b, label).changed() {
@@ -287,18 +287,8 @@ fn project_access(ui: &mut Ui, config: &mut Value, projects: &[(String, String)]
                 ui.horizontal_wrapped(|ui| {
                     ui.label(title);
                     toggle(ui, "Metadata access", &mut row, "metadataEnabled");
-                    toggle(
-                        ui,
-                        "Data read access (not yet active)",
-                        &mut row,
-                        "dataReadEnabled",
-                    );
-                    toggle(
-                        ui,
-                        "Data write access (not yet active)",
-                        &mut row,
-                        "dataWriteEnabled",
-                    );
+                    toggle(ui, "Data read access", &mut row, "dataReadEnabled");
+                    toggle(ui, "Data write access", &mut row, "dataWriteEnabled");
                 });
             },
         );
@@ -325,6 +315,7 @@ impl DatabasesScreen {
         availability: Result<(), &str>,
         projects: &[(String, String)],
         actions: &mut Vec<Action>,
+        rule_command_status: Option<&str>,
     ) {
         let mut state = (self, actions);
         crate::widgets::with_right_sidebar(
@@ -337,8 +328,8 @@ impl DatabasesScreen {
                     ui,
                     crate::widgets::Header {
                         title: "Databases",
-                        summary: "Manage connections and explore read-only structural metadata.",
-                        tabs: &["Schema", "Relationships", "Access"],
+                        summary: "Manage connections, explore schema, and run authorized database operations.",
+                        tabs: &["Schema", "Relationships", "Access", "Data"],
                         tab,
                     },
                     state,
@@ -357,7 +348,13 @@ impl DatabasesScreen {
                                         },
                                     );
                                 }
-                                state.0.main_ui(ui, availability.is_ok(), projects, state.1);
+                                state.0.main_ui(
+                                    ui,
+                                    availability.is_ok(),
+                                    projects,
+                                    state.1,
+                                    rule_command_status,
+                                );
                             });
                     },
                 );
@@ -381,6 +378,7 @@ impl DatabasesScreen {
         online: bool,
         projects: &[(String, String)],
         actions: &mut Vec<Action>,
+        rule_command_status: Option<&str>,
     ) {
         ui.label(self.project.as_ref().map_or_else(
             || "Workspace database sources".to_owned(),
@@ -394,7 +392,7 @@ impl DatabasesScreen {
                 )
             },
         ));
-        ui.label("Manage target connections and explore read-only structural metadata.");
+
         ui.horizontal_wrapped(|ui| {
             if button_enabled(ui, "Generate encryption key", online).clicked() {
                 actions.push(Action::GenerateKey);
@@ -415,8 +413,15 @@ impl DatabasesScreen {
         if let Some(notice) = &self.notice {
             ui.label(notice);
         }
+        if let Some(status) = rule_command_status {
+            ui.label(status);
+        }
         if !online {
             ui.label("Database operations are unavailable while offline or closing.");
+        }
+        if self.tab == 3 {
+            self.data_ui(ui, online, actions);
+            return;
         }
         if self.tab == 2
             && let Some(draft) = &mut self.draft
@@ -539,7 +544,7 @@ impl DatabasesScreen {
                 );
                 toggle(
                     ui,
-                    "Enable separately authorized data writes (not yet active)",
+                    "Enable separately authorized data writes",
                     &mut draft.config,
                     "writesEnabled",
                 );
@@ -547,7 +552,6 @@ impl DatabasesScreen {
                     "Metadata indexing always uses read-only source access. Data operations \
                     require their own permissions.",
                 );
-                crate::widgets::caption(ui, DATA_ACCESS_INACTIVE);
                 project_access(ui, &mut draft.config, projects);
             });
             ui.horizontal(|ui| {
@@ -668,7 +672,6 @@ impl DatabasesScreen {
                     "Separately authorized writes: {}",
                     config.writes_enabled
                 ));
-                crate::widgets::caption(ui, DATA_ACCESS_INACTIVE);
                 for access in config
                     .project_access
                     .as_ref()
@@ -1045,6 +1048,7 @@ impl DatabasesScreen {
             && self.batch_remaining.is_empty()
             && !self.batch_active
             && !self.batch_scanning
+            && self.data.operation.is_none()
         {
             return Value::Null;
         }
@@ -1056,6 +1060,8 @@ impl DatabasesScreen {
             "batchScope": self.batch_scope,
             "submitted": self.batch_submitted,
             "failures": self.batch_failures,
+            "dataOperation": self.data.operation,
+            "dataOperationProject": self.data.operation_project,
             "tab": self.tab
         })
     }
@@ -1065,9 +1071,13 @@ impl DatabasesScreen {
         self.draft = serde_json::from_value(value["draft"].clone())
             .ok()
             .flatten();
+        self.data.operation = serde_json::from_value(value["dataOperation"].clone())
+            .ok()
+            .flatten();
+        self.data.operation_project = value["dataOperationProject"].as_str().map(str::to_owned);
         self.tab = value["tab"]
             .as_u64()
-            .filter(|v| *v <= 2)
+            .filter(|v| *v <= 3)
             .map_or(if self.draft.is_some() { 2 } else { 0 }, |v| v as usize);
         self.batch_remaining =
             serde_json::from_value(value["remaining"].clone()).unwrap_or_default();

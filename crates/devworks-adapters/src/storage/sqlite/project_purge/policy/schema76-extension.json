@@ -1,0 +1,44 @@
+{
+  "schema": 76,
+  "policy": "dw032-dreaming-v1",
+  "additionalTables": [
+    {
+      "table": "dreaming_scope_state",
+      "class": "dreaming",
+      "disposition": "project_owner",
+      "purpose": "Settings and completed sweep cutoffs belong to their exact scope."
+    },
+    {
+      "table": "dreaming_instruction_revisions",
+      "class": "dreaming",
+      "disposition": "project_owner",
+      "purpose": "Instruction revisions belong to their editing scope. Workspace instructions are independent."
+    },
+    {
+      "table": "dreaming_runs",
+      "class": "dreaming",
+      "disposition": "project_owner",
+      "purpose": "Reports, working state and continuation lineage belong to the same project."
+    },
+    {
+      "table": "dreaming_actions",
+      "class": "dreaming",
+      "disposition": "owned_lineage",
+      "purpose": "An action and its before and after evidence follow the run that committed it."
+    },
+    {
+      "table": "dreaming_reversions",
+      "class": "dreaming",
+      "disposition": "owned_lineage",
+      "purpose": "A reversion receipt follows the original action and its project."
+    },
+    {
+      "table": "dreaming_source_changes",
+      "class": "dreaming",
+      "disposition": "project_owner",
+      "purpose": "A source observation belongs to the exact scope whose claims used that source."
+    }
+  ],
+  "readerFloor": 66,
+  "writerFloor": 72
+}

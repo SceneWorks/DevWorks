@@ -93,7 +93,7 @@ fn open(f: &Fixture<'_>, ctx: &InvocationContext, citation: &Citation) -> Resolv
     let OperationResult::DocumentsResolveCitation { value } = result(f.query(
         ctx,
         "documents.resolve_citation",
-        cite_envelope(citation, 11),
+        cite_envelope(citation, 26),
     )) else {
         panic!("expected exact citation")
     };
@@ -174,7 +174,7 @@ fn transfer_proposal(
         r.artifacts().artifact(&document.artifact_id)
     })
     .unwrap();
-    json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":14,"requestKey":key,
+    json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":29,"requestKey":key,
         "body":{"kind":"documents.transfer_propose","documentId":document.artifact_id,
             "expectedDocumentRevision":current.revision.to_string(),
             "expectedScopeRevision":current.scope_revision.to_string(),"destinationRootId":destination,
@@ -182,7 +182,7 @@ fn transfer_proposal(
 }
 
 fn transfer_response(transfer: &Id, need: bool, key: &str) -> Value {
-    json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":14,"requestKey":key,
+    json!({"protocol":"1.0-draft.1","mode":"Command","schemaRevision":29,"requestKey":key,
         "body":{"kind":"documents.transfer_respond","transferId":transfer,
             "expectedRevision":"1","destinationNeedsDocument":need}})
 }
@@ -192,7 +192,7 @@ fn transfer_status(f: &Fixture<'_>, ctx: &InvocationContext, transfer: &Id) -> D
         ctx,
         "documents.transfer_status",
         json!({
-            "protocol":"1.0-draft.1","mode":"Query","schemaRevision":14,"queryId":"transfer-status",
+            "protocol":"1.0-draft.1","mode":"Query","schemaRevision":29,"queryId":"transfer-status",
             "body":{"kind":"documents.transfer_status","transferId":transfer}
         }),
     )
@@ -257,7 +257,7 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
         applied(f.command(
             &f.human,
             "documents.share",
-            json!({"protocol":"1.0-draft.1","schemaRevision":10,
+            json!({"protocol":"1.0-draft.1","schemaRevision":25,
             "requestKey":"initial-share-to-c","command":{"kind":"Share","artifactId":doc.id,
                 "targetProjectId":"document-c","expectedScopeRevision":scope}}),
         ));
@@ -492,7 +492,7 @@ fn native_document_transfer_requires_both_coordinators_and_preserves_exact_evide
         assert_unavailable(f.query(
             &a_view,
             "documents.resolve_citation",
-            cite_envelope(&citation, 11),
+            cite_envelope(&citation, 26),
         ));
         assert!(search(&f, &a_view, "greenhouse", &[]).passages.is_empty());
         assert_eq!(open(&f, &b_view, &citation).text.0, "Greenhouse evidence.");
@@ -590,10 +590,10 @@ fn current_and_exact_retrieval_follow_shares_replacements_moves_and_deletion() {
     assert_unavailable(f.query(
         &b,
         "documents.resolve_citation",
-        cite_envelope(&citation, 11),
+        cite_envelope(&citation, 26),
     ));
     let OperationResult::DocumentsShare { value: DocumentResult::Current(shared) } = applied(f.command(
-        &f.human, "documents.share", json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"share-old",
+        &f.human, "documents.share", json!({"protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"share-old",
             "command":{"kind":"Share","artifactId":old.id,"targetProjectId":"document-b","expectedScopeRevision":old.scope_revision}})
     )) else { panic!("expected shared document") };
     assert_eq!(search(&f, &b, "resume", &[old_ref]).passages.len(), 1);
@@ -623,14 +623,14 @@ fn current_and_exact_retrieval_follow_shares_replacements_moves_and_deletion() {
         envelope(&b, "current", &[current_ref, &bad_ref], 50, 1000),
     ));
     let OperationResult::DocumentsMove { value: DocumentResult::Current(moved) } = applied(f.command(
-        &f.human, "documents.move", json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"move-current",
+        &f.human, "documents.move", json!({"protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"move-current",
             "command":{"kind":"Move","artifactId":current.id,"targetProjectId":"document-b","expectedScopeRevision":current.scope_revision}})
     )) else { panic!("expected moved document") };
     assert!(search(&f, &a, "current", &[]).passages.is_empty());
     assert_unavailable(f.query(
         &a,
         "documents.resolve_citation",
-        cite_envelope(&citation, 11),
+        cite_envelope(&citation, 26),
     ));
     assert_eq!(search(&f, &b, "current", &[]).passages.len(), 1);
     let OperationResult::DocumentsDisableRetrieval {
@@ -663,7 +663,7 @@ fn current_and_exact_retrieval_follow_shares_replacements_moves_and_deletion() {
     assert_unavailable(f.query(
         &b,
         "documents.resolve_citation",
-        cite_envelope(&citation, 11),
+        cite_envelope(&citation, 26),
     ));
 }
 
@@ -726,11 +726,11 @@ fn citation_resolution_is_negotiated_and_never_retargets_a_forged_locator_or_dig
         f.query(
             &a,
             "documents.resolve_citation",
-            cite_envelope(&citation, 10)
+            cite_envelope(&citation, 25)
         ),
         DomainQueryReply::Rejected { .. }
     ));
-    let mut omitted = cite_envelope(&citation, 11);
+    let mut omitted = cite_envelope(&citation, 26);
     omitted.as_object_mut().unwrap().remove("schemaRevision");
     assert!(matches!(
         f.query(&a, "documents.resolve_citation", omitted),
@@ -748,10 +748,10 @@ fn citation_resolution_is_negotiated_and_never_retargets_a_forged_locator_or_dig
         first_line: 2,
         last_line: 2,
     };
-    assert_unavailable(f.query(&a, "documents.resolve_citation", cite_envelope(&forged, 11)));
+    assert_unavailable(f.query(&a, "documents.resolve_citation", cite_envelope(&forged, 26)));
     let mut forged = citation;
     forged.content_digest = Digest::try_from("f".repeat(64)).unwrap();
-    assert_unavailable(f.query(&a, "documents.resolve_citation", cite_envelope(&forged, 11)));
+    assert_unavailable(f.query(&a, "documents.resolve_citation", cite_envelope(&forged, 26)));
 }
 
 #[test]
@@ -926,7 +926,7 @@ fn gateway_rechecks_a_document_share_after_search_and_activity_snapshots() {
         expected_text: None,
         expected_completion: QueryCompletion::Complete,
     };
-    let read = json!({"protocol":"1.0-draft.1","schemaRevision":13,"queryId":"document-activity-revoked",
+    let read = json!({"protocol":"1.0-draft.1","schemaRevision":28,"queryId":"document-activity-revoked",
         "limit":20,"query":{"kind":"Read","artifactId":exact.artifact_id,"versionId":exact.version_id}});
     let reply = gateway
         .query(&b, "documents.read", read.to_string().as_bytes(), &handler)
@@ -1004,7 +1004,7 @@ fn a_citation_tombstoned_after_the_read_returns_typed_unavailability() {
         .query(
             &project,
             "documents.resolve_citation",
-            cite_envelope(&citation, 11).to_string().as_bytes(),
+            cite_envelope(&citation, 26).to_string().as_bytes(),
             &handler,
         )
         .unwrap();

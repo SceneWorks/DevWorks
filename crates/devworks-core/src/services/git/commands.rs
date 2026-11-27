@@ -1,6 +1,16 @@
 //! Journaled writes of the Git owner. A worktree reservation serializes writes; an unknown
 //! result keeps the reservation until observation proves the requested postcondition.
 mod attach;
+mod auto_cleanup;
+pub(super) use auto_cleanup::CleanupSchedule;
+mod delivery;
+pub(crate) use delivery::{
+    already_merged_review_repositories, qualifies_github_resolution_after_cleanup,
+};
+mod feature_delivery;
+pub(crate) use feature_delivery::{
+    feature_head_digest, requires_local_integration, waits_for_publication,
+};
 mod pull_request;
 mod push;
 use super::*;
@@ -29,6 +39,10 @@ pub struct RegisteredGitRoot {
     pub id: Id,
     pub path: PathBuf,
 }
+fn initial_policy_revision() -> i64 {
+    1
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Job {
     actor: ActorId,
@@ -38,8 +52,12 @@ struct Job {
     root: Option<RootId>,
     assignment: Option<AssignmentId>,
     restore_epoch: i64,
+    #[serde(default = "initial_policy_revision")]
+    policy_revision: i64,
     repository_revision: i64,
     work_revision: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_scope_revision: Option<i64>,
     root_epochs: Vec<(RootId, i64)>,
     assignment_generation: Option<i64>,
     delivery_id: Id,
@@ -49,9 +67,12 @@ struct Job {
     action: Action,
     #[serde(default)]
     reviewed_binding: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cleanup_proof: Option<delivery::CleanupProof>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 enum Action {
+    Integrate,
     PullRequest {
         repository: super::github::Repository,
         head: String,
@@ -60,9 +81,14 @@ enum Action {
         description: String,
         expected: GitOid,
         covered: Vec<(Id, i64)>,
+        #[serde(default)]
+        final_feature: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        integrated_heads: Vec<GitOid>,
     },
     Create,
     Inspect,
+    Cleanup,
     Commit {
         message: String,
         expected: GitOid,
@@ -76,6 +102,8 @@ enum Action {
         expected: GitOid,
         remote_head: Option<GitOid>,
         force: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_publication: Option<Box<feature_delivery::TaskPublication>>,
     },
 }
 struct StagedMessage(Result<String, DomainErrorCode>, Option<Value>);
@@ -115,7 +143,7 @@ impl Job {
             Id::new("git-effects").expect("namespace"),
             service.store.info().store_id,
             counter(self.restore_epoch),
-            rev(1),
+            rev(self.policy_revision),
         )
         .with_lineage(
             Some(self.project.clone()),
@@ -152,6 +180,68 @@ fn oid(head: String) -> GitOid {
         },
         hex: head,
     }
+}
+
+fn cleanup_stage(path: &Path, operation: &OperationId) -> Option<PathBuf> {
+    let digest = crate::fingerprint::sha256_hex(operation.0.as_str().as_bytes());
+    Some(
+        path.parent()?
+            .join(format!(".devworks-cleanup-{}", &digest[..24])),
+    )
+}
+
+fn definite_git_refusal(outcome: &Result<Vec<u8>, GitFault>) -> bool {
+    matches!(
+        outcome,
+        Err(GitFault::Helper(
+            HelperFault::Refused(_) | HelperFault::Spawn(_) | HelperFault::Failed { .. }
+        ))
+    )
+}
+
+fn cleanup_identity_matches(git: &Git<'_>, expected: &StoredGitWorktree, path: &Path) -> bool {
+    expected
+        .location
+        .as_ref()
+        .zip(path.to_str())
+        .is_some_and(|(location, path)| {
+            super::location::require_worktree_location(git, path, location).is_ok()
+        })
+}
+
+fn require_clean_checkout(
+    git: &Git<'_>,
+    expected: &StoredGitWorktree,
+    path: &Path,
+) -> Result<(), &'static str> {
+    if !cleanup_identity_matches(git, expected, path) {
+        return Err("could not verify the physical worktree and Git metadata");
+    }
+    let observed = git
+        .revision_observation(path)
+        .map_err(|_| "could not verify the worktree revision and status")?;
+    if observed.head != expected.head.hex {
+        return Err("the worktree head changed");
+    }
+    if observed.branch.as_deref() != Some(expected.branch.as_str()) {
+        return Err("the worktree is no longer on its registered branch");
+    }
+    if observed.dirty {
+        return Err("the worktree has tracked or untracked changes");
+    }
+    if git
+        .has_status_hidden_entries(path)
+        .map_err(|_| "could not verify the worktree index flags")?
+    {
+        return Err("the worktree index has entries that Git status can hide");
+    }
+    if git
+        .has_ignored_files(path)
+        .map_err(|_| "could not verify whether the worktree has ignored files")?
+    {
+        return Err("the worktree has ignored local files");
+    }
+    Ok(())
 }
 
 impl GitService {
@@ -327,19 +417,17 @@ impl GitService {
                 &repository.id,
             ));
         }
-        if let Some(feature) = &work.parent_feature_id
-            && !tx
-                .git()
-                .git_worktrees(feature, None, MAX_PAGE)?
-                .iter()
-                .any(|t| {
-                    t.repository_id == repository.id
-                        && !t.removed
-                        && t.pending_operation_id.is_none()
-                        && t.head == input.base
-                })
-        {
-            return Err(refuse(DomainErrorCode::Conflict, "feature_branch", feature));
+        if let Some(feature) = &work.parent_feature_id {
+            feature_delivery::require_published_branch(tx, feature, &repository.id, &input.base)?;
+            if feature_delivery::uses_local_integration(tx, feature, &repository.id)?
+                && !tx.work().open_prerequisites(&work.id)?.is_empty()
+            {
+                return Err(refuse(
+                    DomainErrorCode::Conflict,
+                    "task_prerequisites",
+                    &work.id,
+                ));
+            }
         }
         Ok(root)
     }
@@ -361,6 +449,8 @@ impl GitService {
             self.validate_reviewed_git_command(tx, ctx, command, binding)?;
         }
         let op = OperationId(tx.new_id(IdKind::Operation));
+        let mut merge_reservation = None;
+        let mut cleanup_proof = None;
         let (mut tree, repository, work, action) = match command.input() {
             OperationInput::Git(ops::Input::Worktree(input)) => {
                 let work = tx
@@ -389,11 +479,6 @@ impl GitService {
                         // IDs do not become path syntax. Hex encoding is reversible and collision free.
                         let component: String =
                             id.as_str().bytes().map(|b| format!("{b:02x}")).collect();
-                        let role = if work.kind == FEATURE {
-                            "feature"
-                        } else {
-                            "task"
-                        };
                         let work_component: String = work
                             .id
                             .as_str()
@@ -417,7 +502,11 @@ impl GitService {
                             owner_assignment_id: ctx.assignment_id().cloned(),
                             registered_root_id: input.registered_root_id.clone(),
                             path,
-                            branch: format!("refs/heads/devworks/{role}-{work_component}"),
+                            branch: if work.kind == FEATURE {
+                                format!("refs/heads/feature/{work_component}")
+                            } else {
+                                format!("refs/heads/devworks/task-{work_component}")
+                            },
                             head: input.base.clone(),
                             revision: 1,
                             removed: false,
@@ -493,6 +582,72 @@ impl GitService {
                     },
                 )
             }
+            OperationInput::Git(ops::Input::Integrate(input)) => {
+                let GitCommand::Integrate { repository_id, .. } = &input.command else {
+                    unreachable!("selected final integration");
+                };
+                let (reservation, work) = delivery::reserve_delivery(tx, ctx, &op, &input.command)?;
+                let selected = reservation.repository(repository_id)?;
+                let (tree, repository, source) =
+                    self.pr_command(tx, ctx, &selected.worktree, true)?;
+                if source != work || repository.revision != selected.registration_revision {
+                    return Err(StorageError::ScopeDenied.into());
+                }
+                merge_reservation = Some(reservation);
+                (tree, repository, work, Action::Integrate)
+            }
+            OperationInput::Git(ops::Input::Cleanup(input)) => {
+                let GitCommand::Cleanup {
+                    worktree_id,
+                    expected_ownership_revision,
+                    expected_head,
+                } = &input.command
+                else {
+                    unreachable!("selected cleanup binding")
+                };
+                let recorded = tx
+                    .git()
+                    .git_worktree(worktree_id)?
+                    .ok_or_else(|| refuse(DomainErrorCode::NotFound, "worktree", worktree_id))?;
+                let scoped = tx
+                    .work()
+                    .work(&recorded.work_id)?
+                    .ok_or(StorageError::ScopeDenied)?;
+                let (tree, repository, work) = if Self::pr_manager(tx, ctx, &scoped, false)? {
+                    self.pr_command(tx, ctx, worktree_id, false)?
+                } else {
+                    self.owned_command(tx, ctx, worktree_id)?
+                };
+                cleanup_proof = delivery::cleanup_proof(tx, &tree, &work)?;
+                if cleanup_proof.is_none() && tree.owner != *ctx.principal() {
+                    return Err(refuse(
+                        DomainErrorCode::PermissionDenied,
+                        "git_ownership",
+                        worktree_id,
+                    ));
+                }
+                if expected_ownership_revision.get() != tree.ownership_revision
+                    || expected_head != &tree.head
+                {
+                    return Err(refuse(
+                        DomainErrorCode::Conflict,
+                        "git_ownership",
+                        worktree_id,
+                    ));
+                }
+                if cleanup_proof.is_none()
+                    && ctx.assignment_id().is_some()
+                    && crate::services::indexing::assigned::owned(tx.git(), ctx)?
+                        .is_none_or(|bound| bound.id != tree.id)
+                {
+                    return Err(refuse(
+                        DomainErrorCode::PermissionDenied,
+                        "git_ownership",
+                        worktree_id,
+                    ));
+                }
+                (tree, repository, work, Action::Cleanup)
+            }
             OperationInput::Git(ops::Input::PullRequest(input)) => {
                 self.decide_pull_request(ctx, command, tx, &input.command)?
             }
@@ -542,6 +697,16 @@ impl GitService {
                 affected.push(root);
             }
         }
+        if let Action::Push {
+            task_publication: Some(publication),
+            ..
+        } = &action
+        {
+            let task = RootId(publication.proof.task_id.clone());
+            if !affected.contains(&task) {
+                affected.push(task);
+            }
+        }
         let root_epochs = affected
             .into_iter()
             .map(|root| {
@@ -556,7 +721,17 @@ impl GitService {
         };
         let job = Job {
             delivery_id: queue.clone(),
-            feature_id: work.parent_feature_id.clone(),
+            feature_id: if matches!(
+                &action,
+                Action::PullRequest {
+                    final_feature: true,
+                    ..
+                }
+            ) {
+                Some(work.id.clone())
+            } else {
+                work.parent_feature_id.clone()
+            },
             actor: ctx.principal().clone(),
             kind: ctx.principal_kind().as_str().to_string(),
             session: ctx.session_id().cloned(),
@@ -564,15 +739,24 @@ impl GitService {
             root: ctx.root_id().cloned(),
             assignment: ctx.assignment_id().cloned(),
             restore_epoch: ctx.restore_epoch().get(),
+            policy_revision: ctx.policy_revision().get(),
             repository_revision: repository.revision,
             work_revision: work.revision,
+            work_scope_revision: matches!(&action, Action::Integrate)
+                .then_some(work.scope_revision),
             root_epochs,
             assignment_generation,
             fences,
             reviewed_binding,
             tree: tree.clone(),
             action,
+            cleanup_proof,
         };
+        // Cleanup's exact worktree reservation already serializes its native effect and
+        // persists after unknown outcomes. A definite refusal releases it, so a fresh cleanup
+        // must not wait behind the failed delivery's generic partition hold.
+        let partition = (!matches!(job.action, Action::Cleanup | Action::Integrate))
+            .then(|| tree.id.as_str().into());
         tx.operations().record_intent(NewOperation {
             id: op.clone(),
             root_id: job.root.clone(),
@@ -580,9 +764,12 @@ impl GitService {
             capability: command.descriptor().name.into(),
             schema_version: 1,
             args_digest: command.fingerprint().as_str().into(),
-            payload: serde_json::to_value(job)
+            payload: serde_json::to_value(&job)
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
         })?;
+        if let Some(mut delivery) = merge_reservation {
+            delivery::record_delivery_intent(tx, ctx.principal(), &op, &mut delivery)?;
+        }
         if let Some(previous_owner) = previous_owner {
             let event = EventId(tx.new_id(IdKind::Event));
             tx.history().append(NewEvent {
@@ -611,7 +798,7 @@ impl GitService {
         tx.history().append(NewEvent {
             id: event.clone(),
             actor: ctx.principal().clone(),
-            project_id: Some(work.project_id),
+            project_id: Some(work.project_id.clone()),
             root_id: ctx.root_id().cloned(),
             operation_id: Some(op.clone()),
             aggregate_kind: "git_worktree".into(),
@@ -628,13 +815,26 @@ impl GitService {
         })?;
 
         let now = tx.now_ms();
+        // A human may act on a linked task directly, even when only its feature owns a run.
+        let mut delivery_root = ctx.root_id().cloned();
+        if ctx.principal_kind() == PrincipalKind::Human
+            && ctx.root_id().is_some_and(|root| root.0 == work.id)
+            && tx.runs().root_control(&RootId(work.id.clone()))?.is_none()
+            && let Some(feature) = &job.feature_id
+        {
+            delivery_root = Some(RootId(feature.clone()));
+        }
         tx.queue().enqueue(NewQueueEntry {
             id: queue,
             consumer: EFFECT_CONSUMER.into(),
             event_id: event,
-            root_id: ctx.root_id().cloned(),
+            root_id: if job.cleanup_proof.is_some() {
+                None
+            } else {
+                delivery_root
+            },
             operation_id: Some(op.clone()),
-            partition: Some(tree.id.as_str().into()),
+            partition,
             priority: 0,
             ready_at_ms: now,
             payload: json!({"worktreeId":tree.id}),
@@ -686,14 +886,45 @@ impl GitService {
                 .projects()
                 .repository(&tree.repository_id)?
                 .ok_or(StorageError::ScopeDenied)?;
+            if let Action::Push {
+                task_publication: Some(task),
+                ..
+            } = &j.action
+            {
+                feature_delivery::publication_current(tx, &work, &j.tree, task)?;
+            }
             // Domain scope checks below run on the same current snapshot as the reservation.
             if work.revision != j.work_revision || repository.revision != j.repository_revision {
                 return Err(StorageError::ScopeDenied);
             }
             let brief = crate::services::work::model::WorkBrief::of(&work)?;
-            let managing =
-                matches!(j.action, Action::PullRequest { .. }) && Self::pr_manager(tx, &c, &work)?;
-            if let Action::PullRequest { covered, .. } = &j.action {
+            let final_delivery = matches!(j.action, Action::Integrate);
+            let managing = (final_delivery
+                || matches!(j.action, Action::PullRequest { .. })
+                || (matches!(j.action, Action::Cleanup) && j.cleanup_proof.is_some()))
+                && Self::pr_manager(tx, &c, &work, final_delivery)?;
+            if let Action::PullRequest {
+                covered,
+                final_feature,
+                integrated_heads,
+                ..
+            } = &j.action
+            {
+                if *final_feature {
+                    let coverage = feature_delivery::final_pr_coverage(tx, &work, &tree)
+                        .map_err(Failure::into_storage)?;
+                    if coverage
+                        .iter()
+                        .map(|(id, rev, _)| (id, *rev))
+                        .ne(covered.iter().map(|(id, rev)| (id, *rev)))
+                        || coverage
+                            .iter()
+                            .map(|(_, _, head)| head)
+                            .ne(integrated_heads)
+                    {
+                        return Err(StorageError::ScopeDenied);
+                    }
+                }
                 for (id, revision) in covered {
                     let covered_work = tx.work().work(id)?.ok_or(StorageError::ScopeDenied)?;
                     if covered_work.revision != *revision
@@ -816,7 +1047,8 @@ impl GitService {
         let result = match &job.action {
             Action::Commit { .. } => OperationResult::GitCommit { value },
             Action::Push { .. } => OperationResult::GitPush { value },
-            Action::PullRequest { .. } => {
+            Action::Cleanup => unreachable!("cleanup settles without a live checkout"),
+            Action::PullRequest { .. } | Action::Integrate => {
                 return EffectOutcome::Unknown(
                     "PR completion requires a remote observation".into(),
                 );
@@ -849,6 +1081,9 @@ impl GitService {
             updated.last_result = Some(durable.clone());
             updated.revision += 1;
             tx.git().update_git_worktree(&updated, current.revision)?;
+            if matches!(j.action, Action::Create | Action::Inspect) {
+                crate::services::indexing::register_git_worktree(tx, &updated)?;
+            }
             let id = EventId(tx.new_id(IdKind::Event));
             let sequence = tx.history().append(NewEvent {
                 id: id.clone(),
@@ -901,11 +1136,547 @@ impl GitService {
                     created_at_ms: now,
                 })?;
             }
+            if let Action::Push {
+                task_publication: Some(task),
+                ..
+            } = &j.action
+            {
+                feature_delivery::settle_task_publication(tx, &ctx, &updated, &op, task)?;
+            }
             Ok(())
         });
         match outcome {
             Ok(()) => EffectOutcome::Completed(checkpoint),
             Err(e) => storage_failure(e),
+        }
+    }
+
+    fn execute_cleanup(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+    ) -> EffectOutcome {
+        let path = Path::new(&job.tree.path);
+        let repo = Path::new(&repository.location);
+        if !repository.primary
+            || self.root_path(&job.tree.registered_root_id).ok().as_deref() != path.parent()
+            || self.same_worktree_path(repo, path)
+        {
+            return denied("cleanup target is not a registered isolated worktree");
+        }
+        if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
+            return changed(reason);
+        }
+        if let Some(proof) = &job.cleanup_proof {
+            if let Err(reason) =
+                self.verify_delivery_cleanup(job, operation, git, repository, proof)
+            {
+                return reason;
+            }
+        } else {
+            let default = match git.default_branch(repo) {
+                Ok(Some(branch)) => branch
+                    .strip_prefix("refs/heads/")
+                    .map(|name| format!("refs/remotes/origin/{name}")),
+                Ok(None) if matches!(git.origin(repo), Ok(None)) => {
+                    git.branch(repo).ok().flatten().filter(|name| {
+                        matches!(name.as_str(), "refs/heads/main" | "refs/heads/master")
+                    })
+                }
+                _ => None,
+            };
+            let base = default
+                .as_deref()
+                .and_then(|name| git.resolve(repo, name).ok().flatten())
+                .map(|(head, _)| head);
+            if !base.as_deref().is_some_and(|head| {
+                matches!(git.is_ancestor(repo, &job.tree.head.hex, head), Ok(true))
+            }) {
+                return denied("cleanup requires the exact worktree head to be integrated");
+            }
+        }
+        let Some(staged) = cleanup_stage(path, &operation.id) else {
+            return denied("cleanup worktree path is unsupported");
+        };
+        let (Ok(original), Ok(staging)) = (
+            crate::services::git::client::path_argument(path),
+            crate::services::git::client::path_argument(&staged),
+        ) else {
+            return denied("cleanup worktree path is unsupported");
+        };
+        if !self.cleanup_path_missing(&staged) {
+            return changed("the cleanup staging path changed");
+        }
+        if let Err(reason) = require_clean_checkout(git, &job.tree, path) {
+            return changed(reason);
+        }
+        if self.git_stopped(job)
+            || job
+                .cleanup_proof
+                .as_ref()
+                .is_some_and(|proof| !self.cleanup_writers_quiesced(job, operation, proof))
+        {
+            return EffectOutcome::NotApplied(
+                "cleanup authority or writers changed before staging".into(),
+            );
+        }
+        let move_effect = git.mutation(
+            repo,
+            &["worktree", "move", "--", &original, &staging],
+            None,
+            &operation.id,
+            false,
+        );
+        if move_effect.is_err() {
+            if definite_git_refusal(&move_effect)
+                && self.cleanup_path_missing(&staged)
+                && require_clean_checkout(git, &job.tree, path).is_ok()
+            {
+                return changed("Git refused to move the intact checkout");
+            }
+            return EffectOutcome::Unknown(
+                "the checkout could not be safely staged; no removal was attempted".into(),
+            );
+        }
+        let restore = || {
+            if !self.cleanup_path_missing(path)
+                || !cleanup_identity_matches(git, &job.tree, &staged)
+            {
+                return false;
+            }
+            let _ = git.mutation(
+                repo,
+                &["worktree", "move", "--", &staging, &original],
+                None,
+                &operation.id,
+                false,
+            );
+            self.cleanup_path_missing(&staged) && cleanup_identity_matches(git, &job.tree, path)
+        };
+        // Moving the physical checkout first fences path-based writers from the deletion target.
+        // Recheck the exact native witness, ref and all local data at the staged path.
+        if require_clean_checkout(git, &job.tree, &staged).is_err()
+            || !self.cleanup_path_missing(path)
+        {
+            return if restore() {
+                changed("the staged checkout had changed and was restored with its data")
+            } else {
+                EffectOutcome::Unknown("staged checkout retained for recovery".into())
+            };
+        }
+        if job.cleanup_proof.is_some() {
+            return self.retire_delivery_worktree(job, operation, git, repository, &staged);
+        }
+        let removal = git.mutation(
+            repo,
+            &["worktree", "remove", "--", &staging],
+            None,
+            &operation.id,
+            false,
+        );
+        if definite_git_refusal(&removal)
+            && require_clean_checkout(git, &job.tree, &staged).is_ok()
+            && restore()
+        {
+            return changed("Git refused to remove the intact checkout");
+        }
+        self.observe_cleanup(job, operation, git, repository)
+    }
+
+    fn verify_delivery_cleanup(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+        proof: &delivery::CleanupProof,
+    ) -> Result<(), EffectOutcome> {
+        if !self.cleanup_writers_quiesced(job, operation, proof) {
+            return Err(EffectOutcome::NotApplied(
+                "owned writers are still quiescing".into(),
+            ));
+        }
+        let repo = Path::new(&repository.location);
+        if git.is_ancestor(repo, &proof.integrated_candidate.hex, &proof.final_head.hex) != Ok(true)
+            || !self.cleanup_repository_matches(job, git, repository)
+        {
+            return Err(denied(
+                "integrated worktree identity cannot be verified for cleanup",
+            ));
+        }
+        use super::github::{Fault, Repository};
+        let client = self
+            .config
+            .github
+            .as_ref()
+            .ok_or_else(|| denied("GitHub is unavailable for cleanup"))?;
+        let target = repository
+            .remote_url
+            .as_deref()
+            .and_then(Repository::from_remote)
+            .ok_or_else(|| denied("GitHub repository changed before cleanup"))?;
+        let main = client
+            .branch_head(self.store.as_ref(), &target, "main")
+            .and_then(|main| {
+                client.commit_reaches_main(
+                    self.store.as_ref(),
+                    &target,
+                    &proof.merge_commit.hex,
+                    &main,
+                )
+            });
+        match main {
+            Ok(true) => {}
+            Err(Fault::Unavailable) => {
+                return Err(EffectOutcome::NotApplied(
+                    "GitHub could not be reached for cleanup verification".into(),
+                ));
+            }
+            _ => {
+                return Err(denied(
+                    "current main does not prove the verified merge for cleanup",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn cleanup_repository_matches(
+        &self,
+        job: &Job,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+    ) -> bool {
+        let path = Path::new(&job.tree.path);
+        if !repository.primary
+            || self.root_path(&job.tree.registered_root_id).ok().as_deref() != path.parent()
+        {
+            return false;
+        }
+        let observed = (|| {
+            let (_, common) = git.metadata_dirs(Path::new(&repository.location)).ok()?;
+            self.config
+                .filesystem
+                .as_ref()?
+                .resolve(&common, None)
+                .ok()?
+                .target?
+                .identity
+        })();
+        observed.is_some_and(|identity| {
+            job.tree
+                .location
+                .as_ref()
+                .is_some_and(|location| location.common_dir == identity)
+        })
+    }
+
+    fn resume_delivery_cleanup(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+    ) -> EffectOutcome {
+        let Some(proof) = &job.cleanup_proof else {
+            return denied("cleanup delivery evidence unavailable");
+        };
+        let path = Path::new(&job.tree.path);
+        let Some(staged) = cleanup_stage(path, &operation.id) else {
+            return denied("unsupported cleanup path");
+        };
+        if let Err(reason) = self.verify_delivery_cleanup(job, operation, git, repository, proof) {
+            return EffectOutcome::Unknown(format!("cleanup cannot resume safely: {reason:?}"));
+        }
+        if self.cleanup_path_missing(&staged) {
+            return self.observe_cleanup(job, operation, git, repository);
+        }
+        self.retire_delivery_worktree(job, operation, git, repository, &staged)
+    }
+
+    fn cleanup_writers_quiesced(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        proof: &delivery::CleanupProof,
+    ) -> bool {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+            let Some(control) = snapshot.runs().root_control(&proof.root)? else {
+                return Ok(false);
+            };
+            if control.desired != DesiredExecution::Paused
+                || !auto_cleanup::stop_verified(snapshot.operations(), &control)?
+            {
+                return Ok(false);
+            }
+            let mut roots = vec![proof.root.clone(), RootId(job.tree.work_id.clone())];
+            if let Some(owner) = &job.tree.owner_assignment_id
+                && let Some(assignment) = snapshot.runs().assignment(owner)?
+                && assignment.state.is_live()
+                && !roots.contains(&assignment.root_id)
+            {
+                roots.push(assignment.root_id);
+            }
+            for root in &roots {
+                if snapshot.runs().live_activation(root)?.is_some() {
+                    return Ok(false);
+                }
+                if root != &proof.root
+                    && let Some(control) = snapshot.runs().root_control(root)?
+                    && control.stop_operation_id.is_some()
+                    && !auto_cleanup::stop_verified(snapshot.operations(), &control)?
+                {
+                    return Ok(false);
+                }
+                let processes = snapshot.resources().processes(
+                    &ProcessFilter::UnsettledRoot(root.clone()),
+                    None,
+                    MAX_PAGE,
+                )?;
+                if processes.len() == usize::from(MAX_PAGE)
+                    || processes
+                        .iter()
+                        .any(|p| p.operation_id.as_ref() != Some(&operation.id))
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+        .unwrap_or(false)
+    }
+
+    fn delivery_staged_clean(&self, job: &Job, git: &Git<'_>, staged: &Path) -> bool {
+        cleanup_identity_matches(git, &job.tree, staged)
+            && git
+                .reviewed_revision_observation(staged)
+                .is_ok_and(|observation| {
+                    observation.head == job.tree.head.hex
+                        && !observation.dirty
+                        && observation
+                            .branch
+                            .as_deref()
+                            .is_none_or(|branch| branch == job.tree.branch.as_str())
+                })
+            && git.has_status_hidden_entries(staged) == Ok(false)
+            && git.has_ignored_files(staged) == Ok(false)
+    }
+
+    fn retire_delivery_worktree(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+        staged: &Path,
+    ) -> EffectOutcome {
+        let original = Path::new(&job.tree.path);
+        let repo = Path::new(&repository.location);
+        let unknown = || {
+            EffectOutcome::Unknown(
+                "staged checkout or branch changed; local data was retained".into(),
+            )
+        };
+        let stopped = || {
+            self.git_stopped(job)
+                || job
+                    .cleanup_proof
+                    .as_ref()
+                    .is_none_or(|proof| !self.cleanup_writers_quiesced(job, operation, proof))
+        };
+        if !self.cleanup_path_missing(original)
+            || !self.delivery_staged_clean(job, git, staged)
+            || stopped()
+        {
+            return unknown();
+        }
+        let Ok(branch) = git.branch(staged) else {
+            return unknown();
+        };
+        if branch.is_some() {
+            let detached = (|| {
+                let policy = git.reviewed_commit_policy(staged)?;
+                git.reviewed_mutation(
+                    staged,
+                    &["checkout", "--detach", &job.tree.head.hex],
+                    None,
+                    &operation.id,
+                    &policy,
+                )?;
+                git.branch(staged)
+            })();
+            if detached != Ok(None) {
+                return unknown();
+            }
+        }
+        if !self.cleanup_path_missing(original)
+            || !self.delivery_staged_clean(job, git, staged)
+            || !git.worktrees(repo).is_ok_and(|trees| {
+                !trees
+                    .iter()
+                    .any(|tree| tree.branch.as_deref() == Some(&job.tree.branch))
+            })
+            || stopped()
+        {
+            return unknown();
+        }
+        match git.resolve(staged, &job.tree.branch) {
+            Ok(Some((head, _))) if head == job.tree.head.hex => {
+                let allowed =
+                    read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+                        let protected = crate::authority::policy::repository_protected_branches(
+                            snapshot,
+                            &job.tree.repository_id,
+                        )?;
+                        Ok(!crate::authority::policy::protected_ref(
+                            &job.tree.branch,
+                            &protected,
+                        ))
+                    });
+                if !matches!(allowed, Ok(true))
+                    || git
+                        .retire_owned_branch(
+                            staged,
+                            &job.tree.branch,
+                            &job.tree.head.hex,
+                            &operation.id,
+                        )
+                        .is_err()
+                {
+                    return unknown();
+                }
+            }
+            Ok(None) => {}
+            _ => return unknown(),
+        }
+        let Ok(staging) = crate::services::git::client::path_argument(staged) else {
+            return unknown();
+        };
+        if !self.cleanup_path_missing(original)
+            || !self.delivery_staged_clean(job, git, staged)
+            || git.resolve(staged, &job.tree.branch) != Ok(None)
+            || stopped()
+        {
+            return unknown();
+        }
+        let _ = git.mutation(
+            repo,
+            &["worktree", "remove", "--", &staging],
+            None,
+            &operation.id,
+            false,
+        );
+        self.observe_cleanup(job, operation, git, repository)
+    }
+
+    fn cleanup_path_missing(&self, path: &Path) -> bool {
+        self.config.filesystem.as_ref().is_some_and(|fs| {
+            path.to_str()
+                .and_then(|path| fs.resolve(path, None).ok())
+                .is_some_and(|entry| {
+                    entry.entry_kind == EntryKind::Missing && entry.linked_ancestors.is_empty()
+                })
+        })
+    }
+
+    fn observe_cleanup(
+        &self,
+        job: &Job,
+        operation: &OperationRecord,
+        git: &Git<'_>,
+        repository: &StoredRepository,
+    ) -> EffectOutcome {
+        let path = Path::new(&job.tree.path);
+        let repo = Path::new(&repository.location);
+        if job.cleanup_proof.is_some()
+            && self.cleanup_path_missing(path)
+            && self.cleanup_repository_matches(job, git, repository)
+            && let Some(staged) = cleanup_stage(path, &operation.id)
+            && self.delivery_staged_clean(job, git, &staged)
+        {
+            return EffectOutcome::NotApplied(
+                "exact unchanged checkout is staged for removal".into(),
+            );
+        }
+        let absence = (|| {
+            let fs = self.config.filesystem.as_ref()?;
+            let (_, common) = git.metadata_dirs(repo).ok()?;
+            let identity = fs.resolve(&common, None).ok()?.target?.identity?;
+            if identity != job.tree.location.as_ref()?.common_dir
+                || self.root_path(&job.tree.registered_root_id).ok().as_deref() != path.parent()
+            {
+                return None;
+            }
+            let staged = cleanup_stage(path, &operation.id)?;
+            if !self.cleanup_path_missing(path)
+                || !self.cleanup_path_missing(&staged)
+                || git.worktrees(repo).ok()?.iter().any(|tree| {
+                    let registered = Path::new(&tree.path);
+                    self.same_worktree_path(registered, path)
+                        || self.same_worktree_path(registered, &staged)
+                })
+                || match git.resolve(repo, &job.tree.branch).ok()? {
+                    None => job.cleanup_proof.is_none(),
+                    Some((head, _)) => job.cleanup_proof.is_some() || head != job.tree.head.hex,
+                }
+            {
+                return None;
+            }
+            Some(())
+        })();
+        if absence.is_none() {
+            return EffectOutcome::Unknown(
+                "worktree removal could not be established; no write was repeated".into(),
+            );
+        }
+        let job = job.clone();
+        let operation = operation.id.clone();
+        let outcome = run_write(&*self.store, WriteOptions::settlement(), move |tx| {
+            let mut tree = tx
+                .git()
+                .git_worktree(&job.tree.id)?
+                .ok_or(StorageError::ScopeDenied)?;
+            if tree.removed && tree.last_operation_id.as_ref() == Some(&operation) {
+                return tree.last_result.ok_or(StorageError::CommitUnknown);
+            }
+            if tree != job.tree || tree.pending_operation_id.as_ref() != Some(&operation) {
+                return Err(StorageError::ScopeDenied);
+            }
+            let prior = tree.revision;
+            tree.revision = prior
+                .checked_add(1)
+                .ok_or_else(|| StorageError::InvalidRecord("Git revision exhausted".into()))?;
+            tree.removed = true;
+            tree.pending_operation_id = None;
+            tree.last_operation_id = Some(operation.clone());
+            let result = json!({"result": OperationResult::GitCleanup {
+                value: crate::protocol::records::MutationSummary {
+                    id: tree.id.clone(), revision: crate::services::kernel::rev(tree.revision), changed: true
+                },
+            }});
+            tree.last_result = Some(result.clone());
+            crate::services::indexing::retire_git_worktree(tx, &tree, &job.actor, &job.project)?;
+            tx.git().update_git_worktree(&tree, prior)?;
+            let id = EventId(tx.new_id(IdKind::Event));
+            tx.history().append(NewEvent {
+                id,
+                actor: job.actor,
+                project_id: Some(job.project),
+                root_id: job.root,
+                operation_id: Some(operation),
+                aggregate_kind: "git_worktree".into(),
+                aggregate_id: tree.id.as_str().to_owned(),
+                aggregate_revision: tree.revision,
+                kind: "GitWorktreeRemoved".into(),
+                payload: json!({"repositoryId": tree.repository_id, "workId": tree.work_id}),
+            })?;
+            Ok(result)
+        });
+        match outcome {
+            Ok(result) => EffectOutcome::Completed(result),
+            Err(error) => storage_failure(error),
         }
     }
 
@@ -916,6 +1687,13 @@ impl GitService {
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let authorization = crate::ports::Authorization::direct().fenced_by(job.fences.clone());
             if !crate::authority::authorization_holds(snapshot, &authorization)?
+                || snapshot
+                    .projects()
+                    .repository(&job.tree.repository_id)?
+                    .is_none_or(|repository| {
+                        repository.lifecycle != ACTIVE
+                            || repository.revision != job.repository_revision
+                    })
                 || snapshot.git().git_worktree(&job.tree.id)?.as_ref() != Some(&job.tree)
                 || snapshot
                     .work()
@@ -932,6 +1710,14 @@ impl GitService {
                 && snapshot.runs().assignment(assignment)?.is_none_or(|a| {
                     !a.state.is_live() || Some(a.generation) != job.assignment_generation
                 })
+            {
+                return Ok(true);
+            }
+            if let Action::Push {
+                task_publication: Some(publication),
+                ..
+            } = &job.action
+                && !publication.current_in(snapshot, job)?
             {
                 return Ok(true);
             }
@@ -952,8 +1738,11 @@ impl GitService {
             }
             for (root, epoch) in &job.root_epochs {
                 if let Some(control) = snapshot.runs().root_control(root)?
-                    && (control.desired == DesiredExecution::Paused
-                        || control.stop_operation_id.is_some()
+                    && ((control.desired == DesiredExecution::Paused
+                        && job.cleanup_proof.is_none())
+                        || (control.stop_operation_id.is_some()
+                            && (job.cleanup_proof.is_none()
+                                || !auto_cleanup::stop_verified(snapshot.operations(), &control)?))
                         || control.stop_epoch != *epoch)
                 {
                     return Ok(true);
@@ -993,6 +1782,9 @@ impl GitService {
             };
             if tree.pending_operation_id.as_ref() != Some(&operation) {
                 return Ok(());
+            }
+            if matches!(job.action, Action::Integrate) {
+                delivery::release_refused_delivery(tx, &job, &operation)?;
             }
             let prior = tree.revision;
             tree.revision += 1;
@@ -1085,6 +1877,12 @@ impl GitService {
             stop: &stop,
         };
         let path = Path::new(&job.tree.path);
+        if matches!(job.action, Action::Cleanup)
+            && job.cleanup_proof.is_some()
+            && self.cleanup_path_missing(path)
+        {
+            return self.resume_delivery_cleanup(&job, operation, &git, &repository);
+        }
         if !matches!(job.action, Action::Create)
             && self
                 .verify_target(
@@ -1099,6 +1897,7 @@ impl GitService {
             return changed("physical repository or worktree identity changed");
         }
         let outcome = match &job.action {
+            Action::Integrate => return self.execute_integrate(&job, operation, &ctx),
             Action::Create => {
                 if let Some(binding) = &job.reviewed_binding {
                     match self.approval_root_witness(&job.tree.registered_root_id) {
@@ -1216,6 +2015,7 @@ impl GitService {
                 }
             }
             Action::Inspect => Ok(vec![]),
+            Action::Cleanup => return self.execute_cleanup(&job, operation, &git, &repository),
             Action::PullRequest { .. } => {
                 return self.execute_pull_request(&job, operation, &git, path);
             }
@@ -1334,6 +2134,15 @@ impl GitService {
             stop: &stop,
         };
         let path = Path::new(&job.tree.path);
+        if matches!(job.action, Action::Cleanup) {
+            let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
+                s.projects().repository(&job.tree.repository_id)
+            });
+            return match repository {
+                Ok(Some(repository)) => self.observe_cleanup(job, operation, &git, &repository),
+                _ => EffectOutcome::Unknown("cleanup repository is unavailable".into()),
+            };
+        }
         if !matches!(job.action, Action::Create) {
             let repository = read_snapshot(&*self.store, &ReadOptions::default(), |s| {
                 s.projects().repository(&job.tree.repository_id)
@@ -1357,13 +2166,21 @@ impl GitService {
             }
         }
         if let Action::PullRequest {
-            repository, head, ..
+            repository,
+            head,
+            final_feature,
+            ..
         } = &job.action
         {
             let Some(client) = &self.config.github else {
                 return EffectOutcome::Unknown("GitHub observation is unavailable".into());
             };
-            return match client.find(&*self.store, repository, head) {
+            let observed = if *final_feature {
+                client.find_feature(&*self.store, repository, head)
+            } else {
+                client.find(&*self.store, repository, head)
+            };
+            return match observed {
                 Ok(Some(pr)) => self.finish_pull_request(job, &operation.id, pr),
                 _ => EffectOutcome::Unknown(
                     "PR outcome has not been established; no write was repeated".into(),
@@ -1398,6 +2215,7 @@ impl GitService {
                     )
             }
             Action::Inspect => true,
+            Action::Cleanup => unreachable!("handled above"),
             Action::Commit { message, expected } => {
                 if observed.head == expected.hex {
                     !observed.dirty && job.reviewed_binding.is_none()
@@ -1417,6 +2235,7 @@ impl GitService {
                 target,
                 expected,
                 transport_digest,
+                task_publication,
                 ..
             } => {
                 let transport = match self.push_transport(
@@ -1447,10 +2266,13 @@ impl GitService {
                         .remote_head(path, url, target)
                         .ok()
                         .flatten()
-                        .as_deref()
-                        == Some(&expected.hex)
+                        .is_some_and(|remote| {
+                            remote == expected.hex
+                                || (task_publication.is_some()
+                                    && git.is_ancestor(path, &expected.hex, &remote) == Ok(true))
+                        })
             }
-            Action::PullRequest { .. } => unreachable!("handled above"),
+            Action::PullRequest { .. } | Action::Integrate => unreachable!("handled above"),
         };
         if verified {
             self.finish_git(job, &operation.id, observed)
@@ -1478,6 +2300,15 @@ impl GitService {
             Err(e) => return storage_failure(e),
         };
         if current.pending_operation_id.as_ref() == Some(&operation.id) && current == job.tree {
+            if matches!(job.action, Action::Integrate) {
+                let outcome = self.observe_integrate(&job, operation);
+                if let EffectOutcome::Failed(reason) = &outcome
+                    && let Err(error) = self.settle_denial(&job, &operation.id, reason)
+                {
+                    return storage_failure(error);
+                }
+                return outcome;
+            }
             return self.observe_pending(&job, operation);
         }
         if current.last_operation_id.as_ref() != Some(&operation.id) {
@@ -1541,6 +2372,24 @@ impl CommandHandler for GitService {
         };
         Ok(Some(Prepared::new(StagedMessage(text, manifest))))
     }
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        prepared: Option<&Prepared>,
+        reply: Option<&crate::protocol::results::DomainCommandReply>,
+        _env: &Preparation<'_>,
+    ) {
+        let Some(staged) = prepared
+            .and_then(|p| p.get::<push::StagedPush>())
+            .and_then(push::StagedPush::integration_diff)
+        else {
+            return;
+        };
+        let committed = matches!(reply, Some(crate::protocol::CommandReply::Recorded { receipt, replayed: false, .. })
+            if matches!(receipt.decision, DomainDecision::Accepted {..}));
+        self.artifacts
+            .settle_host_bytes(self.store.as_ref(), staged, committed);
+    }
     fn decide(
         &self,
         ctx: &InvocationContext,
@@ -1556,6 +2405,16 @@ impl CommandHandler for GitService {
 }
 
 impl JournaledEffect for GitService {
+    fn resumes_after_observation(&self, operation: &OperationRecord) -> bool {
+        self.job(operation).is_ok_and(|job| match job.action {
+            Action::Push { .. } => job.tree.branch.starts_with("refs/heads/feature/"),
+            Action::PullRequest { final_feature, .. } => final_feature,
+            Action::Integrate => true,
+            Action::Cleanup => job.cleanup_proof.is_some(),
+            _ => false,
+        })
+    }
+
     fn execute(&self, operation: &OperationRecord) -> EffectOutcome {
         GitService::execute(self, operation)
     }

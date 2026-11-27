@@ -181,6 +181,29 @@ pub trait ProcessTree: Send {
     }
 }
 
+/// What can be observed about one specified process without owning it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExternalProcessStatus {
+    Running,
+    /// The specified process exited. Its status may be inaccessible to a non-parent observer.
+    Exited(ExternalExit),
+    Missing,
+    /// The PID belongs to another process. Observations of it say nothing about this watch.
+    Different,
+    InvalidIdentity,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExternalExit {
+    pub exit_code: Option<i32>,
+}
+
+/// A read-only OS registration for the verified process. Dropping it releases the registration.
+pub trait ExternalProcessWatch: Send {
+    fn poll_exit(&mut self) -> Result<Option<ExternalExit>, ProcessError>;
+}
+
 /// The native launcher.
 pub trait ProcessHost: Send + Sync {
     /// `unix` or `windows`.
@@ -197,6 +220,17 @@ pub trait ProcessHost: Send + Sync {
     /// establish the real OS PID and birth token; unsupported hosts must not synthesize one.
     fn current_identity(&self) -> Option<NativeIdentity> {
         None
+    }
+    /// Independent read-only observation, by PID and birth token, without a watch registration.
+    fn inspect_external(&self, _identity: &NativeIdentity) -> ExternalProcessStatus {
+        ExternalProcessStatus::Unavailable
+    }
+    /// Registers an OS exit notification without acquiring any authority to stop the process.
+    fn watch_external(
+        &self,
+        _identity: &NativeIdentity,
+    ) -> Result<Box<dyn ExternalProcessWatch>, ExternalProcessStatus> {
+        Err(ExternalProcessStatus::Unavailable)
     }
     /// Inspects a recorded identity without changing anything.
     fn probe(&self, identity: &NativeIdentity) -> Probe;

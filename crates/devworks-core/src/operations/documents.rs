@@ -78,7 +78,7 @@ pub struct IndexInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 12))]
+    #[schemars(with = "bool", extend("x-since" = 27))]
     pub reextract: Option<bool>,
 }
 impl Check for IndexInput {
@@ -92,7 +92,7 @@ impl Check for IndexInput {
 }
 impl Revisioned for IndexInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 12 {
+        if revision < 27 {
             self.reextract = None;
         }
     }

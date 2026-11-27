@@ -44,12 +44,25 @@ unsafe extern "system" {
 }
 /// Link count and identity of an open handle.
 fn handle_information(file: &File) -> io::Result<HandleInformation> {
+    raw_handle_information(file.as_raw_handle())
+}
+
+fn raw_handle_information(
+    handle: std::os::windows::io::RawHandle,
+) -> io::Result<HandleInformation> {
     let mut info = HandleInformation::default();
-    // SAFETY: a live handle owned by `file` and a valid, correctly laid out out pointer.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut info) } == 0 {
+    // The caller retains the open handle and this structure has the Windows ABI layout.
+    if unsafe { GetFileInformationByHandle(handle.cast(), &mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(info)
+}
+
+pub(super) fn single_link_identity(
+    handle: std::os::windows::io::RawHandle,
+) -> Option<FileIdentity> {
+    let info = raw_handle_information(handle).ok()?;
+    (info.links == 1).then(|| info.identity())
 }
 
 pub(super) fn file_identity(file: &File) -> Option<FileIdentity> {

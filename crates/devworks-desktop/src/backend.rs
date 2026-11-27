@@ -51,14 +51,13 @@ pub trait Backend: Send + Sync {
         _selection_key: &str,
     ) {
     }
-    /// Trusted host-only append of the selected coordinator conversation's screen context.
-    fn append_coordinator_notice(
-        &self,
-        _session: &Id,
-        _screen: &str,
-        _context: &str,
-    ) -> Result<(), String> {
-        Err("coordinator context notices are unavailable".into())
+    /// Admits a `sessions.append_screen_context` frame as the host: the screen the user is on
+    /// is host observation, so its notice is the host's, through the same gateway, receipt and
+    /// history as every command. Only the native host implements it.
+    fn append_screen_context(&self, _frame: &[u8]) -> CommandOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            "coordinator screen context".into(),
+        ))
     }
     fn read_coordinator_notice(
         &self,
@@ -265,6 +264,17 @@ pub trait Backend: Send + Sync {
     /// Reads at most `max` bytes of an `artifacts.read` stream handle through the artifact
     /// service's verified stream (re-authorized, liveness-checked, reader-held).
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String>;
+    /// Writes an `artifacts.export` stream to `destination` through the artifact service's
+    /// shared export writer (stream re-authorization, human-only, destination preflight, never
+    /// into application data). An existing file is replaced only with `overwrite`.
+    fn write_export(
+        &self,
+        _stream: &Id,
+        _destination: &std::path::Path,
+        _overwrite: bool,
+    ) -> Result<(), String> {
+        Err("exports are not available here".into())
+    }
     /// Probes package runtimes and refreshes the signed package indexes (blocking; off the UI
     /// thread).
     fn refresh_packages(&self) -> Result<(), String> {
@@ -274,6 +284,32 @@ pub trait Backend: Send + Sync {
     /// against the signed digests) and returns its path.
     fn fetch_index_bundle(&self, _package: &str, _digest: &str) -> Result<PathBuf, String> {
         Err("packages are not available here".into())
+    }
+    fn package_views(
+        &self,
+        _package: &str,
+        _digest: &str,
+    ) -> Result<devworks_engine::package_host::native_ui::NativeViews, String> {
+        Err("package views are not available here".into())
+    }
+    fn load_package_view_data(
+        &self,
+        _package: &str,
+        _digest: &str,
+        _view: &str,
+        _form: &serde_json::Value,
+    ) -> Result<devworks_engine::package_host::native_ui::ViewData, String> {
+        Err("package view data is not available here".into())
+    }
+    fn prepare_package_view_action(
+        &self,
+        _package: &str,
+        _digest: &str,
+        _view: &str,
+        _action: &str,
+        _form: &serde_json::Value,
+    ) -> Result<devworks_core::protocol::provider::ArtifactRef, String> {
+        Err("package view actions are not available here".into())
     }
     /// The index source configuration of the workspace (or a project) section, read for the
     /// form that edits it through `indexing.configure_sources` (none without indexing).
@@ -360,6 +396,7 @@ pub enum Slot {
     Conventions(crate::conventions_ops::ConventionsSlot),
     Artifacts(crate::artifacts_screen::ArtifactsSlot),
     Resources(crate::artifacts_screen::ResourcesSlot),
+    Agents(crate::agents_screen::AgentsSlot),
     Browser(crate::artifacts_screen::BrowserSlot),
     Projects(crate::projects_ops::ProjectsSlot),
     Indexing(crate::indexing_ops::IndexingSlot),
@@ -387,6 +424,7 @@ impl Slot {
             Self::Conventions(_) => ScreenId::Conventions,
             Self::Artifacts(_) => ScreenId::Artifacts,
             Self::Resources(_) => ScreenId::Resources,
+            Self::Agents(_) => ScreenId::Agents,
             Self::Browser(_) => ScreenId::Browser,
             Self::Projects(_) => ScreenId::Projects,
             Self::Indexing(_) => ScreenId::Indexing,
@@ -478,13 +516,31 @@ pub enum TaskOutput {
     DreamingReport(String),
     /// Native host state was refreshed or updated.
     Refreshed,
+    /// An artifact's preview for the Artifacts screen.
+    ArtifactPreview(crate::artifacts_screen::PreviewView),
+    /// An artifact's verified bytes were written to the named file.
+    ArtifactExported(std::path::PathBuf),
+    PackageViews {
+        views: devworks_engine::package_host::native_ui::NativeViews,
+        images: std::collections::BTreeMap<String, eframe::egui::ColorImage>,
+    },
+    PackageViewData(devworks_engine::package_host::native_ui::ViewData),
     /// The text of an MCP resource or prompt a person opened in Settings.
     McpContent(String),
+    AnalysisEvidence(String),
     SystemOneCompletion(Box<Option<devworks_core::protocol::results::OperationCompletion>>),
     /// What deleting a repository's folder would remove, for the person to review.
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.
     RepositoryDeleted(devworks_core::authority::destructive::RemovalOutcome),
+    /// The coordinator conversation was told which screen the user is on.
+    ScreenContextNoticed,
+    /// The text of a host notice in a transcript (its artifact version ID, the text).
+    NoticeText(String, String),
+    /// A pasted image staged as a file under the store's custody.
+    PastedImage(PathBuf),
+    /// The workspace section's index source configuration.
+    IndexSources(devworks_core::ports::storage::StoredSourceConfig),
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;
@@ -512,6 +568,18 @@ pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> 
     )
 }
 
+/// [`resolve_command`] for a `sessions.append_screen_context` frame, admitted as the host
+/// ([`Backend::append_screen_context`]).
+pub fn resolve_screen_context(backend: &dyn Backend, frame: &[u8]) -> CommandOutcome {
+    resolve_with(
+        backend,
+        &CommandDispatch::Generic,
+        "sessions.append_screen_context",
+        frame,
+        || backend.append_screen_context(frame),
+    )
+}
+
 /// `received` is the desktop control state when the UI received the interaction (it matters
 /// only to the human-only dispatches).
 fn resolve_dispatched(
@@ -521,12 +589,23 @@ fn resolve_dispatched(
     frame: &[u8],
     received: ControlEpoch,
 ) -> CommandOutcome {
-    let invoke = || match dispatch {
+    resolve_with(backend, dispatch, operation, frame, || match dispatch {
         CommandDispatch::Generic => backend.command(operation, frame),
         CommandDispatch::Project(project) => backend.command_in_project(project, operation, frame),
         CommandDispatch::HumanDecision => backend.human_decision(frame, received),
         CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame, received),
-    };
+    })
+}
+
+/// Admits `frame` through `invoke`, resubmitting it identically while its outcome is unknown.
+/// A held receipt is resolved through the same project lineage as `dispatch`.
+fn resolve_with(
+    backend: &dyn Backend,
+    dispatch: &CommandDispatch,
+    operation: &str,
+    frame: &[u8],
+    invoke: impl Fn() -> CommandOutcome,
+) -> CommandOutcome {
     let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
         if !is_unknown(&outcome) {

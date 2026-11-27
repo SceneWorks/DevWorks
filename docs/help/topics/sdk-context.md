@@ -9,3 +9,7 @@ Role instructions cannot grant disabled tools, remove a read-only reviewer restr
 Cache-friendly append-only context is useful only within correctness and authority. Preserve stable instructions and tool definitions where possible, but do not retain revoked tools or stale source to improve reuse. Compaction must respect the configured threshold and protected constraints; a hook cannot postpone required compaction indefinitely.
 
 A declared hook is executable only when its actual host runtime is registered and qualified. Report unsupported phases instead of presenting a recorded schema as a working injection path. See [Routing/context](help:routing-context), [Protocol](help:sdk-protocol), and [Permissions](help:permissions).
+
+Use `addons.read_content` or open the contribution from Add-ons to read a Skill, Role, or Prompt. The host checks the current manifest and materializes its exact bytes into the reader's artifact scope. A portable package can ship a signed file with the reference's digest and length. Adopt instructions through the ordinary skill or role controls.
+
+The host gives a hook `contextDigest` and a `context` document with the phase and visible text messages. Assemble and Decision contribute text to the initial decision context. Compact can add attributed material to the summary after host compaction runs. Return a `ContextProposal` with that digest and one published JSON artifact containing `text`. The host retains the current instructions and treats the proposal as attributed contextual text.

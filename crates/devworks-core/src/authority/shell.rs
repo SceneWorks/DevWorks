@@ -1205,8 +1205,12 @@ fn parse_options(
                     seen.push((name, None));
                     i += 1;
                 }
+                // A required value that is missing is not a form this model knows.
                 None if valued => {
-                    seen.push((name, words.get(i + 1).map(|w| w.text.clone())));
+                    let Some(v) = words.get(i + 1) else {
+                        return Parsed::Unknown;
+                    };
+                    seen.push((name, Some(v.text.clone())));
                     i += 2;
                 }
                 _ => return Parsed::Unknown,
@@ -1226,7 +1230,10 @@ fn parse_options(
             if o.value_letters.contains(l) {
                 let rest: String = letters[k + 1..].iter().collect();
                 if rest.is_empty() {
-                    seen.push((opt, words.get(i + 1).map(|w| w.text.clone())));
+                    let Some(v) = words.get(i + 1) else {
+                        return Parsed::Unknown;
+                    };
+                    seen.push((opt, Some(v.text.clone())));
                     consumed = 2;
                 } else {
                     seen.push((opt, Some(rest)));
@@ -1497,8 +1504,8 @@ fn command(words: &[Word], dialect: Dialect, piped: bool, c: &mut Collector, dep
                 // `nice -10 cmd` (obsolete numeric form).
                 let numeric = words.get(i + 1).is_some_and(|w| {
                     w.text.len() > 1
-                        && w.text[1..].chars().all(|d| d.is_ascii_digit())
                         && w.text.starts_with('-')
+                        && w.text[1..].chars().all(|d| d.is_ascii_digit())
                 });
                 if numeric {
                     Parsed::Operand(i + 2)
@@ -2006,6 +2013,7 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
         "-a", "-or", "-and", "-not", "!", "(", ")", "-true", "-false",
     ];
     let mut deletes = false;
+    let mut modeled = true;
     let mut k = 0;
     while k < expr.len() {
         let t = expr[k].text.as_str();
@@ -2023,6 +2031,30 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
                 "rm" | "rmdir" | "unlink" | "shred" => {
                     deletes = true;
                     c.claim(&n);
+                    // `{}` names each found path, which the start points cover. Every other
+                    // operand is the inner command's own target and is planned like a plain
+                    // removal; one that embeds `{}`, or a relative one under -execdir/-okdir
+                    // (resolved in each found path's folder), cannot be resolved here.
+                    // A hold never drops the start points' plan: a protected start point is
+                    // still refused.
+                    let in_found_dir = matches!(t, "-execdir" | "-okdir");
+                    match removal_plan(&n, &inner[1..]) {
+                        Some((kind, operands)) => {
+                            let mut own = Vec::new();
+                            for a in operands.iter().filter(|a| a.text != "{}") {
+                                if a.text.contains("{}") || (in_found_dir && !absolute(&a.text)) {
+                                    c.hold(InputNeeded::OpaqueCommand);
+                                    modeled = false;
+                                } else {
+                                    own.push(a.clone());
+                                }
+                            }
+                            if !own.is_empty() {
+                                modeled &= c.push(kind, &own);
+                            }
+                        }
+                        None => modeled = false,
+                    }
                 }
                 _ if consequential_token(&n) || shell_program(&n) || interpreter(&n) => {
                     c.hold(InputNeeded::OpaqueCommand);
@@ -2055,9 +2087,9 @@ fn find(args: &[Word], c: &mut Collector) -> bool {
         } else {
             starts
         };
-        return c.push(DestructiveKind::EraseContents, &starts);
+        return c.push(DestructiveKind::EraseContents, &starts) && modeled;
     }
-    true
+    modeled
 }
 
 fn protected_branch(c: &Collector, dest: &str) -> bool {
@@ -2067,6 +2099,97 @@ fn protected_branch(c: &Collector, dest: &str) -> bool {
 /// The directory a Git command works in, as a target word.
 fn git_dir(dir: &Option<Word>) -> Word {
     dir.clone().unwrap_or_else(|| literal("."))
+}
+
+fn git_config_read(args: &[Word]) -> bool {
+    if args.iter().any(|arg| arg.dynamic) {
+        return false;
+    }
+    let (subcommand, args) = match args.split_first() {
+        Some((first, rest)) if matches!(first.text.as_str(), "get" | "list") => {
+            (Some(first.text.as_str()), rest)
+        }
+        _ => (None, args),
+    };
+    let mut seen = Vec::new();
+    let Parsed::Operand(index) = parse_options(
+        args,
+        0,
+        &Options {
+            value_letters: "",
+            flag_letters: "lz",
+            long_values: &["--type"],
+            long_flags: &[
+                "--get",
+                "--get-all",
+                "--get-regexp",
+                "--get-urlmatch",
+                "--list",
+                "--global",
+                "--system",
+                "--local",
+                "--worktree",
+                "--includes",
+                "--no-includes",
+                "--null",
+                "--name-only",
+                "--show-names",
+                "--show-origin",
+                "--show-scope",
+                "--all",
+                "--bool",
+                "--int",
+                "--bool-or-int",
+                "--path",
+                "--expiry-date",
+            ],
+            stop: &[],
+        },
+        &mut seen,
+    ) else {
+        return false;
+    };
+    let Some(operands) = args.get(index..) else {
+        return false;
+    };
+    if operands.iter().any(|arg| arg.text.starts_with('-')) {
+        return false;
+    }
+    let mut reads = subcommand
+        .into_iter()
+        .chain(seen.iter().filter_map(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
+            )
+            .then_some(name.as_str())
+        }));
+    let read = reads.next();
+    if reads.next().is_some() {
+        return false;
+    }
+    match read {
+        Some("list" | "--list" | "-l") => operands.is_empty(),
+        Some("--get-urlmatch") => operands.len() == 2,
+        Some("get" | "--get" | "--get-all" | "--get-regexp") => (1..=2).contains(&operands.len()),
+        None => matches!(operands, [key] if key.text.contains('.')),
+        _ => false,
+    }
+}
+
+fn git_config_override(arg: &Word) -> bool {
+    if arg.dynamic || arg.text.chars().any(char::is_control) {
+        return false;
+    }
+    let Some((key, value)) = arg.text.split_once('=') else {
+        return false;
+    };
+    matches!(
+        (key.to_ascii_lowercase().as_str(), value),
+        ("user.name" | "user.email", _)
+            | ("protocol.file.allow" | "protocol.ext.allow", "never")
+            | ("commit.gpgsign", "false")
+    )
 }
 
 fn git(args: &[Word], c: &mut Collector) -> bool {
@@ -2094,9 +2217,7 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                 j += 2;
             }
             "-c" => {
-                let key = args.get(j + 1).map(|v| v.text.to_ascii_lowercase());
-                if key.is_none_or(|k| k.starts_with("alias.") || k.starts_with("core.")) {
-                    // An alias or core setting can change what the subcommand does.
+                if !args.get(j + 1).is_some_and(git_config_override) {
                     return false;
                 }
                 j += 2;
@@ -2147,8 +2268,38 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
         "status" | "log" | "show" | "diff" | "fetch" | "add" | "commit" | "init" | "describe"
         | "blame" | "ls-files" | "ls-tree" | "rev-parse" | "rev-list" | "shortlog" | "grep"
         | "remote" | "tag" | "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am"
-        | "config" | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file"
-        | "ls-remote" | "merge-base" | "check-attr" => true,
+        | "help" | "version" | "show-ref" | "for-each-ref" | "cat-file" | "ls-remote"
+        | "merge-base" | "check-attr" => true,
+        "config" => git_config_read(rest),
+        "archive" => {
+            if rest.iter().any(|a| a.dynamic) {
+                return false;
+            }
+            let mut seen = Vec::new();
+            match parse_options(
+                rest,
+                0,
+                &Options {
+                    value_letters: "",
+                    flag_letters: "vl0123456789",
+                    long_values: &["--format", "--prefix", "--mtime"],
+                    long_flags: &["--verbose", "--no-verbose", "--list", "--no-list"],
+                    stop: &[],
+                },
+                &mut seen,
+            ) {
+                // Git registers the plain tar writer ahead of configured formats.
+                Parsed::Operand(k) => {
+                    seen.iter()
+                        .all(|(name, value)| name != "--format" || value.as_deref() == Some("tar"))
+                        && rest.get(k..).is_some_and(|operands| {
+                            operands.iter().all(|arg| !arg.text.starts_with('-'))
+                        })
+                }
+                Parsed::NoExecution => true,
+                Parsed::Unknown => false,
+            }
+        }
         "stash" => match rest.first().map(|w| w.text.as_str()) {
             Some("drop" | "clear") => consequential(c, &dir),
             _ => true,
@@ -2275,6 +2426,28 @@ fn git(args: &[Word], c: &mut Collector) -> bool {
                     return false;
                 }
                 c.push(DestructiveKind::RemoveTree, &paths)
+            }
+            Some("move") => {
+                let operands = &rest[1..];
+                let [source, destination] =
+                    (if operands.first().is_some_and(|word| word.text == "--") {
+                        &operands[1..]
+                    } else {
+                        operands
+                    })
+                else {
+                    return false;
+                };
+                if !absolute(&source.text) || !absolute(&destination.text) {
+                    c.hold(InputNeeded::UnresolvedTarget);
+                    return false;
+                }
+                // The subcommand is a Git operand, not a second Windows move command.
+                c.claim("move");
+                let source_allowed = c.push(DestructiveKind::Move, std::slice::from_ref(source));
+                let destination_allowed =
+                    c.push(DestructiveKind::Truncate, std::slice::from_ref(destination));
+                source_allowed && destination_allowed
             }
             Some("list" | "add" | "prune" | "lock" | "unlock") => true,
             _ => false,
@@ -2528,6 +2701,16 @@ fn rsync(args: &[Word], c: &mut Collector) -> bool {
 }
 
 fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
+    match removal_plan(name, args) {
+        Some((_, [])) => true,
+        Some((kind, operands)) => c.push(kind, operands),
+        None => false,
+    }
+}
+
+/// The removal kind and operands of rm/rmdir/unlink/shred `args`; `None` for an option this
+/// model does not know.
+fn removal_plan<'a>(name: &str, args: &'a [Word]) -> Option<(DestructiveKind, &'a [Word])> {
     let options = match name {
         "rm" => Options {
             value_letters: "",
@@ -2569,12 +2752,9 @@ fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
     };
     let mut seen = Vec::new();
     let Parsed::Operand(k) = parse_options(args, 0, &options, &mut seen) else {
-        return false;
+        return None;
     };
-    let operands = &args[k..];
-    if operands.is_empty() {
-        return true;
-    }
+    let operands = args.get(k..)?;
     let recursive = seen
         .iter()
         .any(|(o, _)| matches!(o.as_str(), "-r" | "-R" | "--recursive"));
@@ -2583,7 +2763,7 @@ fn posix_removal(name: &str, args: &[Word], c: &mut Collector) -> bool {
         "rm" if recursive => DestructiveKind::RemoveTree,
         _ => DestructiveKind::Unlink,
     };
-    c.push(kind, operands)
+    Some((kind, operands))
 }
 
 /// `mkdir` writes a new entry at each operand (and its missing parents): planned as a write so a
@@ -3320,5 +3500,133 @@ mod transport_operand_tests {
             ),
             ShellAssessment::Destructive { .. } | ShellAssessment::NeedsInput(_)
         ));
+    }
+
+    #[test]
+    fn git_archive_models_only_plain_tar_stdout_reads() {
+        let argv = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).into())
+                .collect::<Vec<String>>()
+        };
+        for args in [
+            &["git", "archive", "HEAD"][..],
+            &["git", "archive", "--format=tar", "HEAD"][..],
+            &["git", "archive", "--format", "tar", "HEAD"][..],
+        ] {
+            assert!(matches!(
+                assess_command(&argv(args), None),
+                ShellAssessment::NoRecognizedDestruction { .. }
+            ));
+        }
+        for unsafe_args in [
+            &["git", "archive", "--format=zip", "HEAD"][..],
+            &["git", "archive", "--format", "tar.gz", "HEAD"][..],
+            &["git", "archive", "--format=custom", "HEAD"][..],
+            &["git", "archive", "--format"][..],
+            &["git", "archive", "-vo", "out.tar", "HEAD"][..],
+            &["git", "archive", "-9o", "out.tar", "HEAD"][..],
+            &["git", "archive", "--out=out.tar", "HEAD"][..],
+            &["git", "archive", "--output", "out.tar", "HEAD"][..],
+            &["git", "archive", "HEAD", "-o", "out.tar"][..],
+            &[
+                "git",
+                "archive",
+                "--rem=https://host/repo",
+                "--exec=cmd",
+                "HEAD",
+            ][..],
+            &[
+                "git",
+                "-c",
+                "tar.tgz.command=tar -xf -",
+                "archive",
+                "--format=tgz",
+                "HEAD",
+            ][..],
+            &["sh", "-c", "git archive $OPTS HEAD"][..],
+        ] {
+            assert!(
+                matches!(
+                    assess_command(&argv(unsafe_args), None),
+                    ShellAssessment::NeedsInput(_)
+                ),
+                "expected NeedsInput for {unsafe_args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn git_config_models_reads_and_holds_writes_and_unrestricted_overrides() {
+        for name in [
+            "tar.example.command",
+            "TAR.example.command",
+            "uploadarchive.allowUnreachable",
+            "core.sshCommand",
+            "credential.helper",
+            "user.name",
+        ] {
+            let args = ["git", "config", name, ""].map(String::from);
+            assert!(matches!(
+                assess_command(&args, None),
+                ShellAssessment::NeedsInput(_)
+            ));
+        }
+        for args in [
+            &["git", "config", "--get", "user.name"][..],
+            &["git", "config", "get", "user.name"][..],
+            &["git", "config", "--null", "--show-scope", "--list"][..],
+            &["git", "-c", "protocol.file.allow=never", "fetch"][..],
+            &[
+                "git",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Fixture",
+            ][..],
+            &[
+                "git",
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "merge",
+                "--no-ff",
+                "--no-commit",
+                "feature",
+            ][..],
+        ] {
+            let args = args
+                .iter()
+                .map(|arg| String::from(*arg))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                assess_command(&args, None),
+                ShellAssessment::NoRecognizedDestruction { .. }
+            ));
+        }
+        for args in [
+            &["git", "config", "set", "user.name", "Test"][..],
+            &["git", "config", "--get", "user.name", "--edit"][..],
+            &["git", "-c", "credential.helper=", "status"][..],
+            &[
+                "git",
+                "-c",
+                "commit.gpgsign=true",
+                "commit",
+                "-qm",
+                "Fixture",
+            ][..],
+        ] {
+            let args = args
+                .iter()
+                .map(|arg| String::from(*arg))
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                assess_command(&args, None),
+                ShellAssessment::NeedsInput(_)
+            ));
+        }
     }
 }
