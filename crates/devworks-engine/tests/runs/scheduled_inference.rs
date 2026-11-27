@@ -575,11 +575,7 @@ fn a_scheduled_inference_run_interrupted_by_shutdown_resumes_its_session_after_r
         (run, paused.session_id.expect("the run's session"))
     });
     drop(rt);
-    let (h, old_store) = f.into_parts();
-    drop(old_store);
-    h.wait_released();
-    let store = h.open();
-    let f = Fx::over(h, store);
+    let f = reopen(f);
     let second = JobWire::new(vec![Answer::Text("Resumed and done")]);
     runtime().block_on(async {
         let app = boot(job_ports(&f, second.clone())).await.unwrap();
@@ -667,17 +663,14 @@ fn a_scheduled_run_holds_while_its_tool_call_waits_and_resumes_when_it_clears() 
         Arc::new(AtomicBool::new(false)),
         Arc::new(AtomicUsize::new(0)),
     );
-    let mut ports = job_ports(&f, wire.clone());
-    let mut scripted = UseCases::new();
-    scripted.register(
-        "sessions.get",
-        Some(Arc::new(Capacity {
+    let ports = capacity_ports(
+        &f,
+        wire.clone(),
+        Capacity {
             open: open.clone(),
             calls: calls.clone(),
-        })),
-        None,
+        },
     );
-    ports.test_overrides = devworks_engine::TestOverrides::new(scripted);
     runtime().block_on(async {
         let app = boot(ports).await.unwrap();
         let run = run_job(
@@ -768,6 +761,131 @@ fn an_app_level_scheduled_run_completes_attributed_to_its_run_without_a_project(
         assert!(usage.project_id.is_none() && usage.work_id.is_none());
         // The request's `Attribution::Job` itself is not stored; the usage asserted above
         // records the same ownership: the run, its session, and no project or work.
+        app.shutdown().await;
+    });
+}
+
+/// [`job_ports`] with `sessions.get` answered by `capacity`.
+fn capacity_ports(f: &Fx, wire: Arc<dyn StreamingHttp>, capacity: Capacity) -> Composition {
+    let mut ports = job_ports(f, wire);
+    let mut scripted = UseCases::new();
+    scripted.register("sessions.get", Some(Arc::new(capacity)), None);
+    ports.test_overrides = devworks_engine::TestOverrides::new(scripted);
+    ports
+}
+
+/// Reopens the store of `f` after its runtime shut down.
+fn reopen(f: Fx) -> Fx {
+    let (h, old_store) = f.into_parts();
+    drop(old_store);
+    h.wait_released();
+    let store = h.open();
+    Fx::over(h, store)
+}
+
+#[test]
+fn a_run_resumed_while_holding_reports_resumed_when_its_wait_clears() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let prompt = seed_job_prompt(&f);
+    let open = Arc::new(AtomicBool::new(false));
+    let first = JobWire::new(vec![Answer::Tool {
+        name: "sessions_get_query",
+        arguments: r#"{"sessionId":"session-a"}"#,
+    }]);
+    let rt = runtime();
+    let run = rt.block_on(async {
+        let ports = capacity_ports(
+            &f,
+            first.clone(),
+            Capacity {
+                open: open.clone(),
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+        );
+        let app = boot(ports).await.unwrap();
+        let run = run_job(
+            &f,
+            &app,
+            prompt,
+            json!({"kind":"Model","modelId":"watch-model"}),
+        );
+        let holding = within(
+            "the run holds on its waiting tool call",
+            wait_run(&f, &app, &run, |r| r.status == "Holding" || terminal(r)),
+        )
+        .await;
+        assert_eq!(holding.status, "Holding", "{holding:?}");
+        app.shutdown().await;
+        let paused = job_run(&f, &run);
+        assert_eq!(paused.status, "Holding", "{paused:?}");
+        assert!(paused.hold.is_some());
+        run
+    });
+    drop(rt);
+    let f = reopen(f);
+    // The wait cleared while the app was closed.
+    open.store(true, Ordering::SeqCst);
+    let second = JobWire::new(vec![Answer::Text("Resumed after the hold")]);
+    runtime().block_on(async {
+        let ports = capacity_ports(
+            &f,
+            second.clone(),
+            Capacity {
+                open: open.clone(),
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+        );
+        let app = boot(ports).await.unwrap();
+        let finished = within("the resumed held run", wait_run(&f, &app, &run, terminal)).await;
+        assert_eq!(finished.status, "Succeeded", "{finished:?}");
+        assert_eq!(finished.resumptions, 1, "{finished:?}");
+        // Succeeding from Holding keeps its hold; only a reported release clears it.
+        assert!(finished.hold.is_none(), "{finished:?}");
+        assert_eq!(second.requests().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn a_run_started_while_scheduled_inference_stops_resumes_at_the_next_boot() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let prompt = seed_job_prompt(&f);
+    let first = JobWire::new(vec![Answer::Text("never sent")]);
+    let rt = runtime();
+    let run = rt.block_on(async {
+        let app = boot(job_ports(&f, first.clone())).await.unwrap();
+        // Shutdown's first step stops the pipeline while the scheduler may still start a run.
+        app.stop_scheduled_inference();
+        let run = run_job(
+            &f,
+            &app,
+            prompt,
+            json!({"kind":"Model","modelId":"watch-model"}),
+        );
+        let taken = within(
+            "the run is taken without a turn",
+            wait_run(&f, &app, &run, |r| r.status != "Queued"),
+        )
+        .await;
+        assert_eq!(taken.status, "Running", "not failed at shutdown: {taken:?}");
+        assert!(taken.reason.is_none(), "{taken:?}");
+        app.shutdown().await;
+        assert!(first.requests().is_empty());
+        run
+    });
+    drop(rt);
+    let f = reopen(f);
+    let second = JobWire::new(vec![Answer::Text("Ran after restart")]);
+    runtime().block_on(async {
+        let app = boot(job_ports(&f, second.clone())).await.unwrap();
+        let finished = within("the resumed run", wait_run(&f, &app, &run, terminal)).await;
+        assert_eq!(finished.status, "Succeeded", "{finished:?}");
+        assert_eq!(finished.resumptions, 1, "{finished:?}");
+        assert_eq!(second.requests().len(), 1);
         app.shutdown().await;
     });
 }

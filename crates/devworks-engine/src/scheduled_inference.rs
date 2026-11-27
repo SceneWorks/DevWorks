@@ -24,6 +24,7 @@ use devworks_core::ports::storage::{
 use devworks_core::protocol::provider::TranscriptBody;
 use devworks_core::protocol::{Counter, Id, OperationId, Revision};
 use devworks_core::services::artifacts::{host::HostArtifactPublication, version_ref};
+use devworks_core::services::diagnostics::DiagnosticService;
 use devworks_core::services::jobs::JobService;
 use devworks_core::services::jobs::runner::{
     InferenceJobs, InferenceOutcome, InferenceRefusal, InferenceStart, handed_off,
@@ -35,7 +36,7 @@ use devworks_core::settings::catalog::AgentRole;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::task::JoinHandle;
@@ -43,21 +44,26 @@ use tokio::task::JoinHandle;
 /// The visible reason of a run handed over before the turn engine is ready.
 const NOT_READY: &str = "Scheduled inference is starting: the agent turn engine is not ready yet. \
     Nothing was sent to a model.";
-const STOPPING: &str = "Scheduled inference is stopping for shutdown. Nothing was sent to a model.";
 const NOTHING_SENT: &str = "Nothing was sent to a model.";
 /// How long a finished turn waits for the scheduler to record its handoff before it leaves the
-/// run to the scheduler's supervision of unsettled starts.
+/// run to the scheduler's supervision of unsettled starts (and records a diagnostic).
 const REPORT_BOUND: Duration = Duration::from_secs(300);
+/// The longest wait between retries of a report the store refused.
+const MAX_REPORT_BACKOFF: Duration = Duration::from_secs(30);
 
 /// The engine's [`InferenceJobs`] port.
 pub(crate) struct ScheduledInference {
     engine: OnceLock<Weak<TurnEngine>>,
     jobs: Arc<JobService>,
-    turns: Mutex<HashMap<String, LiveTurn>>,
+    diagnostics: Arc<DiagnosticService>,
+    /// Live turns by run; each task removes its own entry (by its turn number) when it ends.
+    turns: Arc<Mutex<HashMap<String, LiveTurn>>>,
+    next_turn: AtomicU64,
     stopping: Arc<AtomicBool>,
 }
 
 struct LiveTurn {
+    turn: u64,
     session: Id,
     cancel: Cancellation,
     /// Set by a requested cancellation (not by shutdown).
@@ -66,11 +72,13 @@ struct LiveTurn {
 }
 
 impl ScheduledInference {
-    pub(crate) fn new(jobs: Arc<JobService>) -> Self {
+    pub(crate) fn new(jobs: Arc<JobService>, diagnostics: Arc<DiagnosticService>) -> Self {
         Self {
             engine: OnceLock::new(),
             jobs,
-            turns: Mutex::new(HashMap::new()),
+            diagnostics,
+            turns: Arc::new(Mutex::new(HashMap::new())),
+            next_turn: AtomicU64::new(0),
             stopping: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -112,10 +120,9 @@ impl ScheduledInference {
 }
 
 impl InferenceJobs for ScheduledInference {
+    /// Shutdown is no reason to refuse: the scheduler starts nothing once it is stopped, and a
+    /// run begun meanwhile is taken without a turn (see [`Self::start`]).
     fn availability(&self) -> Result<(), String> {
-        if self.stopping.load(Ordering::SeqCst) {
-            return Err(STOPPING.into());
-        }
         self.engine().map(|_| ()).ok_or_else(|| NOT_READY.into())
     }
 
@@ -124,16 +131,17 @@ impl InferenceJobs for ScheduledInference {
             dispatched: false,
             reason,
         };
-        let engine = self.engine().ok_or_else(|| refuse(NOT_READY.into()))?;
         if self.stopping.load(Ordering::SeqCst) {
-            return Err(refuse(STOPPING.into()));
+            // Shutdown began: take the run without starting its turn. Shutdown records it
+            // interrupted, and the next boot resumes it like any paused turn (a refusal here
+            // would end it Failed and lose the occurrence).
+            return Ok(run.session_id.clone());
         }
+        let engine = self.engine().ok_or_else(|| refuse(NOT_READY.into()))?;
+        if let Some(turn) = self.turns.locked().get(run.run_id.as_str())
+            && !turn.task.is_finished()
         {
-            let mut turns = self.turns.locked();
-            turns.retain(|_, turn| !turn.task.is_finished());
-            if let Some(turn) = turns.get(run.run_id.as_str()) {
-                return Ok(Some(turn.session.clone()));
-            }
+            return Ok(Some(turn.session.clone()));
         }
         let handle = tokio::runtime::Handle::try_current().map_err(|_| {
             refuse(format!(
@@ -155,6 +163,8 @@ impl InferenceJobs for ScheduledInference {
         let report = Reporter {
             store: engine.store().clone(),
             jobs: self.jobs.clone(),
+            diagnostics: self.diagnostics.clone(),
+            stopping: self.stopping.clone(),
             run: run.run_id.clone(),
             operation: opened.operation.clone(),
             attempt: opened.attempt,
@@ -167,7 +177,10 @@ impl InferenceJobs for ScheduledInference {
             self.stopping.clone(),
         );
         let (stop, asked) = (cancel.clone(), requested.clone());
+        let turn = self.next_turn.fetch_add(1, Ordering::SeqCst);
+        let (turns, key) = (self.turns.clone(), run.run_id.as_str().to_owned());
         let task = handle.spawn(async move {
+            let _own = OwnEntry { turns, key, turn };
             let operation_id = report.operation.clone();
             let operation = match crate::store::read(engine.store(), move |read| {
                 read.operations().operation(&operation_id)
@@ -175,7 +188,19 @@ impl InferenceJobs for ScheduledInference {
             .await
             {
                 Ok(Some(operation)) => operation,
-                Ok(None) | Err(_) => return,
+                read => {
+                    let why = match read {
+                        Err(error) => format!("{error}"),
+                        _ => "it is missing".into(),
+                    };
+                    report
+                        .report(InferenceOutcome::Failed(format!(
+                            "The scheduled agent could not read its run's operation ({why}). \
+                             {NOTHING_SENT}"
+                        )))
+                        .await;
+                    return;
+                }
             };
             let end = crate::background_turn::drive(
                 &engine,
@@ -208,15 +233,24 @@ impl InferenceJobs for ScheduledInference {
             };
             report.report(outcome).await;
         });
-        self.turns.locked().insert(
-            run.run_id.as_str().to_owned(),
-            LiveTurn {
-                session: opened.session.clone(),
-                cancel,
-                requested,
-                task,
-            },
-        );
+        let mut turns = self.turns.locked();
+        // Checked under the lock `stop` takes, after the insert: either `stop` sees this turn,
+        // or this sees that it stopped.
+        if self.stopping.load(Ordering::SeqCst) {
+            cancel.cancel();
+        }
+        if !task.is_finished() {
+            turns.insert(
+                run.run_id.as_str().to_owned(),
+                LiveTurn {
+                    turn,
+                    session: opened.session.clone(),
+                    cancel,
+                    requested,
+                    task,
+                },
+            );
+        }
         Ok(Some(opened.session))
     }
 
@@ -229,6 +263,25 @@ impl InferenceJobs for ScheduledInference {
                 Ok(false)
             }
             _ => Ok(true),
+        }
+    }
+}
+
+/// Removes its turn's entry when the turn's task ends (or is aborted), unless a later turn of the
+/// run replaced it.
+struct OwnEntry {
+    turns: Arc<Mutex<HashMap<String, LiveTurn>>>,
+    key: String,
+    turn: u64,
+}
+impl Drop for OwnEntry {
+    fn drop(&mut self) {
+        let mut turns = self.turns.locked();
+        if turns
+            .get(&self.key)
+            .is_some_and(|live| live.turn == self.turn)
+        {
+            turns.remove(&self.key);
         }
     }
 }
@@ -405,6 +458,8 @@ fn prompt_provenance(session: &Id, run: &InferenceStart) -> serde_json::Value {
 struct Reporter {
     store: Arc<dyn ApplicationStore>,
     jobs: Arc<JobService>,
+    diagnostics: Arc<DiagnosticService>,
+    stopping: Arc<AtomicBool>,
     run: Id,
     operation: OperationId,
     attempt: i64,
@@ -419,11 +474,16 @@ enum Reported {
 }
 
 impl Reporter {
+    /// Reports `outcome` once the handoff is recorded. A store refusal is retried with backoff
+    /// for as long as the runtime runs (shutdown records the run interrupted instead); a handoff
+    /// still unrecorded after [`REPORT_BOUND`] is left to the scheduler's supervision of
+    /// unsettled starts, with a diagnostic.
     async fn report(&self, outcome: InferenceOutcome) {
         let deadline = tokio::time::Instant::now() + REPORT_BOUND;
         let mut wait = Duration::from_millis(10);
+        let mut traced = false;
         loop {
-            let (jobs, run, operation, attempt, outcome) = (
+            let (jobs, run, operation, attempt, recorded) = (
                 self.jobs.clone(),
                 self.run.clone(),
                 self.operation.clone(),
@@ -453,21 +513,56 @@ impl Reporter {
                     if !handed_off(&record) {
                         return Ok(Reported::NotHandedOff);
                     }
-                    match jobs.finish_inference(tx, &run, current.revision, &outcome) {
+                    match jobs.finish_inference(tx, &run, current.revision, &recorded) {
                         Ok(_) | Err(StorageError::LeaseLost { .. }) => Ok(Reported::Done),
                         Err(error) => Err(error),
                     }
                 })
                 .await;
-            if let Ok(Reported::Done) = reported {
-                return;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return;
+            let late = tokio::time::Instant::now() >= deadline;
+            match reported {
+                Ok(Reported::Done) => return,
+                Ok(Reported::NotHandedOff) if late => {
+                    self.trace(
+                        &outcome,
+                        "the scheduler never recorded its handoff; the run is \
+                        left to the supervision of unsettled starts",
+                    )
+                    .await;
+                    return;
+                }
+                Ok(Reported::NotHandedOff) => {}
+                Err(_) if self.stopping.load(Ordering::SeqCst) => return,
+                Err(error) => {
+                    if late && !traced {
+                        traced = true;
+                        self.trace(
+                            &outcome,
+                            &format!("the store refuses it ({error}); retrying"),
+                        )
+                        .await;
+                    }
+                }
             }
             tokio::time::sleep(wait).await;
-            wait = (wait * 2).min(Duration::from_secs(1));
+            wait = (wait * 2).min(MAX_REPORT_BACKOFF);
         }
+    }
+
+    /// A durable trace of a report that could not be recorded in time.
+    async fn trace(&self, outcome: &InferenceOutcome, why: &str) {
+        use devworks_core::protocol::records::Severity;
+        use devworks_core::services::diagnostics::LogEntry;
+        let mut entry = LogEntry::new(
+            "jobs.inference",
+            "report-unrecorded",
+            Severity::Error,
+            format!("The outcome {outcome:?} of a scheduled inference run is not recorded: {why}."),
+        );
+        entry.target_kind = Some("job_run".into());
+        entry.target_id = Some(self.run.clone());
+        let diagnostics = self.diagnostics.clone();
+        let _ = tokio::task::spawn_blocking(move || diagnostics.log(entry)).await;
     }
 }
 

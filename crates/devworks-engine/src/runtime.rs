@@ -522,6 +522,8 @@ pub struct Runtime {
     admitter: Arc<Admitter>,
     jobs: Arc<JobService>,
     scheduler: Arc<Scheduler>,
+    #[cfg(any(test, feature = "test-support"))]
+    scheduled_inference: Option<Arc<crate::scheduled_inference::ScheduledInference>>,
     evals: Arc<EvalSupervisor>,
     approvals: Arc<ApprovalService>,
     resumes: Arc<ResumeDispatcher>,
@@ -1475,6 +1477,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let scheduled_inference = runs.inference.is_none().then(|| {
         Arc::new(crate::scheduled_inference::ScheduledInference::new(
             jobs.clone(),
+            diagnostics.clone(),
         ))
     });
     let inference: Arc<dyn devworks_core::services::jobs::runner::InferenceJobs> =
@@ -2552,6 +2555,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         admitter,
         jobs,
         scheduler,
+        #[cfg(any(test, feature = "test-support"))]
+        scheduled_inference,
         evals,
         approvals,
         resumes,
@@ -3407,6 +3412,15 @@ impl Runtime {
     /// The schedule runner (ticks are paced by [`RuntimeConfig::scheduler_interval`]).
     pub fn scheduler(&self) -> &Arc<Scheduler> {
         &self.scheduler
+    }
+    /// Puts the native scheduled-inference pipeline in the state shutdown's first step leaves it
+    /// in, without stopping anything else (a scheduled run started meanwhile is taken without
+    /// a turn).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn stop_scheduled_inference(&self) {
+        if let Some(pipeline) = &self.scheduled_inference {
+            pipeline.stop();
+        }
     }
 
     /// Stops admission of new deliveries, collection, housekeeping and the diagnostics monitor,

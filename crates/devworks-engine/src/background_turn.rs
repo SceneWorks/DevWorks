@@ -260,12 +260,13 @@ fn admission_hold(admission: &Admission) -> Option<String> {
     }
 }
 
-/// Waits for a committed state change (or the 30 s recheck), at least until `started` + 500 ms;
-/// `Err(Cancelled)` once `stopping` is cancelled.
+/// Waits for a committed state change (or the 30 s recheck), and at least until `started` +
+/// `pace`; `Err(Cancelled)` once `stopping` is cancelled.
 async fn wait_for_change(
     changes: &mut tokio::sync::watch::Receiver<u64>,
     stopping: &Cancellation,
     started: tokio::time::Instant,
+    pace: std::time::Duration,
 ) -> Result<(), StorageError> {
     let stopped = Wake::new();
     stopping.wake_on_cancel(&stopped);
@@ -278,9 +279,17 @@ async fn wait_for_change(
         _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
         _ = stopped.changed_after(generation) => return Err(StorageError::Cancelled),
     }
-    tokio::time::sleep_until(started + std::time::Duration::from_millis(500)).await;
-    Ok(())
+    tokio::select! {
+        _ = tokio::time::sleep_until(started + pace) => Ok(()),
+        _ = stopped.changed_after(generation) => Err(StorageError::Cancelled),
+    }
 }
+
+/// The first and longest pause between retries of a request whose admission is held.
+const HOLD_PACE: (std::time::Duration, std::time::Duration) = (
+    std::time::Duration::from_secs(1),
+    std::time::Duration::from_secs(300),
+);
 
 #[derive(Clone)]
 pub(crate) struct PreparedTurn {
@@ -511,6 +520,7 @@ pub(crate) async fn drive(
             Err(error) => return unavailable(error, sent),
         };
     let mut generations = 0;
+    let mut hold_pace = HOLD_PACE.0;
     while generations < TURN_LIMIT {
         if stopping.is_cancelled() {
             return TurnEnd::Stopped;
@@ -561,6 +571,12 @@ pub(crate) async fn drive(
         let mut changes = engine.state_changes();
         changes.borrow_and_update();
         let started = tokio::time::Instant::now();
+        // A scheduled run's request is admitted only while the run is not holding, so a hold
+        // the run records (a waiting tool call, a resumed held run, a held admission) is
+        // released before each request; the owner reports a release only when it holds.
+        if let Some(holds) = holds {
+            holds.resumed().await;
+        }
         sent = true;
         let progress = match engine
             .produce_and_dispatch_native_turn(request, Some(stopping.clone()))
@@ -575,17 +591,20 @@ pub(crate) async fn drive(
             &progress.provider.accounting,
         ) && let Some(reason) = admission_hold(admission)
         {
-            // Nothing was admitted: wait for the hold to clear, then retry the same request.
+            // Nothing was admitted: wait for a state change, then retry the same request, paced
+            // so a lasting hold is retried (and its release and hold recorded) at most once per
+            // pause, doubling to five minutes.
             holds.held(reason).await;
-            if wait_for_change(&mut changes, stopping, started)
+            if wait_for_change(&mut changes, stopping, started, hold_pace)
                 .await
                 .is_err()
             {
                 return TurnEnd::Stopped;
             }
-            holds.resumed().await;
+            hold_pace = (hold_pace * 2).min(HOLD_PACE.1);
             continue;
         }
+        hold_pace = HOLD_PACE.0;
         generations += 1;
         match progress.provider.result.outcome {
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
@@ -961,7 +980,13 @@ async fn finish_tools(
             holds.held(TOOL_HOLD.into()).await;
         }
         // Re-drive only the recorded tool identity after a possible approval or receipt change.
-        wait_for_change(&mut changes, stopping, started).await?;
+        wait_for_change(
+            &mut changes,
+            stopping,
+            started,
+            std::time::Duration::from_millis(500),
+        )
+        .await?;
     }
 }
 
