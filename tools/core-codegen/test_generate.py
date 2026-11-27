@@ -224,6 +224,12 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['budget'], 3)
         self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['plan_digest'], 3)
 
+    def test_a_legacy_result_keeps_only_its_revisions_members(self):
+        # The revert receipt gained its counts at revision 2, so a revision-1 legacy reply drops them.
+        rust = generate.gen_versioned('DreamRevertResult', generate.TYPES['DreamRevertResult'], generate.TYPES)
+        self.assertIn('if let Self::Legacy(value) = self { value.retain_revision(revision); }', rust)
+        self.assertNotIn('Self::Current(value) = self', rust)
+
     def test_skill_resources_project_each_item_to_its_artifact_below_revision_three(self):
         result = generate.DOMAIN_OPS['skills.resources']['result']
         self.assertEqual(result, 'SkillResourcePageResult')

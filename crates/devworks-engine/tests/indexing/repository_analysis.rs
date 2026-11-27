@@ -964,6 +964,23 @@ fn native_repository_analysis_links_seven_passes_and_keeps_missing_cluster_membe
         .expect("connected pair")
         .cluster
         .clone();
+    // A revision-1 caller receives the legacy cluster page without the revision-3 details.
+    let mut legacy = request.clone();
+    legacy["kind"] = json!("analysis.clusters");
+    let legacy = json!({"protocol":"1.0-draft.1","mode":"Query","queryId":"analysis-read",
+        "schemaRevision":1,"body":legacy});
+    let legacy = app
+        .query(&user, "analysis.clusters", legacy.to_string().as_bytes())
+        .unwrap();
+    let legacy = serde_json::to_value(result(legacy)).unwrap();
+    let items = legacy["value"]["items"].as_array().unwrap();
+    assert!(!items.is_empty(), "{legacy}");
+    assert!(
+        items
+            .iter()
+            .all(|item| item["id"].is_string() && item.get("details").is_none()),
+        "{legacy}"
+    );
     let mut detail = request.clone();
     detail["clusterId"] = json!(cluster.id);
     detail["legacyOrdinal"] = json!(cluster.details.unwrap().legacy_ordinal);
