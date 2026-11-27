@@ -2297,6 +2297,7 @@ fn initial_assignment_context(
         },
         instruction_stamps: Vec::new(),
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![
@@ -2571,8 +2572,10 @@ pub fn ensure_membership_context(
     };
     context.instructions = fresh.instructions;
     context.instruction_stamps.clear();
-    // The replaced instructions carried the bound skills block too; binding adds it afresh.
+    // The replaced instructions carried the bound skills and lesson blocks too; binding adds
+    // them afresh.
     context.skill_stamp = None;
+    context.lesson_stamp = None;
     context.messages.push(Message {
         role: MessageRole::User,
         content: vec![ContentBlock::Text {
@@ -2605,6 +2608,7 @@ pub fn ensure_membership_context(
     let ctx = ctx.clone();
     let assignment_id = agent.assignment_id.clone();
     let root_id = agent.root_id.clone();
+    let lessons = context.lesson_stamp.clone();
     let committed = run_write(
         engine.store().as_ref(),
         WriteOptions::observed(),
@@ -2658,6 +2662,7 @@ pub fn ensure_membership_context(
                 sequence,
                 created_at_ms,
             })?;
+            crate::context_epoch::record_lesson_delivery(tx, &session_id, lessons.as_ref())?;
             Ok(())
         },
     );

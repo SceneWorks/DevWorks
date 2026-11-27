@@ -176,6 +176,7 @@ pub fn material(raster: crate::protocol::provider::ArtifactRef) -> Vec<u8> {
         }],
         instruction_stamps: vec![],
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Image { artifact: raster, detail: None, cache: None }],

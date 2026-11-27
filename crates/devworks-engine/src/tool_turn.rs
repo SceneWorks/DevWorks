@@ -330,6 +330,7 @@ pub(crate) fn publish_initial_context(
     let ctx = ctx.clone();
     let session_id = session_id.clone();
     let binding = binding.clone();
+    let lessons = context.lesson_stamp.clone();
     let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
@@ -403,6 +404,7 @@ pub(crate) fn publish_initial_context(
             },
         )?;
         let artifact = version_ref(&version);
+        crate::context_epoch::record_lesson_delivery(tx, &session_id, lessons.as_ref())?;
         tx.sessions().put_provider_context_head(
             &StoredProviderContextHead {
                 session_id,
@@ -3041,6 +3043,7 @@ mod tests {
             instructions: vec![],
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![Message {
                 role: MessageRole::User,
                 content: vec![result(Some(first.clone())), result(Some(second.clone()))],

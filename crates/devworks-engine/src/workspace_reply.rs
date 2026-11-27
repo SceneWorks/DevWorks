@@ -1216,6 +1216,7 @@ fn first_auto_input(
             .collect(),
         instruction_stamps: Vec::new(),
         skill_stamp: None,
+        lesson_stamp: None,
         messages: Vec::new(),
         parameters: GenerationParameters::default(),
     };
@@ -1309,6 +1310,7 @@ fn prepare_prompt(
         instructions,
         instruction_stamps: Vec::new(),
         skill_stamp: None,
+        lesson_stamp: None,
         messages: Vec::new(),
         parameters: GenerationParameters {
             max_output_tokens: (binding.endpoint_profile

@@ -8852,6 +8852,8 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+#[path = "runs/lesson_delivery.rs"]
+mod lesson_delivery;
 #[path = "runs/turn_runtime.rs"]
 mod turn_runtime;
 

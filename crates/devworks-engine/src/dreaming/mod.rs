@@ -433,6 +433,7 @@ impl NativeDreaming {
             instructions: self.instructions(lease)?,
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![self.initial_message(lease, run)?],
             parameters: GenerationParameters::default(),
         };

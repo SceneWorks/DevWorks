@@ -9331,7 +9331,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Atomic entity/claim/evidence validation; client IDs resolve within batch; claims need object or value, not neither. Preserve provenance and contradictory claims."
+      "rules": "Atomic entity/claim/evidence validation; client IDs resolve within batch; claims need object or value, not neither. Preserve provenance and contradictory claims. Evidence citing a file of a registered repository uses sourceRef repo:<repository-id>/<path> (repository-relative, / separators); it is stored normalized (empty and . segments dropped, .. refused) and its source revision is the file's content digest in the repository's published index baseline, replacing any stated sourceRevision. A file that published baseline does not hold, or a repository outside the write scope, is recorded without a source revision (noted evidence_not_indexed). An index publication that changes or deletes a cited file marks the claims citing it stale."
     },
     "knowledge.revise": {
       "operation": "knowledge.revise",
@@ -9390,7 +9390,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again.",
+      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again. A repository file citation (repo:<repository-id>/<path>) is verified at its observed published index digest, never at a stated sourceRevision.",
       "since": {
         "source_revision": 2
       }

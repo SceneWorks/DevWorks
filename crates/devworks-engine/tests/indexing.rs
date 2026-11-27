@@ -361,6 +361,7 @@ fn provider_instructions_use_current_registered_checkout_and_scope() {
         }],
         instruction_stamps: vec![],
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {

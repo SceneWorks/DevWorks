@@ -68,6 +68,7 @@ impl InstructionGuard {
             return if crate::plan_review::attempt_is_current(self.store.as_ref(), ctx)?
                 && context.instruction_stamps.is_empty()
                 && context.skill_stamp.is_none()
+                && context.lesson_stamp.is_none()
                 && expected.is_none_or(<[_]>::is_empty)
                 && ctx.worktree().is_none()
             {
