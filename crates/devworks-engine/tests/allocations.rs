@@ -827,6 +827,101 @@ fn a_manual_start_of_an_unclaimed_root_runs_beside_a_claimed_root() {
     });
 }
 
+fn start_reply(f: &Fx, root: &Id) -> CommandReply {
+    let (control, revision) = read(&*f.store, |s| {
+        Ok((
+            control_of(s.runs(), &RootId(root.clone()))?,
+            s.work().work(root)?.unwrap().revision,
+        ))
+    });
+    f.command("runs.start",json!({"rootId":root,"expectedWorkRevision":revision.to_string(),"expectedControlRevision":control.revision.to_string()}))
+}
+
+fn execution_owned(reply: &CommandReply) -> bool {
+    matches!(reply, CommandReply::Recorded { receipt, .. }
+        if matches!(&receipt.decision, DomainDecision::Refused { fault }
+            if fault.code == devworks_core::protocol::DomainErrorCode::Conflict
+                && fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "project_execution_owned")))
+}
+
+#[test]
+fn a_yielding_claim_without_a_live_activation_still_excludes_claimed_but_not_manual_starts() {
+    let f = Fx::new();
+    let a = f.issue("yielding", 5);
+    let b = f.issue("claimed", 3);
+    let prerequisite = f.issue("prerequisite", 1);
+    let manual = f.issue("manual", 0);
+    let first = outcome(f.next3(json!({})));
+    assert_eq!(first["claim"]["workId"], json!(a));
+    f.start(&a);
+    applied(f.command(
+        "tasks.dependency_links",
+        json!({"taskId":a,"expectedRevision":"1","replacement":{"edges":[
+            {"predecessor":prerequisite,"successor":a}
+        ]}}),
+    ));
+    let control = f.control.clone();
+    write(&*f.store, move |tx| {
+        allocation::reconcile_project(tx, &control, &ProjectId(id("project")))
+    })
+    .unwrap();
+    let first_id = id(first["claim"]["id"].as_str().unwrap());
+    read(&*f.store, |s| {
+        assert_eq!(
+            s.work().allocation_claim(&first_id)?.unwrap().state,
+            ClaimState::Yielding
+        );
+        assert!(s.runs().live_activation(&RootId(a.clone()))?.is_none());
+        Ok(())
+    });
+    let second = outcome(f.next3(json!({"another":true})));
+    assert_eq!(second["claim"]["workId"], json!(b));
+    let reply = start_reply(&f, &b);
+    assert!(execution_owned(&reply), "{reply:?}");
+    assert!(read(&*f.store, |s| s.runs().live_activation(&RootId(b))).is_none());
+    f.start(&manual);
+    assert!(read(&*f.store, |s| s.runs().live_activation(&RootId(manual))).is_some());
+}
+
+#[test]
+fn a_feature_queue_claim_on_a_child_task_does_not_make_its_feature_claimed() {
+    let f = Fx::new();
+    let a = f.issue("claimed", 5);
+    f.seed("feature-b", None, "feature", 0);
+    f.seed("b-task", Some("feature-b"), "task", 0);
+    f.scope.approve(&RootId(id("feature-b")), 1, &[]);
+    let first = outcome(f.next3(json!({})));
+    assert_eq!(first["claim"]["workId"], json!(a));
+    f.start(&a);
+    let child = claim(f.command("next_work.claim_feature_task",json!({"rootId":"feature-b","expectedTaskSetRevision":f.queue(Some("feature-b")).to_string(),"leaseMs":"30000"})));
+    assert_eq!(child["workId"], "b-task");
+    read(&*f.store, |s| {
+        let child = s
+            .work()
+            .allocation_claim(&id(child["id"].as_str().unwrap()))?
+            .unwrap();
+        assert_eq!(child.root_id, RootId(id("feature-b")));
+        assert_ne!(child.queue_key, PROJECT_QUEUE);
+        assert!(child.state.is_live());
+        assert!(
+            s.runs()
+                .live_activation(&RootId(id("feature-b")))?
+                .is_none()
+        );
+        Ok(())
+    });
+    f.start(&id("feature-b"));
+    read(&*f.store, |s| {
+        assert!(s.runs().live_activation(&RootId(a))?.is_some());
+        assert!(
+            s.runs()
+                .live_activation(&RootId(id("feature-b")))?
+                .is_some()
+        );
+        Ok(())
+    });
+}
+
 #[test]
 fn automatic_project_claim_uses_priority_and_start_requires_that_exact_claim_and_archive_epoch() {
     let _native_case = native_runtime_case();

@@ -1027,8 +1027,12 @@ pub fn check_start(
         ));
     }
     // AGENT-16: a claimed execution excludes only other claimed starts in its slot. A manual
-    // Start of a root that holds no claim takes no allocation and runs beside it.
-    let claimed = automatic || all.iter().any(|c| c.work_id == w.id.0 || c.root_id == w.id);
+    // Start of a root that holds no project-queue claim takes no slot and runs beside it; a
+    // feature-queue claim on one of its tasks never occupies the project slot.
+    let claimed = automatic
+        || all
+            .iter()
+            .any(|c| c.queue_key == PROJECT_QUEUE && c.root_id == w.id);
     if claimed
         && all.iter().any(|c| {
             c.queue_key == PROJECT_QUEUE
