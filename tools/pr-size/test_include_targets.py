@@ -3,7 +3,7 @@
 Review skips and the PR size check does not count files marked
 `linguist-generated` (AGENTS.md, check.py). A file the product compiles in
 must not hide that way unless a generator really produces it, so this test
-resolves every include_str!/include_bytes! under crates/ and tools/ and fails
+resolves every include_str!/include_bytes! in tracked Rust outside docs/ and fails
 when one names a generated file not listed in GENERATED_INCLUDES with its
 generator.
 
@@ -15,7 +15,8 @@ import subprocess
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SCANNED = ('crates', 'tools')
+# Every tracked Rust file except docs/ examples and evaluation harnesses.
+EXCLUDED = ('docs/',)
 
 # Generated files that Rust code may include, each with the generator that
 # writes it. Edit the generator's inputs, not the file.
@@ -81,8 +82,8 @@ def include_targets():
     written as string literals at the call.
     """
     targets, unresolved = {}, []
-    sources = [p for p in git('ls-files', '--', *SCANNED).splitlines()
-               if p.endswith('.rs')]
+    sources = [p for p in git('ls-files', '--', '*.rs').splitlines()
+               if p.endswith('.rs') and not p.startswith(EXCLUDED)]
     for source in sources:
         with open(os.path.join(ROOT, source), encoding='utf-8') as f:
             text = f.read()
