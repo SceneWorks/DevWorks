@@ -451,17 +451,60 @@ pub enum ClaimRank {
     /// subject entity's (a query with words), listed descending: higher is a better match.
     /// Every statistic comes from the query's own scopes.
     Relevance(f64),
-    /// The cosine similarity of the claim's vector to the query's
-    /// ([`KnowledgeRead::knowledge_claim_neighbors`]), listed descending.
-    Similarity(f64),
 }
 
-/// A query vector in one qualified embedding space, and how many nearest claims it may match.
+/// A query vector in one qualified embedding space.
 #[derive(Clone, Copy, Debug)]
 pub struct ClaimVectorQuery<'a> {
     pub space: &'a Id,
     pub vector: &'a [f32],
-    pub neighbors: u16,
+}
+
+/// A candidate source of a query with words ([`KnowledgeRead::knowledge_candidates`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimSource {
+    /// Text matches: every query word in the claim's text or its subject entity's text. Key:
+    /// the BM25 score ([`ClaimRank::Relevance`]), 0.
+    Words,
+    /// Graph matches: claims naming a matched entity as subject or object. A matched entity is
+    /// a live entity of the query's scopes whose text has any query word; the best
+    /// `query.entity_limit` by BM25 over their text (then id descending) are matched. Key: the
+    /// best BM25 score of the claim's matched entities, then its update time.
+    Graph,
+    /// Vector matches: claims with a vector in `near.space` and a positive cosine similarity to
+    /// `near.vector`. Key: the similarity, 0.
+    Vector,
+}
+
+/// One read of a candidate source.
+#[derive(Clone, Copy, Debug)]
+pub struct ClaimCandidateRead<'a> {
+    pub source: ClaimSource,
+    /// The query vector ([`ClaimSource::Vector`] only).
+    pub near: Option<ClaimVectorQuery<'a>>,
+    /// Lists only claims no earlier source lists: graph matches that are not text matches, and
+    /// vector matches that are neither text nor graph matches.
+    pub tail: bool,
+    /// Ids left out (applied before `limit`).
+    pub exclude: &'a [Id],
+    /// The last row's key and id as read.
+    pub after: Option<((f64, i64), &'a str)>,
+    pub limit: u16,
+}
+
+/// A listed candidate: its key in its source's order and its id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimCandidate {
+    pub key: (f64, i64),
+    pub id: Id,
+}
+
+/// One read of a candidate source.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClaimCandidates {
+    pub items: Vec<ClaimCandidate>,
+    /// More entities matched the query's words than `query.entity_limit`.
+    pub entities_limited: bool,
 }
 
 /// A listed claim and its sort key. It reads as the claim it carries.
@@ -536,19 +579,19 @@ pub trait KnowledgeRead {
         after: Option<(ClaimRank, &str)>,
         limit: u16,
     ) -> Result<Vec<RankedClaim>, StorageError>;
-    /// The vector matches of a query with words: of the claims that pass every filter of
-    /// `query` but are not its text matches (some word is missing), the `near.neighbors` with
-    /// a vector in `near.space` nearest to `near.vector` and a positive cosine similarity,
-    /// ordered by similarity descending, then id descending; then strictly after `after` (the
-    /// last row's similarity and id as read), at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]).
-    /// The scope and every other filter apply before any similarity is computed.
-    fn knowledge_claim_neighbors(
+    /// One source's candidates for a query with words ([`ClaimCandidateRead`]), in that source's
+    /// order (key descending, then id descending), strictly after `read.after`, without the
+    /// ids `read.exclude` names, at most `read.limit` (1..=[`KNOWLEDGE_PAGE_MAX`]). The read
+    /// scopes and every other filter of `query` apply in the store before any similarity or
+    /// score is computed; only ids and keys are read, no claim is materialized.
+    fn knowledge_candidates(
         &self,
         query: &ClaimQuery,
-        near: &ClaimVectorQuery<'_>,
-        after: Option<(f64, &str)>,
-        limit: u16,
-    ) -> Result<Vec<RankedClaim>, StorageError>;
+        read: &ClaimCandidateRead<'_>,
+    ) -> Result<ClaimCandidates, StorageError>;
+    /// The claims `ids` names that exist, in the order of `ids` (at most
+    /// [`KNOWLEDGE_PAGE_MAX`]), read in one statement.
+    fn knowledge_claims_by_id(&self, ids: &[Id]) -> Result<Vec<StoredClaim>, StorageError>;
     /// Of the claims of `scopes` that are not deleted: how many have a vector of their current
     /// text in `space`, and how many there are.
     fn knowledge_vector_coverage(

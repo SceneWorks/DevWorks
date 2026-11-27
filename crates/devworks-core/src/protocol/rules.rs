@@ -1030,7 +1030,7 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 }
             }
         }
-        "DiagnosticPage" => require(
+        "DiagnosticPage" | "KnowledgeSearchPage" => require(
             v["hasMore"] == present(v, "nextCursor"),
             "page continuation mismatch",
         )?,

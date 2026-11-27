@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2302), 2302);
+    assert_eq!(run("domain-fixtures.json", 2307), 2307);
 }
 
 #[test]
@@ -476,7 +476,8 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // DW-183 introduces agents.list at revision 21.
     // DW-184 negotiates resources.holders and .waiters at revision 22.
     // DW-175 introduces sessions.append_screen_context at revision 23.
-    assert_eq!(admitted.len(), 762);
+    // DW-249 negotiates knowledge.search at revision 30 (retrieval mode and work limit).
+    assert_eq!(admitted.len(), 763);
 }
 
 #[test]

@@ -1557,6 +1557,13 @@ claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'s
 for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Revision 30 (DW-249): a search page reports its retrieval mode and whether a candidate cap limited it.
+case('r30-input-knowledge.search','domain-request.r30',{**request('knowledge.search','Query'),'schemaRevision':30})
+search_r30={'kind':'knowledge.search','value':{'items':[claim_skills],'hasMore':False,'mode':'Hybrid','workLimited':True}}
+case('r30-result-knowledge.search-mode','operation-result.r30',search_r30)
+case('r30-result-knowledge.search-lexical-empty','operation-result.r30',{'kind':'knowledge.search','value':{'items':[],'hasMore':False,'mode':'LexicalOnly','workLimited':False}})
+case('reject-r29-result-knowledge.search-mode','operation-result.r29',search_r30,False,False)
+case('reject-r30-result-knowledge.search-without-mode','operation-result.r30',{'kind':'knowledge.search','value':{'items':[claim_skills],'hasMore':False}},False,False)
 # Revisions 25 and 28 change document results and retain the existing request envelopes.
 for revision in (25,28):
  for name,mode in [('documents.import','Command'),('documents.list','Query')]:

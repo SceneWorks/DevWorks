@@ -268,7 +268,7 @@ All 391 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit`<br>`states`: `?Items<KnowledgeLifecycle>`<br>`entryKinds`: `?Items<KnowledgeEntryKind>`<br>`source`: `?Label`<br>`stale`: `?bool`<br><br>**Schema revisions** 1, 2, 3, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<KnowledgeClaim>` |
+| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit`<br>`states`: `?Items<KnowledgeLifecycle>`<br>`entryKinds`: `?Items<KnowledgeEntryKind>`<br>`source`: `?Label`<br>`stale`: `?bool`<br><br>**Schema revisions** 1, 2, 3, 8, 30 ([revision 30 input](contracts/domain-request.r29.schema.json)) | `KnowledgeSearchResult` |
 | `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision`<br><br>**Schema revisions** 1, 2, 3, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `KnowledgeBundle` |
 | `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
@@ -4798,6 +4798,24 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | `items` | `Rows<KnowledgeReviewItem>` |
 | `nextCursor` | `?Cursor` |
 | `hasMore` | `bool` |
+
+### KnowledgeRetrievalMode
+
+`Hybrid`, `LexicalOnly`.
+
+### KnowledgeSearchPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<KnowledgeClaim>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `mode` | `KnowledgeRetrievalMode` |
+| `workLimited` | `bool` |
+
+### KnowledgeSearchResult
+
+Before revision 30: exact legacy `Page<KnowledgeClaim>`. Revision 30 and later: `KnowledgeSearchPage`. The page projects to the legacy page with the same items, order and continuation, without the members revision 30 adds.
 
 ### NotificationLink
 

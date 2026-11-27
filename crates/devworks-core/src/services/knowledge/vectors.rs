@@ -16,32 +16,34 @@
 //! # Search
 //!
 //! Query preparation embeds the query text (one request per page) when the read scopes have
-//! vectors in the selected space. Text matches (every query word) come first, by BM25; then
-//! the vector matches: of the claims passing every other filter that are not text matches, the
-//! [`VECTOR_NEIGHBORS`] nearest with positive cosine similarity, by similarity descending, then
-//! id descending. The store applies the read scopes before it computes any similarity. A
-//! position is `r<score>|<id>` among text matches and `v<similarity>|<id>` among vector
-//! matches. The cursor binds the selected space (or its absence), not whether this page's query
-//! vector was embedded: when the route fails at query time, the page holds text matches only
-//! (the reply carries no retrieval mode: that would be a contract change, and
-//! `knowledge.diagnostics` reports the mode), and a cursor positioned among vector matches then
-//! expires (`CursorExpired`), since they cannot continue without a query vector. Storing a
-//! vector does not advance the scope's revision, so a claim embedded between two pages can join
-//! a later page, and one pushed out of the nearest set can drop out of it; no claim is listed
-//! twice while the claims' texts and the query vector stay the same (a text change advances
-//! the revision and expires the cursor; the query vector is embedded again for each page).
+//! vectors in the selected space. The page's query vector is the meaning source of the fused
+//! ranking ([`super::fusion`]): the claims passing every other filter with a vector in the
+//! selected space and a positive cosine similarity, nearest first, whether or not they also
+//! match the words. The store applies the read scopes before it computes any similarity. The
+//! cursor binds whether the page had a query vector, its space, and how many claims of the read
+//! scopes have vectors in it: when the route fails at query time, the page fuses the word and
+//! graph matches only and reports `LexicalOnly`, and a cursor issued with a query vector then
+//! expires (`CursorExpired`), as does one issued before a vector was stored. The query vector
+//! is embedded again for each page; a provider that returns another vector for the same text
+//! can reorder the meaning source between pages.
 //!
 //! # Decisions
 //!
 //! Vectors of a space that is no longer selected are kept, as document vectors are: no query
 //! reads them (every query names the selected space), a text change or deletion removes the
 //! claim's vectors in every space, purge removes them with their claims, and selecting that
-//! space again needs no paid embedding. The vector query scores every claim of the read scopes
-//! that has a vector, without a cap: on the development machine (debug build), 20,000 claims
-//! of 1,536 dimensions took 110 ms per vector page, the same order as the lexical side's
-//! one-pass BM25 over the read scopes, which is not capped either. A cap and a `workLimited`
-//! signal (a contract change) come with the fusion (DW-249), which bounds both sides.
-//! Fusing the two orders (with graph neighbours) is later work.
+//! space again needs no paid embedding.
+//!
+//! **Decision · confidence medium: exact vector scoring, no rows-scanned bound.** The meaning
+//! source scores every claim vector of the read scopes, so its recall is exact; its head keeps
+//! the nearest [`super::fusion::CANDIDATES`] and the tail lists the rest by keyset. Measured on
+//! the development machine (release build, 1,536 dimensions, store work of one fused page: the
+//! vector count preparation reads, the three head reads and 20 claims read by id): 8,000
+//! claims took 34 to 41 ms per page, 32,000 claims 143 to 144 ms, of which the vector scan was
+//! 85 ms and the vector count 43 ms. That is within the 150 ms per page this feature accepts
+//! at 32,000 claims, so recall wins over a bound that would make results depend on which rows
+//! were scanned. A larger corpus, or a regression past that budget, would add a bound like
+//! the document index's `max_blocks` that sets `workLimited`.
 use super::{Scoped, knowledge_read, model, ops, resolve_scope, writable};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
@@ -71,8 +73,6 @@ use std::sync::Arc;
 
 /// The durable consumer that embeds claims.
 pub const VECTOR_CONSUMER: &str = "knowledge-claim-vectors";
-/// The most vector matches one search lists after its text matches.
-pub const VECTOR_NEIGHBORS: u16 = 20;
 const JOB_SCHEMA: u32 = 1;
 const BATCH: u16 = 32;
 const AGGREGATE: &str = "knowledge_claim_vectors";
@@ -471,6 +471,11 @@ pub(super) fn run(
 pub(super) struct QueryVector {
     pub space: Id,
     pub vector: Vec<f32>,
+    /// How many claims of the read scopes had a vector in `space` when it was prepared: the
+    /// count only grows while the scopes' revisions stay the same (a text change, deletion or
+    /// move that removes a vector advances them), so a cursor bound to it expires when a
+    /// vector is stored between two pages.
+    pub embedded: i64,
     configuration_digest: String,
 }
 
@@ -500,6 +505,13 @@ pub(super) fn prepare_search(
     if words.is_empty() || words.len() > model::MAX_WORDS || runtime.is_stopped() {
         return Ok(None);
     }
+    // A lexical listing stays lexical: its later pages never pay for a query embedding.
+    if matches!(
+        super::fusion::continued_mode(&i.page),
+        Ok(Some(super::fusion::Mode::Lexical))
+    ) {
+        return Ok(None);
+    }
     let env = Preparation::new(runtime.store.as_ref(), env.cancellation, env.deadline_ms);
     let origin = EmbeddingOrigin::Query {
         query_id: query.query_id().0.clone(),
@@ -521,10 +533,15 @@ pub(super) fn prepare_search(
             let id = space_id(&space.id)?;
             let (embedded, _) =
                 knowledge_read(read).knowledge_vector_coverage(&scoped.keys(), &id)?;
-            Ok::<_, Failure>((embedded > 0).then_some((configuration.source_digest, space, id)))
+            Ok::<_, Failure>((embedded > 0).then_some((
+                configuration.source_digest,
+                space,
+                id,
+                embedded,
+            )))
         })())
     })??;
-    let Some((digest, space, id)) = searchable else {
+    let Some((digest, space, id, embedded)) = searchable else {
         return Ok(None);
     };
     let vector = runtime.embed_query_text(
@@ -546,6 +563,7 @@ pub(super) fn prepare_search(
         .map(|vector| QueryVector {
             space: id,
             vector,
+            embedded,
             configuration_digest: digest,
         }))
 }
@@ -603,9 +621,13 @@ pub(super) fn retrieval_mode(
     Ok((
         "Hybrid",
         format!(
-            "Retrieval is hybrid in embedding space {} ({}, {} dimensions): text matches, then \
-             up to {VECTOR_NEIGHBORS} vector matches. {embedded} of {live} claims have vectors.",
-            space.id, space.model, space.dimensions
+            "Retrieval is hybrid in embedding space {} ({}, {} dimensions): word, meaning and \
+             graph matches, up to {} each, fused by reciprocal rank. {embedded} of {live} \
+             claims have vectors.",
+            space.id,
+            space.model,
+            space.dimensions,
+            super::fusion::CANDIDATES
         ),
     ))
 }

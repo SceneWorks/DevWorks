@@ -14873,6 +14873,101 @@ impl Revisioned for KnowledgeReviewPage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum KnowledgeRetrievalMode {
+    Hybrid,
+    LexicalOnly,
+}
+impl Check for KnowledgeRetrievalMode {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct KnowledgeSearchPage {
+    pub items: Rows<KnowledgeClaim>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+    pub has_more: bool,
+    pub mode: KnowledgeRetrievalMode,
+    pub work_limited: bool,
+}
+impl Check for KnowledgeSearchPage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        self.has_more.check()?;
+        self.mode.check()?;
+        self.work_limited.check()?;
+        crate::protocol::rules::record(
+            "KnowledgeSearchPage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+impl Revisioned for KnowledgeSearchPage {
+    fn retain_revision(&mut self, revision: u32) {
+        self.items.retain_revision(revision);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("x-earlier" = {"name": "Page", "before": 30}))]
+pub enum KnowledgeSearchResult {
+    #[schemars(extend("x-until" = 30))]
+    Legacy(Page<KnowledgeClaim>),
+    #[schemars(extend("x-since" = 30))]
+    Current(KnowledgeSearchPage),
+}
+impl Check for KnowledgeSearchResult {
+    fn check(&self) -> Result<(), String> {
+        match self {
+            Self::Legacy(value) => value.check(),
+            Self::Current(value) => value.check(),
+        }
+    }
+}
+impl Revisioned for KnowledgeSearchResult {
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 30 {
+            let legacy: Option<Page<KnowledgeClaim>> = match self {
+                Self::Current(page) => Some(Page {
+                    items: page.items.clone(),
+                    next_cursor: page.next_cursor.clone(),
+                    has_more: page.has_more,
+                }),
+                _ => None,
+            };
+            if let Some(legacy) = legacy {
+                *self = Self::Legacy(legacy);
+            }
+        }
+        // A legacy page read at an earlier revision keeps only that revision's item members.
+        if let Self::Legacy(value) = self {
+            value.retain_revision(revision);
+        }
+        if let Self::Current(value) = self {
+            value.retain_revision(revision);
+        }
+    }
+    fn check_revision(&self, revision: u32) -> Result<(), String> {
+        match self {
+            Self::Legacy(_) if revision >= 30 => {
+                Err("legacy result requires its recorded revision".into())
+            }
+            Self::Current(_) if revision < 30 => {
+                Err("current result cannot be represented at this revision".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NotificationLink {
     pub kind: Label,

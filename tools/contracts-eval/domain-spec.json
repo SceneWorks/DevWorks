@@ -5378,6 +5378,31 @@
         "has_more": "bool"
       }
     },
+    "KnowledgeRetrievalMode": {
+      "kind": "enum",
+      "values": [
+        "Hybrid",
+        "LexicalOnly"
+      ]
+    },
+    "KnowledgeSearchPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<KnowledgeClaim>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "mode": "KnowledgeRetrievalMode",
+        "work_limited": "bool"
+      }
+    },
+    "KnowledgeSearchResult": {
+      "kind": "versioned",
+      "legacy": "Page<KnowledgeClaim>",
+      "current": "KnowledgeSearchPage",
+      "revision": 30,
+      "projection": "page_members",
+      "earlierName": "Page"
+    },
     "NotificationLink": {
       "kind": "record",
       "fields": {
@@ -9297,10 +9322,10 @@
         "source": "?Label",
         "stale": "?bool"
       },
-      "result": "Page<KnowledgeClaim>",
+      "result": "KnowledgeSearchResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Scoped lexical search, newest first: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies before any candidate is materialized. Every word of text must appear (Unicode case-folded) in the claim or its subject entity. Lifecycle Active by default (revision 1: Active only). Cursors bind the query and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state.",
+      "rules": "Scoped search: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies to every candidate source before any candidate is materialized. Without words, newest first. With words, three sources are fused by reciprocal rank into a head (k 400, each source at most 200 candidates), ordered by how many of the word and meaning sources list a claim, then the fused score: word matches (every word of text appears, Unicode case-folded, in the claim or its subject entity), meaning matches (the nearest claim vectors in the selected embedding space, when the read scopes have vectors in it) and graph matches (claims whose subject or object is one of the entityLimit entities whose text best matches a word). After the head, every other match follows in its source's own order (word, then graph, then meaning matches), so each matching claim is listed once. Lifecycle Active by default (revision 1: Active only). Cursors bind the query, the retrieval inputs and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state. Schema revision 30: the page reports its listing's retrieval mode (Hybrid with meaning matches, otherwise LexicalOnly; a listing keeps its first page's mode) and workLimited, true when fusion ranked only the head (a source had more candidates than its cap, or more entities matched than entityLimit).",
       "since": {
         "states": 2,
         "entry_kinds": 2,
@@ -13203,7 +13228,8 @@
       1,
       2,
       3,
-      8
+      8,
+      30
     ],
     "knowledge.read": [
       1,

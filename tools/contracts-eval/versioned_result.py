@@ -8,7 +8,7 @@ def generate(name, definition, types):
     current = definition['current']
     revision = definition['revision']
     variants = definition.get('claimVariants')
-    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page', 'convention_record', 'convention_read', 'convention_page', 'convention_resources', 'convention_search', 'convention_mutation', 'page_field'):
+    if variants is None and definition.get('projection') not in ('none', 'help_read', 'help_page', 'convention_record', 'convention_read', 'convention_page', 'convention_resources', 'convention_search', 'convention_mutation', 'page_field', 'page_members'):
         raise ValueError(f'{name}: an explicit legacy projection strategy is required')
     conversion = ''
     if variants:
@@ -28,6 +28,8 @@ def generate(name, definition, types):
         conversion = convention_conversion(definition)
     if definition.get('projection') == 'page_field':
         conversion = page_field_conversion(definition)
+    if definition.get('projection') == 'page_members':
+        conversion = page_members_conversion(definition)
     def revisioned(ty, seen=None):
         seen = set() if seen is None else seen
         for token in re.findall(r'[A-Za-z_][A-Za-z0-9_]*', ty):
@@ -159,4 +161,20 @@ def page_field_conversion(definition):
             }};
             if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
         }}
+'''
+
+
+def page_members_conversion(definition):
+    """The current page carries the legacy page's items and continuation plus members of its own;
+    the legacy page keeps the same items, order and cursor."""
+    legacy, revision = (definition[k] for k in ('legacy', 'revision'))
+    return f'''        if revision < {revision} {{
+            let legacy: Option<{legacy}> = match self {{
+                Self::Current(page) => Some(Page {{ items: page.items.clone(), next_cursor: page.next_cursor.clone(), has_more: page.has_more }}),
+                _ => None,
+            }};
+            if let Some(legacy) = legacy {{ *self = Self::Legacy(legacy); }}
+        }}
+        // A legacy page read at an earlier revision keeps only that revision's item members.
+        if let Self::Legacy(value) = self {{ value.retain_revision(revision); }}
 '''
