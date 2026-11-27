@@ -362,20 +362,28 @@ fn a_write_still_running_is_read_again_on_refresh_until_it_is_complete() {
     type_into(&mut h, "Entry text", "A write that keeps running");
     click(&mut h, Role::Button, "Save entry");
     assert!(has_text(&h, "Last change: Entry · still running"));
-    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    // The periodic refresh may also read a running write, so compare counts across each step
+    // rather than expecting exact totals.
+    let first = reads.load(Ordering::SeqCst);
+    assert!(
+        first >= 1,
+        "the write's status is read after it is recorded"
+    );
     h.state_mut().refresh_visible();
     settle(&mut h);
-    assert_eq!(reads.load(Ordering::SeqCst), 2, "a refresh reads it again");
+    let second = reads.load(Ordering::SeqCst);
+    assert!(second > first, "a refresh reads a running write again");
     running.store(false, Ordering::SeqCst);
     h.state_mut().refresh_visible();
     settle(&mut h);
-    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    assert!(reads.load(Ordering::SeqCst) > second);
     assert!(has_text(&h, "Last change: Entry · complete"));
+    let done = reads.load(Ordering::SeqCst);
     h.state_mut().refresh_visible();
     settle(&mut h);
     assert_eq!(
         reads.load(Ordering::SeqCst),
-        3,
+        done,
         "a complete write is not read again"
     );
 }
