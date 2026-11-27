@@ -5,7 +5,9 @@
 //! original prefix. Only the host may append one; any other caller is refused.
 //!
 //! The operation contract bounds the text: `context` is a `Text`, 1 to 4096 characters, and
-//! admission refuses anything outside that before this service runs. No second bound applies.
+//! admission refuses anything outside that before this service runs. No second bound applies;
+//! [`MAX_NOTICE_BYTES`] is the most UTF-8 bytes that bound allows, and readers of host notices
+//! use [`super::MAX_HOST_NOTICE_BYTES`], which covers it.
 use super::{SESSION_CLOSED, SessionService, append_refusal, record_from};
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::AdmittedCommand;
@@ -22,6 +24,12 @@ use crate::services::kernel::{Failure, Refusal, not_found};
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
 use crate::services::sessions::turn;
 use serde_json::json;
+
+/// The most characters the `context` Text of `sessions.append_screen_context` admits.
+pub const MAX_NOTICE_CHARS: u64 = 4096;
+/// The most bytes a stored notice can hold: every admitted character encoded in four UTF-8
+/// bytes. A reader that refused less would fail on a notice the operation accepted.
+pub const MAX_NOTICE_BYTES: u64 = MAX_NOTICE_CHARS * 4;
 
 /// The notice text staged for one command.
 pub(super) struct StagedNotice(StagedFile);

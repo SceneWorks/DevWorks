@@ -803,6 +803,61 @@ fn a_failed_screen_context_notice_is_sent_once_per_screen_context() {
 }
 
 #[test]
+fn screen_context_notices_commit_in_navigation_order() {
+    let root = Root::new("notice-order");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let gate = Gate::new("sessions.append_screen_context");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    let session = sidebar_beside_settings(&mut h);
+    assert_eq!(gate.calls(), 1);
+    // The Artifacts notice is held; the user moves on before it lands.
+    gate.close();
+    nav(&h, "Artifacts").click();
+    let deadline = Instant::now() + SETTLE_BOUND;
+    while !gate.has_waiter() {
+        assert!(
+            Instant::now() < deadline,
+            "the Artifacts notice was never sent"
+        );
+        h.step();
+    }
+    nav(&h, "Settings").click();
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(
+        gate.calls(),
+        2,
+        "a newer context waits for the notice in flight"
+    );
+    gate.open();
+    settle(&mut h);
+    assert_eq!(gate.calls(), 3, "the current context follows once it lands");
+    let texts: Vec<String> = transcript(&*backend, &session)
+        .iter()
+        .filter_map(|body| match body {
+            TranscriptBody::HostNotice { artifact, .. } => {
+                Some(backend.read_coordinator_notice(artifact).unwrap())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    assert!(texts[1].contains("Current screen: Artifacts"), "{texts:?}");
+    assert!(texts[2].contains("Current screen: Settings"), "{texts:?}");
+}
+
+#[test]
 fn a_notice_text_is_read_off_the_frame_thread() {
     let root = Root::new("notice-text-held");
     let engine = start(&root);

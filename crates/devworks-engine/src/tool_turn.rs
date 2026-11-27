@@ -1380,7 +1380,12 @@ pub(crate) fn append_context_fact(
         TranscriptBody::HostNotice { artifact, .. } => vec![ContentBlock::Text {
             text: String::from_utf8(
                 artifacts
-                    .read_exact(store, ctx, &artifact, 8_000)
+                    .read_exact(
+                        store,
+                        ctx,
+                        &artifact,
+                        devworks_core::services::sessions::MAX_HOST_NOTICE_BYTES,
+                    )
                     .map_err(artifact_read_fault)?
                     .0,
             )

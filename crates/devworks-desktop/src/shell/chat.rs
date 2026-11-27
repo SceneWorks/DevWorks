@@ -397,6 +397,12 @@ impl Chat {
         if self.last_coordinator_notice.as_ref() == Some(&(session.clone(), key.clone())) {
             return;
         }
+        // One notice per conversation at a time, so notices commit in navigation order: while
+        // one is in flight, a newer context waits, and the first frame after it lands sends the
+        // context current then (intermediate screens are not sent).
+        if cx.pending(&ChatSlot::ScreenContext(session.clone())) {
+            return;
+        }
         // Each context is sent once, off the frame thread: a failure is reported once, and the
         // next different context is sent as usual.
         let screen = cx.route().screen().id;

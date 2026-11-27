@@ -97,6 +97,15 @@ pub const BRIEFING_LIMIT: usize = 32;
 pub const BRIEFING_OPEN_ITEMS: u16 = 8;
 /// Fault target kind of an append to an ended session.
 pub const SESSION_CLOSED: &str = "SessionClosed";
+/// The most bytes any host notice artifact holds, and so the limit every reader of one uses: a
+/// watcher reminder carries an output tail of up to 64 KiB
+/// ([`crate::ports::storage::MAX_WATCH_TAIL_BYTES`]) plus its framing, and a screen-context
+/// notice up to [`notice::MAX_NOTICE_BYTES`].
+pub const MAX_HOST_NOTICE_BYTES: u64 = 96_000;
+const _: () = assert!(
+    notice::MAX_NOTICE_BYTES <= MAX_HOST_NOTICE_BYTES
+        && crate::ports::storage::MAX_WATCH_TAIL_BYTES as u64 <= MAX_HOST_NOTICE_BYTES
+);
 /// Fault target kind of a briefing or source listing for a superseded context epoch.
 pub const EPOCH_CHANGED: &str = "context_epoch";
 
