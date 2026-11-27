@@ -92,23 +92,39 @@ pub fn fold_applicability(
 /// must split where FTS5 splits.
 pub fn words(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut word = String::new();
-    let mut push = |word: &mut String| {
-        let w = fold(word);
-        if !w.is_empty() && !out.contains(&w) {
+    for w in tokens(text) {
+        if !out.contains(&w) {
             out.push(w);
         }
-        word.clear();
-    };
-    for c in text.chars() {
-        if token_char(c) || (combining_diacritic(c) && !word.is_empty()) {
-            word.push(c);
-        } else {
-            push(&mut word);
-        }
     }
-    push(&mut word);
     out
+}
+
+/// Every folded word of `text` in order, repeats kept: the term counts of relevance ranking.
+/// It splits as [`words`] does.
+pub fn tokens(text: &str) -> impl Iterator<Item = String> + '_ {
+    let mut chars = text.chars().peekable();
+    std::iter::from_fn(move || {
+        loop {
+            let mut word = String::new();
+            while let Some(&c) = chars.peek() {
+                if token_char(c) || (combining_diacritic(c) && !word.is_empty()) {
+                    word.push(c);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if word.is_empty() {
+                chars.next()?;
+                continue;
+            }
+            let w = fold(&word);
+            if !w.is_empty() {
+                return Some(w);
+            }
+        }
+    })
 }
 
 /// A character the index tokenizer starts or continues a token with: letters and digits

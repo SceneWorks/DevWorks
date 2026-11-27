@@ -16,6 +16,7 @@ use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind};
 use devworks_core::fingerprint::sha256_hex;
 use devworks_core::gateway::Gateway;
 use devworks_core::ports::files::{ArtifactSources, ResolvedSource, SourceOrigin, SourceRefusal};
+use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{
@@ -1405,6 +1406,245 @@ fn pages_cover_every_row_once_and_cursors_expire_with_the_scope() {
     };
     assert_eq!(page.items.0.len(), 2);
     assert!(page.has_more);
+}
+
+/// Records `text` about `subject` at `at` (ms); returns the claim id.
+fn fact_at(fx: &Fx, user: &InvocationContext, at: i64, subject: &str, text: &str) -> String {
+    fx.h.set_now(at);
+    fx.claim_id(user, proj("project-a"), subject, draft("Fact", text))
+        .as_str()
+        .to_owned()
+}
+
+#[test]
+fn a_search_with_words_lists_the_best_match_before_a_newer_weak_one() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let t0 = fx.h.now();
+    let strong = fact_at(
+        &fx,
+        &user,
+        t0 + 1_000,
+        "Alpha",
+        "router tiers rotate router tiers",
+    );
+    let weak = fact_at(
+        &fx,
+        &user,
+        t0 + 2_000,
+        "Beta",
+        "the nightly build log mentions a router once and later, among many unrelated notes \
+         about caches, queues, workers and dashboards, also mentions tiers",
+    );
+    let page = fx.search(&user, proj("project-a"), "router tiers", json!({}));
+    assert_eq!(ids(&page), vec![strong, weak]);
+    // A word may match the subject's label instead of the claim's text, and every word must
+    // still match one of them.
+    let about = fact_at(&fx, &user, t0 + 3_000, "Gamma", "tiers rotate");
+    let named = fact_at(&fx, &user, t0 + 500, "Router", "tiers rotate");
+    let page = ids(&fx.search(&user, proj("project-a"), "router tiers", json!({})));
+    assert_eq!(page.len(), 3);
+    assert!(page.contains(&named));
+    assert!(!page.contains(&about));
+}
+
+#[test]
+fn relevance_pages_cover_every_match_once_in_the_order_of_one_page() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let t0 = fx.h.now();
+    // Distinct scores and ties (identical texts score alike and fall back to the id).
+    let texts = [
+        "cache",
+        "cache cache cache",
+        "a cache of many other words here",
+        "cache cache",
+        "cache",
+        "cache entries expire",
+        "cache",
+        "the cache",
+        "unrelated words only",
+    ];
+    let recorded: Vec<String> = texts
+        .iter()
+        .enumerate()
+        .map(|(i, t)| fact_at(&fx, &user, t0 + 1_000 * (i as i64 + 1), &format!("S{i}"), t))
+        .collect();
+    let whole = ids(&fx.search(&user, proj("project-a"), "cache", json!({})));
+    assert_eq!(whole.len(), 8);
+    // The order is relevance, not time: the repeated word outranks every newer single mention.
+    assert_eq!(whole[0], recorded[1]);
+    let body = |cursor: Option<&str>| {
+        let mut page = json!({"limit": 2});
+        if let Some(c) = cursor {
+            page["cursor"] = json!(c);
+        }
+        json!({"scope": proj("project-a"), "text": "cache", "tags": [], "kinds": [],
+            "page": page, "entityLimit": 50, "claimLimit": 50})
+    };
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = match result(fx.q(&user, "knowledge.search", body(cursor.as_deref()))) {
+            OperationResult::KnowledgeSearch { value } => value,
+            other => panic!("{other:?}"),
+        };
+        assert!(page.items.0.len() <= 2);
+        seen.extend(ids(&page));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    assert_eq!(seen, whole, "each match exactly once, in relevance order");
+}
+
+#[test]
+fn a_search_without_words_lists_the_newest_first() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let t0 = fx.h.now();
+    let first = fact_at(&fx, &user, t0 + 1_000, "A", "cache cache cache");
+    let second = fact_at(&fx, &user, t0 + 2_000, "B", "queue");
+    let third = fact_at(&fx, &user, t0 + 3_000, "C", "cache");
+    let page = fx.search(&user, proj("project-a"), " ", json!({}));
+    assert_eq!(ids(&page), vec![third, second, first]);
+}
+
+/// One `knowledge.search` page of project A for "cache", `limit` rows after `cursor`.
+fn cache_page(
+    fx: &Fx,
+    user: &InvocationContext,
+    limit: u32,
+    cursor: Option<&str>,
+) -> Page<KnowledgeClaim> {
+    let mut page = json!({"limit": limit});
+    if let Some(c) = cursor {
+        page["cursor"] = json!(c);
+    }
+    match result(fx.q(
+        user,
+        "knowledge.search",
+        json!({"scope": proj("project-a"), "text": "cache", "tags": [], "kinds": [],
+            "page": page, "entityLimit": 50, "claimLimit": 50}),
+    )) {
+        OperationResult::KnowledgeSearch { value } => value,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The position a cursor carries (`v1.<hex position>.<tag>`): for a relevance page, the score of
+/// its last row.
+fn position(cursor: &str) -> String {
+    let hex = cursor.split('.').nth(1).unwrap();
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    String::from_utf8(bytes).unwrap()
+}
+
+/// Every page of project A's "cache" search, two rows each: the ids and each cursor's position.
+fn cache_pages(fx: &Fx, user: &InvocationContext) -> (Vec<String>, Vec<String>) {
+    let (mut seen, mut positions) = (Vec::new(), Vec::new());
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = cache_page(fx, user, 2, cursor.as_deref());
+        seen.extend(ids(&page));
+        match page.next_cursor {
+            Some(c) => {
+                positions.push(position(&c.0));
+                cursor = Some(c.0);
+            }
+            None => return (seen, positions),
+        }
+    }
+}
+
+#[test]
+fn another_projects_words_never_change_a_relevance_score_order_or_cursor() {
+    let fx = Fx::new();
+    let user = fx.user();
+    for (i, t) in [
+        "cache",
+        "cache cache",
+        "a cache of words",
+        "the cache",
+        "cache rows",
+    ]
+    .iter()
+    .enumerate()
+    {
+        fact_at(&fx, &user, 1_000 * (i as i64 + 1), &format!("S{i}"), t);
+    }
+    let before = cache_pages(&fx, &user);
+    assert_eq!(before.0.len(), 5);
+    assert!(
+        before.1.iter().all(|p| p.starts_with('r')),
+        "{:?}",
+        before.1
+    );
+    // Another project gains the word many times over, in short and long texts.
+    for i in 0..20 {
+        fx.fact(
+            &user,
+            proj("project-b"),
+            &format!("B{i}"),
+            draft("Fact", &"cache ".repeat(i + 1)),
+        );
+    }
+    let after = cache_pages(&fx, &user);
+    assert_eq!(
+        before, after,
+        "scores, order and cursors are project A's alone"
+    );
+}
+
+#[test]
+fn relevance_paging_survives_an_out_of_scope_write_and_expires_on_an_in_scope_one() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // A short single mention and a long repeated one: their order depends on the mean length,
+    // which long texts elsewhere would change under whole-index statistics.
+    for (i, t) in [
+        "cache",
+        "cache cache cache and five more plain words",
+        "the cache",
+    ]
+    .iter()
+    .enumerate()
+    {
+        fact_at(&fx, &user, 1_000 * (i as i64 + 1), &format!("S{i}"), t);
+    }
+    let whole = ids(&cache_page(&fx, &user, 50, None));
+    // Out-of-scope writes between pages leave the cursor valid and every match once.
+    let first = cache_page(&fx, &user, 1, None);
+    for i in 0..30 {
+        fx.fact(
+            &user,
+            proj("project-b"),
+            &format!("B{i}"),
+            draft("Fact", &format!("cache {}", "filler ".repeat(200))),
+        );
+    }
+    let mut seen = ids(&first);
+    let mut cursor = first.next_cursor.map(|c| c.0);
+    while let Some(c) = cursor {
+        let page = cache_page(&fx, &user, 1, Some(&c));
+        seen.extend(ids(&page));
+        cursor = page.next_cursor.map(|c| c.0);
+    }
+    assert_eq!(seen, whole);
+    // An in-scope write between pages expires the cursor instead of shifting the scores under it.
+    let first = cache_page(&fx, &user, 2, None).next_cursor.unwrap().0;
+    fx.fact(&user, proj("project-a"), "Late", draft("Fact", "cache"));
+    let f = query_fault(fx.q(
+        &user,
+        "knowledge.search",
+        json!({"scope": proj("project-a"), "text": "cache", "tags": [], "kinds": [],
+            "page": {"limit": 2, "cursor": first}, "entityLimit": 50, "claimLimit": 50}),
+    ));
+    assert_eq!(f.code, DomainErrorCode::CursorExpired);
 }
 
 #[test]

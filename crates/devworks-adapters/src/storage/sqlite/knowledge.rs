@@ -7,9 +7,12 @@ use super::repos::{Snapshot, Unit};
 use super::support::{conflict, corrupt, id_of, invalid, page_limit};
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::{ActorId, Id, ProjectId, RevisionDimension};
+use devworks_core::services::conventions::indexing::rank;
+use devworks_core::services::knowledge::model;
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension, Row, params, params_from_iter};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 
 fn opt_id(s: Option<String>) -> Result<Option<Id>, StorageError> {
     s.map(id_of).transpose()
@@ -393,9 +396,9 @@ fn effective_state_sql(thresholds: &[(String, i64)], p: &mut Vec<Sql>) -> String
 fn claims_page(
     conn: &Connection,
     q: &ClaimQuery,
-    after: Option<(i64, &str)>,
+    after: Option<(ClaimRank, &str)>,
     limit: u16,
-) -> Result<Vec<StoredClaim>, StorageError> {
+) -> Result<Vec<RankedClaim>, StorageError> {
     let limit = page_limit(limit)?;
     if q.scopes.is_empty() {
         return Err(invalid("a claim query reads at least one scope"));
@@ -431,6 +434,7 @@ fn claims_page(
             p.len()
         ));
     }
+    let mut subjects: Option<String> = None;
     if !q.words.is_empty() {
         // The matching subjects: visible entities that match any word, limited after their
         // scope filter, never before it.
@@ -441,7 +445,7 @@ fn claims_page(
             q.entity_limit.unwrap_or(KNOWLEDGE_PAGE_MAX),
         )));
         let entity_limit = p.len();
-        let subjects = format!(
+        let matching = format!(
             "SELECT e.id FROM knowledge_entity_fts f JOIN knowledge_entities e ON \
              e.rowid=f.rowid WHERE knowledge_entity_fts MATCH ?{any_match} AND e.deleted_at IS \
              NULL AND e.scope_key IN ({entity_scopes}) ORDER BY e.id LIMIT ?{entity_limit}"
@@ -455,9 +459,10 @@ fn claims_page(
             w.push(format!(
                 "(c.rowid IN (SELECT rowid FROM knowledge_claim_fts WHERE knowledge_claim_fts \
                  MATCH ?{m}) OR c.subject_id IN (SELECT f.entity_id FROM knowledge_entity_fts f \
-                 WHERE knowledge_entity_fts MATCH ?{m} AND f.entity_id IN ({subjects})))"
+                 WHERE knowledge_entity_fts MATCH ?{m} AND f.entity_id IN ({matching})))"
             ));
         }
+        subjects = Some(matching);
     }
     if let Some(stale) = q.stale {
         w.push(format!(
@@ -505,19 +510,260 @@ fn claims_page(
             Some(other) => return Err(invalid(format!("unknown lesson view {other}"))),
         }
     }
-    if let Some((t, id)) = after {
-        p.push(Sql::Integer(t));
-        let a = p.len();
-        p.push(Sql::Text(id.to_owned()));
-        w.push(format!("({sort},c.id) < (?{a},?{})", p.len()));
+    if let Some(subjects) = subjects {
+        return relevance_page(conn, q, &w, p, &subjects, after, limit);
     }
+    let position = match after {
+        None => "1".to_owned(),
+        Some((ClaimRank::Time(t), id)) => {
+            p.push(Sql::Integer(t));
+            let a = p.len();
+            p.push(Sql::Text(id.to_owned()));
+            format!("(c.rank,c.id) < (?{a},?{})", p.len())
+        }
+        Some(_) => return Err(invalid("a claim position of another order")),
+    };
     p.push(Sql::Integer(limit));
-    let tail = format!(
-        "WHERE {} ORDER BY {sort} DESC, c.id DESC LIMIT ?{}",
+    let sql = format!(
+        "SELECT * FROM (SELECT {CLAIM_COLUMNS},{sort} AS rank FROM knowledge_claims c WHERE {}) c \
+         WHERE {position} ORDER BY c.rank DESC, c.id DESC LIMIT ?{}",
         w.join(" AND "),
         p.len()
     );
-    claims_where(conn, &tail, p)
+    let ranked = rows(conn, &sql, p, |r| Ok((r.get::<_, i64>(21)?, raw_claim(r)?)))?;
+    ranked
+        .into_iter()
+        .map(|(t, r)| {
+            Ok(RankedClaim {
+                rank: ClaimRank::Time(t),
+                claim: claim_of(conn, r)?,
+            })
+        })
+        .collect()
+}
+
+/// The token count of the `text` column (the second) in an FTS5 `_docsize` row: one SQLite
+/// varint per column, in column order.
+fn text_length(sz: &[u8]) -> Result<u64, StorageError> {
+    let bad = || corrupt("lexical index document size");
+    let mut at = 0;
+    let mut value = 0;
+    for _ in 0..2 {
+        value = 0;
+        for i in 0..9 {
+            let byte = *sz.get(at).ok_or_else(bad)?;
+            at += 1;
+            if i == 8 {
+                value = (value << 8) | u64::from(byte);
+                break;
+            }
+            value = (value << 7) | u64::from(byte & 0x7f);
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+    }
+    Ok(value)
+}
+
+/// The BM25 statistics of the query words in one lexical index (`knowledge_claim_fts` over
+/// `knowledge_claims`, or `knowledge_entity_fts` over live `knowledge_entities`), all read from
+/// the query's scopes alone.
+struct Statistics {
+    /// Records the read scopes index.
+    records: u64,
+    /// Their mean length in tokens.
+    mean_length: f64,
+    /// Per query word: the rowids of the read scopes' matching records (their count is the
+    /// document frequency).
+    matches: Vec<HashSet<i64>>,
+}
+impl Statistics {
+    fn read(
+        conn: &Connection,
+        records: &str,
+        index: &str,
+        scopes: &str,
+        words: &[String],
+    ) -> Result<Self, StorageError> {
+        let live = if records == "knowledge_entities" {
+            " AND r.deleted_at IS NULL"
+        } else {
+            ""
+        };
+        let in_scope = format!("r.scope_key IN (SELECT value FROM json_each(?1)){live}");
+        let sizes = rows(
+            conn,
+            &format!(
+                "SELECT d.sz FROM {records} r JOIN {index}_docsize d ON d.id=r.rowid WHERE \
+                 {in_scope}"
+            ),
+            vec![Sql::Text(scopes.to_owned())],
+            |r| r.get::<_, Vec<u8>>(0),
+        )?;
+        let mut total = 0u64;
+        for sz in &sizes {
+            total += text_length(sz)?;
+        }
+        let mut matches = Vec::with_capacity(words.len());
+        for word in words {
+            let ids = rows(
+                conn,
+                &format!(
+                    "SELECT r.rowid FROM {records} r WHERE {in_scope} AND r.rowid IN (SELECT \
+                     rowid FROM {index} WHERE {index} MATCH ?2)"
+                ),
+                vec![
+                    Sql::Text(scopes.to_owned()),
+                    Sql::Text(fts_query(std::slice::from_ref(word))),
+                ],
+                |r| r.get::<_, i64>(0),
+            )?;
+            matches.push(ids.into_iter().collect());
+        }
+        let n = sizes.len() as u64;
+        Ok(Self {
+            records: n,
+            mean_length: if n == 0 { 0.0 } else { total as f64 / n as f64 },
+            matches,
+        })
+    }
+    /// The BM25 score of `words` in the record at `id` (its rowid) with `text` of `length`
+    /// tokens. The index decides whether a word occurs; its term count is the folded words of
+    /// the text that equal it, at least one where the index matched.
+    fn score(&self, words: &[String], id: i64, text: &str, length: u64) -> f64 {
+        let mut counts = vec![0u32; words.len()];
+        for token in model::tokens(text) {
+            if let Some(i) = words.iter().position(|w| *w == token) {
+                counts[i] = counts[i].saturating_add(1);
+            }
+        }
+        let mut score = 0.0;
+        for (i, ids) in self.matches.iter().enumerate() {
+            if ids.contains(&id) {
+                let idf = rank::inverse_document_frequency(self.records, ids.len() as u64);
+                score += rank::bm25(counts[i].max(1), length, self.mean_length, idf);
+            }
+        }
+        score
+    }
+}
+
+/// One relevance page: the claims passing the filters `w` (values `p`), scored by BM25 (the
+/// shared formula, k1 1.2 and b 0.75) of the query words over the claim's text plus, when its
+/// subject is one of `subjects`, the subject's text. Every statistic (record count, mean length,
+/// document frequency) is read from the query's scopes alone, so no other scope changes a score
+/// or the order, and a change of a read scope advances its revision, which expires a cursor.
+/// Scores are computed in one pass over the filtered claims; only the page is materialized.
+fn relevance_page(
+    conn: &Connection,
+    q: &ClaimQuery,
+    w: &[String],
+    p: Vec<Sql>,
+    subjects: &str,
+    after: Option<(ClaimRank, &str)>,
+    limit: i64,
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let after = match after {
+        None => None,
+        Some((ClaimRank::Relevance(s), id)) => Some((s, id)),
+        Some(_) => return Err(invalid("a claim position of another order")),
+    };
+    let scopes = serde_json::to_string(&q.scopes).expect("scope keys");
+    let claim_stats = Statistics::read(
+        conn,
+        "knowledge_claims",
+        "knowledge_claim_fts",
+        &scopes,
+        &q.words,
+    )?;
+    let entity_stats = Statistics::read(
+        conn,
+        "knowledge_entities",
+        "knowledge_entity_fts",
+        &scopes,
+        &q.words,
+    )?;
+    type Candidate = (
+        i64,
+        String,
+        Option<String>,
+        Option<Vec<u8>>,
+        Option<i64>,
+        Option<String>,
+        Option<Vec<u8>>,
+    );
+    let candidates: Vec<Candidate> = rows(
+        conn,
+        &format!(
+            "SELECT c.rowid,c.id,cf.text,cd.sz,e.rowid,ef.text,ed.sz FROM knowledge_claims c \
+             LEFT JOIN knowledge_claim_fts cf ON cf.rowid=c.rowid \
+             LEFT JOIN knowledge_claim_fts_docsize cd ON cd.id=c.rowid \
+             LEFT JOIN knowledge_entities e ON e.id=c.subject_id AND e.id IN ({subjects}) \
+             LEFT JOIN knowledge_entity_fts ef ON ef.rowid=e.rowid \
+             LEFT JOIN knowledge_entity_fts_docsize ed ON ed.id=e.rowid WHERE {}",
+            w.join(" AND ")
+        ),
+        p,
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+            ))
+        },
+    )?;
+    let mut scored = Vec::with_capacity(candidates.len());
+    // Many claims share a subject: each subject is scored once.
+    let mut subject_scores: HashMap<i64, f64> = HashMap::new();
+    for (row, id, text, sz, subject, subject_text, subject_sz) in candidates {
+        let mut score = 0.0;
+        if let (Some(text), Some(sz)) = (text, sz) {
+            score += claim_stats.score(&q.words, row, &text, text_length(&sz)?);
+        }
+        if let (Some(subject), Some(text), Some(sz)) = (subject, subject_text, subject_sz) {
+            score += match subject_scores.get(&subject) {
+                Some(s) => *s,
+                None => {
+                    let s = entity_stats.score(&q.words, subject, &text, text_length(&sz)?);
+                    subject_scores.insert(subject, s);
+                    s
+                }
+            };
+        }
+        scored.push((score, id));
+    }
+    // Best match first, then id descending; strictly after the cursor's row.
+    if let Some((a, aid)) = after {
+        scored.retain(|(s, id)| *s < a || (*s == a && id.as_str() < aid));
+    }
+    scored.sort_by(|(a, x), (b, y)| b.total_cmp(a).then_with(|| y.cmp(x)));
+    scored.truncate(usize::try_from(limit).expect("page limit"));
+    let ids: Vec<&str> = scored.iter().map(|(_, id)| id.as_str()).collect();
+    let mut found: HashMap<String, StoredClaim> = claims_where(
+        conn,
+        "WHERE c.id IN (SELECT value FROM json_each(?1))",
+        vec![Sql::Text(serde_json::to_string(&ids).expect("claim ids"))],
+    )?
+    .into_iter()
+    .map(|c| (c.id.as_str().to_owned(), c))
+    .collect();
+    scored
+        .into_iter()
+        .map(|(score, id)| {
+            let claim = found
+                .remove(&id)
+                .ok_or_else(|| corrupt("a ranked claim was not read back"))?;
+            Ok(RankedClaim {
+                rank: ClaimRank::Relevance(score),
+                claim,
+            })
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -955,9 +1201,9 @@ macro_rules! knowledge_reads {
             fn knowledge_claims(
                 &self,
                 query: &ClaimQuery,
-                after: Option<(i64, &str)>,
+                after: Option<(ClaimRank, &str)>,
                 limit: u16,
-            ) -> Result<Vec<StoredClaim>, StorageError> {
+            ) -> Result<Vec<RankedClaim>, StorageError> {
                 claims_page(self.conn, query, after, limit)
             }
             fn knowledge_claims_about(

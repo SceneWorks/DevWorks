@@ -431,7 +431,8 @@ pub struct ClaimQuery {
     pub entry_kinds: Vec<String>,
     /// Folded tags the claim must all carry.
     pub tags: Vec<String>,
-    /// Folded words that must all appear in the claim's text or its subject entity's.
+    /// Folded words that must all appear in the claim's text or its subject entity's. With
+    /// words, claims are listed by relevance ([`ClaimRank::Relevance`]) instead of time.
     pub words: Vec<String>,
     /// At most this many matching subject entities contribute (with `words`).
     pub entity_limit: Option<u16>,
@@ -439,6 +440,30 @@ pub struct ClaimQuery {
     pub stale: Option<bool>,
     pub subject_id: Option<Id>,
     pub lesson: Option<LessonFilter>,
+}
+
+/// A claim's sort key in a [`KnowledgeRead::knowledge_claims`] listing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClaimRank {
+    /// The sort time (a query without words), listed descending.
+    Time(i64),
+    /// The BM25 score (k1 1.2, b 0.75) of the query words over the claim's text plus its
+    /// subject entity's (a query with words), listed descending: higher is a better match.
+    /// Every statistic comes from the query's own scopes.
+    Relevance(f64),
+}
+
+/// A listed claim and its sort key. It reads as the claim it carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RankedClaim {
+    pub rank: ClaimRank,
+    pub claim: StoredClaim,
+}
+impl std::ops::Deref for RankedClaim {
+    type Target = StoredClaim;
+    fn deref(&self) -> &StoredClaim {
+        &self.claim
+    }
 }
 
 /// Counts of one scope set (diagnostics).
@@ -486,15 +511,20 @@ pub trait KnowledgeRead {
         canonical_key: &str,
     ) -> Result<Option<StoredEntity>, StorageError>;
     fn knowledge_claim(&self, id: &Id) -> Result<Option<StoredClaim>, StorageError>;
-    /// Claims matching `query`, ordered by `(sort time, id)` descending, strictly after `after`,
-    /// at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]). The sort time is the update time, or for the
-    /// `RecentlyLearned` view the time a rule took effect.
+    /// Claims matching `query`, strictly after `after`, at most `limit`
+    /// (1..=[`KNOWLEDGE_PAGE_MAX`]). A query without words is ordered by `(sort time, id)`
+    /// descending; the sort time is the update time, or for the `RecentlyLearned` view the time
+    /// a rule took effect. A query with words is ordered by relevance descending (best match
+    /// first), then id descending. Scores are computed only for claims that pass the query's
+    /// filters, and their statistics (record count, mean length, document frequency) only from
+    /// the query's scopes, so a write elsewhere never changes a score; a write in a read scope
+    /// advances its revision. `after` is the last row's key as it was read.
     fn knowledge_claims(
         &self,
         query: &ClaimQuery,
-        after: Option<(i64, &str)>,
+        after: Option<(ClaimRank, &str)>,
         limit: u16,
-    ) -> Result<Vec<StoredClaim>, StorageError>;
+    ) -> Result<Vec<RankedClaim>, StorageError>;
     /// Live claims of `scopes` about `subject` with `predicate`, at most `limit`.
     fn knowledge_claims_about(
         &self,

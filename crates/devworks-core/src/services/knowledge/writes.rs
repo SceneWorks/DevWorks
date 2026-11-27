@@ -3309,10 +3309,10 @@ pub(super) fn import_outcomes(
                 .collect(),
             ..ClaimQuery::default()
         };
-        let mut after: Option<(i64, String)> = None;
+        let mut after: Option<(crate::ports::storage::ClaimRank, String)> = None;
         loop {
             let rows =
-                k.knowledge_claims(&query, after.as_ref().map(|(t, i)| (*t, i.as_str())), 500)?;
+                k.knowledge_claims(&query, after.as_ref().map(|(r, i)| (*r, i.as_str())), 500)?;
             if rows
                 .iter()
                 .any(|r| r.body.value.as_deref().map(fold).as_deref() == Some(folded.as_str()))
@@ -3322,7 +3322,7 @@ pub(super) fn import_outcomes(
             }
             match rows.last() {
                 Some(last) if rows.len() == 500 => {
-                    after = Some((last.updated_at_ms, last.id.as_str().to_owned()))
+                    after = Some((last.rank, last.id.as_str().to_owned()))
                 }
                 _ => break,
             }
