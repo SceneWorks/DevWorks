@@ -1022,46 +1022,23 @@ impl Backend for DesktopBackend {
             .map_err(|error| format!("host notice read: {error:?}"))?;
         String::from_utf8(bytes).map_err(|_| "coordinator context is not UTF-8".into())
     }
-    fn append_coordinator_notice(
-        &self,
-        session: &Id,
-        screen: &str,
-        context: &str,
-    ) -> Result<(), String> {
+    fn append_screen_context(&self, frame: &[u8]) -> CommandOutcome {
         let store = self.host.runtime.store();
         let info = store.info();
+        let restore_epoch = Counter::new(info.restore_epoch).map_err(|_| {
+            devworks_core::gateway::GatewayFailure::NoUseCase("host restore epoch".into())
+        })?;
         let host = HostIngress::new(&**store).context(
             info.host_actor,
             PrincipalKind::Host,
-            self.host.ids.next_id(IdKind::Correlation),
             self.host.ids.next_id(IdKind::Invocation),
-            Counter::new(info.restore_epoch).map_err(|e| e.to_string())?,
-            Revision::new(1).map_err(|e| e.to_string())?,
+            Id::new("desktop-screen-context").expect("fixed ingress"),
+            restore_epoch,
+            Revision::new(1).expect("positive revision"),
         );
-        let topic = crate::help_ops::topics(self.query(
-            "help.topic_for_screen",
-            &crate::help_ops::context(self, screen, None),
-        ))
-        .ok()
-        .and_then(|page| {
-            page.items
-                .0
-                .into_iter()
-                .find(|topic| topic.id.as_str() == screen)
-        });
-        let context = topic.map_or_else(
-            || context.to_owned(),
-            |topic| format!("{context} ({})", topic.version.0),
-        );
-        devworks_core::services::sessions::notice::append_screen_context(
-            &**store,
-            self.host.runtime.artifacts(),
-            &host,
-            session,
-            screen,
-            &context,
-        )
-        .map_err(|e| format!("coordinator context notice: {e:?}"))
+        self.host
+            .runtime
+            .command(&host, "sessions.append_screen_context", frame)
     }
     fn purge_client_acknowledge(
         &self,

@@ -51,14 +51,13 @@ pub trait Backend: Send + Sync {
         _selection_key: &str,
     ) {
     }
-    /// Trusted host-only append of the selected coordinator conversation's screen context.
-    fn append_coordinator_notice(
-        &self,
-        _session: &Id,
-        _screen: &str,
-        _context: &str,
-    ) -> Result<(), String> {
-        Err("coordinator context notices are unavailable".into())
+    /// Admits a `sessions.append_screen_context` frame as the host: the screen the user is on
+    /// is host observation, so its notice is the host's, through the same gateway, receipt and
+    /// history as every command. Only the native host implements it.
+    fn append_screen_context(&self, _frame: &[u8]) -> CommandOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(
+            "coordinator screen context".into(),
+        ))
     }
     fn read_coordinator_notice(
         &self,
@@ -498,6 +497,14 @@ pub enum TaskOutput {
     RepositoryDeletionPreview(Box<devworks_core::authority::deletion::DeletionPreview>),
     /// The outcome of a confirmed repository folder deletion.
     RepositoryDeleted(devworks_core::authority::destructive::RemovalOutcome),
+    /// The coordinator conversation was told which screen the user is on.
+    ScreenContextNoticed,
+    /// The text of a host notice in a transcript (its artifact version ID, the text).
+    NoticeText(String, String),
+    /// A pasted image staged as a file under the store's custody.
+    PastedImage(PathBuf),
+    /// The workspace section's index source configuration.
+    IndexSources(devworks_core::ports::storage::StoredSourceConfig),
 }
 
 type Job = Box<dyn FnOnce(&dyn Backend) -> Reply + Send>;
@@ -525,6 +532,14 @@ pub fn resolve_command(backend: &dyn Backend, operation: &str, frame: &[u8]) -> 
     )
 }
 
+/// [`resolve_command`] for a `sessions.append_screen_context` frame, admitted as the host
+/// ([`Backend::append_screen_context`]).
+pub fn resolve_screen_context(backend: &dyn Backend, frame: &[u8]) -> CommandOutcome {
+    resolve_with(backend, "sessions.append_screen_context", frame, || {
+        backend.append_screen_context(frame)
+    })
+}
+
 /// `received` is the desktop control state when the UI received the interaction (it matters
 /// only to the human-only dispatches).
 fn resolve_dispatched(
@@ -534,11 +549,20 @@ fn resolve_dispatched(
     frame: &[u8],
     received: ControlEpoch,
 ) -> CommandOutcome {
-    let invoke = || match dispatch {
+    resolve_with(backend, operation, frame, || match dispatch {
         CommandDispatch::Generic => backend.command(operation, frame),
         CommandDispatch::HumanDecision => backend.human_decision(frame, received),
         CommandDispatch::ProjectPurge => backend.confirm_project_purge(frame, received),
-    };
+    })
+}
+
+/// Admits `frame` through `invoke`, resubmitting it identically while its outcome is unknown.
+fn resolve_with(
+    backend: &dyn Backend,
+    operation: &str,
+    frame: &[u8],
+    invoke: impl Fn() -> CommandOutcome,
+) -> CommandOutcome {
     let mut outcome = invoke();
     for _ in 0..UNKNOWN_RESUBMISSIONS {
         if !is_unknown(&outcome) {

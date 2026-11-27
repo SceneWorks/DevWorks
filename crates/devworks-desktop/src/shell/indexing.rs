@@ -1,6 +1,6 @@
 //! Repository indexing requests and replies: index status, runs, the section's sources and
 //! discovery. Every change is the same `indexing.*` command an agent submits.
-use crate::backend::Reply;
+use crate::backend::{Reply, TaskOutput};
 use crate::indexing_ops::IndexingSlot;
 pub use crate::indexing_screen::{
     IndexAction, IndexingScreen, SourcesForm, StatusState, index_block, run_state_label,
@@ -25,7 +25,7 @@ impl Screen for IndexingScreen {
     fn load(&mut self, cx: &mut Cx, _route: Route) {
         let mut ctl = IndexingCtl { indexing: self, cx };
         if ctl.indexing.sources.is_none() {
-            ctl.load_index_sources();
+            ctl.load_index_sources(false);
         }
         ctl.act(vec![IndexAction::Runs]);
     }
@@ -173,7 +173,7 @@ impl IndexingCtl<'_, '_> {
                         move |b| ops::retire_view(b, &o, &revision),
                     );
                 }
-                IndexAction::LoadSources => self.load_index_sources(),
+                IndexAction::LoadSources => self.load_index_sources(false),
                 IndexAction::SaveSources => {
                     let Some(form) = self.indexing.sources.clone() else {
                         continue;
@@ -219,10 +219,28 @@ impl IndexingCtl<'_, '_> {
         self.indexing.sources.as_ref().map_or(1, |f| f.revision)
     }
 
-    fn load_index_sources(&mut self) {
-        let Some(b) = self.backend() else { return };
-        match b.index_sources(None) {
-            Ok(c) => {
+    /// Reads the workspace section's sources off the frame thread; a newer read supersedes an
+    /// older one, so the form shows the latest configuration. With `keep_edits` (the re-read
+    /// after a save), the reply does not replace a form edited since the read was submitted.
+    fn load_index_sources(&mut self, keep_edits: bool) {
+        self.indexing.sources_at_read = keep_edits.then(|| self.indexing.sources.clone());
+        self.task(
+            IndexingSlot::IndexSources,
+            "Reading indexing sources",
+            |b| b.index_sources(None).map(TaskOutput::IndexSources),
+        );
+    }
+
+    fn apply_index_sources(&mut self, result: Result<TaskOutput, String>) {
+        let edited = self
+            .indexing
+            .sources_at_read
+            .take()
+            .is_some_and(|at| at != self.indexing.sources);
+        match result {
+            // Typed since the read was submitted: the edits stay (their revision is current).
+            Ok(TaskOutput::IndexSources(_)) if edited => {}
+            Ok(TaskOutput::IndexSources(c)) => {
                 self.indexing.sources = Some(SourcesForm {
                     project: None,
                     revision: c.revision,
@@ -233,6 +251,7 @@ impl IndexingCtl<'_, '_> {
                 });
                 self.indexing.sources_error = None;
             }
+            Ok(_) => self.indexing.sources_error = Some("Unexpected reply".into()),
             Err(e) => self.indexing.sources_error = Some(e),
         }
     }
@@ -245,6 +264,10 @@ impl IndexingCtl<'_, '_> {
     ) -> Option<(IndexingSlot, Reply)> {
         let ix = &mut *self.indexing;
         match (slot, reply) {
+            (IndexingSlot::IndexSources, Reply::Task(result)) => {
+                self.apply_index_sources(result);
+                return None;
+            }
             (IndexingSlot::IndexStatus(r), Reply::Query(q)) => {
                 let state = match ops::index_status_result(q) {
                     Ok(s) => StatusState::Ready(Box::new(s)),
@@ -303,10 +326,14 @@ impl IndexingCtl<'_, '_> {
                             Tone::Good,
                             format!("Indexing sources saved (revision {})", m.revision.get()),
                         ));
+                        // The form holds what was saved (and anything typed since).
+                        if let Some(form) = &mut ix.sources {
+                            form.revision = m.revision.get();
+                        }
                     }
                     Err(e) => ix.sources_error = Some(failure_text(e)),
                 }
-                self.load_index_sources();
+                self.load_index_sources(true);
             }
             (IndexingSlot::IndexDiscover, Reply::Query(q)) => {
                 ix.discovered = Some(match ops::discover_result(q) {

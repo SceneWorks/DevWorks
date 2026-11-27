@@ -138,6 +138,10 @@ fn frames() -> BTreeMap<String, String> {
         ),
         ("sessions_list", ops::sessions_list(b, None)),
         ("session_start", ops::session_start(b, "A title")),
+        (
+            "screen_context",
+            ops::screen_context(b, "session-a", "settings", "Current screen: Settings"),
+        ),
         ("resources_list", ops::resources_list(b, None)),
         (
             "resource_holders_project",

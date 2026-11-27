@@ -3,14 +3,14 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "86233e685729ed55eefe592ad187a59904a52a7d82645a4a8275ab15fab0ee3f",
+  "sourceSha256": "42f52515b835c6419345c8512125de6750f61bfa1af06926418ea25fdbfe90d9",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
   "resourcePolicy": "Static safe devworks:// templates; object enumeration/read is an authenticated scoped tool/resource projection of these exact queries, preserving the query stamp and citations.",
   "counts": {
-    "catalogOperations": 386,
-    "modeDispositions": 391,
+    "catalogOperations": 387,
+    "modeDispositions": 392,
     "tools": 161,
     "readTools": 102,
     "commandTools": 59
@@ -3839,6 +3839,12 @@
     },
     {
       "operation": "sessions.end",
+      "mode": "Command",
+      "disposition": "InternalOnly",
+      "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."
+    },
+    {
+      "operation": "sessions.append_screen_context",
       "mode": "Command",
       "disposition": "InternalOnly",
       "reason": "Outside code/work/Knowledge context and selected mutation scope; no implicit automation or proxy surface."

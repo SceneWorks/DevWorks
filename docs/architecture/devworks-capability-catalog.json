@@ -144,7 +144,8 @@
         "append_message",
         "context_sources",
         "start",
-        "end"
+        "end",
+        "append_screen_context"
       ],
       "effectAndAuthority": "Read and host-attributed append; conversation and provider state distinct",
       "status": "Proposed; exact command/tool schemas require review"

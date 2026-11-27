@@ -1,6 +1,7 @@
 //! `ConversationService`: sessions, transcripts, briefings and context sources behind
 //! `sessions.list`, `.get`, `.transcript`, `.briefing`, `.append_message`, `.context_sources`,
-//! `.start` and `.end`, registered through [`crate::services::UseCases::with_sessions`]. The
+//! `.start`, `.end` and `.append_screen_context` (the host's screen-context notice, [`notice`]),
+//! registered through [`crate::services::UseCases::with_sessions`]. The
 //! native UI and agent tools reach the same use cases through the gateway; the host runtime
 //! appends assistant turns, tool calls/results, notices, epochs and checkpoints through the same
 //! session writer ([`transcript::SessionWriter`], [`transcript::append_session_batch`]).
@@ -79,7 +80,7 @@ use std::sync::Arc;
 use transcript::{AppendPath, BatchOutcome, BatchRefusal, SESSION_AGGREGATE, SessionBatch};
 
 /// The operations [`SessionService`] is registered for.
-pub const OPERATIONS: [&str; 8] = [
+pub const OPERATIONS: [&str; 9] = [
     "sessions.list",
     "sessions.get",
     "sessions.transcript",
@@ -88,6 +89,7 @@ pub const OPERATIONS: [&str; 8] = [
     "sessions.context_sources",
     "sessions.start",
     "sessions.end",
+    "sessions.append_screen_context",
 ];
 /// Most context sources a briefing composes; the rest page through `sessions.context_sources`.
 pub const BRIEFING_LIMIT: usize = 32;
@@ -250,6 +252,8 @@ pub struct SessionService {
     audit: Arc<dyn ApplicationStore>,
     /// The workspace coordinator agent a human's Home session is bound to, when configured.
     coordinator: Option<ActorId>,
+    /// Publishes host notice texts (`sessions.append_screen_context`), when composed.
+    artifacts: Option<Arc<crate::services::artifacts::ArtifactService>>,
 }
 
 /// History kind of a transcript read that served restricted native material.
@@ -263,7 +267,16 @@ impl SessionService {
             ids,
             audit,
             coordinator: None,
+            artifacts: None,
         }
+    }
+    /// Publishes host notice texts through `artifacts` (`sessions.append_screen_context`).
+    pub fn with_artifacts(
+        mut self,
+        artifacts: Arc<crate::services::artifacts::ArtifactService>,
+    ) -> Self {
+        self.artifacts = Some(artifacts);
+        self
     }
     /// Binds every Home (workspace, no work root) session a human starts to `coordinator`, the
     /// agent that conducts it, so the host runtime may append its turns.
@@ -1140,6 +1153,30 @@ impl QueryHandler for SessionService {
 }
 
 impl CommandHandler for SessionService {
+    fn prepare(
+        &self,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        _env: &crate::ports::Preparation<'_>,
+    ) -> Result<Option<crate::ports::Prepared>, StorageError> {
+        match command.input() {
+            OperationInput::Sessions(ops::Input::AppendScreenContext(i)) => {
+                self.prepare_screen_context(ctx, i)
+            }
+            _ => Ok(None),
+        }
+    }
+    fn settle(
+        &self,
+        _ctx: &InvocationContext,
+        prepared: Option<&crate::ports::Prepared>,
+        _reply: Option<&crate::protocol::results::DomainCommandReply>,
+        env: &crate::ports::Preparation<'_>,
+    ) {
+        if let Some(prepared) = prepared {
+            self.settle_screen_context(prepared, env);
+        }
+    }
     fn decide(
         &self,
         ctx: &InvocationContext,
@@ -1149,6 +1186,9 @@ impl CommandHandler for SessionService {
         let outcome = match command.input() {
             OperationInput::Sessions(ops::Input::Start(i)) => self.start(tx, ctx, i),
             OperationInput::Sessions(ops::Input::End(i)) => self.end(tx, ctx, i),
+            OperationInput::Sessions(ops::Input::AppendScreenContext(i)) => {
+                self.append_screen_context(tx, ctx, command, i)
+            }
             OperationInput::Sessions(ops::Input::AppendMessage(i)) => {
                 return match self.append_message(tx, ctx, i) {
                     Ok((decision, operation_id)) => Ok(Decided {

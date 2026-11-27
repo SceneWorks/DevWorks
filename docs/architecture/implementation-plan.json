@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "25c016b75a9c713127c3b9aeec0971bff221aca5509a0d69320bc76d8c31dce2",
-    "devworks-capability-catalog.json": "4f063eb85a76dc96c6e5f41e7a91a239d4d8455418bb17b3cb7dba1320b84104",
+    "devworks-capability-catalog.json": "c83885a6e3484c9dd0650774135eb01561bc6d50c482041528221241e8bb4fb4",
     "devworks-requirements-traceability.json": "85ab62c6e3282f2ba9eaf813aa80a8cd81dc96d614a924c17fae9943e3db232d",
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "86233e685729ed55eefe592ad187a59904a52a7d82645a4a8275ab15fab0ee3f",
-    "mcp-publication-candidates.json": "3c531208f245e4ebe67e44b1ddd510d5778d914815bf6ceda15edfe89a115411",
+    "contracts/family-coverage.json": "42f52515b835c6419345c8512125de6750f61bfa1af06926418ea25fdbfe90d9",
+    "mcp-publication-candidates.json": "5dd67d23a97ea3c83b6c9ecbb786afccfcd0da5afa3656a679c4e13457084a20",
     "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },
   "counts": {
     "slices": 81,
     "operationFamilies": 50,
-    "operations": 386,
+    "operations": 387,
     "requirements": 392,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 149
     },
-    "inputSchemaCandidates": 386,
+    "inputSchemaCandidates": 387,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -614,6 +614,7 @@
         "sessions.context_sources",
         "sessions.start",
         "sessions.end",
+        "sessions.append_screen_context",
         "history.events",
         "history.work_lineage",
         "history.git_links",
@@ -13931,6 +13932,20 @@
     },
     {
       "operation": "sessions.end",
+      "family": "sessions",
+      "serviceOwner": "ConversationService",
+      "primarySlice": "sessions",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "SessionRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "sessions.append_screen_context",
       "family": "sessions",
       "serviceOwner": "ConversationService",
       "primarySlice": "sessions",
@@ -36679,8 +36694,8 @@
   ],
   "mcpPublication": {
     "counts": {
-      "catalogOperations": 386,
-      "modeDispositions": 391,
+      "catalogOperations": 387,
+      "modeDispositions": 392,
       "tools": 161,
       "readTools": 102,
       "commandTools": 59

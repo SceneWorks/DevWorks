@@ -180,6 +180,9 @@ pub enum OperationResult {
     SessionsStart { value: SessionRecord },
     #[serde(rename = "sessions.end")]
     SessionsEnd { value: SessionRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "sessions.append_screen_context")]
+    SessionsAppendScreenContext { value: SessionRecord },
     #[serde(rename = "ui.current_screen")]
     UiCurrentScreen { value: ScreenContext },
     #[serde(rename = "history.events")]
@@ -902,6 +905,7 @@ impl OperationResult {
             Self::SessionsContextSources { .. } => "sessions.context_sources",
             Self::SessionsStart { .. } => "sessions.start",
             Self::SessionsEnd { .. } => "sessions.end",
+            Self::SessionsAppendScreenContext { .. } => "sessions.append_screen_context",
             Self::UiCurrentScreen { .. } => "ui.current_screen",
             Self::HistoryEvents { .. } => "history.events",
             Self::HistoryWorkLineage { .. } => "history.work_lineage",
@@ -1298,6 +1302,7 @@ impl Check for OperationResult {
             Self::SessionsContextSources { value } => value.check()?,
             Self::SessionsStart { value } => value.check()?,
             Self::SessionsEnd { value } => value.check()?,
+            Self::SessionsAppendScreenContext { value } => value.check()?,
             Self::UiCurrentScreen { value } => value.check()?,
             Self::HistoryEvents { value } => value.check()?,
             Self::HistoryWorkLineage { value } => value.check()?,
@@ -1661,6 +1666,7 @@ impl Revisioned for OperationResult {
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::SessionsStart { value } => value.retain_revision(revision),
             Self::SessionsEnd { value } => value.retain_revision(revision),
+            Self::SessionsAppendScreenContext { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::HistoryWorkLineage { value } => value.retain_revision(revision),
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
@@ -1880,6 +1886,9 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AgentsList { .. } if revision < 21 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SessionsAppendScreenContext { .. } if revision < 23 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SchemasCodeReferences { .. } if revision < 8 => {

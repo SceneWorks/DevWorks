@@ -1622,6 +1622,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         })))
     ));
 
+    let s = Arc::new(s);
     let artifacts = Arc::new(devworks_core::services::artifacts::ArtifactService::new(
         Arc::new(crate::fs::artifacts::NativeArtifactFiles::new(
             h.root.path().to_path_buf(),
@@ -1643,21 +1644,48 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Counter::new(s.info().restore_epoch).unwrap(),
         Revision::new(1).unwrap(),
     );
+    // The host appends each notice through its operation, with a receipt.
+    let sessions = devworks_core::services::UseCases::new().with_sessions(Arc::new(
+        devworks_core::services::sessions::SessionService::new(h.ids.clone(), s.clone())
+            .with_artifacts(artifacts.clone()),
+    ));
+    let authority = devworks_core::authority::HostAuthority {
+        store: &*s,
+        clock: &*h.clock,
+        protected_branches: &[],
+    };
+    let gateway = devworks_core::gateway::Gateway {
+        authority: &authority,
+        store: &*s,
+        ids: &*h.ids,
+    };
     for (screen, context) in [
         ("features", "Viewing feature board"),
         ("issues", "Viewing project issues"),
     ] {
-        devworks_core::services::sessions::notice::append_screen_context(
-            &s,
-            &artifacts,
-            &host,
-            &id("session-home"),
-            screen,
-            context,
-        )
-        .unwrap();
+        let frame = json!({"mode":"Command","protocol":"1.0-draft.1",
+            "requestKey":format!("notice-{screen}"),"schemaRevision":23,
+            "body":{"kind":"sessions.append_screen_context","sessionId":"session-home",
+                "screenId":screen,"context":context}});
+        let reply = sessions
+            .command(
+                &gateway,
+                &host,
+                "sessions.append_screen_context",
+                frame.to_string().as_bytes(),
+            )
+            .expect("addressable");
+        assert!(
+            matches!(
+                &reply,
+                devworks_core::protocol::CommandReply::Recorded { receipt, .. }
+                    if matches!(receipt.decision,
+                        devworks_core::protocol::results::DomainDecision::Applied { .. })
+            ),
+            "{reply:?}"
+        );
     }
-    read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+    read_snapshot(&*s, &ReadOptions::default(), |snapshot| {
         let entries = snapshot.sessions().entries(&id("session-home"), 0, 10)?;
         assert_eq!(entries.len(), 2);
         assert!(entries.iter().all(|entry| entry.kind == "HostNotice"));
@@ -1679,7 +1707,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         Ok(())
     })
     .unwrap();
-    let persisted = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+    let persisted = read_snapshot(&*s, &ReadOptions::default(), |snapshot| {
         snapshot.sessions().entries(&id("session-home"), 0, 10)
     })
     .unwrap();
@@ -1689,7 +1717,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         devworks_core::providers::context::GenerationParameters::default(),
         |reference| {
             let (bytes, _) = artifacts
-                .read_exact(&s, &host, reference, 8_000)
+                .read_exact(&*s, &host, reference, 8_000)
                 .map_err(|_| StorageError::ScopeDenied)?;
             String::from_utf8(bytes)
                 .map_err(|_| StorageError::InvalidRecord("invalid notice text".into()))
@@ -1709,7 +1737,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
         notice_text,
         ["Viewing feature board", "Viewing project issues"]
     );
-    let notice = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+    let notice = read_snapshot(&*s, &ReadOptions::default(), |snapshot| {
         let entry = snapshot
             .sessions()
             .entries(&id("session-home"), 0, 1)?
@@ -1728,7 +1756,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             Revision::new(1).unwrap(),
         )
         .with_session(id("session-home"));
-    let outcome = run_write(&s, WriteOptions::fixture(), move |tx| {
+    let outcome = run_write(&*s, WriteOptions::fixture(), move |tx| {
         let batch = devworks_core::services::sessions::turn::batch_of(
             &id("session-home"),
             tx.new_id(devworks_core::ports::IdKind::TranscriptBatch),
@@ -1754,7 +1782,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
             )
         )
     ));
-    let heads = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+    let heads = read_snapshot(&*s, &ReadOptions::default(), |snapshot| {
         Ok((
             snapshot.runs().agent_delivery_head()?,
             snapshot.runs().agent_event_head()?,
@@ -1767,7 +1795,7 @@ fn message_delivery_replays_after_reopen_and_rejects_cross_project_links() {
              DELETE FROM agent_message_deliveries WHERE project_id='project-a';",
         )
         .unwrap();
-    let retained = read_snapshot(&s, &ReadOptions::default(), |snapshot| {
+    let retained = read_snapshot(&*s, &ReadOptions::default(), |snapshot| {
         Ok((
             snapshot.runs().agent_delivery_head()?,
             snapshot.runs().agent_event_head()?,

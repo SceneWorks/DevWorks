@@ -397,19 +397,26 @@ impl Chat {
         if self.last_coordinator_notice.as_ref() == Some(&(session.clone(), key.clone())) {
             return;
         }
-        let Some(backend) = cx.backend() else {
-            return;
-        };
-        let screen = cx.route().screen();
-        match devworks_core::protocol::Id::new(session.clone()) {
-            Ok(id) => match backend.append_coordinator_notice(&id, screen.id, &context) {
-                Ok(()) => {
-                    self.last_coordinator_notice = Some((session.clone(), key));
-                    self.load_transcript(cx, &session);
-                }
-                Err(error) => cx.announce(error),
+        // Each context is sent once, off the frame thread: a failure is reported once, and the
+        // next different context is sent as usual.
+        let screen = cx.route().screen().id;
+        let sid = session.clone();
+        let submitted = cx.task(
+            ChatSlot::ScreenContext(session.clone()),
+            "Telling the coordinator about this screen",
+            move |b| {
+                ops::append_screen_context(b, &sid, screen, &context)
+                    .map(|_| TaskOutput::ScreenContextNoticed)
+                    .map_err(|e| {
+                        format!(
+                            "The coordinator could not be told about this screen: {}",
+                            e.describe()
+                        )
+                    })
             },
-            Err(_) => cx.announce("Coordinator conversation identity is invalid"),
+        );
+        if submitted {
+            self.last_coordinator_notice = Some((session, key));
         }
     }
     /// The frame's conversation input: images and file paths pasted into a composer.
@@ -829,8 +836,13 @@ impl ChatCtl<'_, '_> {
 
     fn send(&mut self) {
         let Some(session) = self.chat.selected_session().cloned() else {
-            // The first message starts the conversation, then is sent.
-            if self.chat.draft().is_some_and(|d| !d.is_empty()) {
+            // The first message starts the conversation, then is sent (never before a pasted
+            // image is written).
+            if self
+                .chat
+                .draft()
+                .is_some_and(|d| !d.is_empty() && !d.pasting())
+            {
                 self.chat.send_after_start = true;
                 self.start_session(StartReason::ForDraft);
             }
@@ -921,23 +933,88 @@ impl ChatCtl<'_, '_> {
     }
 
     /// Attaches a pasted image: it is written as a PNG beside the store, attached, and the
-    /// temporary file removed once the artifact service holds its copy.
+    /// temporary file removed once the artifact service holds its copy. Encoding and staging run
+    /// as a task. The image is in the draft it was pasted into from the start (`Pasting`, which
+    /// holds that draft's Send), so it stays with that draft wherever the draft goes.
     fn attach_pasted_image(&mut self, image: &egui::ColorImage) {
-        let Some(b) = self.backend() else { return };
-        let session = self
-            .chat
-            .selected
-            .as_deref()
-            .map(devworks_core::protocol::Id::new)
-            .transpose();
-        let result = session.map_err(|e| e.to_string()).and_then(|session| {
-            let png = attachments::encode_paste(image)?;
-            b.stage_pasted_image(session.as_ref(), &png)
-        });
-        match result {
-            Ok(path) => self.attach_files(vec![(path, true)]),
-            Err(e) => self.announce(format!("The pasted image could not be attached: {e}")),
+        if self.online().is_err() {
+            return;
         }
+        let session = self.chat.selected.clone();
+        let image = image.clone();
+        let local = self.chat.next_local();
+        let slot = ChatSlot::PastedImage(self.chat.draft_key(), local);
+        self.chat.draft_mut().attachments.push(Attachment {
+            local,
+            name: "Pasted image".into(),
+            media_type: "image/png".into(),
+            path: None,
+            owned: true,
+            state: AttachState::Pasting,
+            preview: None,
+            preview_note: None,
+        });
+        let submitted = self.task(slot, "Attaching a pasted image", move |b| {
+            let session = session
+                .map(devworks_core::protocol::Id::new)
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            let png = attachments::encode_paste(&image)?;
+            b.stage_pasted_image(session.as_ref(), &png)
+                .map(TaskOutput::PastedImage)
+        });
+        if !submitted {
+            self.chat.take_attachment(local);
+        }
+    }
+
+    /// A pasted image's file is ready: it waits for its own draft's conversation like any file.
+    fn pasted(&mut self, local: u64, result: Result<TaskOutput, String>) {
+        let path = match result {
+            Ok(TaskOutput::PastedImage(path)) => path,
+            other => {
+                let e = match other {
+                    Err(e) => e,
+                    _ => "unexpected reply".into(),
+                };
+                if let Some(a) = self.chat.attachment_mut(local) {
+                    a.state = AttachState::Failed(e.clone());
+                }
+                self.announce(format!("The pasted image could not be attached: {e}"));
+                return;
+            }
+        };
+        let Some(key) = self.chat.attachment_draft(local) else {
+            // Removed while it was being written: only the shell's own file is left.
+            self.remove_owned(Some(&path));
+            return;
+        };
+        let media = attachments::media_type(&path).to_owned();
+        if let Some(a) = self.chat.attachment_mut(local) {
+            a.name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("attachment")
+                .to_owned();
+            a.media_type = media.clone();
+            a.path = Some(path.clone());
+            a.state = AttachState::WaitingForConversation;
+        }
+        if attachments::previewable(&media)
+            && let Some(c) = &mut self.client
+        {
+            c.task(
+                ChatSlot::Preview(key.clone(), local).into(),
+                "Preparing a preview",
+                move |_| attachments::preview(&path),
+            );
+        }
+        if key != chat::NEW_DRAFT {
+            self.store_waiting(&key);
+        } else if self.chat.draft_key() == key {
+            self.start_session(StartReason::ForDraft);
+        }
+        // A new draft not shown now starts its conversation when it is sent.
     }
 
     /// Removes a pending attachment from its draft. One already stored is deleted through
@@ -948,6 +1025,8 @@ impl ChatCtl<'_, '_> {
         };
         let owned = a.path.clone().filter(|_| a.owned);
         match a.state {
+            // Being written: its reply finds it removed and removes the file it wrote.
+            AttachState::Pasting => {}
             // Nothing was admitted: only a file the shell created is left to remove.
             AttachState::WaitingForConversation | AttachState::Failed(_) => {
                 self.remove_owned(owned.as_deref());
@@ -1740,14 +1819,20 @@ impl ChatCtl<'_, '_> {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        if let Some(backend) = self.backend() {
-                            for artifact in notices {
-                                if let Ok(text) = backend.read_coordinator_notice(&artifact) {
-                                    self.chat
-                                        .notice_texts
-                                        .insert(artifact.version_id.as_str().into(), text);
-                                }
+                        // Each text is read once, off the frame thread; it shows when it lands.
+                        for artifact in notices {
+                            let slot = ChatSlot::NoticeText(artifact.version_id.as_str().into());
+                            if self.pending(&slot) {
+                                continue;
                             }
+                            self.task(slot, "Reading a conversation notice", move |b| {
+                                b.read_coordinator_notice(&artifact).map(|text| {
+                                    TaskOutput::NoticeText(
+                                        artifact.version_id.as_str().into(),
+                                        text,
+                                    )
+                                })
+                            });
                         }
                         self.chat.reconcile_text_preview();
                         if more {
@@ -1880,7 +1965,11 @@ impl ChatCtl<'_, '_> {
                         | TaskOutput::AnalysisEvidence(_)
                         | TaskOutput::SystemOneCompletion(_)
                         | TaskOutput::RepositoryDeletionPreview(_)
-                        | TaskOutput::RepositoryDeleted(_),
+                        | TaskOutput::RepositoryDeleted(_)
+                        | TaskOutput::ScreenContextNoticed
+                        | TaskOutput::NoticeText(..)
+                        | TaskOutput::PastedImage(_)
+                        | TaskOutput::IndexSources(_),
                     ) => AttachState::Failed("unexpected reply".into()),
                     Err(e) => AttachState::Failed(e),
                 };
@@ -1916,6 +2005,7 @@ impl ChatCtl<'_, '_> {
                         }
                         // Not saved: the shell's own file is no longer needed.
                         AttachState::Failed(_)
+                        | AttachState::Pasting
                         | AttachState::Storing
                         | AttachState::Saving(_)
                         | AttachState::WaitingForConversation => {
@@ -1958,12 +2048,32 @@ impl ChatCtl<'_, '_> {
                             | TaskOutput::AnalysisEvidence(_)
                             | TaskOutput::SystemOneCompletion(_)
                             | TaskOutput::RepositoryDeletionPreview(_)
-                            | TaskOutput::RepositoryDeleted(_),
+                            | TaskOutput::RepositoryDeleted(_)
+                            | TaskOutput::ScreenContextNoticed
+                            | TaskOutput::NoticeText(..)
+                            | TaskOutput::PastedImage(_)
+                            | TaskOutput::IndexSources(_),
                         ) => {}
                         Err(e) => a.preview_note = Some(format!("No preview: {e}")),
                     }
                 }
             }
+            (ChatSlot::ScreenContext(id), Reply::Task(result)) => match result {
+                Ok(_) => {
+                    if self.chat.selected.as_deref() == Some(id.as_str()) {
+                        self.load_transcript(&id);
+                    }
+                }
+                Err(e) => self.announce(e),
+            },
+            (ChatSlot::NoticeText(_), Reply::Task(result)) => {
+                // A text that cannot be read is not shown; the next transcript read asks again.
+                if let Ok(TaskOutput::NoticeText(version, text)) = result {
+                    self.chat.notice_texts.insert(version, text);
+                    self.chat.reconcile_text_preview();
+                }
+            }
+            (ChatSlot::PastedImage(_, local), Reply::Task(result)) => self.pasted(local, result),
             (ChatSlot::DeleteAttachment(_), Reply::Command(c)) => match ops::deleted(c) {
                 Ok(()) => {
                     self.cx.effects.push(Effect::ArtifactsChanged);
