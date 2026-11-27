@@ -56,12 +56,14 @@ impl SweepLease {
         if !dream_actions::is_write(tool) {
             return Ok(None);
         }
-        self.context(tx)?;
+        let ctx = self.context(tx)?;
         let run = self.read(tx, true)?;
         let point = tx.savepoint()?;
         match dream_actions::apply(tx, &run, tool, arguments, checked_sources) {
             Ok(result) => {
                 tx.release(point)?;
+                // The changed claims get vectors without another write.
+                crate::services::knowledge::queue_claim_vectors(tx, &ctx, &run.scope)?;
                 Ok(Some(result))
             }
             Err(failure) => {

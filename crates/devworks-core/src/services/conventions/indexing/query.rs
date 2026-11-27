@@ -338,7 +338,7 @@ impl IndexService {
                 Err(EmbeddingFailure::NotStarted { .. }) => {
                     return Err(invalid("native send returned observer-only absence").into());
                 }
-                Err(EmbeddingFailure::Unavailable(_)) => {
+                Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::InvalidVectors { .. }) => {
                     prepared.reason = Some(
                         "The configured native embedding route is unavailable; results use \
                     lexical retrieval."

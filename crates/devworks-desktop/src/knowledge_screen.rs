@@ -549,7 +549,8 @@ pub struct KnowledgeScreen {
     pub selected: Option<Id>,
     pub detail: Option<KnowledgeBundle>,
     pub detail_error: Option<String>,
-    pub retrieval: Option<String>,
+    /// The retrieval diagnostic's code and message (`knowledge.diagnostics`).
+    pub retrieval: Option<(String, String)>,
     pub draft: Option<Draft>,
     /// The write in flight (its label); further writes wait for its outcome.
     pub writing: Option<String>,
@@ -1674,7 +1675,7 @@ impl KnowledgeScreen {
                 .0
                 .iter()
                 .find(|d| d.component.0 == "knowledge.retrieval")
-                .map(|d| d.code.0.clone());
+                .map(|d| (d.code.0.clone(), d.message.0.clone()));
         }
     }
     /// Applies a write's outcome; `true` when it was recorded (the listing and selection are
@@ -1941,14 +1942,8 @@ impl KnowledgeScreen {
             if self.lessons_only {
                 self.lesson_filters(ui, actions);
             }
-            match self.retrieval.as_deref() {
-                Some("LexicalOnly") => {
-                    chip(ui, "Word search only (no embedding route)", Tone::Neutral);
-                }
-                Some(other) => {
-                    chip(ui, other.to_owned(), Tone::Neutral);
-                }
-                None => {}
+            if let Some((code, message)) = &self.retrieval {
+                chip(ui, retrieval_label(code, message), Tone::Neutral);
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -2834,5 +2829,32 @@ mod tests {
             s.claims.error.is_none(),
             "a stale reply never overwrites state"
         );
+    }
+}
+
+/// The retrieval mode as the user reads it: what kind of search runs, then the diagnostic's
+/// own words (the embedding space for hybrid search, the reason for word search only).
+fn retrieval_label(code: &str, message: &str) -> String {
+    match code {
+        "Hybrid" => format!("Word and meaning search. {message}"),
+        "LexicalOnly" => format!("Word search only. {message}"),
+        other => format!("{other}. {message}"),
+    }
+}
+
+#[cfg(test)]
+mod retrieval_label_tests {
+    #[test]
+    fn each_retrieval_mode_names_its_space_or_reason() {
+        let hybrid = super::retrieval_label(
+            "Hybrid",
+            "Retrieval is hybrid in embedding space space-1 (m, 2 dimensions).",
+        );
+        assert!(hybrid.starts_with("Word and meaning search.") && hybrid.contains("space-1"));
+        let lexical = super::retrieval_label(
+            "LexicalOnly",
+            "Retrieval is lexical only (NoClaimVectors): none has a vector.",
+        );
+        assert!(lexical.starts_with("Word search only.") && lexical.contains("NoClaimVectors"));
     }
 }

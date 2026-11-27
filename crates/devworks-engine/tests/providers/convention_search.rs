@@ -24,6 +24,34 @@ use devworks_engine::conventions::embedding::NativeEmbeddings;
 use std::sync::atomic::AtomicBool;
 pub(super) const VECTOR: &str = r#"{"model":"fixture-model","data":[{"index":0,"embedding":[0.25,0.75]}],"usage":{"prompt_tokens":3,"total_tokens":3}}"#;
 pub(super) fn qualify(f: &Fx) -> (InvocationContext, Arc<NativeEmbeddings>, Arc<IndexService>) {
+    let (caller, executor, _) = qualified_candidate(f);
+    write(&*f.store, move |tx| {
+        let q = tx
+            .router()
+            .embedding_qualification(&id("actual-candidate"))?
+            .unwrap();
+        tx.router()
+            .select_embedding_candidate(1, Some((&id("actual-candidate"), q.revision)))?;
+        Ok(())
+    })
+    .unwrap();
+    let index = Arc::new(IndexService::new(
+        f.store.clone(),
+        f.artifacts.clone(),
+        f.h.ids.clone(),
+        f.h.clock(),
+    ));
+    index.set_embeddings(Some(executor.clone()));
+    (caller, executor, index)
+}
+/// A qualified candidate (its actual native probe completed) that is not selected yet.
+pub(super) fn qualified_candidate(
+    f: &Fx,
+) -> (
+    InvocationContext,
+    Arc<NativeEmbeddings>,
+    Arc<devworks_core::services::router::embedding_spaces::EmbeddingSpaceService>,
+) {
     let (spaces, operation) = super::embedding_qualification::probe(f);
     let executor = Arc::new(NativeEmbeddings::new(
         f.store.clone(),
@@ -49,23 +77,10 @@ pub(super) fn qualify(f: &Fx) -> (InvocationContext, Arc<NativeEmbeddings>, Arc<
             None,
         )?;
         complete.complete_probe(tx, &op)?;
-        let q = tx
-            .router()
-            .embedding_qualification(&id("actual-candidate"))?
-            .unwrap();
-        tx.router()
-            .select_embedding_candidate(1, Some((&id("actual-candidate"), q.revision)))?;
         Ok(())
     })
     .unwrap();
-    let index = Arc::new(IndexService::new(
-        f.store.clone(),
-        f.artifacts.clone(),
-        f.h.ids.clone(),
-        f.h.clock(),
-    ));
-    index.set_embeddings(Some(executor.clone()));
-    (caller, executor, index)
+    (caller, executor, spaces)
 }
 pub(super) fn source(
     f: &Fx,

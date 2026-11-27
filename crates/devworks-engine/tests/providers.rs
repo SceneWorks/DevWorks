@@ -2985,3 +2985,5 @@ mod mcp_end_to_end;
 mod document_embeddings;
 #[path = "providers/document_vision.rs"]
 mod document_vision;
+#[path = "providers/knowledge_vectors.rs"]
+mod knowledge_vectors;

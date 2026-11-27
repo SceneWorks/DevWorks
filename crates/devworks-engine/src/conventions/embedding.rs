@@ -807,6 +807,7 @@ impl NativeEmbeddings {
             ));
         }
         let mut vectors = Vec::with_capacity(completed.result.vector_artifacts.len());
+        let mut usable = true;
         for reference in &completed.result.vector_artifacts {
             let bytes = self
                 .inner
@@ -828,17 +829,25 @@ impl NativeEmbeddings {
                 .iter()
                 .map(|b| f32::from_le_bytes(*b))
                 .collect();
-            if vector.iter().any(|v| !v.is_finite())
-                || vector
-                    .iter()
-                    .map(|v| f64::from(*v) * f64::from(*v))
-                    .sum::<f64>()
-                    == 0.0
-            {
+            if vector.iter().any(|v| !v.is_finite()) {
                 return Err(unavailable("Invalid cosine vector"));
             }
-            vectors.push(vector);
+            // A zero vector has no direction: that one input is unusable, the rest stand.
+            let zero = vector
+                .iter()
+                .map(|v| f64::from(*v) * f64::from(*v))
+                .sum::<f64>()
+                == 0.0;
+            usable &= !zero;
+            vectors.push((!zero).then_some(vector));
         }
+        if !usable {
+            return Err(EmbeddingFailure::InvalidVectors {
+                request_id: request.request_id,
+                vectors,
+            });
+        }
+        let vectors = vectors.into_iter().flatten().collect();
         Ok(EmbeddedBatch {
             request_id: request.request_id,
             space: request.space,

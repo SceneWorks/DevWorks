@@ -91,6 +91,9 @@ impl ArtifactRead for Unmodelled {
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
         unmodelled()
     }
+    fn live_claim_text_digest(&self, _: &Id) -> Result<Option<String>, StorageError> {
+        unmodelled()
+    }
     fn subject_exists(&self, _: &ProjectId, _: &SubjectKey) -> Result<bool, StorageError> {
         unmodelled()
     }
@@ -2455,6 +2458,29 @@ impl KnowledgeRead for Unmodelled {
     ) -> Result<Vec<RankedClaim>, StorageError> {
         unmodelled()
     }
+    fn knowledge_claim_neighbors(
+        &self,
+        _: &ClaimQuery,
+        _: &ClaimVectorQuery<'_>,
+        _: Option<(f64, &str)>,
+        _: u16,
+    ) -> Result<Vec<RankedClaim>, StorageError> {
+        unmodelled()
+    }
+    fn knowledge_vector_coverage(&self, _: &[String], _: &Id) -> Result<(i64, i64), StorageError> {
+        unmodelled()
+    }
+    fn pending_knowledge_vector_scopes(&self, _: &Id) -> Result<Vec<KnowledgeScope>, StorageError> {
+        unmodelled()
+    }
+    fn pending_knowledge_claim_vectors(
+        &self,
+        _: &KnowledgeScope,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError> {
+        unmodelled()
+    }
     fn knowledge_claims_about(
         &self,
         _: &[String],
@@ -2649,6 +2675,13 @@ impl KnowledgeRepository for Unmodelled {
         _: &StoredEntity,
         _: Option<i64>,
     ) -> Result<StoredEntity, StorageError> {
+        unmodelled()
+    }
+    fn insert_knowledge_claim_vectors(
+        &mut self,
+        _: &Id,
+        _: &[(Id, String, Vec<f32>)],
+    ) -> Result<usize, StorageError> {
         unmodelled()
     }
     fn put_knowledge_claim(

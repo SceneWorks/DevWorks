@@ -60,15 +60,19 @@ pub(crate) mod dream_actions;
 mod graph;
 pub mod import;
 pub mod model;
+mod vectors;
 mod writes;
 pub(crate) use writes::{reverse_dream_changes, review_dream_change};
 
 pub use graph::NO_MEMORIES;
+pub use vectors::{VECTOR_CONSUMER, VECTOR_NEIGHBORS};
 
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, knowledge as ops};
 use crate::ports::files::ArtifactFiles;
+use crate::ports::storage::ClaimVectorQuery;
 use crate::ports::storage::{
     ArtifactRead, AuthorityRead, ClaimQuery, ClaimRank, ConfigScope, ConfigurationRead,
     KNOWLEDGE_PAGE_MAX, KnowledgeRead, KnowledgeScope, LessonFilter, RankedClaim, ReadSnapshot,
@@ -93,6 +97,7 @@ use crate::protocol::support::{
 };
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState, ProjectId};
 use crate::registry::SchemaRevision;
+use crate::services::conventions::indexing::IndexService;
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::kernel::{
     Failure, Refusal, content, counter, decided, label, not_found, query_fault, require_project,
@@ -102,7 +107,7 @@ use crate::settings::catalog::descriptor;
 use crate::settings::model::{chain, current_chain};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub use model::{TAG_KNOWLEDGE, TAG_LESSON, TAG_MEMORY};
 
@@ -207,6 +212,9 @@ pub struct KnowledgeService {
         Arc<dyn crate::ports::storage::ApplicationStore>,
         Arc<crate::services::artifacts::ArtifactService>,
     )>,
+    /// The shared qualified embedding runtime: claim vectors and their search ([`vectors`]).
+    /// `None`: retrieval is lexical only.
+    embeddings: RwLock<Option<Arc<IndexService>>>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -624,14 +632,40 @@ fn claims(
     after: Option<&str>,
     n: u16,
 ) -> Result<Vec<RankedClaim>, StorageError> {
-    let after = after.map(|at| parse_position(query, at)).transpose()?;
-    read.knowledge_claims(query, after.as_ref().map(|(r, id)| (*r, id.as_str())), n)
+    search_claims(read, query, None, after, n)
+}
+
+/// [`claims`] of a search, followed by its vector matches when it has a query vector (`near`).
+fn search_claims(
+    read: &dyn KnowledgeRead,
+    query: &ClaimQuery,
+    near: Option<&ClaimVectorQuery<'_>>,
+    after: Option<&str>,
+    n: u16,
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let after = after
+        .map(|at| parse_position(query, near.is_some(), at))
+        .transpose()?;
+    // Text matches first; the vector matches follow the last of them ([`vectors`]).
+    if let (Some(near), Some((ClaimRank::Similarity(s), id))) = (near, &after) {
+        return read.knowledge_claim_neighbors(query, near, Some((*s, id.as_str())), n);
+    }
+    let mut rows =
+        read.knowledge_claims(query, after.as_ref().map(|(r, id)| (*r, id.as_str())), n)?;
+    if let Some(near) = near
+        && rows.len() < usize::from(n)
+    {
+        let rest = n - u16::try_from(rows.len()).expect("page size");
+        rows.extend(read.knowledge_claim_neighbors(query, near, None, rest)?);
+    }
+    Ok(rows)
 }
 
 /// A claim's position in `query`'s order: its sort key as the store ranked it, and its id. A
-/// relevance key is `r` and the exact score (Rust's shortest round-tripping decimal), so the
-/// next page resumes strictly after the last row as it was read; the prefix keeps a time
-/// position issued before relevance ranking from resuming a relevance listing.
+/// relevance key is `r` and the exact score (Rust's shortest round-tripping decimal), and a
+/// vector match's `v` and its exact similarity, so the next page resumes strictly after the
+/// last row as it was read; the prefix keeps a time position issued before relevance ranking
+/// from resuming a relevance listing.
 fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
     debug_assert_eq!(
         query.words.is_empty(),
@@ -641,20 +675,33 @@ fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
     match c.rank {
         ClaimRank::Time(t) => format!("{t}|{}", c.id.as_str()),
         ClaimRank::Relevance(s) => format!("r{s}|{}", c.id.as_str()),
+        ClaimRank::Similarity(s) => format!("v{s}|{}", c.id.as_str()),
     }
 }
 
-fn parse_position(query: &ClaimQuery, at: &str) -> Result<(ClaimRank, String), StorageError> {
+/// Parses a position of `query`'s order; a vector position only when the search has a query
+/// vector (`vectors`).
+fn parse_position(
+    query: &ClaimQuery,
+    vectors: bool,
+    at: &str,
+) -> Result<(ClaimRank, String), StorageError> {
     let (key, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
-    let rank = if query.words.is_empty() {
-        ClaimRank::Time(key.parse().map_err(|_| StorageError::CursorExpired)?)
-    } else {
-        let s: f64 = key
-            .strip_prefix('r')
+    let score = |prefix: char| {
+        key.strip_prefix(prefix)
             .and_then(|s| s.parse().ok())
             .filter(|s: &f64| s.is_finite())
-            .ok_or(StorageError::CursorExpired)?;
+    };
+    let rank = if query.words.is_empty() {
+        ClaimRank::Time(key.parse().map_err(|_| StorageError::CursorExpired)?)
+    } else if let Some(s) = score('r') {
         ClaimRank::Relevance(s)
+    } else {
+        ClaimRank::Similarity(
+            score('v')
+                .filter(|_| vectors)
+                .ok_or(StorageError::CursorExpired)?,
+        )
     };
     Ok((rank, id.to_owned()))
 }
@@ -673,6 +720,28 @@ impl KnowledgeService {
             clock,
             files,
             summaries: None,
+            embeddings: RwLock::new(None),
+        }
+    }
+    /// Embeds claims and adds vector matches to `knowledge.search` through the shared
+    /// qualified embedding runtime. The composition that sets it also registers
+    /// [`VECTOR_CONSUMER`], which runs [`KnowledgeService::embed_claims`].
+    pub fn set_embeddings(&self, runtime: Option<Arc<IndexService>>) {
+        *self.embeddings.write_locked() = runtime;
+    }
+    fn embeddings(&self) -> Option<Arc<IndexService>> {
+        self.embeddings.read_locked().clone()
+    }
+    /// Runs one [`VECTOR_CONSUMER`] delivery: embeds its scope's claims that have no vector
+    /// in the selected space. Without an embedding runtime there is nothing to do.
+    pub fn embed_claims(
+        &self,
+        entry: &crate::ports::storage::QueueEntry,
+        cancellation: &crate::ports::storage::Cancellation,
+    ) -> Result<(), StorageError> {
+        match self.embeddings() {
+            Some(runtime) => vectors::run(&runtime, entry, cancellation),
+            None => Ok(()),
         }
     }
     /// Offers `knowledge.render_summary`: summaries are published as artifacts of the
@@ -712,6 +781,7 @@ impl KnowledgeService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         i: &ops::SearchInput,
+        prepared: Option<&vectors::QueryVector>,
     ) -> Result<(OperationResult, i64), Failure> {
         let scoped = resolve_scope(
             snapshot.artifacts(),
@@ -747,16 +817,45 @@ impl KnowledgeService {
         };
         let limit = i.page.limit.get().min(i.claim_limit.get()) as usize;
         let k = knowledge_read(snapshot);
+        // The selected space binds the cursor; this page's query vector is used while the
+        // selection it was embedded under is current. A page without one (the route failed at
+        // query time) lists text matches only ([`vectors`]).
+        let runtime = self.embeddings().filter(|_| !words.is_empty());
+        let selected = match &runtime {
+            Some(runtime) => runtime
+                .configuration_read(snapshot, ctx)?
+                .space
+                .map(|space| space.id),
+            None => None,
+        };
+        let vector = match (&runtime, prepared) {
+            (Some(runtime), Some(v))
+                if selected.as_deref() == Some(v.space.as_str())
+                    && v.current(runtime, snapshot, ctx)? =>
+            {
+                Some(v)
+            }
+            _ => None,
+        };
+        let near = vector.map(|v| ClaimVectorQuery {
+            space: &v.space,
+            vector: &v.vector,
+            neighbors: VECTOR_NEIGHBORS,
+        });
         let (mut parts, exact_revision) = Self::revision_parts(k, &scoped)?;
         parts.push(format!("{query:?}"));
         parts.push(limit.to_string());
+        parts.push(match &selected {
+            Some(space) => format!("vectors={space}"),
+            None => "lexical".into(),
+        });
         let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
         let mut request = i.page.clone();
         request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
         let rows = cursor::page(
             &binding,
             &request,
-            |after, n| claims(k, &query, after, n),
+            |after, n| search_claims(k, &query, near.as_ref(), after, n),
             |c| claim_position(&query, c),
         )?;
         let th = thresholds(snapshot.configuration(), &scoped.readable)?;
@@ -923,15 +1022,16 @@ impl KnowledgeService {
         let k = knowledge_read(snapshot);
         let exact_revision = k.knowledge_scope_revision(&scoped.exact)?;
         let mut items = Vec::new();
-        // Knowledge retrieval is lexical (SQLite FTS5): no embedding route or vector index
-        // exists, so vector search is never run and this says so.
+        // Text matches are lexical (SQLite FTS5); vector matches are added exactly when a
+        // qualified embedding space is selected (Hybrid), and this says which.
+        let (mode, message) =
+            vectors::retrieval_mode(self.embeddings().as_deref(), snapshot, ctx, &scoped)?;
         items.push(diagnostic(
             "knowledge-retrieval",
             Severity::Info,
             RETRIEVAL_COMPONENT,
-            "LexicalOnly",
-            "Retrieval is lexical only (NoEmbeddingRoute): no embedding route exists, so vector \
-             search is not run.",
+            mode,
+            &message,
         ));
         let counts = k.knowledge_counts(&scoped.keys())?;
         for (lifecycle, n) in &counts.claims {
@@ -1924,6 +2024,32 @@ pub(crate) fn no_applicability() -> Applicability {
     }
 }
 
+impl crate::services::conventions::indexing::SelectionListener for KnowledgeService {
+    /// A newly selected space queues the embedding of every scope with claims it has no
+    /// vector for, so claims written before it was selected need no other write.
+    fn selection_changed(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        fences: &[crate::ports::AuthorityFence],
+    ) -> Result<(), StorageError> {
+        if self.embeddings().is_none() {
+            return Ok(());
+        }
+        vectors::queue_selection(tx, ctx, fences)
+    }
+}
+
+/// Queues the embedding of `scope`'s pending claims as `ctx` after a Knowledge change made
+/// outside the Knowledge commands (Dreaming), in its unit of work.
+pub(crate) fn queue_claim_vectors(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+) -> Result<(), StorageError> {
+    vectors::queue_scope(tx, ctx, &[], scope, None)
+}
+
 impl QueryHandler for KnowledgeService {
     /// `knowledge.render_summary` renders from one snapshot and publishes the text as an
     /// artifact of the invocation's scope before the answer (bounded, recoverable publication).
@@ -1933,6 +2059,15 @@ impl QueryHandler for KnowledgeService {
         query: &AdmittedQuery,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, DomainFault> {
+        // `knowledge.search` embeds its text before the snapshot, through the shared route.
+        if let OperationInput::Knowledge(ops::Input::Search(i)) = query.input() {
+            let Some(runtime) = self.embeddings() else {
+                return Ok(None);
+            };
+            return vectors::prepare_search(&runtime, ctx, query, i, env)
+                .map(|v| v.map(Prepared::new))
+                .map_err(|f| query_fault(f, CLAIM, self.correlation()));
+        }
         let OperationInput::Knowledge(ops::Input::RenderSummary(i)) = query.input() else {
             return Ok(None);
         };
@@ -2012,7 +2147,9 @@ impl QueryHandler for KnowledgeService {
             );
         };
         let answered = match input {
-            ops::Input::Search(i) => self.search(snapshot, ctx, i),
+            ops::Input::Search(i) => {
+                self.search(snapshot, ctx, i, query.prepared::<vectors::QueryVector>())
+            }
             ops::Input::Read(i) => self.read(snapshot, ctx, i),
             ops::Input::Diagnostics(i) => self.diagnostics(snapshot, ctx, i),
             ops::Input::WriteStatus(i) => self.write_status(snapshot, ctx, i),
@@ -2129,7 +2266,13 @@ impl CommandHandler for KnowledgeService {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into());
             return decided(tx, refused);
         };
-        let outcome = writes::decide(ctx, command, input, tx);
+        let mut outcome = writes::decide(ctx, command, input, tx);
+        if let (Some(_), Ok(crate::protocol::results::DomainDecision::Applied { result })) =
+            (self.embeddings(), &outcome)
+            && let Err(error) = vectors::queue_after_write(tx, ctx, command, result)
+        {
+            outcome = Err(error.into());
+        }
         decided(tx, outcome)
     }
 }
@@ -2256,7 +2399,7 @@ mod tests {
         };
         // A cursor issued for a search with words before relevance ranking carried a time.
         assert!(matches!(
-            parse_position(&words, "1700000000000|knowledgeclaim-1"),
+            parse_position(&words, false, "1700000000000|knowledgeclaim-1"),
             Err(StorageError::CursorExpired)
         ));
         for bad in [
@@ -2265,7 +2408,7 @@ mod tests {
             "r|knowledgeclaim-1",
         ] {
             assert!(matches!(
-                parse_position(&words, bad),
+                parse_position(&words, false, bad),
                 Err(StorageError::CursorExpired)
             ));
         }
@@ -2295,17 +2438,32 @@ mod tests {
         };
         let at = claim_position(&words, &claim);
         assert_eq!(
-            parse_position(&words, &at).unwrap(),
+            parse_position(&words, false, &at).unwrap(),
             (claim.rank, claim.id.as_str().to_owned())
         );
         // A search without words keeps the time position.
         let none = ClaimQuery::default();
         assert_eq!(
-            parse_position(&none, "1700000000000|knowledgeclaim-1").unwrap(),
+            parse_position(&none, false, "1700000000000|knowledgeclaim-1").unwrap(),
             (
                 ClaimRank::Time(1_700_000_000_000),
                 "knowledgeclaim-1".to_owned()
             )
         );
+        // A vector match resumes exactly where it was read, and only with a query vector.
+        let near = RankedClaim {
+            rank: ClaimRank::Similarity(0.987_654_321_012_345_6),
+            ..claim
+        };
+        let at = claim_position(&words, &near);
+        assert!(at.starts_with('v'), "{at}");
+        assert_eq!(
+            parse_position(&words, true, &at).unwrap(),
+            (near.rank, near.id.as_str().to_owned())
+        );
+        assert!(matches!(
+            parse_position(&words, false, &at),
+            Err(StorageError::CursorExpired)
+        ));
     }
 }

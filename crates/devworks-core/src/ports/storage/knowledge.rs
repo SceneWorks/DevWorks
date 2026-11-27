@@ -451,6 +451,17 @@ pub enum ClaimRank {
     /// subject entity's (a query with words), listed descending: higher is a better match.
     /// Every statistic comes from the query's own scopes.
     Relevance(f64),
+    /// The cosine similarity of the claim's vector to the query's
+    /// ([`KnowledgeRead::knowledge_claim_neighbors`]), listed descending.
+    Similarity(f64),
+}
+
+/// A query vector in one qualified embedding space, and how many nearest claims it may match.
+#[derive(Clone, Copy, Debug)]
+pub struct ClaimVectorQuery<'a> {
+    pub space: &'a Id,
+    pub vector: &'a [f32],
+    pub neighbors: u16,
 }
 
 /// A listed claim and its sort key. It reads as the claim it carries.
@@ -525,6 +536,39 @@ pub trait KnowledgeRead {
         after: Option<(ClaimRank, &str)>,
         limit: u16,
     ) -> Result<Vec<RankedClaim>, StorageError>;
+    /// The vector matches of a query with words: of the claims that pass every filter of
+    /// `query` but are not its text matches (some word is missing), the `near.neighbors` with
+    /// a vector in `near.space` nearest to `near.vector` and a positive cosine similarity,
+    /// ordered by similarity descending, then id descending; then strictly after `after` (the
+    /// last row's similarity and id as read), at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]).
+    /// The scope and every other filter apply before any similarity is computed.
+    fn knowledge_claim_neighbors(
+        &self,
+        query: &ClaimQuery,
+        near: &ClaimVectorQuery<'_>,
+        after: Option<(f64, &str)>,
+        limit: u16,
+    ) -> Result<Vec<RankedClaim>, StorageError>;
+    /// Of the claims of `scopes` that are not deleted: how many have a vector of their current
+    /// text in `space`, and how many there are.
+    fn knowledge_vector_coverage(
+        &self,
+        scopes: &[String],
+        space: &Id,
+    ) -> Result<(i64, i64), StorageError>;
+    /// The scopes with a claim that is not deleted and has no vector in `space`.
+    fn pending_knowledge_vector_scopes(
+        &self,
+        space: &Id,
+    ) -> Result<Vec<KnowledgeScope>, StorageError>;
+    /// Up to `limit` (1..=32) claims of `scope` that are not deleted and have no vector in
+    /// `space`, oldest first, each with the text its vector embeds.
+    fn pending_knowledge_claim_vectors(
+        &self,
+        scope: &KnowledgeScope,
+        space: &Id,
+        limit: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError>;
     /// Live claims of `scopes` about `subject` with `predicate`, at most `limit`.
     fn knowledge_claims_about(
         &self,
@@ -713,8 +757,20 @@ pub trait KnowledgeRepository: KnowledgeRead {
         entity: &StoredEntity,
         expected: Option<i64>,
     ) -> Result<StoredEntity, StorageError>;
+    /// Stores the vectors (1..=32) in the cosine Float32 `space`, each of the claim text it
+    /// embeds, as unit vectors. A claim that is deleted, or whose current text is no longer
+    /// that text, is skipped (its next pending read offers the current text). A vector the
+    /// space cannot hold (wrong length, not finite, zero) is recorded without a vector, so that
+    /// text is no longer pending and is never matched. Returns how many usable vectors were
+    /// stored.
+    fn insert_knowledge_claim_vectors(
+        &mut self,
+        space: &Id,
+        vectors: &[(Id, String, Vec<f32>)],
+    ) -> Result<usize, StorageError>;
     /// Inserts `claim` at revision 1 or replaces it at `expected`, storing `expected + 1`, with
-    /// its tags, basis, evidence links and lexical row (none once deleted).
+    /// its tags, basis, evidence links and lexical row (none once deleted). Its vectors are
+    /// removed when it is deleted or its text changes.
     fn put_knowledge_claim(
         &mut self,
         claim: &StoredClaim,

@@ -151,6 +151,7 @@ record_kinds! {
     KnowledgeClaimFtsDocsize,
     KnowledgeClaimFtsIdx,
     KnowledgeClaimTags,
+    KnowledgeClaimVectors,
     KnowledgeClaims,
     KnowledgeDeliveries,
     KnowledgeEntities,

@@ -91,6 +91,9 @@ impl ProbeRuntime {
                         "Original native request has not been admitted".into(),
                     ),
                     Err(EmbeddingFailure::Unavailable(reason)) => EffectResult::Failed(reason),
+                    Err(EmbeddingFailure::InvalidVectors { .. }) => {
+                        EffectResult::Failed("Invalid cosine vector".into())
+                    }
                     Err(EmbeddingFailure::Unknown { reason, .. }) => EffectResult::Unknown(reason),
                     Err(EmbeddingFailure::Cancelled) => {
                         EffectResult::Failed("Embedding probe cancelled".into())

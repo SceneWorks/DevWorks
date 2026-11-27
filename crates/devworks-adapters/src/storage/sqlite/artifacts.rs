@@ -33,6 +33,8 @@ const DOCUMENT_VISION_INPUT_KIND: &str =
     devworks_core::services::artifacts::derivation::DerivedKind::DocumentVisionInput.as_str();
 const DOCUMENT_VISION_OUTPUT_KIND: &str =
     devworks_core::services::artifacts::derivation::DerivedKind::DocumentVisionOutput.as_str();
+const KNOWLEDGE_EMBEDDING_INPUT_KIND: &str =
+    devworks_core::services::artifacts::derivation::DerivedKind::KnowledgeEmbeddingInput.as_str();
 const ARTIFACT_COLUMNS: &str = "id,origin_project_id,origin_work_id,title,revision,current_project_id,\
     scope_revision,reference_revision,current_version_id,state,created_at,\
     provenance_json,scope_kind,owner_actor_id,retention";
@@ -307,7 +309,8 @@ fn list(
             '$.derived.kind') IS '{DOCUMENT_EMBEDDING_INPUT_KIND}' OR json_extract(a.provenance_json,\
             '$.derived.kind') IS '{DOCUMENT_EMBEDDING_OUTPUT_KIND}' OR json_extract(a.provenance_json,\
             '$.derived.kind') IS '{DOCUMENT_VISION_INPUT_KIND}' OR json_extract(a.provenance_json,\
-            '$.derived.kind') IS '{DOCUMENT_VISION_OUTPUT_KIND}'))
+            '$.derived.kind') IS '{DOCUMENT_VISION_OUTPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{KNOWLEDGE_EMBEDDING_INPUT_KIND}'))
            AND \
             (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND \
             a.id<?3))
@@ -405,7 +408,8 @@ fn list_workspace(
             '$.derived.kind') IS '{DOCUMENT_EMBEDDING_INPUT_KIND}' OR json_extract(a.provenance_json,\
             '$.derived.kind') IS '{DOCUMENT_EMBEDDING_OUTPUT_KIND}' OR json_extract(a.provenance_json,\
             '$.derived.kind') IS '{DOCUMENT_VISION_INPUT_KIND}' OR json_extract(a.provenance_json,\
-            '$.derived.kind') IS '{DOCUMENT_VISION_OUTPUT_KIND}'))
+            '$.derived.kind') IS '{DOCUMENT_VISION_OUTPUT_KIND}' OR json_extract(a.provenance_json,\
+            '$.derived.kind') IS '{KNOWLEDGE_EMBEDDING_INPUT_KIND}'))
            AND \
             (?2=9223372036854775807 OR a.created_at<?2 OR (a.created_at=?2 AND \
             a.id<?3))
@@ -555,6 +559,9 @@ macro_rules! artifact_reads {
         impl ArtifactRead for $t {
             fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
                 exists(self.conn, "SELECT 1 FROM projects WHERE id=?1 AND lifecycle<>'Deleted'", [project.0.as_str()])
+            }
+            fn live_claim_text_digest(&self, claim: &Id) -> Result<Option<String>, StorageError> {
+                super::knowledge::live_claim_text_digest(self.conn, claim)
             }
             fn subject_exists(
                 &self,

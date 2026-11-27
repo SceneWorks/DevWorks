@@ -87,8 +87,16 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// Migration 77 adds document transfer proposals. Their custody follows both participating
 /// projects and the retained artifact, as recorded in the document-transfers policy. It uses
 /// plain foreign keys so the guarded purge deletes every reviewed row explicitly.
+/// Migration 78 adds knowledge_claim_vectors (schema78 extension): the rebuildable vector of a
+/// claim's text follows its claim (claim_id in ownedClaims), so a project's purge removes the
+/// vectors of its claims and keeps every other. It adds one foreign key to knowledge_claims
+/// and one to the shared embedding_spaces row, which it does not own; a row without a vector
+/// records an unusable provider vector. It also adds the partial expression index
+/// artifacts_knowledge_embedding_input on artifacts (no table, column or ownership edge); the
+/// Host KnowledgeEmbeddingInput artifacts it finds are deleted with the project's claims
+/// (ownedKnowledgeInferenceArtifacts).
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "dfe2dbfe900276219ae42b98df2d6922a9cf42f7290a79ef6404455bd7199860";
+    "6b3c8bc81195b1370860c456645b85de8716def92489d39894501270c7ef0635";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

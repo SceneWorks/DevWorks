@@ -1,0 +1,14 @@
+{
+  "schema": 78,
+  "policy": "dw247-knowledge-claim-vectors-v1",
+  "additionalTables": [
+    {
+      "table": "knowledge_claim_vectors",
+      "class": "knowledge_lineage",
+      "disposition": "owned_lineage",
+      "purpose": "The rebuildable unit vector of a claim's current text (or the record that its route returned no usable vector) follows its claim (claim_id in ownedClaims): it is deleted with a project's claims and kept with every other claim. It does not own the shared model space. A claim's captured embedding inputs (Host artifacts of derived kind KnowledgeEmbeddingInput naming the claim, in any scope) are deleted with the project's claims as owned lineage (ownedKnowledgeInferenceArtifacts), and the expression index artifacts_knowledge_embedding_input adds no table or ownership edge."
+    }
+  ],
+  "readerFloor": 70,
+  "writerFloor": 78
+}

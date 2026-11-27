@@ -20,6 +20,9 @@ pub enum DerivedKind {
     DocumentEmbeddingOutput,
     DocumentVisionInput,
     DocumentVisionOutput,
+    /// The text of one Knowledge claim, captured for its embedding (`knowledgeClaimId`,
+    /// `textDigest`): readable only while the claim is live with that text.
+    KnowledgeEmbeddingInput,
     ProviderNativeContinuation,
 }
 
@@ -38,6 +41,7 @@ impl DerivedKind {
             Self::DocumentEmbeddingOutput => "DocumentEmbeddingOutput",
             Self::DocumentVisionInput => "DocumentVisionInput",
             Self::DocumentVisionOutput => "DocumentVisionOutput",
+            Self::KnowledgeEmbeddingInput => "KnowledgeEmbeddingInput",
             Self::ProviderNativeContinuation => "ProviderNativeContinuation",
         }
     }
@@ -55,6 +59,7 @@ impl DerivedKind {
             Self::DocumentEmbeddingOutput,
             Self::DocumentVisionInput,
             Self::DocumentVisionOutput,
+            Self::KnowledgeEmbeddingInput,
             Self::ProviderNativeContinuation,
         ]
         .into_iter()
