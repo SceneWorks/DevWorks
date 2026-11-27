@@ -29,6 +29,7 @@
 mod calls;
 mod exec;
 mod links;
+pub(crate) mod semantic;
 mod units;
 
 use calls::*;
@@ -281,6 +282,8 @@ impl IndexWorker {
             ctx: self.env.host_context(run.project_id.as_ref()),
             warnings: run.warnings.clone(),
             shares: BTreeMap::new(),
+            semantic_packs: Vec::new(),
+            repository_semantics: Vec::new(),
         };
         exec.log(
             "claimed",
@@ -459,6 +462,7 @@ pub(crate) fn coverage_of(
 ) -> Result<(Value, i64), StorageError> {
     let mut languages: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
     let mut gaps: BTreeSet<String> = BTreeSet::new();
+    let mut semantic = BTreeMap::new();
     let mut count = 0i64;
     let mut after: Option<String> = None;
     let bump = |m: &mut Map<String, Value>, k: &str| {
@@ -471,6 +475,11 @@ pub(crate) fn coverage_of(
         })?;
         for u in &page {
             count += 1;
+            for pack in u.payload["semanticPacks"].as_array().into_iter().flatten() {
+                if let Some(id) = pack["id"].as_str() {
+                    semantic.insert(id.to_owned(), pack.clone());
+                }
+            }
             let mode = u.payload.get("mode").and_then(Value::as_str).unwrap_or("");
             let lang = u.payload.get("language").and_then(Value::as_str);
             let errors = u
@@ -531,6 +540,7 @@ pub(crate) fn coverage_of(
     Ok((
         json!({
             "state": state,
+            "semanticPacks": semantic.into_values().collect::<Vec<_>>(),
             "gaps": gaps.into_iter().collect::<Vec<_>>(),
             "languages": Value::Object(languages.into_iter().map(|(k, v)| (k, Value::Object(v))).collect()),
             "excluded": excluded.get("excluded").copied().unwrap_or(0),

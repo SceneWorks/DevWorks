@@ -280,13 +280,6 @@ impl CoreServices {
                 Arc::new(InferenceRouter::new(ids.clone(), clock.clone(), directory))
             })
         });
-        let sessions = app.sessions.as_ref().map(|p| {
-            let service = SessionService::new(ids.clone(), store.clone());
-            Arc::new(match &p.coordinator {
-                Some(coordinator) => service.with_coordinator(coordinator.clone()),
-                None => service,
-            })
-        });
         let history = app
             .history
             .then(|| Arc::new(HistoryService::new(ids.clone())));
@@ -304,6 +297,15 @@ impl CoreServices {
             artifacts = artifacts.with_project_previews(custody.clone());
         }
         let artifacts = Arc::new(artifacts);
+        // The host's screen-context notices publish their text through the one artifact service.
+        let sessions = app.sessions.as_ref().map(|p| {
+            let service =
+                SessionService::new(ids.clone(), store.clone()).with_artifacts(artifacts.clone());
+            Arc::new(match &p.coordinator {
+                Some(coordinator) => service.with_coordinator(coordinator.clone()),
+                None => service,
+            })
+        });
         let resources = Arc::new(ResourceService::new(ids.clone(), clock.clone()));
         let control = {
             let service = match &r.scope {

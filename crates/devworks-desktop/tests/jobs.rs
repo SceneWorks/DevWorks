@@ -83,6 +83,17 @@ fn jobs(backend: &dyn Backend) -> Vec<JobRecord> {
         .0
 }
 
+/// The nightly Dreaming job every new store installs. It sorts after the `Job NNNN` titles.
+const NIGHTLY: &str = "Nightly Dreaming";
+
+/// The listed job titled `title`.
+fn listed(backend: &dyn Backend, title: &str) -> JobRecord {
+    jobs(backend)
+        .into_iter()
+        .find(|job| job.title.0 == title)
+        .unwrap_or_else(|| panic!("{title} is listed"))
+}
+
 #[test]
 fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     let root = Root::new("jobs-screen");
@@ -115,14 +126,14 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     assert!(has_text(&h, "Enabled"));
     // Run now: this build has no inference pipeline, so the run fails before dispatch and says so.
     click(&mut h, Role::Button, "Run now");
-    let job = jobs(&*backend).pop().unwrap();
+    let job = listed(&*backend, "Issue triage");
     assert!(
         job.last_run_id.is_some(),
         "Run now recorded a run through jobs.run_now"
     );
     let deadline = std::time::Instant::now() + SETTLE_BOUND;
     loop {
-        let job = jobs(&*backend).pop().unwrap();
+        let job = listed(&*backend, "Issue triage");
         if job.active_run_id.is_none() {
             break;
         }
@@ -137,17 +148,20 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     assert!(has_text(&h, "Nothing was sent to a model"));
     click(&mut h, Role::Button, "Schedules");
     click(&mut h, Role::Button, "Disable");
-    assert!(!jobs(&*backend).pop().unwrap().enabled);
+    assert!(!listed(&*backend, "Issue triage").enabled);
     click(&mut h, Role::Button, "Enable");
-    assert!(jobs(&*backend).pop().unwrap().enabled);
+    assert!(listed(&*backend, "Issue triage").enabled);
     // Delete asks first; Keep leaves it.
     click(&mut h, Role::Button, "Delete…");
     assert!(has_text(&h, "its run history is kept"));
+    let titles = |backend: &dyn Backend| -> Vec<String> {
+        jobs(backend).into_iter().map(|job| job.title.0).collect()
+    };
     click(&mut h, Role::Button, "Keep");
-    assert_eq!(jobs(&*backend).len(), 1);
+    assert_eq!(titles(&*backend), ["Issue triage", NIGHTLY]);
     click(&mut h, Role::Button, "Delete…");
     click(&mut h, Role::Button, "Delete");
-    assert!(jobs(&*backend).is_empty());
+    assert_eq!(titles(&*backend), [NIGHTLY]);
 }
 
 #[test]
@@ -735,7 +749,7 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
     assert_eq!(h.state().jobs.list.items.len(), page);
     click(&mut h, Role::Button, "Load more");
     settle(&mut h);
-    assert_eq!(h.state().jobs.list.items.len(), page + 5);
+    assert_eq!(h.state().jobs.list.items.len(), page + 6);
     // A job created elsewhere sorts first: its change hint refreshes the screen.
     create_job(&*backend, &title(0));
     step_until(&mut h, "the hint-driven refresh", |s| {
@@ -750,7 +764,8 @@ fn an_automatic_refresh_keeps_the_expanded_jobs_list() {
         .iter()
         .map(|j| j.title.0.clone())
         .collect();
-    assert_eq!(titles, (0..=page + 5).map(title).collect::<Vec<_>>());
+    let expected: Vec<String> = (0..=page + 5).map(title).chain([NIGHTLY.into()]).collect();
+    assert_eq!(titles, expected);
     assert!(!h.state().jobs.list.more() && h.state().jobs.list.pages() == 2);
     assert!(
         has_text(&h, &title(page)),
@@ -809,7 +824,7 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
     });
     gate.open();
     settle(&mut h);
-    assert_eq!(h.state().jobs.list.items.len(), page + 5);
+    assert_eq!(h.state().jobs.list.items.len(), page + 6);
     let titles: Vec<String> = h
         .state()
         .jobs
@@ -818,7 +833,8 @@ fn a_refresh_while_more_jobs_is_pending_keeps_the_requested_page() {
         .iter()
         .map(|j| j.title.0.clone())
         .collect();
-    assert_eq!(titles, (1..=page + 5).map(title).collect::<Vec<_>>());
+    let expected: Vec<String> = (1..=page + 5).map(title).chain([NIGHTLY.into()]).collect();
+    assert_eq!(titles, expected);
     assert_eq!(h.state().jobs.list.pages(), 2);
     assert!(!h.state().jobs.list.more() && !h.state().jobs.list.loading());
 }
@@ -1005,4 +1021,179 @@ fn prompt_picker_loads_and_selects_beyond_the_first_page_in_each_scope() {
         assert_eq!(definition["prompt"]["versionId"], "paged-version-000");
         assert!(!selected.enabled);
     }
+}
+
+/// A consumer the runtime does not dispatch, so only the test and the screen move its delivery.
+const SEEDED_CONSUMER: &str = "seeded-consumer";
+
+/// Claims the seeded consumer's ready delivery and fails it terminally with `cause`.
+fn fail_seeded(engine: &devworks_desktop::host::Engine, cause: &'static str) {
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::fixture(),
+        move |tx| {
+            let owner = tx.new_id(devworks_core::ports::IdKind::QueueEntry);
+            let claimed = tx.queue().claim_ready(&ClaimRequest {
+                consumer: SEEDED_CONSUMER.into(),
+                owner: owner.clone(),
+                lease_ms: 600_000,
+                limit: 1,
+            })?;
+            let entry = claimed.into_iter().next().expect("the ready delivery");
+            tx.queue().fail(
+                &entry.id,
+                &QueueFence {
+                    owner,
+                    generation: entry.generation,
+                },
+                cause,
+                FailureDisposition::Terminal,
+            )?;
+            Ok(())
+        },
+    )
+    .unwrap();
+}
+
+fn seeded_entry(engine: &devworks_desktop::host::Engine, delivery: &Id) -> QueueEntry {
+    let id = delivery.clone();
+    read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        move |s| s.queue().entry(&id),
+    )
+    .unwrap()
+    .expect("the delivery")
+}
+
+#[test]
+fn a_failed_delivery_is_listed_retried_and_dismissed_from_the_deliveries_view() {
+    let root = Root::new("jobs-deliveries");
+    let engine = start(&root);
+    let delivery = run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::fixture(),
+        |tx| {
+            let event =
+                devworks_core::protocol::EventId(tx.new_id(devworks_core::ports::IdKind::Event));
+            let actor = tx.store().host_actor.clone();
+            tx.history().append(NewEvent {
+                id: event.clone(),
+                actor,
+                project_id: None,
+                root_id: None,
+                operation_id: None,
+                aggregate_kind: "fixture".into(),
+                aggregate_id: "seeded".into(),
+                aggregate_revision: 1,
+                kind: "Changed".into(),
+                payload: json!({}),
+            })?;
+            let id = tx.new_id(devworks_core::ports::IdKind::QueueEntry);
+            tx.queue().enqueue(NewQueueEntry {
+                id,
+                consumer: SEEDED_CONSUMER.into(),
+                event_id: event,
+                root_id: None,
+                operation_id: None,
+                partition: None,
+                priority: 0,
+                ready_at_ms: 0,
+                payload: json!({}),
+            })
+        },
+    )
+    .unwrap()
+    .id;
+    fail_seeded(&engine, "payload schema is not supported");
+    assert_eq!(seeded_entry(&engine, &delivery).state, QueueState::Failed);
+
+    // The reads of the list can be held, to look at the rows between a resolution's reply and
+    // the list's next page.
+    let gate = Gate::new("queue.inspect");
+    struct Release(Gate);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.open();
+        }
+    }
+    let _release = Release(gate.clone());
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(engine.backend())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1440.0,
+        900.0,
+    );
+    settle(&mut h);
+    click_nav(&mut h, "Scheduled jobs");
+    click(&mut h, Role::Button, "Deliveries");
+    settle(&mut h);
+    // queue.inspect lists it with its consumer, state, attempt and last error.
+    assert!(has_text(&h, SEEDED_CONSUMER));
+    assert!(has_text(&h, "Failed"));
+    assert!(has_text(&h, "attempt 1"));
+    assert!(has_text(&h, "Last error: payload schema is not supported"));
+
+    // Retry (queue.retry) makes it ready again with a fresh budget. Until the list is read
+    // again its row still shows the failure, and its actions stay disabled.
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Retry").click();
+    step_until(&mut h, "the retry's reply and the held re-read", |s| {
+        s.jobs.delivery_notice.is_some() && gate.has_waiter()
+    });
+    h.step();
+    assert!(has_text(&h, "Last error: payload schema is not supported"));
+    for button in ["Retry", "Dismiss…"] {
+        assert!(
+            h.get_by_role_and_label(Role::Button, button)
+                .accesskit_node()
+                .is_disabled(),
+            "{button} is disabled before the list is read again"
+        );
+    }
+    gate.open();
+    settle(&mut h);
+    assert!(h.state().jobs.resolved_deliveries.is_empty());
+    let retried = seeded_entry(&engine, &delivery);
+    assert_eq!(retried.state, QueueState::Ready);
+    assert_eq!(retried.attempt_count, 0);
+    assert!(has_text(&h, "Queued"), "the list was read again");
+
+    // Its next attempt fails again; Dismiss (queue.resolve) asks first, then settles it.
+    fail_seeded(&engine, "payload schema is still not supported");
+    assert!(has_text(&h, "The seeded-consumer delivery is now queued."));
+    // A manual reload clears the last resolution's outcome.
+    click(&mut h, Role::Button, "Refresh");
+    settle(&mut h);
+    assert!(h.state().jobs.delivery_notice.is_none());
+    assert!(has_text(
+        &h,
+        "Last error: payload schema is still not supported"
+    ));
+    click(&mut h, Role::Button, "Dismiss…");
+    assert!(has_text(&h, "It is never delivered again"));
+    click(&mut h, Role::Button, "Keep");
+    assert_eq!(seeded_entry(&engine, &delivery).state, QueueState::Failed);
+    click(&mut h, Role::Button, "Dismiss…");
+    h.get_by_role_and_label(Role::TextInput, "Reason").focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Reason")
+        .type_text("the producer no longer exists");
+    h.step();
+    click(&mut h, Role::Button, "Dismiss");
+    settle(&mut h);
+    assert_eq!(
+        seeded_entry(&engine, &delivery).state,
+        QueueState::Dismissed
+    );
+    assert!(has_text(&h, "The seeded-consumer delivery was dismissed."));
+    // A dismissed delivery is no longer listed.
+    assert!(!has_text(&h, &format!("Delivery {}", delivery.as_str())));
+    // Leaving the subview clears the outcome too.
+    click(&mut h, Role::Button, "Runs");
+    assert!(h.state().jobs.delivery_notice.is_none());
 }

@@ -50,6 +50,7 @@ fn setup(tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
             credential_revision: 1,
             permission_revision: 1,
             granted_scopes: vec!["repo".into()],
+            granted_scopes_reported: true,
             observed_at_ms: T0,
             last_error: None,
         },

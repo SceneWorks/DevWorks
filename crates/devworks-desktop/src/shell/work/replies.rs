@@ -5,6 +5,7 @@ impl WorkCtl<'_, '_> {
     /// Applies a reply for one of the work slots; returns it back when it is not one.
     pub(super) fn apply_work(&mut self, slot: WorkSlot, reply: Reply) -> Option<(WorkSlot, Reply)> {
         let (slot, reply) = self.apply_workflow(slot, reply)?;
+        let (slot, reply) = self.apply_code_review(slot, reply)?;
         match (slot, reply) {
             (WorkSlot::KeepWorking(project), Reply::Task(result)) => {
                 if self.selected_project.as_deref() == Some(project.as_str()) {
@@ -215,7 +216,7 @@ impl WorkCtl<'_, '_> {
                     .insert(tree, ops::git_inspected(q).map_err(|e| e.describe()));
             }
             (WorkSlot::ReadinessHistory(id, generation), Reply::Query(q)) => {
-                let page = wops::readiness_history_result(q)
+                let page = wops::work_lineage_result(q)
                     .map(|page| {
                         Page::new(
                             page.items
@@ -232,6 +233,42 @@ impl WorkCtl<'_, '_> {
                         list.apply_unique(generation, page, |row| row.id.as_str().to_owned())
                 {
                     self.request_readiness_history(&id, fetch);
+                }
+            }
+            (WorkSlot::WorkLineage(id, generation), Reply::Query(q)) => {
+                let page = wops::work_lineage_result(q)
+                    .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
+                    .map_err(|e| e.describe());
+                if let Some(linked) = self.work.linked.get_mut(&id)
+                    && let Applied::Continue(fetch) =
+                        linked
+                            .lineage
+                            .apply_unique(generation, page, |row| row.id.as_str().to_owned())
+                {
+                    self.send_linked(&id, LinkedPart::Lineage, fetch);
+                }
+            }
+            (WorkSlot::WorkEvidence(id, generation), Reply::Query(q)) => {
+                let page = wops::evidence_links_result(q)
+                    .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
+                    .map_err(|e| e.describe());
+                if let Some(linked) = self.work.linked.get_mut(&id)
+                    && let Applied::Continue(fetch) =
+                        linked
+                            .evidence
+                            .apply_unique(generation, page, |row| row.id.as_str().to_owned())
+                {
+                    self.send_linked(&id, LinkedPart::Evidence, fetch);
+                }
+            }
+            (WorkSlot::WorkToolUsage(id, generation), Reply::Query(q)) => {
+                let page = wops::tool_usage_result(q)
+                    .map(|(rows, next)| Page::new(rows, next))
+                    .map_err(|e| e.describe());
+                if let Some(linked) = self.work.linked.get_mut(&id)
+                    && let Applied::Continue(fetch) = linked.usage.apply(generation, page)
+                {
+                    self.send_linked(&id, LinkedPart::Usage, fetch);
                 }
             }
             (WorkSlot::WorkGit(id), Reply::Query(q)) => {
@@ -290,10 +327,66 @@ impl WorkCtl<'_, '_> {
                 }
                 Err(e) => self.announce(format!("The work could not be opened: {}", e.describe())),
             },
-            (WorkSlot::WorkInspect(id), Reply::Query(q)) => {
-                if let Ok(s) = wops::run_snapshot(q) {
-                    self.work.runs.insert(id, s);
+            (WorkSlot::WorkInspect(id), Reply::Query(q)) => match wops::run_snapshot(q) {
+                Ok(s) => {
+                    let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
+                    self.work.runs.insert(id.clone(), s.clone());
+                    // Implementation is gated by every condition (pause, plan, readiness,
+                    // prerequisites, questions, capacity), so it names all that hold the root.
+                    let purpose = devworks_core::protocol::Purpose::Implementation;
+                    let root = id.clone();
+                    self.query(
+                        WorkSlot::WorkEligibility(id.clone()),
+                        "Reading why work is held",
+                        "runs.eligibility",
+                        move |be| wops::run_eligibility(be, &root, purpose),
+                    );
+                    if self.work.continue_all.remove(&id)
+                        && held
+                        && let Some(w) = self.record(&id)
+                    {
+                        self.command(
+                            WorkSlot::WorkRun(id),
+                            "Continuing held work",
+                            "runs.continue",
+                            move |be| wops::run_control(be, "runs.continue", &w, &s),
+                        );
+                    }
                 }
+                Err(_) => {
+                    self.work.continue_all.remove(&id);
+                }
+            },
+            (WorkSlot::WorkEligibility(id), Reply::Query(q)) => {
+                if let Ok(e) = wops::run_eligible(q) {
+                    self.work.eligibility.insert(id, e);
+                }
+            }
+            (WorkSlot::WorkRedirect(id), Reply::Command(c)) => {
+                let sent = self.work.redirect_sent.remove(&id);
+                match wops::run_redirected(c) {
+                    Ok(_) => {
+                        // A draft edited while the send ran is kept.
+                        if sent.is_some_and(|s| {
+                            self.work.redirect_drafts.get(&id).map(|d| d.trim()) == Some(s.as_str())
+                        }) {
+                            self.work.redirect_drafts.remove(&id);
+                        }
+                        self.announce("Redirect sent.");
+                    }
+                    Err(e) => self.work_failure("Redirect", e),
+                }
+                self.inspect(&id);
+            }
+            (WorkSlot::WorkStop(id), Reply::Command(c)) => {
+                match wops::run_stopped(c) {
+                    Ok(wops::Stopped::Applied) => self.announce("The work is stopped."),
+                    Ok(wops::Stopped::Accepted) => {
+                        self.announce("Stop accepted: the work stops at its next safe boundary.")
+                    }
+                    Err(e) => self.work_failure("Stop", e),
+                }
+                self.inspect(&id);
             }
             (WorkSlot::ArchiveCount(p, features), Reply::Query(q)) => {
                 let key = (p.clone(), features);
@@ -493,6 +586,72 @@ impl WorkCtl<'_, '_> {
                 }
                 self.inspect(&id);
                 self.load_work();
+            }
+            (WorkSlot::GithubIssuePublish(issue_id), Reply::Command(c)) => {
+                use devworks_core::protocol::{
+                    CommandReply,
+                    records::GithubIssueLinkResult,
+                    results::{DomainDecision, OperationResult},
+                };
+                if let Ok(CommandReply::Recorded { receipt, .. }) = &c
+                    && matches!(receipt.decision, DomainDecision::Accepted { .. })
+                {
+                    self.work.message =
+                        Some((Tone::Accent, "GitHub issue publication queued.".into()));
+                    self.inspect(&issue_id);
+                } else {
+                    match ops::command_result(c) {
+                        Ok(OperationResult::IssuesPublish {
+                            value: GithubIssueLinkResult::Current(link),
+                        }) => {
+                            self.work.github_links.insert(issue_id.clone(), link);
+                            self.work.message =
+                                Some((Tone::Good, "Published issue to GitHub.".into()));
+                            self.inspect(&issue_id);
+                            self.load_work();
+                        }
+                        Err(e) => self.work_failure("Publishing issue to GitHub", e),
+                        _ => {}
+                    }
+                }
+            }
+            (WorkSlot::GithubIssueLink(issue_id), Reply::Command(c)) => {
+                use devworks_core::protocol::{
+                    records::GithubIssueLinkResult, results::OperationResult,
+                };
+                match ops::command_result(c) {
+                    Ok(OperationResult::IssuesLink {
+                        value: GithubIssueLinkResult::Current(link),
+                    }) => {
+                        self.work.github_link_number_drafts.remove(&issue_id);
+                        self.work.github_links.insert(issue_id.clone(), link);
+                        self.work.message = Some((Tone::Good, "Linked GitHub issue.".into()));
+                        self.inspect(&issue_id);
+                        self.load_work();
+                    }
+                    Err(e) => self.work_failure("Linking GitHub issue", e),
+                    _ => {}
+                }
+            }
+            (WorkSlot::GithubPullChecks(pr_url), Reply::Query(q)) => {
+                use devworks_core::protocol::results::OperationResult;
+                match ops::query_result(q).map(|(r, _)| r) {
+                    Ok(OperationResult::GithubChecks { value }) => {
+                        self.work.github_pr_checks.insert(pr_url, value.items.0);
+                    }
+                    Err(e) => self.work.message = Some((Tone::Bad, e.describe())),
+                    _ => {}
+                }
+            }
+            (WorkSlot::GithubPullReviews(pr_url), Reply::Query(q)) => {
+                use devworks_core::protocol::results::OperationResult;
+                match ops::query_result(q).map(|(r, _)| r) {
+                    Ok(OperationResult::GithubReviews { value }) => {
+                        self.work.github_pr_reviews.insert(pr_url, value.items.0);
+                    }
+                    Err(e) => self.work.message = Some((Tone::Bad, e.describe())),
+                    _ => {}
+                }
             }
             (slot, reply) => return Some((slot, reply)),
         }

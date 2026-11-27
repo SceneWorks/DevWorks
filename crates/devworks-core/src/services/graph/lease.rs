@@ -3,6 +3,7 @@ use super::scope;
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::gateway::AdmittedQuery;
+pub(crate) use crate::kernel::graph_view::{check_pin, owner, scope_digest};
 use crate::ports::storage::*;
 use crate::ports::{Clock, IdKind, IdSource};
 use crate::protocol::Id;
@@ -15,56 +16,6 @@ use std::sync::Arc;
 pub(super) struct Selected {
     pub pin: StoredGraphReadPin,
     pub layers: Vec<ViewLayers>,
-}
-
-pub(crate) fn owner(ctx: &InvocationContext) -> String {
-    let worktree = ctx.worktree().map(|tree| {
-        json!({
-            "id": tree.id(),
-            "workId": tree.work_id(),
-            "repositoryId": tree.repository_id(),
-            "ownershipRevision": tree.ownership_revision()
-        })
-    });
-    sha256_hex(
-        json!({
-            "actor": ctx.principal(),
-            "kind": ctx.principal_kind().as_str().to_string(),
-            "project": ctx.project_id(),
-            "root": ctx.root_id(),
-            "assignment": ctx.assignment_id(),
-            "session": ctx.session_id(),
-            "ingress": ctx.ingress_namespace(),
-            "worktree": worktree
-        })
-        .to_string()
-        .as_bytes(),
-    )
-}
-
-pub(crate) fn scope_digest(scope: &DataScope) -> String {
-    sha256_hex(
-        serde_json::to_string(scope)
-            .expect("typed scope")
-            .as_bytes(),
-    )
-}
-
-pub(super) fn check_pin(
-    pin: &StoredGraphReadPin,
-    ctx: &InvocationContext,
-    requested_scope: &DataScope,
-    now: i64,
-) -> Result<(), Failure> {
-    if pin.owner_namespace != owner(ctx)
-        || pin.scope_digest != scope_digest(requested_scope)
-        || pin.store_id != *ctx.store_id()
-        || pin.restore_epoch != ctx.restore_epoch().get()
-        || pin.expires_at_ms <= now
-    {
-        return Err(scope::unavailable(Some(pin.id.clone())));
-    }
-    Ok(())
 }
 
 pub(super) struct Host<'a> {
@@ -192,7 +143,7 @@ pub(super) fn select(
             ..WriteOptions::host_state()
         },
         move |tx| {
-            if !crate::authority::authorization_holds_in(tx, &context, &authority)? {
+            if !crate::services::fences::authorization_holds_in(tx, &context, &authority)? {
                 return Ok(Err(crate::services::kernel::Refusal::new(
                     crate::protocol::DomainErrorCode::PermissionDenied,
                     "graph_scope",

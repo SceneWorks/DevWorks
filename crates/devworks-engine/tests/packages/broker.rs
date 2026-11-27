@@ -79,6 +79,39 @@ pub(super) fn read_artifact(
 }
 
 #[test]
+fn a_human_invoked_package_cannot_make_a_protected_decision() {
+    let _s = serial();
+    let a = App::new();
+    let mut spec = Spec::new("decision-pack", "1.0.0");
+    spec.contributions = vec!["call"];
+    spec.effect = "Mutation";
+    package(a.install(&a.user, &spec));
+    a.ready("decision-pack");
+    let args = a.save(&a.user, b"{}");
+    let script = json!({"calls": [
+        {"actionKey": "decision", "call": application("approvals.record_human_decision",
+            input_schema("approvals.record_human_decision", Mode::Command, None), json!("$input"))},
+        {"actionKey": "continue", "call": application("runs.continue",
+            input_schema("runs.continue", Mode::Command, None), json!("$input"))}
+    ]});
+    let (progress, _) = run_calls(
+        &a,
+        "decision-pack",
+        script,
+        &args,
+        Some(a.user.clone()),
+        vec![],
+    );
+    assert_eq!(
+        progress,
+        [
+            "call:decision:PermissionDenied",
+            "call:continue:PermissionDenied"
+        ]
+    );
+}
+
+#[test]
 fn a_package_calls_only_what_its_grant_allows_and_as_its_invoking_principal() {
     let _s = serial();
     let a = App::new();

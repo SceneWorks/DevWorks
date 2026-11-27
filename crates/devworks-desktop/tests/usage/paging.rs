@@ -1,5 +1,4 @@
 use super::*;
-use devworks_core::locks::LockExt;
 
 #[test]
 fn native_price_more_gesture_survives_same_frame_catalog_hint_without_replacing_partial_page() {
@@ -212,66 +211,5 @@ impl Backend for Hinted {
     }
     fn read_stream(&self, id: &devworks_core::protocol::Id, n: u64) -> Result<Vec<u8>, String> {
         self.inner.read_stream(id, n)
-    }
-}
-
-/// An owned no-op transaction controls this fixture's no-event premise. It never completes a
-/// native producer or manufactures a reply; all first/continuation reads still use the gateway.
-pub(super) struct WriterHold {
-    release: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
-    cancel: devworks_core::ports::storage::Cancellation,
-    worker:
-        Option<std::thread::JoinHandle<Result<(), devworks_core::ports::storage::StorageError>>>,
-}
-impl WriterHold {
-    pub(super) fn new(
-        store: std::sync::Arc<dyn devworks_core::ports::storage::ApplicationStore>,
-    ) -> Self {
-        use devworks_core::ports::storage::{Cancellation, StorageError, WriteOptions, run_write};
-        let release =
-            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
-        let (entered, admitted) = std::sync::mpsc::sync_channel(1);
-        let cancel = Cancellation::new();
-        let options = WriteOptions {
-            cancellation: Some(cancel.clone()),
-            ..WriteOptions::fixture()
-        };
-        let gate = release.clone();
-        let worker = std::thread::spawn(move || {
-            run_write(&*store, options, move |_| {
-                entered.send(()).map_err(|_| StorageError::Cancelled)?;
-                let mut open = gate.0.locked();
-                while !*open {
-                    open = gate.1.wait(open).unwrap_or_else(|p| p.into_inner());
-                }
-                Ok(())
-            })
-        });
-        let hold = Self {
-            release,
-            cancel,
-            worker: Some(worker),
-        };
-        admitted
-            .recv_timeout(SETTLE_BOUND)
-            .expect("the real writer slot is admitted");
-        hold
-    }
-}
-impl Drop for WriterHold {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-        *self.release.0.locked() = true;
-        self.release.1.notify_one();
-        let result = self.worker.take().expect("owned writer worker").join();
-        if !std::thread::panicking() {
-            assert!(
-                matches!(
-                    result,
-                    Ok(Ok(())) | Ok(Err(devworks_core::ports::storage::StorageError::Cancelled))
-                ),
-                "writer control finishes: {result:?}"
-            );
-        }
     }
 }

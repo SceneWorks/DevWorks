@@ -4,6 +4,9 @@
 //! method answers `unmodelled()`, except those `tools/core-codegen/stubs.py` gives behaviour.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 use crate::{Unmodelled, unmodelled};
+use devworks_core::kernel::document_evidence::ExtractedBlock;
+use devworks_core::kernel::document_evidence::VisionTarget;
+use devworks_core::kernel::document_evidence::VisionUnit;
 use devworks_core::ports::GrantUse;
 use devworks_core::ports::storage::AgentMessageHistoryFilter;
 use devworks_core::ports::storage::ArtifactScope;
@@ -35,11 +38,55 @@ use devworks_core::protocol::provider::ArtifactRef;
 use devworks_core::protocol::records::DocumentTransferState;
 use devworks_core::protocol::records::SchemaObject;
 use devworks_core::protocol::records::SchemaRelation;
-use devworks_core::services::documents::extraction::ExtractedBlock;
-use devworks_core::services::documents::vision::VisionTarget;
-use devworks_core::services::documents::vision::VisionUnit;
 use serde_json::Value;
 
+impl AnalysisRead for Unmodelled {
+    fn analysis_retention_page(
+        &self,
+        _: Option<&AnalysisRunPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredAnalysisRun>, StorageError> {
+        unmodelled()
+    }
+    fn analysis_active_reference(&self, _: &str, _: &Id) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn active_model_runs(&self, _: &str) -> Result<usize, StorageError> {
+        unmodelled()
+    }
+    fn analysis_repository_runs(
+        &self,
+        _: Option<&str>,
+        _: &[Id],
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredAnalysisRun>, StorageError> {
+        unmodelled()
+    }
+    fn analysis_run(&self, _: &Id) -> Result<Option<StoredAnalysisRun>, StorageError> {
+        unmodelled()
+    }
+    fn analysis_runs(
+        &self,
+        _: &str,
+        _: bool,
+        _: Option<&AnalysisRunPosition>,
+        _: u16,
+    ) -> Result<Vec<StoredAnalysisRun>, StorageError> {
+        unmodelled()
+    }
+}
+impl AnalysisRepository for Unmodelled {
+    fn remove_terminal_analysis_run(&mut self, _: &Id, _: i64) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn insert_analysis_run(&mut self, _: &StoredAnalysisRun) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn update_analysis_run(&mut self, _: &StoredAnalysisRun, _: i64) -> Result<(), StorageError> {
+        unmodelled()
+    }
+}
 impl ArtifactRead for Unmodelled {
     fn project_exists(&self, _: &ProjectId) -> Result<bool, StorageError> {
         unmodelled()
@@ -107,6 +154,24 @@ impl ArtifactRead for Unmodelled {
         unmodelled()
     }
     fn repository_text_readers(&self, _: &Id) -> Result<Vec<ProjectId>, StorageError> {
+        unmodelled()
+    }
+    fn analysis_artifact_available(
+        &self,
+        _: &Id,
+        _: &Id,
+        _: Option<&ProjectId>,
+        _: Option<(&Id, i64)>,
+        _: i64,
+    ) -> Result<bool, StorageError> {
+        unmodelled()
+    }
+    fn database_artifact_available(
+        &self,
+        _: &DatabaseArtifactAccess,
+        _: &ActorId,
+        _: Option<&ProjectId>,
+    ) -> Result<bool, StorageError> {
         unmodelled()
     }
     fn links(&self, _: &Id) -> Result<Vec<ArtifactLink>, StorageError> {
@@ -1336,6 +1401,29 @@ impl EvalRepository for Unmodelled {
     }
 }
 impl GitRead for Unmodelled {
+    fn code_review(&self, _: &Id) -> Result<Option<StoredCodeReview>, StorageError> {
+        unmodelled()
+    }
+    fn code_reviews(
+        &self,
+        _: Option<&devworks_core::protocol::ProjectId>,
+        _: Option<&RootId>,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredCodeReview>, StorageError> {
+        unmodelled()
+    }
+    fn code_finding(&self, _: &Id) -> Result<Option<StoredCodeFinding>, StorageError> {
+        unmodelled()
+    }
+    fn code_findings(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<StoredCodeFinding>, StorageError> {
+        unmodelled()
+    }
     fn git_worktree_for_branch(
         &self,
         _: &Id,
@@ -1352,6 +1440,9 @@ impl GitRead for Unmodelled {
     }
     fn git_worktree(&self, _: &Id) -> Result<Option<StoredGitWorktree>, StorageError> {
         Ok(None)
+    }
+    fn git_worktree_at(&self, _: &str) -> Result<Option<StoredGitWorktree>, StorageError> {
+        unmodelled()
     }
     fn git_repository_worktrees(
         &self,
@@ -1371,6 +1462,20 @@ impl GitRead for Unmodelled {
     }
 }
 impl GitRepository for Unmodelled {
+    fn put_code_review(
+        &mut self,
+        _: &StoredCodeReview,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_code_finding(
+        &mut self,
+        _: &StoredCodeFinding,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn insert_git_worktree(&mut self, _: &StoredGitWorktree) -> Result<(), StorageError> {
         Err(StorageError::InvalidRecord(
             "Git test store not configured".into(),
@@ -1383,6 +1488,16 @@ impl GitRepository for Unmodelled {
     }
 }
 impl GithubRead for Unmodelled {
+    fn github_triage_case(
+        &self,
+        _: &GithubIssueKey,
+        _: &ProjectId,
+    ) -> Result<Option<StoredGithubTriageCase>, StorageError> {
+        unmodelled()
+    }
+    fn github_index_target(&self, _: &Id) -> Result<Option<StoredGithubIndexTarget>, StorageError> {
+        unmodelled()
+    }
     fn github_adjudication_owner(
         &self,
         _: &Id,
@@ -1418,6 +1533,14 @@ impl GithubRead for Unmodelled {
         &self,
         _: &Id,
     ) -> Result<Option<StoredGithubRepositoryBinding>, StorageError> {
+        unmodelled()
+    }
+    fn github_bound_registrations(
+        &self,
+        _: &Id,
+        _: Option<&Id>,
+        _: u16,
+    ) -> Result<Vec<Id>, StorageError> {
         unmodelled()
     }
     fn github_repository_binding_history(
@@ -1472,6 +1595,14 @@ impl GithubRead for Unmodelled {
     ) -> Result<Vec<StoredGithubObservation>, StorageError> {
         unmodelled()
     }
+    fn github_open_pulls(
+        &self,
+        _: &Id,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredGithubObservation>, StorageError> {
+        unmodelled()
+    }
     fn github_poll_cursor(
         &self,
         _: &Id,
@@ -1495,6 +1626,14 @@ impl GithubRead for Unmodelled {
         unmodelled()
     }
     fn github_intake_clock(&self) -> Result<GithubIntakeClock, StorageError> {
+        unmodelled()
+    }
+    fn github_issues_for_work(
+        &self,
+        _: &RootId,
+        _: &Id,
+        _: u16,
+    ) -> Result<Vec<StoredGithubIssueIntake>, StorageError> {
         unmodelled()
     }
     fn github_obligation_revision(&self, _: &GithubIssueKey) -> Result<i64, StorageError> {
@@ -1531,6 +1670,16 @@ impl GithubRead for Unmodelled {
     }
 }
 impl GithubRepository for Unmodelled {
+    fn put_github_triage_case(
+        &mut self,
+        _: &StoredGithubTriageCase,
+        _: Option<i64>,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn put_github_index_target(&mut self, _: &StoredGithubIndexTarget) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn retire_github_work_link(
         &mut self,
         _: &StoredGithubObligationRetirement,
@@ -1800,6 +1949,9 @@ impl GraphRepository for Unmodelled {
         unmodelled()
     }
     fn invalidate_graph_pins_for_view(&mut self, _: &Id) -> Result<(), StorageError> {
+        unmodelled()
+    }
+    fn invalidate_graph_pins_for_overlay(&mut self, _: &Id) -> Result<(), StorageError> {
         unmodelled()
     }
     fn insert_graph_source_capture(
@@ -3381,6 +3533,15 @@ impl RunRead for Unmodelled {
     ) -> Result<Vec<StoredAssignment>, StorageError> {
         unmodelled()
     }
+    fn project_assignments(
+        &self,
+        _: &ProjectId,
+        _: bool,
+        _: Option<&AssignmentId>,
+        _: u16,
+    ) -> Result<Vec<StoredAssignment>, StorageError> {
+        unmodelled()
+    }
     fn child_assignments_with_role(
         &self,
         _: &RootId,
@@ -3396,6 +3557,13 @@ impl RunRead for Unmodelled {
         &self,
         _: &RootId,
         _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredInstruction>, StorageError> {
+        unmodelled()
+    }
+    fn latest_instructions(
+        &self,
+        _: &RootId,
         _: u16,
     ) -> Result<Vec<StoredInstruction>, StorageError> {
         unmodelled()
@@ -3526,6 +3694,12 @@ impl RunRepository for Unmodelled {
     }
 }
 impl SchemaRead for Unmodelled {
+    fn mysql_readonly_sources(&self) -> Result<Vec<StoredSchemaSource>, StorageError> {
+        unmodelled()
+    }
+    fn sensitive_policy(&self, _: Option<&Id>) -> Result<SensitivePolicy, StorageError> {
+        unmodelled()
+    }
     fn schema_certificate(&self, _: &Id) -> Result<Option<StoredSchemaCertificate>, StorageError> {
         unmodelled()
     }
@@ -3585,6 +3759,14 @@ impl SchemaRead for Unmodelled {
     }
 }
 impl SchemaRepository for Unmodelled {
+    fn set_sensitive_policy(
+        &mut self,
+        _: Option<&Id>,
+        _: i64,
+        _: &SensitivePolicy,
+    ) -> Result<(), StorageError> {
+        unmodelled()
+    }
     fn set_schema_certificate(
         &mut self,
         _: &Id,
@@ -4068,6 +4250,15 @@ impl WatcherRead for Unmodelled {
     ) -> Result<Vec<StoredWatchEvent>, StorageError> {
         unmodelled()
     }
+    fn delivered_watch_events(
+        &self,
+        _: &Id,
+        _: i64,
+        _: i64,
+        _: u16,
+    ) -> Result<Vec<StoredWatchEvent>, StorageError> {
+        unmodelled()
+    }
 }
 impl WatcherRepository for Unmodelled {
     fn insert_watcher(&mut self, _: &StoredWatcher) -> Result<(), StorageError> {
@@ -4082,7 +4273,7 @@ impl WatcherRepository for Unmodelled {
     fn deliver_watch_event(&mut self, _: &Id, _: i64, _: i64) -> Result<bool, StorageError> {
         unmodelled()
     }
-    fn carry_watch_events(&mut self, _: &Id, _: &Id) -> Result<u64, StorageError> {
+    fn carry_watch_events(&mut self, _: &Id, _: &Id, _: i64) -> Result<u64, StorageError> {
         unmodelled()
     }
     fn release_watch_events(

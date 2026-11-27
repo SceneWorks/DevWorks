@@ -96,6 +96,8 @@
       "issues.edit",
       "tasks.dependency_links",
       "issues.prioritize",
+      "issues.link",
+      "issues.publish",
       "tasks.edit",
       "tasks.assign"
     ]
@@ -383,7 +385,9 @@
       "git.worktree",
       "git.commit",
       "git.push",
-      "git.pull_request"
+      "git.pull_request",
+      "github.checks",
+      "github.reviews"
     ]
   },
   {
@@ -541,7 +545,11 @@
       "settings.read_effective",
       "settings.validate",
       "settings.save_revision",
-      "settings.explain_source"
+      "settings.explain_source",
+      "github.account",
+      "github.repositories",
+      "github.poll_status",
+      "github.issue_sync"
     ]
   },
   {

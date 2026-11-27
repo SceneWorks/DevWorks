@@ -292,7 +292,7 @@ Poll GitHub for changes.
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: DevWorks does not poll GitHub yet, so this switch changes nothing. Once polling is built, pushes, merges, reviews and checks notify agents through authenticated polling.
+Pushes, merges, reviews and checks notify agents through authenticated polling.
 
 ## github.importOpenIssues
 
@@ -304,7 +304,7 @@ Import open issues.
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: GitHub issue import is not built yet, so this switch changes nothing. Once it is, existing open issues are imported when a repository is connected, and newly reported ones thereafter.
+Existing open issues are imported when a repository is connected, and newly reported ones thereafter.
 
 ## github.syncLinkedIssueFields
 
@@ -316,7 +316,7 @@ Receive linked issue updates.
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: GitHub issue synchronization is not built yet, so this switch changes nothing. Once it is, remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.
+Remote issue updates are reflected locally; intermediate execution details stay local and a resolution is published only after completed work is verified.
 
 ## github.issueTriageIntervalSeconds
 
@@ -328,7 +328,7 @@ Issue triage interval (seconds).
 - Policy: Configurable
 - Section: GitHub
 
-Not yet active: automatic issue triage is not built yet, so this value changes nothing. Once it is, this is the app-wide minimum interval between automatic issue triage admissions.
+The app-wide minimum interval between automatic issue triage admissions.
 
 ## delivery.autoMerge
 
@@ -340,11 +340,11 @@ Auto-Merge.
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: DevWorks does not merge pull requests yet, so this switch changes nothing. Once merging is built, work is committed, pushed, review feedback addressed and the pull request merged when all required checks pass.
+Allow DevWorks to submit a merge after the required checks, review, approval and repository policies pass for the exact PR head. Disable this setting to hold automatic submission while other authorized work continues.
 
 ## delivery.mandatoryReview
 
-Mandatory review.
+Independent local review.
 
 - Default: `true`
 - Scope: Workspace only
@@ -352,19 +352,31 @@ Mandatory review.
 - Policy: HarnessEnforced
 - Section: Delivery
 
-Every delivery is reviewed before merge. A harness protection, not an override value.
+Every feature task requires one independent review before integration.
 
-## delivery.maxReviewFixCycles
+## delivery.finalPullRequestReview
 
-Review fix cycles.
+Require final pull request review.
 
-- Default: `3`
+- Default: `true`
 - Scope: Workspace → Project → Repository
 - Adoption: NextAdmission
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: the review/fix cycle is not built yet, so this value changes nothing. Once it is, this is the maximum number of review/fix cycles before asking for help. Engineering default.
+Require exact-head review evidence for final GitHub pull requests. Local feature task review always applies.
+
+## delivery.maxReviewFixCycles
+
+Review rounds.
+
+- Default: `5`
+- Scope: Workspace → Project → Repository
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Delivery
+
+Set a lower limit for automated reviews. Feature pull requests allow up to five rounds, and standalone pull requests up to three.
 
 ## watch.backupEnabled
 
@@ -412,7 +424,19 @@ Automated review wait (seconds).
 - Policy: Configurable
 - Section: Delivery
 
-Not yet active: the review gate is not built yet, so this value changes nothing. Once it is, this is the finite wait for a registered review source before the gate escalates. Engineering default.
+After this time, DevWorks may use one independent in-app reviewer for the same round.
+
+## reviews.githubBotId
+
+GitHub review bot ID.
+
+- Default: `0`
+- Scope: Workspace → Project → Repository
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Delivery
+
+The registered bot's numeric GitHub actor ID. Set to zero to use an independent in-app reviewer.
 
 ## agents.maxSubagents
 
@@ -622,7 +646,7 @@ Editable role instructions; policies and selected tools still apply.
 
 FeatureCoordinator.
 
-- Default: `"Plan and coordinate one feature against its approved plan."`
+- Default: `"Plan and coordinate one feature against its approved plan. Publish each owned feature branch before task checkout. Take the highest-priority task with verified prerequisites. Use a local task worktree and one independent review of its exact diff. Resolve findings, integrate locally and verify the candidate. For a conflict, verify that both the task and existing feature behaviors survive. Publish with git.push taskIntegration and advance only when DevWorks verifies publication. Open one final PR to main per affected repository after integrated acceptance."`
 - Scope: Workspace → Project
 - Adoption: NextSafeStep
 - Policy: Configurable

@@ -458,6 +458,1024 @@
       "$ref": "#/$defs/AllocationOutcome",
       "x-since": 3
     },
+    "AnalysisAvailability": {
+      "enum": [
+        "Available",
+        "NoData",
+        "Pending",
+        "Stale",
+        "Partial",
+        "Failed",
+        "Unavailable"
+      ],
+      "type": "string"
+    },
+    "AnalysisClusterConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "clusterId": {
+          "$ref": "#/$defs/Id"
+        },
+        "edgeCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "types": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        }
+      },
+      "required": [
+        "clusterId",
+        "edgeCount",
+        "types"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterDetails": {
+      "additionalProperties": false,
+      "properties": {
+        "bridges": {
+          "$ref": "#/$defs/List_Id_0_128"
+        },
+        "connections": {
+          "$ref": "#/$defs/List_AnalysisClusterConnection_0_500"
+        },
+        "density": {
+          "$ref": "#/$defs/Finite"
+        },
+        "externalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "internalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "legacyOrdinal": {
+          "$ref": "#/$defs/Counter"
+        },
+        "members": {
+          "$ref": "#/$defs/List_AnalysisClusterMember_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "legacyOrdinal",
+        "internalEdges",
+        "externalEdges",
+        "density",
+        "members",
+        "bridges",
+        "connections"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterGraphEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "crossCluster": {
+          "type": "boolean"
+        },
+        "edgeCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "relationshipCounts": {
+          "$ref": "#/$defs/List_AnalysisClusterRelationshipCount_0_128"
+        },
+        "sourceRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceViewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetRepositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "targetViewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "sourceRepositoryId",
+        "sourceViewId",
+        "targetRepositoryId",
+        "targetViewId",
+        "edgeCount",
+        "relationshipCounts",
+        "crossCluster"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterItem": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "$ref": "#/$defs/ClusterRecord"
+        }
+      },
+      "required": [
+        "cluster"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterMember": {
+      "additionalProperties": false,
+      "properties": {
+        "centrality": {
+          "$ref": "#/$defs/Finite"
+        },
+        "clusterId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "externalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "foundational": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "framework": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "internalEdges": {
+          "$ref": "#/$defs/Counter"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceGroup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "name",
+        "centrality",
+        "internalEdges",
+        "externalEdges"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterPage": {
+      "additionalProperties": false,
+      "properties": {
+        "clusteredRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "graphEdges": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisClusterGraphEdge_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_AnalysisClusterItem_0_500"
+        },
+        "links": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisLinkEvidence_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modularity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/AnalysisObservation"
+        },
+        "repositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisClusterMember_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "totalRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "AnalysisClusterPageResult": {
+      "$ref": "#/$defs/AnalysisClusterPage",
+      "x-since": 3
+    },
+    "AnalysisClusterRelationshipCount": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/Counter"
+        },
+        "relationship": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "relationship",
+        "count"
+      ],
+      "type": "object"
+    },
+    "AnalysisFileMetrics": {
+      "additionalProperties": false,
+      "properties": {
+        "branches": {
+          "$ref": "#/$defs/Counter"
+        },
+        "bugFixRatio": {
+          "$ref": "#/$defs/Finite"
+        },
+        "changes90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "churn30d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "churn365d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "churn90d": {
+          "$ref": "#/$defs/Finite"
+        },
+        "complexity": {
+          "$ref": "#/$defs/Counter"
+        },
+        "concern": {
+          "$ref": "#/$defs/Finite"
+        },
+        "couplingPartners": {
+          "$ref": "#/$defs/Counter"
+        },
+        "couplingStrength": {
+          "$ref": "#/$defs/Finite"
+        },
+        "deepLines": {
+          "$ref": "#/$defs/Counter"
+        },
+        "dotnetProject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "functionCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "health": {
+          "$ref": "#/$defs/Finite"
+        },
+        "lastChangeAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "linesAdded90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "linesRemoved90d": {
+          "$ref": "#/$defs/Counter"
+        },
+        "lintErrors": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lintWarnings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "longestFunction": {
+          "$ref": "#/$defs/Counter"
+        },
+        "maxNesting": {
+          "$ref": "#/$defs/Counter"
+        },
+        "recurringChurn": {
+          "$ref": "#/$defs/Finite"
+        },
+        "risk": {
+          "$ref": "#/$defs/Finite"
+        },
+        "role": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "truckFactor": {
+          "$ref": "#/$defs/Counter"
+        },
+        "trust": {
+          "$ref": "#/$defs/Finite"
+        }
+      },
+      "required": [
+        "health",
+        "risk",
+        "concern",
+        "trust",
+        "complexity",
+        "maxNesting",
+        "deepLines",
+        "functionCount",
+        "longestFunction",
+        "branches",
+        "linesAdded90d",
+        "linesRemoved90d",
+        "changes90d",
+        "churn30d",
+        "churn90d",
+        "churn365d",
+        "bugFixRatio",
+        "recurringChurn",
+        "couplingStrength",
+        "couplingPartners",
+        "truckFactor",
+        "role"
+      ],
+      "type": "object"
+    },
+    "AnalysisFleetTotals": {
+      "additionalProperties": false,
+      "properties": {
+        "alertCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "averageHealth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "belowAlert": {
+          "$ref": "#/$defs/Counter"
+        },
+        "belowHotspot": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hotspotCount": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryCount": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "repositoryCount",
+        "hotspotCount",
+        "alertCount",
+        "belowHotspot",
+        "belowAlert"
+      ],
+      "type": "object"
+    },
+    "AnalysisHealthSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alerts": {
+          "$ref": "#/$defs/Counter"
+        },
+        "baseScore": {
+          "$ref": "#/$defs/Finite"
+        },
+        "dotnetProject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "$ref": "#/$defs/Counter"
+        },
+        "hotspots": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "baseScore",
+        "files",
+        "hotspots",
+        "alerts"
+      ],
+      "type": "object"
+    },
+    "AnalysisLinkEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "nodeId": {
+          "$ref": "#/$defs/Id"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "nodeId"
+      ],
+      "type": "object"
+    },
+    "AnalysisLinkEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Finite"
+        },
+        "matchedBy": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "relationship": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "resolution": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "source": {
+          "$ref": "#/$defs/AnalysisLinkEndpoint"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisLinkEndpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetLabel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "relationship",
+        "source",
+        "resolution",
+        "confidence",
+        "matchedBy"
+      ],
+      "type": "object"
+    },
+    "AnalysisMetricItem": {
+      "additionalProperties": false,
+      "properties": {
+        "computedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fileMetrics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisFileMetrics"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "historyCoverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageIndexed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "link": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisLinkEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricRecord"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelativePath"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "metric",
+        "repositoryId",
+        "viewId"
+      ],
+      "type": "object"
+    },
+    "AnalysisMetricPage": {
+      "additionalProperties": false,
+      "properties": {
+        "fleet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisFleetTotals"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "found": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_AnalysisMetricItem_0_500"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "languageIndexed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "$ref": "#/$defs/AnalysisObservation"
+        }
+      },
+      "required": [
+        "items",
+        "hasMore",
+        "observation"
+      ],
+      "type": "object"
+    },
+    "AnalysisMetricPageResult": {
+      "$ref": "#/$defs/AnalysisMetricPage",
+      "x-since": 3
+    },
+    "AnalysisNarrative": {
+      "additionalProperties": false,
+      "properties": {
+        "computedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "evidence": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "model": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "summary": {
+          "$ref": "#/$defs/Text0To65536"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "summary",
+        "confidence",
+        "model",
+        "computedAtMs",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "AnalysisObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "availability": {
+          "$ref": "#/$defs/AnalysisAvailability"
+        },
+        "baseScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bindings": {
+          "$ref": "#/$defs/List_AnalysisViewBinding_0_500"
+        },
+        "computedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/List_Text1To256_0_128"
+        },
+        "hasMore": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisHealthSummary_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "indexedBindings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisViewBinding_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "missingRepositories": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Id_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "narratives": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisNarrative_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phases": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisPhaseStatus_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relatedWorkIds": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_Id_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "security": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisSecuritySummary_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "topHotspots": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisMetricItem_0_500"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trends": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/List_AnalysisTrendPoint_0_128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "availability",
+        "bindings",
+        "coverage",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "AnalysisPhaseStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "completedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        }
+      },
+      "required": [
+        "phase",
+        "state"
+      ],
+      "type": "object"
+    },
     "AnalysisRecord": {
       "additionalProperties": false,
       "properties": {
@@ -469,6 +1487,10 @@
         },
         "kind": {
           "$ref": "#/$defs/Text1To256"
+        },
+        "observation": {
+          "$ref": "#/$defs/AnalysisObservation",
+          "x-since": 3
         },
         "report": {
           "anyOf": [
@@ -497,6 +1519,104 @@
         "kind",
         "state",
         "coverage"
+      ],
+      "type": "object"
+    },
+    "AnalysisSecuritySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "critical": {
+          "$ref": "#/$defs/Counter"
+        },
+        "high": {
+          "$ref": "#/$defs/Counter"
+        },
+        "low": {
+          "$ref": "#/$defs/Counter"
+        },
+        "medium": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "scannedFiles": {
+          "$ref": "#/$defs/Counter"
+        },
+        "score": {
+          "$ref": "#/$defs/Finite"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "score",
+        "complete",
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "scannedFiles"
+      ],
+      "type": "object"
+    },
+    "AnalysisTrendPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "adjustedScore": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Finite"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseScore": {
+          "$ref": "#/$defs/Finite"
+        },
+        "computedAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "view": {
+          "$ref": "#/$defs/AnalysisViewBinding"
+        }
+      },
+      "required": [
+        "view",
+        "computedAtMs",
+        "baseScore"
+      ],
+      "type": "object"
+    },
+    "AnalysisViewBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/RepositorySnapshot"
+        },
+        "viewDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "viewId",
+        "viewDigest",
+        "snapshot"
       ],
       "type": "object"
     },
@@ -1484,6 +2604,10 @@
     "ClusterRecord": {
       "additionalProperties": false,
       "properties": {
+        "details": {
+          "$ref": "#/$defs/AnalysisClusterDetails",
+          "x-since": 3
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
@@ -4513,6 +5637,109 @@
         }
       ]
     },
+    "DatabaseLegacyRows": {
+      "additionalProperties": false,
+      "properties": {
+        "rowCount": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "rows": {
+          "$ref": "#/$defs/List_BoundedUntrustedJson_0_500"
+        }
+      },
+      "required": [
+        "rows",
+        "rowCount"
+      ],
+      "type": "object"
+    },
+    "DatabaseSensitiveColumnRule": {
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "boolean"
+        },
+        "catalog": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "column": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text0To65536"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "column",
+        "allow"
+      ],
+      "type": "object"
+    },
+    "DatabaseSensitiveRuleSet": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "rules": {
+          "$ref": "#/$defs/List_DatabaseSensitiveColumnRule_0_500"
+        }
+      },
+      "required": [
+        "revision",
+        "rules"
+      ],
+      "type": "object"
+    },
     "DbColumn": {
       "additionalProperties": false,
       "properties": {
@@ -4561,6 +5788,10 @@
         },
         "rows": {
           "$ref": "#/$defs/List_DbRow_0_500"
+        },
+        "schemaDigest": {
+          "$ref": "#/$defs/Digest",
+          "x-since": 9
         },
         "sourceRevision": {
           "anyOf": [
@@ -5522,39 +6753,11 @@
         "batchLimit": {
           "$ref": "#/$defs/Limit"
         },
-        "effort": {
-          "$ref": "#/$defs/EffortName",
-          "x-since": 9
-        },
         "enabled": {
           "type": "boolean"
         },
         "instructions": {
           "$ref": "#/$defs/ArtifactRef"
-        },
-        "maxElapsedMs": {
-          "$ref": "#/$defs/PositiveCounter",
-          "x-since": 9
-        },
-        "maxMicroUsd": {
-          "$ref": "#/$defs/Counter",
-          "x-since": 9
-        },
-        "maxTokens": {
-          "$ref": "#/$defs/PositiveCounter",
-          "x-since": 9
-        },
-        "maxTurns": {
-          "$ref": "#/$defs/PositiveCounter",
-          "x-since": 9
-        },
-        "minimumIntervalMs": {
-          "$ref": "#/$defs/Counter",
-          "x-since": 9
-        },
-        "modelId": {
-          "$ref": "#/$defs/Id",
-          "x-since": 9
         },
         "scheduleId": {
           "anyOf": [
@@ -5574,64 +6777,6 @@
       ],
       "type": "object"
     },
-    "DreamRevertConflict": {
-      "additionalProperties": false,
-      "properties": {
-        "actionId": {
-          "$ref": "#/$defs/Id"
-        },
-        "currentRevision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Revision"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "expectedRevision": {
-          "$ref": "#/$defs/Revision"
-        },
-        "targetId": {
-          "$ref": "#/$defs/Id"
-        }
-      },
-      "required": [
-        "actionId",
-        "targetId",
-        "expectedRevision"
-      ],
-      "type": "object"
-    },
-    "DreamRevertOutcome": {
-      "additionalProperties": false,
-      "properties": {
-        "applied": {
-          "$ref": "#/$defs/List_Id_0_500"
-        },
-        "conflicts": {
-          "$ref": "#/$defs/List_DreamRevertConflict_0_500"
-        },
-        "remaining": {
-          "$ref": "#/$defs/Counter"
-        },
-        "runId": {
-          "$ref": "#/$defs/Id"
-        }
-      },
-      "required": [
-        "runId",
-        "applied",
-        "conflicts",
-        "remaining"
-      ],
-      "type": "object"
-    },
-    "DreamRevertResult": {
-      "$ref": "#/$defs/DreamRevertOutcome",
-      "x-since": 9
-    },
     "DreamRun": {
       "additionalProperties": false,
       "properties": {
@@ -5644,10 +6789,6 @@
               "type": "null"
             }
           ]
-        },
-        "detail": {
-          "$ref": "#/$defs/DreamRunDetail",
-          "x-since": 9
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -5683,171 +6824,6 @@
         "proposalIds"
       ],
       "type": "object"
-    },
-    "DreamRunDetail": {
-      "additionalProperties": false,
-      "properties": {
-        "baseInstructionRevision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Revision"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "canContinue": {
-          "type": "boolean"
-        },
-        "connectionId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Id"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "continuedFrom": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Id"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "costMicroUsd": {
-          "$ref": "#/$defs/Counter"
-        },
-        "endedAtMs": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Counter"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "evidence": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ArtifactRef"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "initiator": {
-          "$ref": "#/$defs/Id"
-        },
-        "inputTokens": {
-          "$ref": "#/$defs/Counter"
-        },
-        "journalDigest": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Digest"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "modelId": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Id"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "outputTokens": {
-          "$ref": "#/$defs/Counter"
-        },
-        "projectInstructionRevision": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Revision"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reason": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To256"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "settingsRevision": {
-          "$ref": "#/$defs/Revision"
-        },
-        "startedAtMs": {
-          "$ref": "#/$defs/Counter"
-        },
-        "status": {
-          "$ref": "#/$defs/DreamRunStatus"
-        },
-        "trigger": {
-          "$ref": "#/$defs/DreamRunTrigger"
-        },
-        "usageUncertain": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "status",
-        "trigger",
-        "initiator",
-        "startedAtMs",
-        "settingsRevision",
-        "inputTokens",
-        "outputTokens",
-        "costMicroUsd",
-        "usageUncertain",
-        "canContinue"
-      ],
-      "type": "object"
-    },
-    "DreamRunStatus": {
-      "enum": [
-        "Queued",
-        "Running",
-        "Disabled",
-        "Busy",
-        "TooSoon",
-        "NoSignal",
-        "Blocked",
-        "BudgetExhausted",
-        "Partial",
-        "Failed",
-        "Cancelled",
-        "OutcomeUnknown",
-        "ScheduledFanout",
-        "Completed"
-      ],
-      "type": "string"
-    },
-    "DreamRunTrigger": {
-      "enum": [
-        "Manual",
-        "Scheduled",
-        "Resume"
-      ],
-      "type": "string"
     },
     "DreamSettingsRecord": {
       "additionalProperties": false,
@@ -7391,6 +8367,10 @@
             }
           ]
         },
+        "apiHost": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
         "authFlowId": {
           "anyOf": [
             {
@@ -7401,12 +8381,54 @@
             }
           ]
         },
+        "authorizationState": {
+          "$ref": "#/$defs/Text1To256",
+          "x-since": 3
+        },
+        "failure": {
+          "$ref": "#/$defs/Text1To4096",
+          "x-since": 3
+        },
+        "grantedScopes": {
+          "$ref": "#/$defs/List_Text1To256_0_128",
+          "x-since": 3
+        },
+        "permissionRevision": {
+          "$ref": "#/$defs/Revision",
+          "x-since": 3
+        },
         "state": {
           "$ref": "#/$defs/ItemState"
         }
       },
       "required": [
         "state"
+      ],
+      "type": "object"
+    },
+    "GithubIssueIntakePage": {
+      "additionalProperties": false,
+      "properties": {
+        "hasMore": {
+          "type": "boolean"
+        },
+        "items": {
+          "$ref": "#/$defs/List_GithubIssueIntakeView_0_500"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "items",
+        "hasMore"
       ],
       "type": "object"
     },
@@ -7420,6 +8442,100 @@
         "Closed"
       ],
       "type": "string"
+    },
+    "GithubIssueIntakeView": {
+      "additionalProperties": false,
+      "properties": {
+        "closeState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "commentState": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationState"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remoteIssueNumber": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "state": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        },
+        "workId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "remoteIssueNumber",
+        "sourceRevision",
+        "state",
+        "url"
+      ],
+      "type": "object"
+    },
+    "GithubIssueLink": {
+      "additionalProperties": false,
+      "properties": {
+        "remoteIssueId": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "remoteIssueNumber": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "remoteRepositoryId": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/Text1To4096"
+        },
+        "url": {
+          "$ref": "#/$defs/Url"
+        },
+        "workId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "workId",
+        "remoteRepositoryId",
+        "remoteIssueId",
+        "remoteIssueNumber",
+        "url",
+        "sourceRevision"
+      ],
+      "type": "object"
+    },
+    "GithubIssueLinkResult": {
+      "$ref": "#/$defs/GithubIssueLink",
+      "x-since": 3
     },
     "GithubIssueTracking": {
       "additionalProperties": false,
@@ -7518,6 +8634,88 @@
         "kind",
         "state",
         "revision"
+      ],
+      "type": "object"
+    },
+    "GithubPollEndpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Text1To4096"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastPolledAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextPollAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "state": {
+          "$ref": "#/$defs/Text1To256"
+        }
+      },
+      "required": [
+        "endpoint",
+        "state",
+        "nextPollAtMs"
+      ],
+      "type": "object"
+    },
+    "GithubPollStatusResult": {
+      "$ref": "#/$defs/GithubPollStatusView",
+      "x-since": 3
+    },
+    "GithubPollStatusView": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoints": {
+          "$ref": "#/$defs/List_GithubPollEndpoint_0_128"
+        },
+        "intake": {
+          "$ref": "#/$defs/GithubIssueIntakePage"
+        },
+        "intervalSeconds": {
+          "$ref": "#/$defs/PositiveCounter"
+        },
+        "lastAdmittedAtMs": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Counter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "nextAdmissionAtMs": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "repositoryId",
+        "endpoints",
+        "intake",
+        "intervalSeconds",
+        "nextAdmissionAtMs"
       ],
       "type": "object"
     },
@@ -10100,6 +11298,110 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_AnalysisClusterConnection_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterConnection"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterGraphEdge_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterGraphEdge"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterItem_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterItem"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterMember_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterMember"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisClusterRelationshipCount_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisClusterRelationshipCount"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisHealthSummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisHealthSummary"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisLinkEvidence_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisLinkEvidence"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisMetricItem_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisMetricItem"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisNarrative_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisNarrative"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisPhaseStatus_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisPhaseStatus"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisSecuritySummary_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisSecuritySummary"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisTrendPoint_0_128": {
+      "items": {
+        "$ref": "#/$defs/AnalysisTrendPoint"
+      },
+      "maxItems": 128,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_AnalysisViewBinding_0_500": {
+      "items": {
+        "$ref": "#/$defs/AnalysisViewBinding"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_ApprovalViewRecord_0_500": {
       "items": {
         "$ref": "#/$defs/ApprovalViewRecord"
@@ -10140,6 +11442,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_BoundedUntrustedJson_0_500": {
+      "items": {
+        "$ref": "#/$defs/BoundedUntrustedJson"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_BrowserObservation_0_500": {
       "items": {
         "$ref": "#/$defs/BrowserObservation"
@@ -10151,14 +11461,6 @@
     "List_BrowserSession_0_500": {
       "items": {
         "$ref": "#/$defs/BrowserSession"
-      },
-      "maxItems": 500,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_ClusterRecord_0_500": {
-      "items": {
-        "$ref": "#/$defs/ClusterRecord"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -10388,6 +11690,14 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_DatabaseSensitiveColumnRule_0_500": {
+      "items": {
+        "$ref": "#/$defs/DatabaseSensitiveColumnRule"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_DbColumn_0_128": {
       "items": {
         "$ref": "#/$defs/DbColumn"
@@ -10471,14 +11781,6 @@
     "List_DocumentRecord_0_500": {
       "items": {
         "$ref": "#/$defs/DocumentRecord"
-      },
-      "maxItems": 500,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_DreamRevertConflict_0_500": {
-      "items": {
-        "$ref": "#/$defs/DreamRevertConflict"
       },
       "maxItems": 500,
       "minItems": 0,
@@ -10596,11 +11898,27 @@
       "minItems": 0,
       "type": "array"
     },
+    "List_GithubIssueIntakeView_0_500": {
+      "items": {
+        "$ref": "#/$defs/GithubIssueIntakeView"
+      },
+      "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
     "List_GithubObservation_0_500": {
       "items": {
         "$ref": "#/$defs/GithubObservation"
       },
       "maxItems": 500,
+      "minItems": 0,
+      "type": "array"
+    },
+    "List_GithubPollEndpoint_0_128": {
+      "items": {
+        "$ref": "#/$defs/GithubPollEndpoint"
+      },
+      "maxItems": 128,
       "minItems": 0,
       "type": "array"
     },
@@ -10857,14 +12175,6 @@
         "$ref": "#/$defs/MetadataObjectKind"
       },
       "maxItems": 128,
-      "minItems": 0,
-      "type": "array"
-    },
-    "List_MetricRecord_0_500": {
-      "items": {
-        "$ref": "#/$defs/MetricRecord"
-      },
-      "maxItems": 500,
       "minItems": 0,
       "type": "array"
     },
@@ -12811,6 +14121,34 @@
       ],
       "type": "string"
     },
+    "PackageContent": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "contentKind": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "contributionId": {
+          "$ref": "#/$defs/Text1To256"
+        },
+        "manifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "packageId": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "packageId",
+        "contributionId",
+        "contentKind",
+        "manifestDigest",
+        "artifact"
+      ],
+      "type": "object"
+    },
     "PackageInvocation": {
       "additionalProperties": false,
       "properties": {
@@ -13183,58 +14521,6 @@
         },
         "items": {
           "$ref": "#/$defs/List_IndexRunRecord_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page13": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_MetricRecord_0_500"
-        },
-        "nextCursor": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Text1To4096"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "items",
-        "hasMore"
-      ],
-      "type": "object"
-    },
-    "Page14": {
-      "additionalProperties": false,
-      "properties": {
-        "hasMore": {
-          "type": "boolean"
-        },
-        "items": {
-          "$ref": "#/$defs/List_ClusterRecord_0_500"
         },
         "nextCursor": {
           "anyOf": [
@@ -20831,6 +22117,38 @@
       ],
       "type": "object"
     },
+    "WatchGithubTarget": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "repositoryId",
+            "workflowRunId"
+          ]
+        },
+        {
+          "required": [
+            "repositoryId",
+            "pullRequestNumber"
+          ]
+        }
+      ],
+      "properties": {
+        "pullRequestNumber": {
+          "$ref": "#/$defs/Counter"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/Id"
+        },
+        "workflowRunId": {
+          "$ref": "#/$defs/Counter"
+        }
+      },
+      "required": [
+        "repositoryId"
+      ],
+      "type": "object"
+    },
     "WatchOutcome": {
       "additionalProperties": false,
       "properties": {
@@ -20984,13 +22302,22 @@
       "type": "object"
     },
     "WatchSourceKind": {
-      "enum": [
-        "Process",
-        "Probe",
-        "Timer",
-        "File"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "Process",
+            "Probe",
+            "Timer",
+            "File"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "GitHub",
+          "type": "string",
+          "x-since": 9
+        }
+      ]
     },
     "WatcherPage": {
       "additionalProperties": false,
@@ -21062,6 +22389,10 @@
               "type": "null"
             }
           ]
+        },
+        "github": {
+          "$ref": "#/$defs/WatchGithubTarget",
+          "x-since": 9
         },
         "id": {
           "$ref": "#/$defs/Id"
@@ -22125,7 +23456,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/GitLink"
+          "$ref": "#/$defs/GithubIssueLinkResult"
         }
       },
       "required": [
@@ -22142,7 +23473,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/GitLink"
+          "$ref": "#/$defs/GithubIssueLinkResult"
         }
       },
       "required": [
@@ -22946,7 +24277,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -22980,7 +24311,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page14"
+          "$ref": "#/$defs/AnalysisClusterPageResult"
         }
       },
       "required": [
@@ -23031,7 +24362,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -23048,7 +24379,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -23065,7 +24396,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -23082,7 +24413,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -23099,7 +24430,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page13"
+          "$ref": "#/$defs/AnalysisMetricPageResult"
         }
       },
       "required": [
@@ -23396,6 +24727,60 @@
         "value"
       ],
       "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "database.mysql_readonly_query",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/DatabaseLegacyRows"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 9
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "database.sensitive_columns",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/DatabaseSensitiveRuleSet"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 9
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "database.edit_sensitive_column_rules",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/DatabaseSensitiveRuleSet"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 9
     },
     {
       "additionalProperties": false,
@@ -23915,7 +25300,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/DreamRevertResult"
+          "$ref": "#/$defs/KnowledgeWriteReceipt"
         }
       },
       "required": [
@@ -24817,7 +26202,7 @@
           "type": "string"
         },
         "value": {
-          "$ref": "#/$defs/Page28"
+          "$ref": "#/$defs/GithubPollStatusResult"
         }
       },
       "required": [
@@ -26189,6 +27574,42 @@
       ],
       "type": "object",
       "x-since": 8
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "addons.read_content",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/PackageContent"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 9
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "addons.run_workflow",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/PackageInvocation"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object",
+      "x-since": 9
     },
     {
       "additionalProperties": false,

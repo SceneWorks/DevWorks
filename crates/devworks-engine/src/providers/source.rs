@@ -1,4 +1,5 @@
 //! One transport owns one accounting attempt; credentials are obtained only at actual dispatch.
+use crate::package_host::codec::PackageCodec;
 use devworks_core::{
     ports::{
         http::HttpRequest,
@@ -31,6 +32,7 @@ pub struct NativeProviderSource {
     credential_revision: i64,
     stream: Option<Box<dyn HttpStream>>,
     decoder: Decoder,
+    codec: Option<PackageCodec>,
     sse: Option<devworks_core::providers::sse::SseDecoder>,
     aggregate: Vec<u8>,
     pending: VecDeque<InferenceFrame>,
@@ -63,6 +65,7 @@ impl NativeProviderSource {
             credential_revision,
             stream: None,
             decoder,
+            codec: None,
             sse: None,
             aggregate: Vec::new(),
             pending: VecDeque::new(),
@@ -76,6 +79,10 @@ impl NativeProviderSource {
             start_failure: AttemptEnd::Failed,
             send_gate: None,
         }
+    }
+    pub(crate) fn with_package_codec(mut self, codec: Option<PackageCodec>) -> Self {
+        self.codec = codec;
+        self
     }
     pub fn with_send_gate(
         mut self,
@@ -318,6 +325,9 @@ impl OwnedInferenceSource for NativeProviderSource {
         if cancellation.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
+        if let Some(codec) = &self.codec {
+            codec.current()?;
+        }
         if let Some(gate) = &self.send_gate {
             gate()?;
         }
@@ -455,7 +465,27 @@ impl OwnedInferenceSource for NativeProviderSource {
                 }
                 Ok(0) => {
                     self.ended = true;
-                    let frames = if let Some(sse) = self.sse.as_mut() {
+                    let frames = if self.status < 300
+                        && let Some(codec) = self.codec.as_mut()
+                    {
+                        if self.sse.as_mut().is_some_and(|sse| {
+                            sse.finish() != Ok(devworks_core::providers::sse::End::Complete)
+                        }) {
+                            self.decoder.finish_interrupted(
+                                DecodedOutcome::Incomplete,
+                                "unterminated codec stream",
+                            )
+                        } else {
+                            let raw = std::str::from_utf8(&self.aggregate)
+                                .map_err(|_| invalid("the codec response is not UTF-8"))?;
+                            codec.decode(
+                                &self.prepared,
+                                serde_json::json!(raw),
+                                true,
+                                cancellation,
+                            )?
+                        }
+                    } else if let Some(sse) = self.sse.as_mut() {
                         if sse.finish() == Ok(devworks_core::providers::sse::End::Complete) {
                             self.decoder.finish()
                         } else {
@@ -517,11 +547,29 @@ impl OwnedInferenceSource for NativeProviderSource {
                     if let Some(sse) = self.sse.as_mut() {
                         let mut frames = Vec::new();
                         let decoder = &mut self.decoder;
+                        let package_decodes = self.codec.is_some();
+                        let mut codec_frames = Vec::new();
                         let parsed = sse.push_events(&bytes[..n], |event| {
-                            frames.extend(
-                                decoder.consume_data_event(event.event.as_deref(), &event.data),
-                            );
+                            if package_decodes {
+                                codec_frames.push(
+                                    serde_json::json!({"event":event.event,"data":event.data}),
+                                );
+                            } else {
+                                frames.extend(
+                                    decoder.consume_data_event(event.event.as_deref(), &event.data),
+                                );
+                            }
                         });
+                        if let Some(codec) = self.codec.as_mut()
+                            && !codec_frames.is_empty()
+                        {
+                            frames.extend(codec.decode(
+                                &self.prepared,
+                                serde_json::json!(codec_frames),
+                                false,
+                                cancellation,
+                            )?);
+                        }
                         self.frames(frames)?;
                         if parsed.is_err() {
                             self.interrupted(DecodedOutcome::Incomplete, "malformed event stream")?;

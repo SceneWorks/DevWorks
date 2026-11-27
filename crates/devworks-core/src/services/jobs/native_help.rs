@@ -84,6 +84,11 @@ pub(super) fn cancel_accepted(
     {
         crate::services::schemas::scheduled::cancel_accepted(tx, run)?;
     }
+    if matches!(definition,JobDefinition::Native{capability_id:ref id,..} if id==&super::capability_id(crate::services::packages::workflow::OPERATION))
+        && let Some(operation) = &run.inner_operation_id
+    {
+        crate::services::packages::workflow::request_cancel(tx, operation)?;
+    }
     Ok(())
 }
 

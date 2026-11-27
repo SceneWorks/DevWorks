@@ -63,6 +63,9 @@ pub struct McpSampling {
 #[derive(Clone)]
 enum Origin {
     Mcp,
+    Analysis {
+        request: Id,
+    },
     /// A package's `broker.call` under its action key.
     Package {
         action_key: String,
@@ -104,11 +107,39 @@ impl McpSampling {
         }
     }
 
+    pub(crate) fn for_analysis(
+        store: Arc<dyn ApplicationStore>,
+        artifacts: Arc<ArtifactService>,
+        providers: Arc<NativeProviders>,
+        router: Arc<InferenceRouter>,
+        request: Id,
+    ) -> Self {
+        Self {
+            origin: Origin::Analysis { request },
+            ..Self::new(store, artifacts, providers, router)
+        }
+    }
+
+    pub(crate) async fn produce_analysis(
+        &self,
+        grant: &SamplingGrant,
+        call: &SamplingCall,
+        cancellation: Cancellation,
+    ) -> Result<(), SamplingRefusal> {
+        let invocation = self.plan(grant, call)?;
+        self.providers
+            .produce_cancellable(invocation, Some(cancellation))
+            .await
+            .map_err(unavailable("analysis inference could not be observed"))?;
+        Ok(())
+    }
+
     /// This request's identity: an MCP sample's by its ordinal, a package call's by its action
     /// key (see [`Self::request_id`]).
     pub fn identity(&self, grant: &SamplingGrant, ordinal: u8) -> Id {
         match &self.origin {
             Origin::Mcp => Self::request_id(grant, ordinal),
+            Origin::Analysis { request } => request.clone(),
             Origin::Package { action_key } => {
                 let digest = sha256_hex(
                     format!(
@@ -133,6 +164,9 @@ impl McpSampling {
         match self.origin {
             Origin::Mcp => INSTRUCTIONS,
             Origin::Package { .. } => PACKAGE_INSTRUCTIONS,
+            Origin::Analysis { .. } => {
+                "Return structured evidence only. This request has no tools."
+            }
         }
     }
 
@@ -378,10 +412,12 @@ impl McpSampling {
             },
             attribution: match (ctx.project_id(), ctx.root_id()) {
                 // The invocation itself owns the request of a person or an event handler.
-                _ if Self::host_run(ctx) => Attribution::Service {
-                    operation_id: grant.operation_id.clone(),
-                    project_id: ctx.project_id().cloned(),
-                },
+                _ if Self::host_run(ctx) || matches!(self.origin, Origin::Analysis { .. }) => {
+                    Attribution::Service {
+                        operation_id: grant.operation_id.clone(),
+                        project_id: ctx.project_id().cloned(),
+                    }
+                }
                 (Some(project_id), Some(root_id)) if route.feature => Attribution::Feature {
                     project_id: project_id.clone(),
                     root_id: root_id.clone(),
@@ -459,13 +495,19 @@ impl McpSampling {
             category: match self.origin {
                 Origin::Mcp => ReportCategory::Mcp,
                 Origin::Package { .. } => ReportCategory::Other,
+                Origin::Analysis { .. } => ReportCategory::RepositoryAnalysis,
             },
             attempt,
             request,
             nested: Some(NestedToolInference {
                 tool_operation: grant.operation_id.clone(),
-                // A person's or event handler's invocation has no agent tool call.
-                call: (!Self::host_run(ctx)).then(|| grant.call.clone()),
+                // Repository analysis has its own durable subject instead of a nested tool call.
+                call: (!Self::host_run(ctx) && !matches!(self.origin, Origin::Analysis { .. }))
+                    .then(|| grant.call.clone()),
+                analysis_request: match &self.origin {
+                    Origin::Analysis { request } => Some(request.clone()),
+                    _ => None,
+                },
             }),
         })
     }

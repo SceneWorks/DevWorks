@@ -49,7 +49,7 @@ pub fn authorize_source(b: &dyn Backend, version: ArtifactRef) -> Vec<u8> {
         b,
         version,
         None,
-        Negotiate::pinned(10, "Exact source authority only"),
+        Negotiate::pinned(25, "Exact source authority only"),
     )
 }
 
@@ -80,9 +80,11 @@ pub fn import(
     save_frame: &[u8],
 ) -> Vec<u8> {
     // Keep this receipt identical if the upload journal is recovered after import committed.
-    let Ok(mut envelope) = serde_json::from_slice::<serde_json::Value>(&frame::with(
+    let digest = devworks_core::fingerprint::sha256_hex(save_frame);
+    frame::with_request_key(
         b,
-        Negotiate::pinned(10, "Stable import replay after upload"),
+        Negotiate::pinned(25, "Stable import replay after upload"),
+        &format!("document-import-{digest}"),
         || {
             let (replace_document_id, expected_revision) = plan.replacement.unzip();
             Some(In::Documents(ops::Input::Import(ops::ImportInput {
@@ -93,12 +95,7 @@ pub fn import(
                 expected_revision,
             })))
         },
-    )) else {
-        return Vec::new();
-    };
-    let digest = devworks_core::fingerprint::sha256_hex(save_frame);
-    envelope["requestKey"] = serde_json::json!(format!("document-import-{digest}"));
-    serde_json::to_vec(&envelope).expect("document import envelope")
+    )
 }
 
 pub struct Search {

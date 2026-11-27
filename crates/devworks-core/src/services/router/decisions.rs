@@ -274,7 +274,7 @@ impl DecisionService {
         verified: Vec<Candidate>,
         input_digest: &str,
     ) -> Result<Vec<Candidate>, StorageError> {
-        use crate::authority::service::fences_hold;
+        use crate::services::fences::fences_hold;
         let current = tx
             .operations()
             .operation(&operation.id)?

@@ -1,5 +1,6 @@
 //! Host-only binding of an invocation to durable, currently owned Git work.
 use crate::context::{BoundWorktree, InvocationContext, PrincipalKind};
+pub use crate::kernel::checkout::{AssignmentCheckout, assignment_worktree};
 use crate::ports::storage::{ApplicationStore, ReadOptions, StorageError, read_snapshot};
 use crate::protocol::Id;
 use crate::services::work::model::WorkBrief;

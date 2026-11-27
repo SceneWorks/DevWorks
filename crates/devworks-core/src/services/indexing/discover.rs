@@ -17,7 +17,7 @@
 use super::paths::{location_identity, native_location};
 use super::{IndexEnv, section_config};
 use crate::context::InvocationContext;
-use crate::fingerprint::sha256_hex;
+pub use crate::kernel::checkout::worktree_id;
 use crate::ports::IdKind;
 use crate::ports::indexing::{EntryKind, GitMarker};
 use crate::ports::storage::*;
@@ -119,12 +119,6 @@ pub fn groups_on(root: &str, location: &str, windows: bool) -> Vec<String> {
         .map(str::to_owned)
         .collect();
     parts[..parts.len().saturating_sub(1)].to_vec()
-}
-
-/// The stable worktree ID of a checkout path.
-pub fn worktree_id(repository: &Id, path: &str) -> Id {
-    let d = sha256_hex(format!("{}\u{0}{path}", repository.as_str()).as_bytes());
-    Id::new(format!("wt-{}", &d[..32])).expect("valid")
 }
 
 /// The observed identity of one checkout.

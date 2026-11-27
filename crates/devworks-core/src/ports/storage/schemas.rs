@@ -67,7 +67,30 @@ pub struct StoredSchemaCertificate {
     pub reference: crate::protocol::provider::ArtifactRef,
     pub pem: Vec<u8>,
 }
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensitivePolicy {
+    pub revision: i64,
+    pub rules: Vec<SensitiveRule>,
+    /// The revision-1 surface replaces only these source-local column IDs.
+    pub legacy_columns: Vec<Id>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SensitiveRule {
+    pub id: Id,
+    pub catalog: Option<String>,
+    pub schema: Option<String>,
+    pub table: Option<String>,
+    pub column: String,
+    pub allow: bool,
+    pub reason: Option<String>,
+}
+
 pub trait SchemaRead {
+    fn mysql_readonly_sources(&self) -> Result<Vec<StoredSchemaSource>, StorageError>;
+    fn sensitive_policy(&self, source: Option<&Id>) -> Result<SensitivePolicy, StorageError>;
     fn schema_certificate(
         &self,
         connection: &Id,
@@ -114,6 +137,12 @@ pub trait SchemaRead {
     }
 }
 pub trait SchemaRepository: SchemaRead {
+    fn set_sensitive_policy(
+        &mut self,
+        source: Option<&Id>,
+        expected: i64,
+        policy: &SensitivePolicy,
+    ) -> Result<(), StorageError>;
     fn set_schema_certificate(
         &mut self,
         connection: &Id,

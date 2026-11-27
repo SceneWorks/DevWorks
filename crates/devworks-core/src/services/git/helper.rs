@@ -352,7 +352,7 @@ impl SupervisedHelpers {
             let text: String = Redactor::new()
                 .redact_text(text.trim())
                 .chars()
-                .take(2048)
+                .take(STDERR_BOUND)
                 .collect();
             return Err(HelperFault::Failed {
                 code: exit,

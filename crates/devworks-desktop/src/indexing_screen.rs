@@ -26,7 +26,7 @@ pub enum StatusState {
 }
 
 /// The section configuration being edited, against the revision it was read at.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SourcesForm {
     pub project: Option<String>,
     pub revision: i64,
@@ -43,6 +43,9 @@ pub struct IndexingScreen {
     /// The project the runs were read for (`None`: every project).
     pub runs_project: Option<Option<String>>,
     pub sources: Option<SourcesForm>,
+    /// The form as it was when a re-read that keeps edits was submitted: its reply replaces
+    /// the form only if nothing was typed since. `None`: the latest read replaces the form.
+    pub sources_at_read: Option<Option<SourcesForm>>,
     pub sources_error: Option<String>,
     pub message: Option<(Tone, String)>,
     /// The last discovery's outcome.

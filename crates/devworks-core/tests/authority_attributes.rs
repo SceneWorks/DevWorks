@@ -2,7 +2,7 @@
 //! `tools/contracts-eval/domain-spec.json` (`operationAuthority`). The lists below are a frozen
 //! copy of the operation-name lists `authority/policy.rs` and `authority/service.rs` held before
 //! the rules moved onto the descriptor; they prove every existing operation keeps its behaviour,
-//! except the recorded native-execution decisions.
+//! except the recorded native-execution decisions and new authority rules.
 mod common;
 
 use devworks_core::registry::{self, AssignmentScope, Mode, OperationDescriptor};
@@ -100,10 +100,12 @@ enum InputCheck {
     Assignment,
 }
 fn old_input_check(op: &str) -> InputCheck {
-    if matches!(
-        family(op),
-        "tasks" | "features" | "issues" | "next_work" | "runs" | "history" | "indexing"
-    ) {
+    if op == "addons.run_workflow"
+        || matches!(
+            family(op),
+            "tasks" | "features" | "issues" | "next_work" | "runs" | "history" | "indexing"
+        )
+    {
         InputCheck::Root
     } else if matches!(family(op), "artifacts" | "jobs" | "approvals")
         || matches!(
@@ -140,8 +142,9 @@ fn command_only(d: &OperationDescriptor) -> bool {
 }
 
 /// The recorded native-execution decisions that changed behaviour (each now needs a reviewed
-/// native grant under Project scope). `git.pull_request` was reviewed and stays non-native.
-const NEWLY_NATIVE: [&str; 7] = [
+/// native grant under Project scope). DW-382 added pull-request creation to this set.
+const NEWLY_NATIVE: [&str; 9] = [
+    "git.pull_request",
     "git.integrate",
     "git.cleanup",
     "desktop.input",
@@ -149,7 +152,11 @@ const NEWLY_NATIVE: [&str; 7] = [
     "database.execute_write",
     "database.apply_migration",
     "database.direct_schema_change",
+    "addons.run_workflow",
 ];
+
+/// DW-37 gives only a human administrator control of database sensitive-column policy.
+const HUMAN_DATABASE_POLICY: &str = "database.edit_sensitive_column_rules";
 
 #[test]
 fn descriptor_attributes_reproduce_the_former_name_lists() {
@@ -164,7 +171,7 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         );
         assert_eq!(
             d.human_only,
-            OLD_HUMAN_ONLY.contains(&op),
+            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY,
             "{op} human only"
         );
         let scope = d.assignment_scope;
@@ -180,14 +187,14 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         );
         assert_eq!(
             scope == AssignmentScope::Coordinator,
-            OLD_WORKER_DENIED.contains(&op),
+            OLD_WORKER_DENIED.contains(&op) || op == "addons.run_workflow",
             "{op} coordinator only"
         );
         // The administration rule only ever refused commands.
         if d.binding(Mode::Command).is_some() {
             assert_eq!(
                 scope == AssignmentScope::Administration,
-                old_administration(op),
+                old_administration(op) || op == HUMAN_DATABASE_POLICY,
                 "{op} administration"
             );
         } else {
@@ -208,7 +215,6 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
     for op in NEWLY_NATIVE {
         assert!(registry::find(op).unwrap().native_execution, "{op}");
     }
-    assert!(!registry::find("git.pull_request").unwrap().native_execution);
 }
 
 #[test]

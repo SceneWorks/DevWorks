@@ -84,10 +84,6 @@ pub struct Pending {
     pub owner: &'static str,
 }
 
-const fn pending(what: &'static str, owner: &'static str) -> Option<Pending> {
-    Some(Pending { what, owner })
-}
-
 pub static SCREENS: [Screen; 21] = [
     Screen {
         route: Route::Chat,
@@ -199,12 +195,9 @@ pub static SCREENS: [Screen; 21] = [
         subviews: &["Active", "Finished"],
         inner_sidebar: None,
         summary_strip: &[],
-        pending: pending(
-            "assignments, agent transcripts and run controls",
-            "DW-15, DW-9",
-        ),
+        pending: None,
         link: Some(("Resource reservations", Route::Resources)),
-        owner: ScreenId::Placeholder,
+        owner: ScreenId::Agents,
     },
     Screen {
         route: Route::Artifacts,
@@ -242,7 +235,7 @@ pub static SCREENS: [Screen; 21] = [
         group: NavGroup::Intelligence,
         help_topic: "dreaming",
         subviews: &[],
-        inner_sidebar: None,
+        inner_sidebar: Some("Run history"),
         summary_strip: &[],
         pending: None,
         link: None,
@@ -266,10 +259,10 @@ pub static SCREENS: [Screen; 21] = [
         route: Route::Jobs,
         id: "jobs",
         title: "Scheduled jobs",
-        summary: "Durable schedules and manual jobs.",
+        summary: "Durable schedules, manual jobs and background deliveries.",
         group: NavGroup::Bottom,
         help_topic: "jobs",
-        subviews: &["Schedules", "Runs"],
+        subviews: &["Schedules", "Runs", "Deliveries"],
         inner_sidebar: None,
         summary_strip: &[],
         pending: None,

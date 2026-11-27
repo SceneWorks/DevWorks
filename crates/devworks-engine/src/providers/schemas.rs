@@ -1,4 +1,5 @@
 //! The current selected-operation and installed-package registry, never caller schema bytes.
+use crate::analysis_tools::{self, Alias};
 use devworks_core::{
     authority::policy::{self, Verdict},
     context::InvocationContext,
@@ -124,11 +125,76 @@ impl RegisteredSchemas {
         &self,
         ctx: &InvocationContext,
     ) -> Result<Vec<ToolSchema>, StorageError> {
+        let selected = self.selected_builtin_bindings(ctx, registry::all().iter(), None)?;
+        let mut tools = selected
+            .into_iter()
+            .map(|(name, mode, revision)| {
+                let mode_name = match mode {
+                    Mode::Query => "query",
+                    Mode::Command => "command",
+                };
+                let wire_name = if name == "database.mysql_readonly_query" {
+                    "mysql_readonly_query".into()
+                } else {
+                    format!("{}_{}", name.replace('.', "_"), mode_name)
+                };
+                if wire_name.len() > 128 {
+                    return Err(StorageError::InvalidRecord(
+                        "built-in alias too long".into(),
+                    ));
+                }
+                let mut tool = self
+                    .builtin(name, mode, revision, &wire_name)
+                    .map_err(|error| {
+                        StorageError::InvalidRecord(format!("built-in schema: {error:?}"))
+                    })?;
+                tool.capability_id =
+                    QualifiedId::try_from(format!("{}/{}", mode_namespace(mode), name))
+                        .map_err(|error| StorageError::InvalidRecord(error.into()))?;
+                Ok(tool)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let aliases = analysis_tools::selected(&tools)
+            .map(|alias| {
+                alias
+                    .tool()
+                    .map_err(|_| StorageError::InvalidRecord("invalid analysis tool schema".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        tools.extend(aliases);
+        tools.sort_by(|a, b| {
+            a.capability_id
+                .as_str()
+                .cmp(b.capability_id.as_str())
+                .then_with(|| a.wire_name.cmp(&b.wire_name))
+        });
+        if tools
+            .iter()
+            .map(|tool| tool.wire_name.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != tools.len()
+        {
+            return Err(StorageError::InvalidRecord(
+                "ambiguous built-in alias".into(),
+            ));
+        }
+        Ok(tools)
+    }
+
+    fn selected_builtin_bindings(
+        &self,
+        ctx: &InvocationContext,
+        descriptors: impl Iterator<Item = &'static registry::OperationDescriptor>,
+        required_mode: Option<Mode>,
+    ) -> Result<Vec<(&'static str, Mode, SchemaRevision)>, StorageError> {
         if ctx.principal_kind() != devworks_core::context::PrincipalKind::Agent {
             return Err(StorageError::ScopeDenied);
         }
-        let selected = read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
+        read_snapshot(self.store.as_ref(), &ReadOptions::default(), |snapshot| {
             current_context(snapshot, ctx)?;
+            let worktree = assignment_worktree(snapshot, ctx)?;
+            let ctx = worktree.as_ref().unwrap_or(ctx);
             let principal = snapshot.authority().principal(ctx.principal())?;
             let plan_reviewer = principal.as_ref().and_then(|p| p.role)
                 == Some(devworks_core::settings::catalog::AgentRole::PlanReviewer);
@@ -139,15 +205,13 @@ impl RegisteredSchemas {
             };
             let effective = policy::resolve_policy(snapshot.configuration(), ctx.project_id())?;
             let mut selected = Vec::new();
-            for descriptor in registry::all() {
+            for descriptor in descriptors {
                 if plan_reviewer && !(source_enabled && descriptor.name == "code.source") {
                     continue;
                 }
-                if ctx.assignment_id().is_some() && descriptor.name.starts_with("indexing.") {
-                    continue;
-                }
                 for binding in descriptor.modes {
-                    if self.registered(descriptor.name, binding.mode)
+                    if required_mode.is_none_or(|mode| mode == binding.mode)
+                        && self.registered(descriptor.name, binding.mode)
                         && matches!(
                             policy::registered_tool_visibility(
                                 ctx,
@@ -168,49 +232,7 @@ impl RegisteredSchemas {
                 }
             }
             Ok(selected)
-        })?;
-        let mut tools = selected
-            .into_iter()
-            .map(|(name, mode, revision)| {
-                let mode_name = match mode {
-                    Mode::Query => "query",
-                    Mode::Command => "command",
-                };
-                let wire_name = format!("{}_{}", name.replace('.', "_"), mode_name);
-                if wire_name.len() > 128 {
-                    return Err(StorageError::InvalidRecord(
-                        "built-in alias too long".into(),
-                    ));
-                }
-                let mut tool = self
-                    .builtin(name, mode, revision, &wire_name)
-                    .map_err(|error| {
-                        StorageError::InvalidRecord(format!("built-in schema: {error:?}"))
-                    })?;
-                tool.capability_id =
-                    QualifiedId::try_from(format!("{}/{}", mode_namespace(mode), name))
-                        .map_err(|error| StorageError::InvalidRecord(error.into()))?;
-                Ok(tool)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        tools.sort_by(|a, b| {
-            a.capability_id
-                .as_str()
-                .cmp(b.capability_id.as_str())
-                .then_with(|| a.wire_name.cmp(&b.wire_name))
-        });
-        if tools
-            .iter()
-            .map(|tool| tool.wire_name.as_str())
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-            != tools.len()
-        {
-            return Err(StorageError::InvalidRecord(
-                "ambiguous built-in alias".into(),
-            ));
-        }
-        Ok(tools)
+        })
     }
 
     pub fn selected_mcp_tools(
@@ -384,6 +406,31 @@ impl RegisteredSchemas {
         }
         None
     }
+    pub(crate) fn selected_analysis_alias(
+        &self,
+        ctx: &InvocationContext,
+        alias: Alias,
+        reference: &SchemaRef,
+    ) -> Result<ToolSchema, ProviderError> {
+        let expected = alias.tool()?;
+        if !equal(&expected.input_schema, reference) {
+            return Err(ProviderError::MaterialUnavailable);
+        }
+        // Use the same selection policy as the inventory, checking only this alias's query
+        // dependencies. Resolving or rechecking one alias must not rebuild unrelated schemas.
+        let operations = alias.operations();
+        let selected = self
+            .selected_builtin_bindings(
+                ctx,
+                operations.iter().filter_map(|name| registry::find(name)),
+                Some(Mode::Query),
+            )
+            .map_err(|_| ProviderError::MaterialUnavailable)?;
+        if selected.len() != operations.len() {
+            return Err(ProviderError::MaterialUnavailable);
+        }
+        Ok(expected)
+    }
     fn registered(&self, op: &str, mode: Mode) -> bool {
         match mode {
             Mode::Query => self.cases.has_query(op),
@@ -421,6 +468,12 @@ impl RegisteredSchemas {
                 if equal(&expected, reference) {
                     read_snapshot(self.store.as_ref(), &ReadOptions::default(), |s| {
                         current_context(s, ctx)?;
+                        let worktree = if d.family == "indexing" {
+                            assignment_worktree(s, ctx)?
+                        } else {
+                            None
+                        };
+                        let ctx = worktree.as_ref().unwrap_or(ctx);
                         let principal = s.authority().principal(ctx.principal())?;
                         let effective =
                             policy::resolve_policy(s.configuration(), ctx.project_id())?;
@@ -643,6 +696,24 @@ fn builtin_schema_binding(schema_id: &str) -> Option<(&str, Mode)> {
 fn equal(a: &SchemaRef, b: &SchemaRef) -> bool {
     a.schema_id.as_str() == b.schema_id.as_str() && a.revision == b.revision && a.sha256 == b.sha256
 }
+fn assignment_worktree(
+    read: &dyn ReadSnapshot,
+    ctx: &InvocationContext,
+) -> Result<Option<InvocationContext>, StorageError> {
+    use devworks_core::services::git::context::{AssignmentCheckout, assignment_worktree};
+    match assignment_worktree(
+        read,
+        ctx,
+        AssignmentCheckout {
+            any_for_visibility: true,
+            ..Default::default()
+        },
+    ) {
+        Err(StorageError::ScopeDenied) => Ok(None),
+        result => result,
+    }
+}
+
 fn current_context(s: &dyn ReadSnapshot, ctx: &InvocationContext) -> Result<(), StorageError> {
     if s.stamp().store_id != *ctx.store_id()
         || s.stamp().restore_epoch != ctx.restore_epoch().get()
@@ -688,6 +759,10 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         reference: &SchemaRef,
     ) -> Result<Value, ProviderError> {
+        if let Some(alias) = Alias::from_schema(reference.schema_id.as_str()) {
+            self.selected_analysis_alias(ctx, alias, reference)?;
+            return Ok(alias.document());
+        }
         let decision = devworks_core::providers::systemone::result_reference();
         if reference.schema_id == decision.schema_id {
             return if equal(reference, &decision) {
@@ -714,6 +789,20 @@ impl SchemaDocuments for RegisteredSchemas {
         ctx: &InvocationContext,
         alias: &ToolSchema,
     ) -> Result<PreparedTool, ProviderError> {
+        if let Some(analysis) = Alias::from_capability(alias.capability_id.as_str()) {
+            let expected = self.selected_analysis_alias(ctx, analysis, &alias.input_schema)?;
+            if expected.wire_name != alias.wire_name {
+                return Err(ProviderError::MaterialUnavailable);
+            }
+            let schema = analysis.document();
+            return Ok(PreparedTool {
+                wire_name: alias.wire_name.clone(),
+                capability_id: alias.capability_id.clone(),
+                input_schema: alias.input_schema.clone(),
+                description: schema["description"].as_str().map(str::to_owned),
+                schema,
+            });
+        }
         if alias.capability_id.as_str().starts_with("mcp/") {
             let material = self
                 .selected_mcp_materials(ctx)?

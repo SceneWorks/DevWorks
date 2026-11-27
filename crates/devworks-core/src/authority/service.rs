@@ -6,8 +6,8 @@ use super::policy::{
 };
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::operations::{
-    OperationInput, approvals, artifacts, browser, features, git, history, issues, knowledge,
-    next_work, runs, sessions, tasks,
+    OperationInput, addons, approvals, artifacts, browser, features, git, history, issues,
+    knowledge, next_work, runs, sessions, tasks,
 };
 use crate::ports::storage::{
     ApplicationStore, AuthorityGrant, AuthorityRead, ConfigurationRead, GrantKind, GrantRecord,
@@ -544,6 +544,9 @@ fn agent_assignment_scope(
                 history::Input::CommandReceipt(_) => true,
             }
         }
+        OperationInput::Addons(addons::Input::RunWorkflow(input)) => {
+            coordinator && readable_artifact(&input.input.artifact_id, &input.input.version_id)?
+        }
         // Jobs have project scope and no root or assignment owner. Active assignments cannot
         // use project-wide scheduler operations through their ambient agent authority.
         OperationInput::Jobs(_) => false,
@@ -750,7 +753,41 @@ fn agent_assignment_scope(
                 _ => false,
             },
         },
-        OperationInput::Indexing(_) => false,
+        OperationInput::Indexing(input) => {
+            use crate::kernel::checkout;
+            use crate::operations::indexing::Input;
+            use crate::protocol::data::IndexCommand;
+            match input {
+                Input::RefreshOverlay(input) => match &input.command {
+                    IndexCommand::RefreshOverlay {
+                        repository_id,
+                        worktree_id,
+                        git_ref,
+                        ..
+                    } => checkout::refresh_target(
+                        s.git(),
+                        ctx,
+                        repository_id,
+                        worktree_id.as_ref(),
+                        git_ref.is_some(),
+                    )
+                    .map_err(|_| DenialReason::AuthorityUnavailable)?
+                    .is_some(),
+                    _ => false,
+                },
+                Input::Status(input) => match checkout::status_target(
+                    s,
+                    ctx,
+                    input.repository_id.as_ref(),
+                    input.overlay_id.as_ref(),
+                ) {
+                    Ok(_) => true,
+                    Err(StorageError::ScopeDenied) => false,
+                    Err(_) => return Err(DenialReason::AuthorityUnavailable),
+                },
+                _ => false,
+            }
+        }
         // An operation whose assignment scope needs its target checked, but that has no check
         // here, is outside every assignment.
         _ => false,
@@ -802,6 +839,9 @@ pub(crate) fn decide_in(
     {
         return Err(deny(DenialReason::UnregisteredPrincipal));
     }
+    let selected = crate::authority::database::authority_scope(ctx, request.input)
+        .map_err(|_| deny(DenialReason::OutOfProjectScope))?;
+    let ctx = selected.as_ref().unwrap_or(ctx);
     let binding = bound(s, ctx).map_err(unavailable)?;
     if binding.as_ref().and_then(|binding| binding.role)
         == Some(crate::settings::catalog::AgentRole::PlanReviewer)
@@ -850,6 +890,18 @@ pub(crate) fn decide_in(
     }
     let digest = policy.digest();
     let mut fences = fences_for(ctx, binding.as_ref(), &policy);
+    if !matches!(verdict, Verdict::Deny(_))
+        && let Some(fence) = crate::authority::database::mutation_fence(s, ctx, request.input)
+            .map_err(|error| {
+                if matches!(error, StorageError::ScopeDenied) {
+                    deny(DenialReason::OutOfProjectScope)
+                } else {
+                    unavailable(error)
+                }
+            })?
+    {
+        fences.push(fence);
+    }
     if let Some((id, digest)) = ownership {
         fences.push(AuthorityFence::GitWorktree { id, digest });
     }
@@ -1027,56 +1079,69 @@ fn policy_holds(
     Ok(resolve_policy(read, project)?.digest() == digest)
 }
 
+/// The checks for fences a service owns: a document index run, the document vision setting, a
+/// dreaming sweep request and the qualified embedding choice. Authority cannot evaluate them
+/// without reaching the services, so each check here takes their owner as an argument;
+/// `services::fences` supplies it and holds the entry points services, the engine and the
+/// adapters call. A check given [`AuthorityFencesOnly`] refuses every service-owned fence.
+pub trait ServiceFences {
+    /// Whether `fence` holds inside a write transaction, in the native invocation context
+    /// when the caller has one.
+    fn holds_in(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: Option<&InvocationContext>,
+        fence: &AuthorityFence,
+    ) -> Result<bool, StorageError>;
+    /// Whether `fence` holds in a fresh read snapshot.
+    fn holds(&self, s: &dyn ReadSnapshot, fence: &AuthorityFence) -> Result<bool, StorageError>;
+}
+
+/// The owner for checks of authorizations minted here, which carry no service-owned fence.
+pub struct AuthorityFencesOnly;
+
+impl ServiceFences for AuthorityFencesOnly {
+    fn holds_in(
+        &self,
+        _: &mut dyn WriteTransaction,
+        _: Option<&InvocationContext>,
+        _: &AuthorityFence,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+    fn holds(&self, _: &dyn ReadSnapshot, _: &AuthorityFence) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+}
+
 /// Re-checks every fence inside the command's write transaction (the commit linearization
-/// point). Called by the gateway before the receipt lookup.
-pub fn fences_hold(
-    tx: &mut dyn WriteTransaction,
-    fences: &[AuthorityFence],
-) -> Result<bool, StorageError> {
-    fences_hold_with_context(tx, None, fences)
-}
-
-/// Checks the exact qualified embedding choice in the real native invocation context.
-pub fn inference_fences_hold(
-    tx: &mut dyn WriteTransaction,
-    ctx: &InvocationContext,
-    fences: &[AuthorityFence],
-) -> Result<bool, StorageError> {
-    fences_hold_with_context(tx, Some(ctx), fences)
-}
-
-fn fences_hold_with_context(
+/// point), in the native invocation context when `ctx` is given.
+pub fn fences_hold_with(
     tx: &mut dyn WriteTransaction,
     ctx: Option<&InvocationContext>,
     fences: &[AuthorityFence],
+    owners: &dyn ServiceFences,
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::kernel::analysis::dispatch_binding_in(tx, operation, request)?
+            }
+            AuthorityFence::DatabaseSource { id, revision } => {
+                tx.schemas().schema_source(id)?.is_some_and(|source| {
+                    !source.deleted && source.connection.revision.get() == *revision
+                })
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness_in(tx, id)?.as_ref() == Some(digest)
             }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(tx.authority(), actor, *revision)?
             }
-            AuthorityFence::DocumentIndex { run, generation } => {
-                crate::services::documents::indexing::embedding_source_in(tx, run, *generation)?
-                    .is_some()
-            }
-            AuthorityFence::DreamingSweep {
-                run,
-                generation,
-                request,
-            } => crate::services::dreaming::inference_fence_in(tx, run, *generation, request)?,
-            AuthorityFence::QualifiedEmbedding { source_digest } => {
-                let Some(ctx) = ctx else { return Ok(false) };
-                let current =
-                    crate::services::router::embedding_spaces::resolve_selected_in(tx, ctx)?;
-                current.binding().is_some() && current.source_digest() == source_digest
-            }
-            AuthorityFence::DocumentVision { settings_witness } => {
-                let current = crate::services::documents::vision::policy(tx.configuration())?;
-                current.enabled && current.witness == *settings_witness
-            }
+            AuthorityFence::DocumentIndex { .. }
+            | AuthorityFence::DreamingSweep { .. }
+            | AuthorityFence::QualifiedEmbedding { .. }
+            | AuthorityFence::DocumentVision { .. } => owners.holds_in(tx, ctx, fence)?,
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(tx.configuration(), project_id.as_ref(), digest)?
             }
@@ -1088,20 +1153,21 @@ fn fences_hold_with_context(
     Ok(true)
 }
 
-/// [`authorization_holds`] inside a write transaction, together with the invocation's store and
-/// restore epoch: the linearization point of a write a query makes during preparation (the web
-/// tools' evidence and activity records). A principal revoked or re-bound, a narrowed policy or
-/// a changed grant since authorization makes it `false`, and the caller writes nothing.
-pub fn authorization_holds_in(
+/// [`authorization_holds_with`] inside a write transaction, together with the invocation's store
+/// and restore epoch: the linearization point of a write a query makes during preparation (the
+/// web tools' evidence and activity records). A principal revoked or re-bound, a narrowed policy
+/// or a changed grant since authorization makes it `false`, and the caller writes nothing.
+pub fn authorization_holds_in_with(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     authorization: &Authorization,
+    owners: &dyn ServiceFences,
 ) -> Result<bool, StorageError> {
     let store = tx.store();
     if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get() {
         return Ok(false);
     }
-    if !fences_hold(tx, authorization.fences())? {
+    if !fences_hold_with(tx, None, authorization.fences(), owners)? {
         return Ok(false);
     }
     for g in authorization.authority_grants() {
@@ -1117,27 +1183,31 @@ pub fn authorization_holds_in(
 
 /// Re-checks fences and the grants an authorization relies on against a fresh snapshot (the
 /// publication point of a read). A grant revoked or changed since authorization denies output.
-pub fn authorization_holds(
+pub fn authorization_holds_with(
     s: &dyn ReadSnapshot,
     authorization: &Authorization,
+    owners: &dyn ServiceFences,
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
+            AuthorityFence::AnalysisRequest { operation, request } => {
+                crate::kernel::analysis::dispatch_binding_snapshot(s, operation, request)?
+            }
+            AuthorityFence::DatabaseSource { id, revision } => {
+                s.schemas().schema_source(id)?.is_some_and(|source| {
+                    !source.deleted && source.connection.revision.get() == *revision
+                })
+            }
             AuthorityFence::GitWorktree { id, digest } => {
                 super::git::witness(s, id)?.as_ref() == Some(digest)
             }
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(s.authority(), actor, *revision)?
             }
-            AuthorityFence::DocumentIndex { run, generation } => {
-                crate::services::documents::indexing::embedding_fence_read(s, run, *generation)?
-            }
-            AuthorityFence::DreamingSweep { .. } => false,
-            AuthorityFence::QualifiedEmbedding { .. } => false,
-            AuthorityFence::DocumentVision { settings_witness } => {
-                let current = crate::services::documents::vision::policy(s.configuration())?;
-                current.enabled && current.witness == *settings_witness
-            }
+            AuthorityFence::DocumentIndex { .. }
+            | AuthorityFence::DreamingSweep { .. }
+            | AuthorityFence::QualifiedEmbedding { .. }
+            | AuthorityFence::DocumentVision { .. } => owners.holds(s, fence)?,
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(s.configuration(), project_id.as_ref(), digest)?
             }

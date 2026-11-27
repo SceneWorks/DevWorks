@@ -78,7 +78,7 @@ impl SystemOne {
         let author = devworks_core::ports::Authorization::direct()
             .fenced_by(intent.authority_fences.clone());
         let owned = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-            if !devworks_core::authority::service::authorization_holds(read, &author)? {
+            if !devworks_core::services::fences::authorization_holds(read, &author)? {
                 return Err(StorageError::ScopeDenied);
             }
             auxiliary::ownership(read, &info, &context).map_err(|error| match error {
@@ -198,7 +198,7 @@ impl SystemOne {
                 return Ok(EffectOutcome::Failed("SystemOne decision cancelled".into()));
             }
             let prepared = read_snapshot(&*self.store, &ReadOptions::default(), |read| {
-                if !devworks_core::authority::service::authorization_holds(read, &author)? {
+                if !devworks_core::services::fences::authorization_holds(read, &author)? {
                     return Err(StorageError::ScopeDenied);
                 }
                 let Some(model) = self.decisions.current_candidate(
@@ -540,7 +540,7 @@ impl SystemOne {
             let context = context.clone();
             let cancel = cancel.clone();
             let committed = run_write(store, WriteOptions::observed(), move |tx| {
-                if cancel.is_cancelled() || !devworks_core::authority::service::fences_hold(tx, &intent.authority_fences)? {
+                if cancel.is_cancelled() || !devworks_core::services::fences::fences_hold(tx, &intent.authority_fences)? {
                     return Err(StorageError::ScopeDenied);
                 }
                 let current = tx.operations().operation(&operation.id)?.ok_or(StorageError::ScopeDenied)?;
@@ -889,7 +889,7 @@ pub(crate) fn completion(
             && source.root_id() == context.root_id()
             && source.job_run_id() == context.job_run_id()
             && source.ingress_namespace() == context.ingress_namespace()
-            && devworks_core::authority::service::authorization_holds(read, &author)?)
+            && devworks_core::services::fences::authorization_holds(read, &author)?)
         .then_some(operation))
     })
     .map_err(|_| not_found())?

@@ -79,10 +79,10 @@ impl Harness {
         // Cargo's per-target scratch directory, not the system temp directory: on GitHub's
         // Windows runners %TEMP% is on the C: OS disk, whose flush latency stalls the hundreds of
         // durable commits of native Help startup past the `within` guard.
-        let guard = TempRoot::under(
-            std::path::Path::new(env!("CARGO_TARGET_TMPDIR")),
-            "devworks-engine-test",
-        );
+        Self::under(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")))
+    }
+    pub fn under(base: &std::path::Path) -> Self {
+        let guard = TempRoot::under(base, "devworks-engine-test");
         Self {
             root: guard.path().to_path_buf(),
             _root: guard,
@@ -184,7 +184,8 @@ pub struct StoreWork {
     pub read_pages: u64,
 }
 impl CountingStore {
-    /// The store work `request` performs; nothing else may use the store meanwhile.
+    /// The store work `request` performs on this thread: its read snapshots, steps and pages, and
+    /// every write the store's writer runs meanwhile.
     pub fn count<T>(&self, request: impl FnOnce() -> T) -> (T, StoreWork) {
         let p = &self.probe;
         let (snapshots, read, write, pages) = (
@@ -193,7 +194,11 @@ impl CountingStore {
             p.write_steps(),
             p.read_pages(),
         );
+        // A background reader the runtime's bounded shutdown abandoned can still be stepping on
+        // this store; only the reads this thread makes for the request are its work.
+        p.attribute_reads(true);
         let value = request();
+        p.attribute_reads(false);
         (
             value,
             StoreWork {

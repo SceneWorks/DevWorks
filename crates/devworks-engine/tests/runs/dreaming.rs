@@ -36,7 +36,7 @@ fn run(
     project: &str,
     expected: i64,
 ) -> DomainCommandReply {
-    let frame = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+    let frame = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":24,"requestKey":fx.key(),
         "body":{"kind":"dreaming.run","scope":{"kind":"Project","projectId":project},
                 "expectedSettingsRevision":expected.to_string()}});
     app.command(&fx.user, "dreaming.run", frame.to_string().as_bytes())
@@ -305,7 +305,7 @@ fn scheduled_and_manual_resume_keep_scoped_receipts_and_get_fresh_budgets() {
             }
         }).unwrap();
         artifacts.settle_host_bytes(fx.store.as_ref(), &staged, true);
-        let save = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+        let save = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":24,"requestKey":fx.key(),
             "body":{"kind":"dreaming.instructions","scope":{"kind":"Workspace"},"expectedRevision":"1",
                     "content":new_text}});
         applied(&app.command(&fx.user, "dreaming.instructions", save.to_string().as_bytes()).unwrap());
@@ -336,7 +336,7 @@ fn scheduled_and_manual_resume_keep_scoped_receipts_and_get_fresh_budgets() {
         assert_eq!(second_actions.len(), 1);
         assert_eq!(second_actions[0].action["tool"], "dream_read_prior");
         assert!(receipts(&third).is_empty());
-        let stale = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+        let stale = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":24,"requestKey":fx.key(),
             "body":{"kind":"dreaming.run","scope":{"kind":"Project","projectId":"project-a"},
                 "expectedSettingsRevision":"2","resumeRunId":first.id}});
         let stale = app.command(&fx.user, "dreaming.run", stale.to_string().as_bytes()).unwrap();
@@ -587,7 +587,7 @@ fn direct_consolidation_records_exact_citation_and_human_revert_keeps_the_audit(
         let approval = read(&*fx.store, |r| r.decisions().approval(&approval_id)).unwrap();
         assert!(approval.payload["reviewed"]["evidence"].as_array().unwrap().iter()
             .any(|evidence| evidence["kind"] == "Review" && evidence["reference"] == "proposal-review-witness"));
-        for revision in [1, 9] {
+        for revision in [1, 24] {
             let stage = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":revision,"requestKey":fx.key(),
                 "body":{"kind":"dreaming.propose","runId":completed.id,"expectedRevision":completed.revision.to_string(),
                     "claimIds":[{"id":proposal["targetId"],"revision":proposal["targetRevision"]}],"content":proposal["artifact"]}});
@@ -597,7 +597,7 @@ fn direct_consolidation_records_exact_citation_and_human_revert_keeps_the_audit(
         }
         assert_eq!(proposal["state"], "Pending");
         assert_eq!(completed.report.as_ref().unwrap()["proposalIds"][0], proposal["id"]);
-        let mut review = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+        let mut review = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":24,"requestKey":fx.key(),
             "body":{"kind":"dreaming.review","proposalId":proposal["id"],"expectedRevision":proposal["revision"],
                 "decision":"Approve","rationale":"Approve the scoped fixture retraction."}});
         let unauthorized = app.command(&fx.user, "dreaming.review", review.to_string().as_bytes()).unwrap();
@@ -622,12 +622,12 @@ fn direct_consolidation_records_exact_citation_and_human_revert_keeps_the_audit(
         applied(&app.command(&fx.user, "knowledge.tag", edit.to_string().as_bytes()).unwrap());
         let edited = read(&*fx.store, |r| r.knowledge().knowledge_claim(&edited_id)).unwrap();
         assert_eq!(edited.revision, 2);
-        let report = json!({"mode":"Query","protocol":PROTOCOL,"schemaRevision":9,"queryId":"read-revert-witness",
+        let report = json!({"mode":"Query","protocol":PROTOCOL,"schemaRevision":24,"queryId":"read-revert-witness",
             "body":{"kind":"dreaming.report","runId":completed.id}});
         let report = serde_json::to_value(app.query(&fx.user, "dreaming.report", report.to_string().as_bytes()).unwrap()).unwrap();
         assert!(report["result"]["value"]["report"].is_object(), "{report}");
         let digest = &report["result"]["value"]["detail"]["journalDigest"];
-        let undo = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+        let undo = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":24,"requestKey":fx.key(),
             "body":{"kind":"dreaming.revert","runId":completed.id,"expectedRevision":completed.revision.to_string(),
                 "expectedChangeDigest":digest,"allChanges":true}});
         let undo = applied(&app.command(&fx.user, "dreaming.revert", undo.to_string().as_bytes()).unwrap());
@@ -755,7 +755,7 @@ fn settlement_releases_the_scope_after_provider_failure_settings_change_or_cance
             }
             if cancel {
                 let live = read(&*fx.store, |r| r.dreaming()?.dream_live_run(&scope)).unwrap();
-                let request = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":9,"requestKey":fx.key(),
+                let request = json!({"mode":"Command","protocol":PROTOCOL,"schemaRevision":24,"requestKey":fx.key(),
                     "body":{"kind":"dreaming.run","scope":{"kind":"Project","projectId":"project-a"},
                         "expectedSettingsRevision":"2","cancelRunId":live.id}});
                 applied(&app.command(&fx.user, "dreaming.run", request.to_string().as_bytes()).unwrap());

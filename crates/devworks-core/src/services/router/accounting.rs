@@ -10,9 +10,7 @@ pub enum ReportCategory {
     Assistant,
     /// Inference of an agent bound to the code-review role ([`Self::for_agent_role`]).
     CodeReview,
-    /// Not produced yet: no native repository analysis makes inference requests. DW-29 owns the
-    /// model-assisted analysis stages that will report here; until then the Usage screen marks
-    /// this report not yet active.
+    /// Attributed requests from native repository analysis.
     RepositoryAnalysis,
     Mcp,
     Other,

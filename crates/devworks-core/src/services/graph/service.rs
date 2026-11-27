@@ -7,6 +7,7 @@ use super::{
     read::{Metadata, Position, Reader},
     scope, search, source,
 };
+use crate::kernel::graph_request::graph_input;
 use crate::{
     context::InvocationContext,
     gateway::{AdmittedCommand, AdmittedQuery},
@@ -15,7 +16,7 @@ use crate::{
     protocol::{data::*, records::*, results::*, *},
     services::{
         artifacts::ArtifactService,
-        indexing::{IndexEnv, views},
+        indexing::{IndexEnv, assigned, views},
         kernel::{self, Failure, Refusal, rev},
     },
 };
@@ -93,28 +94,10 @@ struct ReadPrepared {
     source_budget: Option<Budget>,
 }
 fn request(ctx: &InvocationContext, query: &AdmittedQuery) -> Result<GraphReadRequest, Failure> {
-    use operations::code::Input::*;
+    if let Some(input) = graph_input(query.input()) {
+        return Ok(input.clone());
+    }
     let request = match query.input() {
-        OperationInput::Code(
-            Search(i)
-            | Architecture(i)
-            | Dependency(i)
-            | Impact(i)
-            | Source(i)
-            | Traverse(i)
-            | GraphScopeStatus(i)
-            | Overview(i)
-            | NodesByFile(i)
-            | NodeDetail(i)
-            | FileImpact(i)
-            | GraphSchema(i)
-            | CallPath(i)
-            | DataLineage(i)
-            | Consumers(i)
-            | Publishers(i)
-            | Snippet(i)
-            | RepositoryDependencies(i),
-        ) => i.clone(),
         OperationInput::Repositories(operations::repositories::Input::Nodes(i)) => {
             let scope = i.scope.clone().unwrap_or_else(|| {
                 ctx.project_id()
@@ -230,7 +213,21 @@ impl QueryHandler for GraphService {
                 requested = Some(ViewSelection::Pinned { pin_id });
             }
             let current_worktree = if requested.is_none() {
-                match self.current_worktree(ctx, deadline, env.cancellation) {
+                let resolved = self.current_worktree(ctx, deadline, env.cancellation);
+                let prepared = resolved.and_then(|worktree| {
+                    if let (Some(worktree_id), Some(bound), Some(indexing)) =
+                        (&worktree, ctx.worktree(), &self.indexing)
+                        && assigned::applies(ctx)
+                        && matches!(&request.scope, DataScope::Project{project_id} if Some(project_id) == ctx.project_id())
+                    {
+                        assigned::ensure_current(
+                            indexing, ctx, query.authorization(), bound.repository_id(),
+                            worktree_id, deadline, env.cancellation,
+                        )?;
+                    }
+                    Ok(worktree)
+                });
+                match prepared {
                     Err(Failure::Refused(reason))
                         if reason.code == DomainErrorCode::ViewUnavailable
                             && matches!(request.query, GraphQuery::ScopeStatus) =>
@@ -563,6 +560,17 @@ impl GraphService {
                         .ok_or_else(|| scope::unavailable(Some(id.clone())))?;
                     let (state, _) =
                         crate::services::indexing::status::manifest_coverage(&generation.manifest);
+                    if !gaps.contains(&"stale_semantic_package")
+                        && crate::services::indexing::status::semantic_stale(
+                            read.packages(),
+                            &generation.manifest,
+                            &read
+                                .projects()
+                                .repository_projects(&generation.repository_id)?,
+                        )?
+                    {
+                        gaps.push("stale_semantic_package");
+                    }
                     if !matches!(state, CoverageState::Complete)
                         && !gaps.contains(&"index_coverage_partial")
                     {
@@ -921,6 +929,15 @@ fn resolved(
             let (_, recorded) =
                 crate::services::indexing::status::manifest_coverage(&generation.manifest);
             gaps.extend(recorded);
+            if crate::services::indexing::status::semantic_stale(
+                read.packages(),
+                &generation.manifest,
+                &read
+                    .projects()
+                    .repository_projects(&generation.repository_id)?,
+            )? {
+                gaps.push("stale_semantic_package".into());
+            }
         }
         let strings: Vec<_> = gaps.iter().map(|g| g.as_str()).collect();
         let coverage = coverage(
@@ -1310,6 +1327,18 @@ fn bound_cursors(
     };
     let mut canonical =
         json!({"scope":request.scope,"query":request.query,"limits":request.limits});
+    if matches!(
+        request.query,
+        GraphQuery::Traverse { .. }
+            | GraphQuery::Path { .. }
+            | GraphQuery::NodeImpact { .. }
+            | GraphQuery::FileImpact { .. }
+            | GraphQuery::DataLineage { .. }
+    ) {
+        // Old offsets counted repeated expansions or a different budget-limited prefix.
+        // Expire their cursors so a client can restart against the same retained pin.
+        canonical["walkOrder"] = json!(2);
+    }
     if let Some(selected) = selected {
         canonical["selection"] = json!(selected.pin.intent_digest);
         let mut registrations = Vec::new();

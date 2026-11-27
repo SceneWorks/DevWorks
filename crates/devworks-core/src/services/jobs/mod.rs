@@ -109,7 +109,7 @@ pub const RUN_CAPABILITY: &str = "jobs.run";
 /// retained CodeGraph job type to (`job:src/CodeGraph.Jobs/Jobs/*`), plus approved native schema sync.
 /// Only those with a registered
 /// use case are offered and accepted ([`NativeCatalog::qualified`]).
-pub const MAINTENANCE_OPERATIONS: [&str; 14] = [
+pub const MAINTENANCE_OPERATIONS: [&str; 15] = [
     "maintenance.prune_diagnostics",
     "analysis.community_analysis",
     "indexing.discover",
@@ -124,6 +124,7 @@ pub const MAINTENANCE_OPERATIONS: [&str; 14] = [
     "help.generate_capability_docs",
     "imports.apply",
     "schemas.index",
+    crate::services::packages::workflow::OPERATION,
 ];
 /// Namespace of a native capability's argument schema (`<namespace>/<operation>`).
 pub const ARGUMENT_SCHEMA_NAMESPACE: &str = "devworks.job-arguments";

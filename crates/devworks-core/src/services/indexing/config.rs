@@ -28,34 +28,17 @@
 //!
 //! The retained default skip patterns apply until a section replaces them.
 use crate::fingerprint::sha256_hex;
-use crate::ports::storage::{StoredSourceConfig, WORKSPACE_SCOPE_KEY};
+pub use crate::kernel::index_config::{DEFAULT_EXCLUDES, DEFAULT_MAX_FILE_BYTES, default_config};
+use crate::ports::storage::StoredSourceConfig;
+#[cfg(test)]
+use crate::ports::storage::WORKSPACE_SCOPE_KEY;
 use serde_json::json;
 
-/// The retained default file size bound (CodeGraph `MaxFileSizeKb = 512`).
-pub const DEFAULT_MAX_FILE_BYTES: i64 = 512 * 1024;
 /// The retained Swift exception (`MaxFileSizeKbByExtension[".swift"] = 2048`), applied while
 /// the section keeps the default bound.
 pub const SWIFT_MAX_FILE_BYTES: i64 = 2048 * 1024;
 /// The largest bound a section may set (a file is read into memory to parse it).
 pub const MAX_FILE_BYTES_LIMIT: i64 = 64 * 1024 * 1024;
-/// The retained default skip patterns (CodeGraph `IndexingOptions.SkipPatterns`).
-pub const DEFAULT_EXCLUDES: [&str; 15] = [
-    "**/bin/**",
-    "**/obj/**",
-    "**/node_modules/**",
-    "**/build/**",
-    "**/managed_components/**",
-    "**/.cache/**",
-    "**/wwwroot/lib/**",
-    "**/*.min.js",
-    "**/.git/**",
-    "**/TestResults/**",
-    "**/.claude/worktrees/**",
-    "**/.build/**",
-    "**/.swiftpm/**",
-    "**/DerivedData/**",
-    "**/SourcePackages/**",
-];
 /// Dependency directories excluded only beside their manifest (CodeGraph's conditional skips).
 pub const MANIFEST_DIRECTORIES: [(&str, &[&str]); 3] = [
     ("target", &["Cargo.toml"]),
@@ -231,22 +214,6 @@ fn class_match(p: &[char], start: usize, c: char) -> Option<(bool, usize)> {
         return None;
     }
     Some((matched != negate, i + 1))
-}
-
-/// The defaults of a section never written.
-pub fn default_config(scope_key: &str) -> StoredSourceConfig {
-    StoredSourceConfig {
-        scope_key: scope_key.to_owned(),
-        project_id: (scope_key != WORKSPACE_SCOPE_KEY).then(|| {
-            crate::protocol::ProjectId(crate::protocol::Id::new(scope_key).expect("project key"))
-        }),
-        revision: 1,
-        structural_languages: Vec::new(),
-        semantic_packages: Vec::new(),
-        exclude_patterns: DEFAULT_EXCLUDES.iter().map(|s| (*s).to_owned()).collect(),
-        max_file_bytes: DEFAULT_MAX_FILE_BYTES,
-        updated_at_ms: 0,
-    }
 }
 
 /// The configuration one repository is indexed under.

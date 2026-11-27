@@ -295,6 +295,9 @@ impl ProcessToolService {
                     probe: None,
                     timer: None,
                     file: None,
+                    github: None,
+                    attached_process: None,
+                    assignment_id: None,
                     matching: None,
                     max_lifetime_ms: None,
                     tail_bytes: origin
@@ -347,7 +350,15 @@ impl ProcessToolService {
             .filter_map(|entry| entry.value.as_ref().map(|value| value.0.clone()))
             .chain(secret_values)
             .collect();
-        self.run_owned(
+        let check_root = &job.spec.working_directory.root_id;
+        let directory = spec.cwd.clone();
+        let git = self.git.as_ref().filter(|_| job.watch.is_none());
+        let subject = || {
+            git.zip(directory.as_deref())
+                .and_then(|(git, cwd)| git.check_subject(&ctx, check_root, cwd))
+        };
+        let before = subject();
+        let mut outcome = self.run_owned(
             operation,
             &ctx,
             spec,
@@ -359,7 +370,13 @@ impl ProcessToolService {
             None,
             launched,
             job.watch.as_ref().and_then(|w| w.pattern.as_deref()),
-        )
+        );
+        if let (Some(before), EffectOutcome::Completed(observed)) = (before, &mut outcome)
+            && subject().as_ref() == Some(&before)
+        {
+            observed["verifiedWorktree"] = before;
+        }
+        outcome
     }
 
     pub(super) fn execute_install(&self, operation: &OperationRecord) -> EffectOutcome {

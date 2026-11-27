@@ -295,6 +295,18 @@ fn a_crash_after_commit_before_ack_replays_as_a_no_op() {
         ),
         (2, true, 2, 2, e.event_sequence)
     );
+    // Another delivery from this subscription cannot retrieve this event's receipt.
+    let later = enqueue(&*s, CONSUMER, Some("acme"), json!({}));
+    let unrelated = write(&*s, move |tx| {
+        let mut inv = invocation("session-restarted", &stale, tx.store().host_actor.clone());
+        inv.delivery_id = later.id;
+        commit_event(tx, &inv, &resubmitted)
+    })
+    .unwrap();
+    assert!(matches!(
+        unrelated,
+        CommitOutcome::Refused(CommitRefusal::BindingMismatch)
+    ));
 }
 
 #[test]

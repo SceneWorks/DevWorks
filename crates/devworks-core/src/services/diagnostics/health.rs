@@ -988,6 +988,11 @@ pub(crate) fn checks(
         attention.len() as i64,
     ));
     out.insert(0, readiness);
+    if let Some(handled) = svc.operations.read_locked().as_ref() {
+        for c in &mut out {
+            c.recovery.retain(|l| handled.contains(l.operation));
+        }
+    }
     out
 }
 

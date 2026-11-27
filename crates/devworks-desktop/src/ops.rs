@@ -23,10 +23,10 @@ use devworks_core::protocol::provider::{
 };
 use devworks_core::protocol::records::{
     AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
-    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, MutationSummary,
-    ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord, RouteAvailability,
-    RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord, SettingEntry,
-    ValidationReport, WebDocument, WebResult,
+    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, LeaseRecord,
+    MutationSummary, ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord,
+    RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord,
+    SettingEntry, ValidationReport, WebDocument, WebResult,
 };
 use devworks_core::protocol::records::{
     BrowserSessionAction, IndexSourceConfig, ProjectPatch, ProjectPurgeManifest,
@@ -533,6 +533,52 @@ pub fn started(outcome: CommandOutcome) -> Result<SessionRecord, Failure> {
         other => Err(unexpected("sessions.start", &other)),
     }
 }
+/// The `sessions.append_screen_context` notice of `screen` for `session`.
+pub fn screen_context(
+    backend: &dyn Backend,
+    session: &str,
+    screen: &str,
+    context: &str,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Sessions(sessions::Input::AppendScreenContext(
+            sessions::AppendScreenContextInput {
+                session_id: frame::id(session)?,
+                screen_id: frame::id(screen)?,
+                context: frame::text(context)?,
+            },
+        )))
+    })
+}
+/// Tells `session`'s coordinator that the user is on `screen`, described by `context` and the
+/// version of the screen's local Help topic when Help has one. Blocking: run it as a task.
+pub fn append_screen_context(
+    backend: &dyn Backend,
+    session: &str,
+    screen: &str,
+    context: &str,
+) -> Result<SessionRecord, Failure> {
+    let topic = crate::help_ops::topics(backend.query(
+        "help.topic_for_screen",
+        &crate::help_ops::context(backend, screen, None),
+    ))
+    .ok()
+    .and_then(|page| {
+        page.items
+            .0
+            .into_iter()
+            .find(|topic| topic.id.as_str() == screen)
+    });
+    let context = topic.map_or_else(
+        || context.to_owned(),
+        |topic| format!("{context} ({})", topic.version.0),
+    );
+    let frame = screen_context(backend, session, screen, &context);
+    match command_result(crate::backend::resolve_screen_context(backend, &frame))? {
+        OperationResult::SessionsAppendScreenContext { value } => Ok(value),
+        other => Err(unexpected("sessions.append_screen_context", &other)),
+    }
+}
 /// One transcript page after `after` (the projection's tail cursor).
 pub fn transcript(backend: &dyn Backend, session: &str, after: Option<&str>) -> Vec<u8> {
     frame::with(backend, Negotiate::Latest, || {
@@ -810,6 +856,110 @@ pub fn deleted(outcome: CommandOutcome) -> Result<(), Failure> {
         other => Err(unexpected("artifacts.delete", &other)),
     }
 }
+/// `artifacts.preview` of one version: a bounded text excerpt, or image or metadata facts.
+pub fn artifact_preview(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    artifact_version_query(backend, artifact, |artifact_id, version_id| {
+        artifacts::Input::Preview(ArtifactQueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: ArtifactQuery::Preview {
+                artifact_id,
+                version_id,
+            },
+            limit: 1,
+            cursor: None,
+        })
+        .into()
+    })
+}
+pub fn artifact_previewed(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::ArtifactPreview, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsPreview { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("artifacts.preview", &other)),
+    }
+}
+/// `artifacts.export` of one version: a stream handle for its verified bytes.
+pub fn artifact_export(backend: &dyn Backend, artifact: &ArtifactRef) -> Vec<u8> {
+    artifact_version_query(backend, artifact, |artifact_id, version_id| {
+        artifacts::Input::Export(ArtifactQueryRequest {
+            protocol: frame::protocol(),
+            query_id: frame::query_id(backend)?,
+            query: ArtifactQuery::Export {
+                artifact_id,
+                version_id,
+            },
+            limit: 1,
+            cursor: None,
+        })
+        .into()
+    })
+}
+pub fn artifact_exported(
+    outcome: QueryOutcome,
+) -> Result<devworks_core::protocol::records::ArtifactExport, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ArtifactsExport { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("artifacts.export", &other)),
+    }
+}
+fn artifact_version_query(
+    backend: &dyn Backend,
+    artifact: &ArtifactRef,
+    input: impl FnOnce(
+        devworks_core::protocol::Id,
+        devworks_core::protocol::Id,
+    ) -> Option<artifacts::Input>,
+) -> Vec<u8> {
+    let (artifact_id, version_id) = (artifact.artifact_id.clone(), artifact.version_id.clone());
+    frame::with(backend, Negotiate::Initial, || {
+        input(artifact_id, version_id).map(In::Artifacts)
+    })
+}
+/// `artifacts.tag`: replaces the tag set of the artifact listed at `revision`.
+pub fn artifact_tag(
+    backend: &dyn Backend,
+    artifact_id: &str,
+    revision: &str,
+    tags: Vec<String>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Tag(artifacts::TagInput {
+            artifact_id: frame::id(artifact_id)?,
+            expected_revision: frame::text(revision)?,
+            tags: ArtifactTags::new(tags).ok()?,
+        })))
+    })
+}
+pub fn artifact_tagged(outcome: CommandOutcome) -> Result<MutationSummary, Failure> {
+    match command_result(outcome)? {
+        OperationResult::ArtifactsTag { value } => Ok(value),
+        other => Err(unexpected("artifacts.tag", &other)),
+    }
+}
+/// `artifacts.delete` of the whole artifact under the identities `record` was listed with
+/// (schema revision 19). `None` when the record carries no identities (an earlier contract).
+pub fn delete_artifact(backend: &dyn Backend, record: &ArtifactRecord) -> Option<Vec<u8>> {
+    let revision = record.revision.clone()?;
+    let reference = record.reference_revision.clone()?;
+    let digest = record.versions_digest.clone()?;
+    let artifact_id = record.artifact.artifact_id.clone();
+    Some(frame::with(backend, Negotiate::Initial, || {
+        Some(In::Artifacts(artifacts::Input::Delete(
+            ArtifactDeletionRequest {
+                protocol: frame::protocol(),
+                request_key: frame::request_key(backend)?,
+                deletion: ArtifactDeletion::DeleteArtifact {
+                    artifact_id,
+                    expected_revision: revision,
+                    expected_reference_revision: reference,
+                    expected_versions_digest: digest,
+                },
+            },
+        )))
+    }))
+}
 pub fn workspace_artifacts(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
     artifact_list(backend, None, true, cursor)
 }
@@ -870,8 +1020,62 @@ pub fn artifacts(outcome: QueryOutcome) -> Result<Page<ArtifactRecord>, Failure>
         (other, _) => Err(unexpected("artifacts.list", &other)),
     }
 }
-pub fn resources_list(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+/// One page of `agents.list`: the project's coordinator and worker assignments (schema
+/// revision 21), only the live ones when `live_only`.
+pub fn agents_list(
+    backend: &dyn Backend,
+    project: &str,
+    live_only: bool,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    use devworks_core::operations::agents;
+    frame::with(backend, Negotiate::Latest, || {
+        Some(In::Agents(agents::Input::List(agents::ListInput {
+            project_id: ProjectId(frame::id(project)?),
+            live_only,
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
+        })))
+    })
+}
+pub fn agents_page(
+    outcome: QueryOutcome,
+) -> Result<Page<devworks_core::protocol::records::AgentSummary>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::AgentsList { value }, _) => {
+            Ok(Page::new(value.items.0, value.next_cursor.map(|c| c.0)))
+        }
+        (other, _) => Err(unexpected("agents.list", &other)),
+    }
+}
+/// One page of `agents.inbox` of an assignment: its messages in both directions.
+pub fn agent_messages(backend: &dyn Backend, assignment: &str, cursor: Option<&str>) -> Vec<u8> {
+    use devworks_core::operations::agents;
+    use devworks_core::protocol::records::MessageDirection;
     frame::with(backend, Negotiate::Initial, || {
+        Some(In::Agents(agents::Input::Inbox(agents::InboxInput {
+            assignment_id: devworks_core::protocol::AssignmentId(frame::id(assignment)?),
+            page: frame::page(PAGE_LIMIT.into(), cursor)?,
+            unacknowledged_only: false,
+            direction: MessageDirection::Both,
+        })))
+    })
+}
+pub fn agent_messages_page(
+    outcome: QueryOutcome,
+) -> Result<Page<devworks_core::protocol::records::AgentMessage>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::AgentsInbox { value }, _) => page_of(
+            "agents.inbox",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (other, _) => Err(unexpected("agents.inbox", &other)),
+    }
+}
+/// The workspace's resources at the revision that names each one's scope and project.
+pub fn resources_list(backend: &dyn Backend, cursor: Option<&str>) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
         Some(In::Resources(resources::Input::List(
             resources::ListInput {
                 scope: DataScope::Workspace,
@@ -931,6 +1135,51 @@ pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
         CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
         CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+/// One page of a resource's held leases (`resources.holders`) or its queue
+/// (`resources.waiters`), naming the project of a project resource.
+pub fn resource_leases(
+    backend: &dyn Backend,
+    waiters: bool,
+    resource: &str,
+    project: Option<&str>,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        let resource_id = frame::text(resource)?;
+        let project_id = frame::lift(project.map(frame::text))?;
+        let page = frame::page(PAGE_LIMIT.into(), cursor)?;
+        Some(In::Resources(if waiters {
+            resources::Input::Waiters(resources::WaitersInput {
+                resource_id,
+                page,
+                project_id,
+            })
+        } else {
+            resources::Input::Holders(resources::HoldersInput {
+                resource_id,
+                page,
+                project_id,
+            })
+        }))
+    })
+}
+pub fn resource_leases_page(outcome: QueryOutcome) -> Result<Page<LeaseRecord>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::ResourcesHolders { value }, _) => page_of(
+            "resources.holders",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (OperationResult::ResourcesWaiters { value }, _) => page_of(
+            "resources.waiters",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (other, _) => Err(unexpected("resources.holders", &other)),
     }
 }
 pub fn resources(outcome: QueryOutcome) -> Result<Page<ResourceRecord>, Failure> {

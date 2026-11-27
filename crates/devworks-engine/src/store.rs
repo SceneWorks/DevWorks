@@ -63,6 +63,39 @@ where
         })
 }
 
+/// Runs synchronous store work that [`read`] and [`write`] cannot express (several snapshots, a
+/// blocking `run_write`, artifact files) on the blocking pool, so a busy writer or a slow read
+/// does not stall the runtime thread.
+pub(crate) async fn blocking<T, E, F>(work: F) -> Result<T, E>
+where
+    T: Send + 'static,
+    E: From<StorageError> + Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|error| {
+            Err(StorageError::unavailable(
+                Unavailable::HandlerPanicked,
+                format!("blocking store task failed: {}", join_failure(error)),
+            )
+            .into())
+        })
+}
+
+/// The panic message of a failed blocking task, or the join error when it has none.
+fn join_failure(error: tokio::task::JoinError) -> String {
+    if !error.is_panic() {
+        return error.to_string();
+    }
+    let payload = error.into_panic();
+    payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panicked without a message".into())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Queue primitives used by the engine
 

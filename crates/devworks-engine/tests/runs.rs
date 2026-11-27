@@ -1107,6 +1107,30 @@ fn host_materializes_one_issue_coordinator_for_a_running_activation() {
         fx.query(&stale_agent, "agents.inspect", inspect("inspect-stale")),
         DomainQueryReply::Rejected { .. }
     ));
+    // agents.list (schema revision 21) admits the host through the real authority and lists the
+    // coordinator; an agent caller is refused by the service.
+    let list = |query_id: &str| {
+        json!({"mode":"Query","protocol":PROTOCOL,"schemaRevision":21,"queryId":query_id,
+            "body":{"kind":"agents.list","projectId":"project-a","liveOnly":true,
+                "page":{"limit":50}}})
+    };
+    let host = principal(&*fx.store, "coordinator-host", PrincipalKind::Host);
+    let listed =
+        serde_json::to_value(result(&fx.query(&host, "agents.list", list("list-host")))).unwrap();
+    let items = listed["items"].as_array().cloned().unwrap_or_default();
+    assert!(
+        items
+            .iter()
+            .any(|a| a["assignmentId"] == json!(first.assignment_id) && a["parentId"].is_null()),
+        "{listed}"
+    );
+    assert!(
+        !matches!(
+            fx.query(&agent, "agents.list", list("list-agent")),
+            DomainQueryReply::Result { .. }
+        ),
+        "an agent cannot list the project's agents"
+    );
     let request = devworks_core::operations::agents::DelegateInput {
         root_id: rid("root-i"),
         expected_control_revision: Revision::new(fx.control("root-i").revision).unwrap(),
@@ -8828,7 +8852,11 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+#[path = "runs/turn_runtime.rs"]
+mod turn_runtime;
 
+#[path = "runs/code_review.rs"]
+mod code_review_tests;
 #[path = "runs/plan_review.rs"]
 mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
@@ -8836,3 +8864,131 @@ mod review_capacity_tests;
 
 #[path = "runs/dreaming.rs"]
 mod dreaming;
+#[cfg(unix)]
+#[path = "runs/feature_delivery.rs"]
+mod feature_delivery_tests;
+
+/// Revision 20 names the gate, cause and reason of each condition holding a root, so a person
+/// can see why it waits; revision 1 keeps its recorded shape.
+#[test]
+fn revision_20_lists_the_gate_and_reason_of_every_hold() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let at = |revision: u64, query: Value| {
+        result(&fx.query(
+            &fx.user,
+            query["kind"].as_str().unwrap().to_owned().as_str(),
+            json!({"protocol": PROTOCOL, "schemaRevision": revision, "queryId": fx.key(), "query": query}),
+        ))
+    };
+    let eligibility = json!({"kind": "runs.eligibility",
+        "target": {"kind": "root", "id": "root-g"}, "purpose": "Implementation"});
+    // No approved plan covers root-g: a derived Plan condition with its reason.
+    let held = at(20, eligibility.clone());
+    let conditions = held["conditions"].as_array().unwrap();
+    let plan = conditions
+        .iter()
+        .find(|c| c["gate"] == "Plan")
+        .unwrap_or_else(|| panic!("{held}"));
+    assert!(!plan["reason"].as_str().unwrap().is_empty(), "{plan}");
+    assert_eq!(plan["rateLimited"], false);
+    assert!(at(1, eligibility).get("conditions").is_none());
+    // A paused root lists its pause as a Pause condition with the HumanPause cause.
+    let f = rid("root-f");
+    fx.scope.approve(&f, 1, &[("x", "dx")]);
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    applied(&fx.pause(&fx.user, "root-f"));
+    let inspect = json!({"kind": "runs.inspect", "rootId": "root-f"});
+    let snapshot = at(20, inspect.clone());
+    let pause = snapshot["conditions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["gate"] == "Pause")
+        .unwrap_or_else(|| panic!("{snapshot}"));
+    assert_eq!(pause["cause"], "HumanPause");
+    assert!(at(1, inspect).get("conditions").is_none());
+}
+
+/// Revision 20 lists a root's redirects with each durable stage as it advances.
+#[test]
+fn revision_20_shows_each_redirect_stage() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    fx.assign("root-f", "root-f", None, None);
+    let a = fx.launch("supervisor-1");
+    let redirects = || {
+        let v = result(&fx.query(
+            &fx.user,
+            "runs.inspect",
+            json!({"protocol": PROTOCOL, "schemaRevision": 20, "queryId": fx.key(),
+                "query": {"kind": "runs.inspect", "rootId": "root-f"}}),
+        ));
+        v["redirects"].as_array().unwrap().clone()
+    };
+    assert!(redirects().is_empty());
+    let summary = applied(&fx.redirect(&fx.user, "root-f", "Ship the CLI first"));
+    let instruction = id(summary["id"].as_str().unwrap());
+    let r = redirects();
+    assert_eq!(
+        (r.len(), r[0]["stage"].clone(), r[0]["message"].clone()),
+        (1, json!("Received"), json!("Ship the CLI first"))
+    );
+    assert!(r[0].get("acknowledgedAtMs").is_none());
+    let seq = read(&*fx.store, |s| s.runs().instruction(&instruction))
+        .unwrap()
+        .seq;
+    let (x, e) = (a.id.clone(), a.owner_epoch);
+    fx.tx(move |svc, tx| svc.acknowledge_instructions(tx, &x, e, seq))
+        .unwrap();
+    let r = redirects();
+    assert_eq!(r[0]["stage"], "Acknowledged");
+    assert!(r[0]["acknowledgedAtMs"].is_string());
+    let (x, i) = (a.id.clone(), instruction.clone());
+    fx.tx(move |svc, tx| {
+        svc.incorporate_instruction(
+            tx,
+            &x,
+            e,
+            &i,
+            Disposition {
+                summary: "CLI moved ahead of the GUI".into(),
+                superseded: vec![],
+                pending_plan_revision: None,
+            },
+        )
+    })
+    .unwrap();
+    let r = redirects();
+    assert_eq!(
+        (r[0]["stage"].clone(), r[0]["outcome"].clone()),
+        (json!("Incorporated"), json!("CLI moved ahead of the GUI"))
+    );
+}
+
+/// A snapshot lists only the newest 20 redirects, oldest first, however long the history.
+#[test]
+fn revision_20_lists_only_the_newest_redirects() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    applied(&fx.start(&fx.user, "root-f", 1, 1));
+    fx.assign("root-f", "root-f", None, None);
+    for i in 1..=25 {
+        applied(&fx.redirect(&fx.user, "root-f", &format!("Redirect {i}")));
+    }
+    let v = result(&fx.query(
+        &fx.user,
+        "runs.inspect",
+        json!({"protocol": PROTOCOL, "schemaRevision": 20, "queryId": fx.key(),
+            "query": {"kind": "runs.inspect", "rootId": "root-f"}}),
+    ));
+    let messages: Vec<&str> = v["redirects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["message"].as_str().unwrap())
+        .collect();
+    let expected: Vec<String> = (6..=25).map(|i| format!("Redirect {i}")).collect();
+    assert_eq!(messages, expected);
+}

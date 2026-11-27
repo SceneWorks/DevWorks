@@ -1,7 +1,8 @@
 //! Native repository navigation retains the owner's pin through every drill-down.
 use super::Shell;
 use crate::{
-    backend::{Reply, Slot, Unresolved},
+    analysis_screen::{self, Action as AnalysisAction, Query as AnalysisQuery},
+    backend::{Reply, Slot, TaskOutput, Unresolved},
     graph_ops::{self, GraphSlot},
     graph_screen::{self, Action, GraphScreen, Read},
     memory::RouteMemory,
@@ -11,10 +12,47 @@ use crate::{
     widgets::Tone,
 };
 use devworks_core::ports::storage::ProjectPurgeClientScope;
-use devworks_core::protocol::data::GraphResult;
+use devworks_core::protocol::{
+    CommandReply,
+    data::{GraphResult, ViewSelection},
+    results::DomainDecision,
+};
 use eframe::egui::Ui;
 
 impl Shell {
+    pub fn open_fleet_analysis(&mut self) {
+        self.route = Route::Repositories;
+        self.with_typed(|graph: &mut GraphScreen, cx| {
+            let project = cx.selected_project.clone();
+            let rows = if project.is_some() {
+                &cx.projects.members
+            } else {
+                &cx.projects.repositories
+            };
+            let choices: std::collections::BTreeMap<_, _> = rows
+                .items
+                .iter()
+                .map(|repo| (repo.id.as_str().to_owned(), repo.name.0.clone()))
+                .collect();
+            let generation = graph.analysis.generation.wrapping_add(1);
+            *graph = GraphScreen {
+                opened: true,
+                analysis_fleet: true,
+                name: "Fleet analysis".into(),
+                project,
+                sequence: graph.sequence.wrapping_add(1),
+                published_repositories: choices.keys().cloned().collect(),
+                repository_choices: choices,
+                analysis: analysis_screen::AnalysisScreen {
+                    generation,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            GraphCtl { graph, cx }.read_analysis(AnalysisQuery::Fleet, None);
+        });
+    }
+
     pub fn open_repository_graph(&mut self, repository: &str, name: &str) {
         self.route = Route::Repositories;
         self.with_typed(|s: &mut super::indexing::IndexingScreen, cx| {
@@ -63,10 +101,11 @@ impl Screen for GraphScreen {
     fn help_topic(&self, _route: Route, _mem: &RouteMemory) -> Option<&'static str> {
         Some("code-exploration")
     }
-    fn restore_in_flight(&mut self, _slot: &GraphSlot, _u: &Unresolved) {
-        // Only a trust change is a command.
-        self.trust_busy = true;
-        self.trust_unknown = true;
+    fn restore_in_flight(&mut self, slot: &GraphSlot, _u: &Unresolved) {
+        if matches!(slot, GraphSlot::GraphTrust(_)) {
+            self.trust_busy = true;
+            self.trust_unknown = true;
+        }
     }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
         if self.project.as_deref() == Some(scope.project_id.0.as_str()) {
@@ -87,6 +126,8 @@ impl Screen for GraphScreen {
 impl GraphCtl<'_, '_> {
     fn open(&mut self, repository: &str, name: &str) {
         let sequence = self.graph.sequence.wrapping_add(1);
+        self.graph.analysis.invalidate();
+        let analysis_generation = self.graph.analysis.generation;
         *self.graph = graph_screen::GraphScreen {
             opened: true,
             repository: repository.into(),
@@ -98,6 +139,10 @@ impl GraphCtl<'_, '_> {
             published_repositories: std::collections::BTreeSet::from([repository.into()]),
             project: self.selected_project.clone(),
             sequence,
+            analysis: analysis_screen::AnalysisScreen {
+                generation: analysis_generation,
+                ..Default::default()
+            },
             depth: 3,
             relationship_depth: 3,
             line_start: "1".into(),
@@ -117,8 +162,12 @@ impl GraphCtl<'_, '_> {
                 repository: self.graph.repository.clone(),
                 name: self.graph.name.clone(),
                 selected: self.graph.selected.clone(),
+                pin: self.graph.pin.clone(),
                 tab: self.graph.tab,
             });
+        }
+        if read.view_override.is_some() {
+            self.graph.pin = None;
         }
         self.graph.tab = match read.operation {
             "code.overview" | "code.architecture" => 0,
@@ -136,7 +185,11 @@ impl GraphCtl<'_, '_> {
         self.graph.sequence = self.graph.sequence.wrapping_add(1);
         let generation = self.graph.sequence;
         let scope = self.graph.scope();
-        let view = self.graph.view();
+        let view = read
+            .view_override
+            .clone()
+            .map(|view| Some(Some(view)))
+            .unwrap_or_else(|| self.graph.view());
         let cursor = read.cursors.last().cloned().flatten();
         self.graph.loading = true;
         self.graph.error = None;
@@ -163,6 +216,50 @@ impl GraphCtl<'_, '_> {
     }
     fn apply_graph(&mut self, slot: GraphSlot, reply: Reply) -> Option<(GraphSlot, Reply)> {
         match (slot, reply) {
+            (GraphSlot::AnalysisRead(generation), Reply::Query(outcome)) => {
+                let state = &mut self.graph.analysis;
+                if self.graph.opened && state.generation == generation {
+                    state.loading = false;
+                    match ops::query_result(outcome) {
+                        Ok((result, revision)) => {
+                            state.result = Some(result);
+                            state.revision = Some(revision);
+                        }
+                        Err(error) => state.error = Some(error.describe()),
+                    }
+                }
+            }
+            (GraphSlot::AnalysisCommand(key), Reply::Command(outcome)) => {
+                if self.graph.opened && key == self.analysis_key() {
+                    let notice = match &outcome {
+                        Ok(CommandReply::Recorded { receipt, .. }) => match &receipt.decision {
+                            DomainDecision::Accepted { operation_id } => {
+                                format!("Analysis queued as {}", operation_id.0.as_str())
+                            }
+                            DomainDecision::NoChange { .. } => {
+                                "No saved requests needed attention.".into()
+                            }
+                            _ => "Analysis request recorded.".into(),
+                        },
+                        _ => ops::command_result(outcome).err().map_or_else(
+                            || "Analysis request recorded.".into(),
+                            |error| error.describe(),
+                        ),
+                    };
+                    self.read_analysis(AnalysisQuery::Status, None);
+                    self.graph.analysis.notice = Some(notice);
+                }
+            }
+            (GraphSlot::AnalysisEvidence(generation), Reply::Task(result)) => {
+                let state = &mut self.graph.analysis;
+                if self.graph.opened && state.generation == generation {
+                    match result {
+                        Ok(TaskOutput::AnalysisEvidence(text)) => state.evidence = Some(text),
+                        Err(error) => state.error = Some(error),
+                        _ => return None,
+                    }
+                }
+            }
             (GraphSlot::GraphRead(generation), _) if generation != self.graph.sequence => {}
             (GraphSlot::GraphRead(_), Reply::Query(outcome)) => {
                 self.graph.loading = false;
@@ -256,6 +353,9 @@ impl GraphCtl<'_, '_> {
                                 } else {
                                     read.module_pages.push((cursor, page.clone()));
                                 }
+                            }
+                            if page.view.is_some() {
+                                read.view_override = None;
                             }
                             read.page = Some(page);
                         }
@@ -392,6 +492,7 @@ impl GraphCtl<'_, '_> {
                     self.graph.opened = false;
                 }
                 Action::Indexing => self.navigate(Route::Indexing),
+                Action::Analysis(action) => self.analysis_action(action),
                 Action::Repository(repository) => {
                     self.open_graph_read(Read::overview(&repository), true);
                     self.graph.repository = repository;
@@ -441,11 +542,13 @@ impl GraphCtl<'_, '_> {
                         self.graph.repository = crumb.repository;
                         self.graph.name = crumb.name;
                         self.graph.selected = crumb.selected;
-                        self.graph.tab = crumb.tab;
+                        self.graph.pin = crumb.pin;
                         self.open_graph_read(crumb.read, false);
+                        self.graph.tab = crumb.tab;
                     }
                 }
                 Action::RefreshView => {
+                    self.graph.analysis.invalidate();
                     self.graph.pin = None;
                     self.graph.history.clear();
                     self.graph.selected = None;
@@ -481,6 +584,187 @@ impl GraphCtl<'_, '_> {
                     ) {
                         self.graph.trust_busy = true;
                     }
+                }
+            }
+        }
+    }
+}
+
+impl GraphCtl<'_, '_> {
+    fn analysis_view(&self) -> Option<ViewSelection> {
+        let repository_ids = self
+            .graph
+            .published_repositories
+            .iter()
+            .map(|id| crate::frame::id(id))
+            .collect::<Option<Vec<_>>>()?;
+        if self.graph.analysis_fleet {
+            return Some(ViewSelection::Published { repository_ids });
+        }
+        self.graph
+            .view()?
+            .or(Some(ViewSelection::Published { repository_ids }))
+    }
+
+    fn measurement_view(&self, view: devworks_core::protocol::Id) -> Option<ViewSelection> {
+        self.graph
+            .pin
+            .as_ref()
+            .is_none_or(|pin| !pin.views.iter().any(|captured| captured.view_id == view))
+            .then_some(ViewSelection::Exact {
+                view_ids: vec![view],
+            })
+    }
+
+    fn analysis_key(&self) -> String {
+        format!(
+            "{}/{}",
+            self.graph.project.as_deref().unwrap_or("workspace"),
+            self.graph.repository
+        )
+    }
+
+    fn read_analysis(&mut self, query: AnalysisQuery, cursor: Option<String>) {
+        let scope = self.graph.scope();
+        let views = self.analysis_view();
+        let repository = query
+            .repository_filter()
+            .then(|| self.graph.repository.clone());
+        if !self.graph.analysis_fleet {
+            self.graph.tab = 3;
+        }
+        let operation = query.operation();
+        self.graph.analysis.invalidate();
+        let generation = self.graph.analysis.generation;
+        self.graph.analysis.query = Some(query.clone());
+        self.graph.analysis.loading = self.query(
+            GraphSlot::AnalysisRead(generation),
+            "Reading analysis report",
+            operation,
+            move |backend| {
+                query.frame(
+                    backend,
+                    scope,
+                    views,
+                    repository.as_deref(),
+                    cursor.as_deref(),
+                )
+            },
+        );
+        if !self.graph.analysis.loading {
+            self.graph.analysis.error = Some("DevWorks is offline or closing.".into());
+        }
+    }
+
+    fn analysis_action(&mut self, action: AnalysisAction) {
+        match action {
+            AnalysisAction::Read(query, cursor) => self.read_analysis(query, cursor),
+            AnalysisAction::Command(command) => {
+                let Some(revision) = self.graph.analysis.revision else {
+                    return;
+                };
+                let scope = self.graph.scope();
+                let views = if matches!(
+                    command,
+                    analysis_screen::Command::AnalyzeProjects
+                        | analysis_screen::Command::Synthesize
+                ) {
+                    self.graph
+                        .pin
+                        .as_ref()
+                        .and_then(|pin| {
+                            pin.views.iter().find(|view| {
+                                view.snapshot.repository_id.as_str() == self.graph.repository
+                            })
+                        })
+                        .map_or_else(
+                            || {
+                                crate::frame::id(&self.graph.repository).map(|repository| {
+                                    ViewSelection::Published {
+                                        repository_ids: vec![repository],
+                                    }
+                                })
+                            },
+                            |view| {
+                                Some(ViewSelection::Exact {
+                                    view_ids: vec![view.view_id.clone()],
+                                })
+                            },
+                        )
+                } else {
+                    self.analysis_view()
+                };
+                if self.command(
+                    GraphSlot::AnalysisCommand(self.analysis_key()),
+                    "Requesting analysis",
+                    command.operation(),
+                    move |backend| command.frame(backend, scope, views, revision),
+                ) {
+                    self.graph.analysis.loading = true;
+                    self.graph.analysis.notice = Some("Submitting analysis request…".into());
+                }
+            }
+            AnalysisAction::OpenFile {
+                repository,
+                view,
+                path,
+            } => {
+                let source = graph_screen::file_source(repository.clone(), path, 0, 0);
+                let mut read = Read::code("code.source", "Captured source", source);
+                read.view_override = self.measurement_view(view);
+                self.open_graph_read(read, true);
+                self.graph.repository = repository.as_str().into();
+                self.graph.selected = None;
+            }
+            AnalysisAction::OpenRepository(repository) => {
+                let id = repository.as_str();
+                let name = self
+                    .graph
+                    .repository_choices
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| id.to_owned());
+                if self.graph.analysis_fleet {
+                    self.open(id, &name);
+                } else {
+                    self.open_graph_read(Read::overview(id), true);
+                    self.graph.repository = id.into();
+                    self.graph.name = name;
+                    self.graph.selected = None;
+                }
+            }
+            AnalysisAction::OpenEndpoint {
+                repository,
+                view,
+                node,
+            } => {
+                let mut read = Read::node("Related node", node.as_str());
+                read.view_override = self.measurement_view(view);
+                self.open_graph_read(read, true);
+                self.graph.repository = repository.as_str().into();
+                self.graph.selected = None;
+            }
+            AnalysisAction::OpenWork(id) => self.open_work(id.as_str()),
+            AnalysisAction::Evidence(report) => {
+                let generation = self.graph.analysis.generation;
+                if self.online().is_ok()
+                    && let Some(client) = self.client.as_mut()
+                {
+                    client.task(
+                        GraphSlot::AnalysisEvidence(generation).into(),
+                        "Reading report evidence",
+                        move |backend| {
+                            let bytes = ops::read_artifact_bytes(backend, &report)?;
+                            let mut text = String::from_utf8(bytes)
+                                .map_err(|_| "The report is not UTF-8.".to_owned())?;
+                            const DISPLAY_BYTES: usize = 65_536;
+                            if text.len() > DISPLAY_BYTES {
+                                text.truncate(text.floor_char_boundary(DISPLAY_BYTES));
+                                text.push_str("\nReport preview truncated.");
+                            }
+                            Ok(TaskOutput::AnalysisEvidence(text))
+                        },
+                    );
                 }
             }
         }

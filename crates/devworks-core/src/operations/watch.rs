@@ -12,7 +12,7 @@
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Counter, Id, Revision, RootId};
+use crate::protocol::{AssignmentId, Counter, Id, Revision, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,12 +29,33 @@ pub struct CreateInput {
     pub timer: Option<WatchTimer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<WatchFile>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchGithubTarget", extend("x-since" = 9))]
+    pub github: Option<WatchGithubTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matching: Option<WatchMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail_bytes: Option<ByteLimit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_ms: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "WatchAttachedProcess", extend("x-since" = 18))]
+    pub attached_process: Option<WatchAttachedProcess>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "AssignmentId", extend("x-since" = 18))]
+    pub assignment_id: Option<AssignmentId>,
 }
 impl Check for CreateInput {
     fn check(&self) -> Result<(), String> {
@@ -42,14 +63,27 @@ impl Check for CreateInput {
         self.probe.check()?;
         self.timer.check()?;
         self.file.check()?;
+        self.github.check()?;
         self.matching.check()?;
         self.tail_bytes.check()?;
         self.max_lifetime_ms.check()?;
+        self.attached_process.check()?;
+        self.assignment_id.check()?;
         Ok(())
     }
 }
 impl Revisioned for CreateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 9 {
+            self.github = None;
+        }
+        if revision < 18 {
+            self.attached_process = None;
+        }
+        if revision < 18 {
+            self.assignment_id = None;
+        }
+    }
 }
 
 /// `watch.list` Query input.

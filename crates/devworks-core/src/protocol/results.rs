@@ -74,9 +74,9 @@ pub enum OperationResult {
     #[serde(rename = "issues.prioritize")]
     IssuesPrioritize { value: MutationSummary },
     #[serde(rename = "issues.publish")]
-    IssuesPublish { value: GitLink },
+    IssuesPublish { value: GithubIssueLinkResult },
     #[serde(rename = "issues.link")]
-    IssuesLink { value: GitLink },
+    IssuesLink { value: GithubIssueLinkResult },
     #[serde(rename = "tasks.list")]
     TasksList { value: Page<WorkRecord> },
     #[serde(rename = "tasks.get")]
@@ -161,6 +161,9 @@ pub enum OperationResult {
     AgentsAcknowledge { value: AgentMessage },
     #[serde(rename = "agents.checkpoint")]
     AgentsCheckpoint { value: CheckpointRecord },
+    #[schemars(extend("x-since" = 21))]
+    #[serde(rename = "agents.list")]
+    AgentsList { value: AgentPage },
     #[serde(rename = "sessions.list")]
     SessionsList { value: Page<SessionRecord> },
     #[serde(rename = "sessions.get")]
@@ -177,6 +180,9 @@ pub enum OperationResult {
     SessionsStart { value: SessionRecord },
     #[serde(rename = "sessions.end")]
     SessionsEnd { value: SessionRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "sessions.append_screen_context")]
+    SessionsAppendScreenContext { value: SessionRecord },
     #[serde(rename = "ui.current_screen")]
     UiCurrentScreen { value: ScreenContext },
     #[serde(rename = "history.events")]
@@ -254,13 +260,13 @@ pub enum OperationResult {
     #[serde(rename = "analysis.health")]
     AnalysisHealth { value: AnalysisRecord },
     #[serde(rename = "analysis.cross_repo_links")]
-    AnalysisCrossRepoLinks { value: Page<MetricRecord> },
+    AnalysisCrossRepoLinks { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.community_analysis")]
     AnalysisCommunityAnalysis { value: AnalysisRecord },
     #[serde(rename = "analysis.status")]
     AnalysisStatus { value: AnalysisRecord },
     #[serde(rename = "analysis.clusters")]
-    AnalysisClusters { value: Page<ClusterRecord> },
+    AnalysisClusters { value: AnalysisClusterPageResult },
     #[serde(rename = "analysis.cluster_detail")]
     AnalysisClusterDetail { value: ClusterRecord },
     #[serde(rename = "analysis.link_and_detect")]
@@ -270,19 +276,19 @@ pub enum OperationResult {
     #[serde(rename = "analysis.security")]
     AnalysisSecurity { value: AnalysisRecord },
     #[serde(rename = "analysis.metrics")]
-    AnalysisMetrics { value: Page<MetricRecord> },
+    AnalysisMetrics { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.hotspots")]
-    AnalysisHotspots { value: Page<MetricRecord> },
+    AnalysisHotspots { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.reanalyze")]
     AnalysisReanalyze { value: AnalysisRecord },
     #[serde(rename = "analysis.synthesize")]
     AnalysisSynthesize { value: AnalysisRecord },
     #[serde(rename = "analysis.fleet_health")]
-    AnalysisFleetHealth { value: Page<MetricRecord> },
+    AnalysisFleetHealth { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.archival_candidates")]
-    AnalysisArchivalCandidates { value: Page<MetricRecord> },
+    AnalysisArchivalCandidates { value: AnalysisMetricPageResult },
     #[serde(rename = "analysis.file_hotspot")]
-    AnalysisFileHotspot { value: Page<MetricRecord> },
+    AnalysisFileHotspot { value: AnalysisMetricPageResult },
     #[serde(rename = "schemas.connections")]
     SchemasConnections { value: Page<SchemaConnection> },
     #[serde(rename = "schemas.objects")]
@@ -310,6 +316,15 @@ pub enum OperationResult {
     DatabaseDirectSchemaChange { value: DbWriteResult },
     #[serde(rename = "database.configure_sensitive_columns")]
     DatabaseConfigureSensitiveColumns { value: SchemaConnection },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.mysql_readonly_query")]
+    DatabaseMysqlReadonlyQuery { value: DatabaseLegacyRows },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.sensitive_columns")]
+    DatabaseSensitiveColumns { value: DatabaseSensitiveRuleSet },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "database.edit_sensitive_column_rules")]
+    DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
     KnowledgeSearch { value: Page<KnowledgeClaim> },
     #[serde(rename = "knowledge.read")]
@@ -394,16 +409,16 @@ pub enum OperationResult {
     DocumentsDisableRetrieval { value: DocumentResult },
     #[serde(rename = "documents.remove_index")]
     DocumentsRemoveIndex { value: DocumentResult },
-    #[schemars(extend("x-since" = 11))]
+    #[schemars(extend("x-since" = 26))]
     #[serde(rename = "documents.resolve_citation")]
     DocumentsResolveCitation { value: ResolvedDocumentCitation },
-    #[schemars(extend("x-since" = 14))]
+    #[schemars(extend("x-since" = 29))]
     #[serde(rename = "documents.transfer_propose")]
     DocumentsTransferPropose { value: DocumentTransferRecord },
-    #[schemars(extend("x-since" = 14))]
+    #[schemars(extend("x-since" = 29))]
     #[serde(rename = "documents.transfer_respond")]
     DocumentsTransferRespond { value: DocumentTransferRecord },
-    #[schemars(extend("x-since" = 14))]
+    #[schemars(extend("x-since" = 29))]
     #[serde(rename = "documents.transfer_status")]
     DocumentsTransferStatus { value: DocumentTransferRecord },
     #[serde(rename = "artifacts.save")]
@@ -540,7 +555,7 @@ pub enum OperationResult {
     #[serde(rename = "github.repositories")]
     GithubRepositories { value: Page<RepositoryRecord> },
     #[serde(rename = "github.poll_status")]
-    GithubPollStatus { value: Page<GithubObservation> },
+    GithubPollStatus { value: GithubPollStatusResult },
     #[serde(rename = "github.issue_sync")]
     GithubIssueSync { value: OperationRef },
     #[serde(rename = "github.checks")]
@@ -720,6 +735,12 @@ pub enum OperationResult {
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invoke")]
     AddonsInvoke { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.run_workflow")]
+    AddonsRunWorkflow { value: PackageInvocation },
+    #[schemars(extend("x-since" = 9))]
+    #[serde(rename = "addons.read_content")]
+    AddonsReadContent { value: PackageContent },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "addons.invocation")]
     AddonsInvocation { value: PackageInvocation },
@@ -887,6 +908,7 @@ impl OperationResult {
             Self::AgentsInbox { .. } => "agents.inbox",
             Self::AgentsAcknowledge { .. } => "agents.acknowledge",
             Self::AgentsCheckpoint { .. } => "agents.checkpoint",
+            Self::AgentsList { .. } => "agents.list",
             Self::SessionsList { .. } => "sessions.list",
             Self::SessionsGet { .. } => "sessions.get",
             Self::SessionsTranscript { .. } => "sessions.transcript",
@@ -895,6 +917,7 @@ impl OperationResult {
             Self::SessionsContextSources { .. } => "sessions.context_sources",
             Self::SessionsStart { .. } => "sessions.start",
             Self::SessionsEnd { .. } => "sessions.end",
+            Self::SessionsAppendScreenContext { .. } => "sessions.append_screen_context",
             Self::UiCurrentScreen { .. } => "ui.current_screen",
             Self::HistoryEvents { .. } => "history.events",
             Self::HistoryWorkLineage { .. } => "history.work_lineage",
@@ -962,6 +985,9 @@ impl OperationResult {
             Self::DatabaseConfigureSensitiveColumns { .. } => {
                 "database.configure_sensitive_columns"
             }
+            Self::DatabaseMysqlReadonlyQuery { .. } => "database.mysql_readonly_query",
+            Self::DatabaseSensitiveColumns { .. } => "database.sensitive_columns",
+            Self::DatabaseEditSensitiveColumnRules { .. } => "database.edit_sensitive_column_rules",
             Self::KnowledgeSearch { .. } => "knowledge.search",
             Self::KnowledgeRead { .. } => "knowledge.read",
             Self::KnowledgeRecord { .. } => "knowledge.record",
@@ -1163,6 +1189,8 @@ impl OperationResult {
             Self::AddonsRollback { .. } => "addons.rollback",
             Self::AddonsUninstall { .. } => "addons.uninstall",
             Self::AddonsInvoke { .. } => "addons.invoke",
+            Self::AddonsRunWorkflow { .. } => "addons.run_workflow",
+            Self::AddonsReadContent { .. } => "addons.read_content",
             Self::AddonsInvocation { .. } => "addons.invocation",
             Self::HelpSearch { .. } => "help.search",
             Self::HelpRead { .. } => "help.read",
@@ -1281,6 +1309,7 @@ impl Check for OperationResult {
             Self::AgentsInbox { value } => value.check()?,
             Self::AgentsAcknowledge { value } => value.check()?,
             Self::AgentsCheckpoint { value } => value.check()?,
+            Self::AgentsList { value } => value.check()?,
             Self::SessionsList { value } => value.check()?,
             Self::SessionsGet { value } => value.check()?,
             Self::SessionsTranscript { value } => value.check()?,
@@ -1289,6 +1318,7 @@ impl Check for OperationResult {
             Self::SessionsContextSources { value } => value.check()?,
             Self::SessionsStart { value } => value.check()?,
             Self::SessionsEnd { value } => value.check()?,
+            Self::SessionsAppendScreenContext { value } => value.check()?,
             Self::UiCurrentScreen { value } => value.check()?,
             Self::HistoryEvents { value } => value.check()?,
             Self::HistoryWorkLineage { value } => value.check()?,
@@ -1354,6 +1384,9 @@ impl Check for OperationResult {
             Self::DatabaseApplyMigration { value } => value.check()?,
             Self::DatabaseDirectSchemaChange { value } => value.check()?,
             Self::DatabaseConfigureSensitiveColumns { value } => value.check()?,
+            Self::DatabaseMysqlReadonlyQuery { value } => value.check()?,
+            Self::DatabaseSensitiveColumns { value } => value.check()?,
+            Self::DatabaseEditSensitiveColumnRules { value } => value.check()?,
             Self::KnowledgeSearch { value } => value.check()?,
             Self::KnowledgeRead { value } => value.check()?,
             Self::KnowledgeRecord { value } => value.check()?,
@@ -1553,6 +1586,8 @@ impl Check for OperationResult {
             Self::AddonsRollback { value } => value.check()?,
             Self::AddonsUninstall { value } => value.check()?,
             Self::AddonsInvoke { value } => value.check()?,
+            Self::AddonsRunWorkflow { value } => value.check()?,
+            Self::AddonsReadContent { value } => value.check()?,
             Self::AddonsInvocation { value } => value.check()?,
             Self::HelpSearch { value } => value.check()?,
             Self::HelpRead { value } => value.check()?,
@@ -1620,6 +1655,8 @@ impl Revisioned for OperationResult {
             Self::IssuesGet { value } => value.retain_revision(revision),
             Self::IssuesCreate { value } => value.retain_revision(revision),
             Self::IssuesEdit { value } => value.retain_revision(revision),
+            Self::IssuesPublish { value } => value.retain_revision(revision),
+            Self::IssuesLink { value } => value.retain_revision(revision),
             Self::TasksList { value } => value.retain_revision(revision),
             Self::TasksGet { value } => value.retain_revision(revision),
             Self::TasksCreate { value } => value.retain_revision(revision),
@@ -1638,12 +1675,18 @@ impl Revisioned for OperationResult {
             Self::NextWorkClaimFeatureTask { value } => value.retain_revision(revision),
             Self::NextWorkInspectClaim { value } => value.retain_revision(revision),
             Self::NextWorkReleaseClaim { value } => value.retain_revision(revision),
+            Self::RunsStart { value } => value.retain_revision(revision),
+            Self::RunsPause { value } => value.retain_revision(revision),
+            Self::RunsContinue { value } => value.retain_revision(revision),
+            Self::RunsInspect { value } => value.retain_revision(revision),
+            Self::RunsEligibility { value } => value.retain_revision(revision),
             Self::SessionsList { value } => value.retain_revision(revision),
             Self::SessionsGet { value } => value.retain_revision(revision),
             Self::SessionsTranscript { value } => value.retain_revision(revision),
             Self::SessionsAppendMessage { value } => value.retain_revision(revision),
             Self::SessionsStart { value } => value.retain_revision(revision),
             Self::SessionsEnd { value } => value.retain_revision(revision),
+            Self::SessionsAppendScreenContext { value } => value.retain_revision(revision),
             Self::HistoryEvents { value } => value.retain_revision(revision),
             Self::HistoryWorkLineage { value } => value.retain_revision(revision),
             Self::HistoryGitLinks { value } => value.retain_revision(revision),
@@ -1669,10 +1712,28 @@ impl Revisioned for OperationResult {
             Self::CodeSnippet { value } => value.retain_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.retain_revision(revision),
             Self::IndexingStatus { value } => value.retain_revision(revision),
+            Self::AnalysisHealth { value } => value.retain_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.retain_revision(revision),
+            Self::AnalysisCommunityAnalysis { value } => value.retain_revision(revision),
+            Self::AnalysisStatus { value } => value.retain_revision(revision),
+            Self::AnalysisClusters { value } => value.retain_revision(revision),
+            Self::AnalysisClusterDetail { value } => value.retain_revision(revision),
+            Self::AnalysisLinkAndDetect { value } => value.retain_revision(revision),
+            Self::AnalysisProcessBatch { value } => value.retain_revision(revision),
+            Self::AnalysisSecurity { value } => value.retain_revision(revision),
+            Self::AnalysisMetrics { value } => value.retain_revision(revision),
+            Self::AnalysisHotspots { value } => value.retain_revision(revision),
+            Self::AnalysisReanalyze { value } => value.retain_revision(revision),
+            Self::AnalysisSynthesize { value } => value.retain_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.retain_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.retain_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.retain_revision(revision),
             Self::SchemasConnections { value } => value.retain_revision(revision),
             Self::SchemasObjects { value } => value.retain_revision(revision),
             Self::SchemasConfigure { value } => value.retain_revision(revision),
+            Self::DatabaseRead { value } => value.retain_revision(revision),
             Self::DatabaseConfigureSensitiveColumns { value } => value.retain_revision(revision),
+            Self::DatabaseMysqlReadonlyQuery { value } => value.retain_revision(revision),
             Self::KnowledgeSearch { value } => value.retain_revision(revision),
             Self::KnowledgeRead { value } => value.retain_revision(revision),
             Self::KnowledgeRecord { value } => value.retain_revision(revision),
@@ -1742,6 +1803,15 @@ impl Revisioned for OperationResult {
             Self::NotificationsRead { value } => value.retain_revision(revision),
             Self::NotificationsAcknowledge { value } => value.retain_revision(revision),
             Self::NotificationsMarkRead { value } => value.retain_revision(revision),
+            Self::ReviewsList { value } => value.retain_revision(revision),
+            Self::ReviewsInspect { value } => value.retain_revision(revision),
+            Self::ReviewsRequest { value } => value.retain_revision(revision),
+            Self::ReviewsFindings { value } => value.retain_revision(revision),
+            Self::ReviewsRespond { value } => value.retain_revision(revision),
+            Self::ReviewsAdjudicate { value } => value.retain_revision(revision),
+            Self::ReviewsReadiness { value } => value.retain_revision(revision),
+            Self::GithubAccount { value } => value.retain_revision(revision),
+            Self::GithubPollStatus { value } => value.retain_revision(revision),
             Self::ResourcesList { value } => value.retain_revision(revision),
             Self::ResourcesAcquire { value } => value.retain_revision(revision),
             Self::ResourcesRenew { value } => value.retain_revision(revision),
@@ -1807,6 +1877,10 @@ impl Revisioned for OperationResult {
             Self::WorkspaceLogs { value } => value.retain_revision(revision),
             Self::WorkspaceRecordDiagnostic { value } => value.retain_revision(revision),
             Self::RepositoriesNodes { value } => value.retain_revision(revision),
+            Self::WatchCreate { value } => value.retain_revision(revision),
+            Self::WatchList { value } => value.retain_revision(revision),
+            Self::WatchInspect { value } => value.retain_revision(revision),
+            Self::WatchCancel { value } => value.retain_revision(revision),
             _ => {}
         }
     }
@@ -1842,19 +1916,34 @@ impl Revisioned for OperationResult {
             Self::AgentsEvents { .. } if revision < 7 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::AgentsList { .. } if revision < 21 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::SessionsAppendScreenContext { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::SchemasCodeReferences { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
-            Self::DocumentsResolveCitation { .. } if revision < 11 => {
+            Self::DatabaseMysqlReadonlyQuery { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
-            Self::DocumentsTransferPropose { .. } if revision < 14 => {
+            Self::DatabaseSensitiveColumns { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
-            Self::DocumentsTransferRespond { .. } if revision < 14 => {
+            Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
-            Self::DocumentsTransferStatus { .. } if revision < 14 => {
+            Self::DocumentsResolveCitation { .. } if revision < 26 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferPropose { .. } if revision < 29 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferRespond { .. } if revision < 29 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferStatus { .. } if revision < 29 => {
                 Err("operation result predates its introduction".into())
             }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
@@ -1881,6 +1970,12 @@ impl Revisioned for OperationResult {
             Self::AddonsInvoke { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::AddonsRunWorkflow { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::AddonsReadContent { .. } if revision < 9 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::AddonsInvocation { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
@@ -1896,6 +1991,8 @@ impl Revisioned for OperationResult {
             Self::WatchCancel { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::IssuesPublish { value } => value.check_revision(revision),
+            Self::IssuesLink { value } => value.check_revision(revision),
             Self::NextWorkClaimProjectQueue { value } => value.check_revision(revision),
             Self::NextWorkClaimFeatureTask { value } => value.check_revision(revision),
             Self::CodeSearch { value } => value.check_revision(revision),
@@ -1916,6 +2013,13 @@ impl Revisioned for OperationResult {
             Self::CodePublishers { value } => value.check_revision(revision),
             Self::CodeSnippet { value } => value.check_revision(revision),
             Self::CodeRepositoryDependencies { value } => value.check_revision(revision),
+            Self::AnalysisCrossRepoLinks { value } => value.check_revision(revision),
+            Self::AnalysisClusters { value } => value.check_revision(revision),
+            Self::AnalysisMetrics { value } => value.check_revision(revision),
+            Self::AnalysisHotspots { value } => value.check_revision(revision),
+            Self::AnalysisFleetHealth { value } => value.check_revision(revision),
+            Self::AnalysisArchivalCandidates { value } => value.check_revision(revision),
+            Self::AnalysisFileHotspot { value } => value.check_revision(revision),
             Self::DreamingRevert { value } => value.check_revision(revision),
             Self::DocumentsImport { value } => value.check_revision(revision),
             Self::DocumentsList { value } => value.check_revision(revision),
@@ -1938,6 +2042,7 @@ impl Revisioned for OperationResult {
             Self::ConventionsDeleteResource { value } => value.check_revision(revision),
             Self::ConventionsSearch { value } => value.check_revision(revision),
             Self::SkillsResources { value } => value.check_revision(revision),
+            Self::GithubPollStatus { value } => value.check_revision(revision),
             Self::JobsList { value } => value.check_revision(revision),
             Self::JobsCreate { value } => value.check_revision(revision),
             Self::JobsEdit { value } => value.check_revision(revision),
@@ -1956,6 +2061,10 @@ impl Revisioned for OperationResult {
             Self::HelpTopicForScreen { value } => value.check_revision(revision),
             Self::HelpPackageGuides { value } => value.check_revision(revision),
             Self::RepositoriesNodes { value } => value.check_revision(revision),
+            Self::WatchCreate { value } => value.check_revision(revision),
+            Self::WatchList { value } => value.check_revision(revision),
+            Self::WatchInspect { value } => value.check_revision(revision),
+            Self::WatchCancel { value } => value.check_revision(revision),
             _ => Ok(()),
         }
     }

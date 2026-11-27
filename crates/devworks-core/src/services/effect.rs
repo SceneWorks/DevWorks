@@ -23,11 +23,11 @@ pub enum EffectOutcome {
 /// Both methods block and run on a blocking thread, never on the async runtime. `observe` must
 /// not perform the effect again.
 pub trait JournaledEffect: Send + Sync + 'static {
-    fn observes_delivery_cancellation(&self) -> bool {
+    /// This service's observed outcomes are sufficient to safely requeue the receipt for settlement.
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         false
     }
-    /// A reconciled delivery may be requeued to settle a proved result or safely resume custody.
-    fn resumes_after_observation(&self) -> bool {
+    fn observes_delivery_cancellation(&self) -> bool {
         false
     }
     /// Performs the effect of a `Dispatching` operation once.

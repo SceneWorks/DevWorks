@@ -44,6 +44,7 @@ fn denied(message: &str) -> RpcError {
 pub(super) fn read(
     host: &PackageHost,
     ctx: &SlotContext,
+    slot: &Slot,
     artifact: &wire::ArtifactRef,
     offset: Option<&wire::Counter>,
 ) -> Result<RpcResult, RpcError> {
@@ -82,7 +83,11 @@ pub(super) fn read(
             "the offset is past the artifact's end",
         ));
     }
-    let end = (offset + ARTIFACT_CHUNK_BYTES).min(bytes.len());
+    let count = slot.take_artifact_credit(
+        artifact.version_id.as_str(),
+        ARTIFACT_CHUNK_BYTES.min(bytes.len() - offset),
+    )?;
+    let end = offset + count;
     Ok(RpcResult::ArtifactChunk {
         artifact: artifact.clone(),
         offset: wire::Counter::try_from(offset.to_string())

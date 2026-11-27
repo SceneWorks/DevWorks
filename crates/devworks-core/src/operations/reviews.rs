@@ -59,11 +59,32 @@ impl Revisioned for InspectInput {
 /// `reviews.request` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["rootId", "expectedRevision", "barrier", "policyRevision"]}, {"required": ["rootId", "expectedRevision", "policyRevision", "localTarget"], "x-since": 15}, {"required": ["rootId", "expectedRevision", "policyRevision", "candidateRepair"], "x-since": 15}]))]
 pub struct RequestInput {
     pub root_id: RootId,
     pub expected_revision: Revision,
-    pub barrier: DeliveryBarrier,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DeliveryBarrier")]
+    pub barrier: Option<DeliveryBarrier>,
     pub policy_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LocalReviewTarget", extend("x-since" = 15))]
+    pub local_target: Option<LocalReviewTarget>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "ReviewCandidateRepair", extend("x-since" = 15))]
+    pub candidate_repair: Option<ReviewCandidateRepair>,
 }
 impl Check for RequestInput {
     fn check(&self) -> Result<(), String> {
@@ -71,11 +92,20 @@ impl Check for RequestInput {
         self.expected_revision.check()?;
         self.barrier.check()?;
         self.policy_revision.check()?;
+        self.local_target.check()?;
+        self.candidate_repair.check()?;
         Ok(())
     }
 }
 impl Revisioned for RequestInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.local_target = None;
+        }
+        if revision < 15 {
+            self.candidate_repair = None;
+        }
+    }
 }
 
 /// `reviews.findings` Query input.
@@ -127,6 +157,13 @@ pub struct AdjudicateInput {
     pub actionable: bool,
     pub rationale: Content,
     pub evidence: Items<ArtifactRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "CodeReviewResolution", extend("x-since" = 15))]
+    pub resolution: Option<CodeReviewResolution>,
 }
 impl Check for AdjudicateInput {
     fn check(&self) -> Result<(), String> {
@@ -135,31 +172,55 @@ impl Check for AdjudicateInput {
         self.actionable.check()?;
         self.rationale.check()?;
         self.evidence.check()?;
+        self.resolution.check()?;
         Ok(())
     }
 }
 impl Revisioned for AdjudicateInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.resolution = None;
+        }
+    }
 }
 
 /// `reviews.readiness` Query input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["rootId", "barrier", "policyRevision"]}, {"required": ["rootId", "policyRevision", "localTarget"], "x-since": 15}]))]
 pub struct ReadinessInput {
     pub root_id: RootId,
-    pub barrier: DeliveryBarrier,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "DeliveryBarrier")]
+    pub barrier: Option<DeliveryBarrier>,
     pub policy_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "LocalReviewTarget", extend("x-since" = 15))]
+    pub local_target: Option<LocalReviewTarget>,
 }
 impl Check for ReadinessInput {
     fn check(&self) -> Result<(), String> {
         self.root_id.check()?;
         self.barrier.check()?;
         self.policy_revision.check()?;
+        self.local_target.check()?;
         Ok(())
     }
 }
 impl Revisioned for ReadinessInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 15 {
+            self.local_target = None;
+        }
+    }
 }
 
 /// An admitted input of the `reviews` family, built only for the selected operation and mode.

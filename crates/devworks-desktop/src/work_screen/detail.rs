@@ -1,5 +1,6 @@
 //! Feature and card detail: plans and their requirement editor, readiness, blockers, feature
-//! membership, acceptance, assignment, run controls, history and source control.
+//! membership, acceptance, assignment, run controls, history, linked history (lineage, evidence
+//! links and model and tool usage) and source control.
 use crate::frame;
 use crate::theme;
 use crate::widgets::{self, Tone, chip};
@@ -18,49 +19,161 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 fn run_controls(
     ui: &mut Ui,
-    work: &WorkUi,
+    work: &mut WorkUi,
     w: &WorkRecord,
     enabled: bool,
     actions: &mut Vec<Action>,
 ) {
-    if let Some(s) = work.runs.get(w.id.as_str()).cloned() {
-        let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
-        widgets::caption(
-            ui,
-            format!(
-                "Execution: {:?}{}",
-                s.root.desired_state,
-                if held {
-                    " · paused until you continue it"
-                } else {
-                    ""
+    use devworks_core::protocol::Phase;
+    use devworks_core::protocol::records::{HoldCondition, HoldGate, RedirectStage};
+    let id = w.id.as_str().to_owned();
+    let Some(s) = work.runs.get(&id).cloned() else {
+        if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
+            actions.push(Action::Inspect(id));
+        }
+        return;
+    };
+    let held = s.blockers.items.iter().any(|b| wops::manual_hold(&b.cause));
+    let running = s
+        .activation
+        .as_ref()
+        .is_some_and(|a| matches!(a.phase, Phase::Pending | Phase::Claimed | Phase::Running));
+    widgets::caption(
+        ui,
+        format!(
+            "Execution: {:?}{}",
+            s.root.desired_state,
+            if held {
+                " · paused until you continue it"
+            } else if running {
+                " · running"
+            } else {
+                ""
+            }
+        ),
+    );
+    // Every condition holding the root: the eligibility read names derived ones (plan,
+    // readiness, prerequisites, questions) as well as the stored holds the snapshot lists.
+    let mut conditions: Vec<HoldCondition> = Vec::new();
+    let sources = work
+        .eligibility
+        .get(&id)
+        .and_then(|e| e.conditions.as_ref())
+        .into_iter()
+        .chain(s.conditions.as_ref());
+    for c in sources.flat_map(|c| c.0.iter()) {
+        if !conditions.iter().any(|x| x.hold_id.0 == c.hold_id.0) {
+            conditions.push(c.clone());
+        }
+    }
+    if !conditions.is_empty() {
+        ui.label(RichText::new("Why this work is waiting").strong());
+        for c in &conditions {
+            let what = if c.rate_limited {
+                "Rate limited"
+            } else {
+                match c.gate {
+                    HoldGate::Pause => "Paused",
+                    HoldGate::Prerequisite => "Waiting for a prerequisite",
+                    HoldGate::Question => "Waiting for your answer",
+                    HoldGate::Plan => "Needs an approved plan",
+                    HoldGate::Readiness => "Readiness not current",
+                    HoldGate::Archived => "Project archived",
+                    HoldGate::Assignment => "Assignment not current",
+                    HoldGate::Hold => match c.cause {
+                        devworks_core::protocol::Cause::Capacity => "Waiting for capacity",
+                        devworks_core::protocol::Cause::Approval => "Waiting for approval",
+                        devworks_core::protocol::Cause::Credentials => "Needs credentials",
+                        devworks_core::protocol::Cause::RestartContinue => "Held after a restart",
+                        devworks_core::protocol::Cause::BudgetContinue => "Budget reached",
+                        _ => "Held",
+                    },
                 }
-            ),
-        );
-        ui.horizontal(|ui| {
-            if w.parent_id.is_none()
-                && ui
-                    .add_enabled(enabled, egui::Button::new("Start"))
-                    .clicked()
-            {
-                actions.push(Action::Run("runs.start", w.clone()));
-            }
+            };
+            widgets::caption(ui, format!("{what}: {}", c.reason.0));
+        }
+    }
+    ui.horizontal(|ui| {
+        if w.parent_id.is_none()
+            && ui
+                .add_enabled(enabled, egui::Button::new("Start"))
+                .clicked()
+        {
+            actions.push(Action::Run("runs.start", w.clone()));
+        }
+        if ui
+            .add_enabled(enabled, egui::Button::new("Pause"))
+            .clicked()
+        {
+            actions.push(Action::Run("runs.pause", w.clone()));
+        }
+        if ui
+            .add_enabled(enabled && held, egui::Button::new("Continue"))
+            .clicked()
+        {
+            actions.push(Action::Run("runs.continue", w.clone()));
+        }
+        // Work can run outside the root's activation (its processes, a linked task), so Stop is
+        // always offered and the service decides what there is to stop.
+        if ui.add_enabled(enabled, egui::Button::new("Stop")).clicked() {
+            actions.push(Action::Stop(w.clone()));
+        }
+    });
+    if w.parent_id.is_some() {
+        return;
+    }
+    let redirects = s
+        .redirects
+        .as_ref()
+        .map(|r| r.0.as_slice())
+        .unwrap_or_default();
+    // Collapsed by default so the detail stays compact; open while a redirect is in progress.
+    let pending = redirects
+        .iter()
+        .any(|r| !matches!(r.stage, RedirectStage::Incorporated));
+    // One redirect is sent at a time: a second click waits for the first reply.
+    let sending = work.redirect_sent.contains_key(w.id.as_str());
+    egui::CollapsingHeader::new(format!("Redirect ({})", redirects.len()))
+        .id_salt(("redirect", w.id.as_str()))
+        .default_open(pending)
+        .show(ui, |ui| {
+            let draft = work.redirect_drafts.entry(id).or_default();
+            let input = ui.add(
+                egui::TextEdit::multiline(draft)
+                    .hint_text("Tell the coordinator what to change")
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY),
+            );
+            input.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, "Redirect message")
+            });
             if ui
-                .add_enabled(enabled, egui::Button::new("Pause"))
+                .add_enabled(
+                    enabled && !sending && !draft.trim().is_empty(),
+                    egui::Button::new(if sending {
+                        "Sending redirect…"
+                    } else {
+                        "Send redirect"
+                    }),
+                )
                 .clicked()
             {
-                actions.push(Action::Run("runs.pause", w.clone()));
+                actions.push(Action::Redirect(w.clone()));
             }
-            if ui
-                .add_enabled(enabled && held, egui::Button::new("Continue"))
-                .clicked()
-            {
-                actions.push(Action::Run("runs.continue", w.clone()));
+            for r in redirects.iter().rev() {
+                let stage = match r.stage {
+                    RedirectStage::Received => "sent, waiting for the coordinator",
+                    RedirectStage::Acknowledged => "acknowledged by the coordinator",
+                    RedirectStage::Incorporated => "incorporated",
+                };
+                let outcome = r
+                    .outcome
+                    .as_ref()
+                    .map(|o| format!(" · {}", o.0))
+                    .unwrap_or_default();
+                widgets::caption(ui, format!("Redirect “{}”: {stage}{outcome}", r.message.0));
             }
         });
-    } else if w.parent_id.is_none() && ui.button("Show run controls").clicked() {
-        actions.push(Action::Inspect(w.id.as_str().to_owned()));
-    }
 }
 
 /// Feature list tabs and Issues tabs.
@@ -100,11 +213,12 @@ pub(crate) fn feature_detail(
             );
             metadata_summary(ui, f);
             if !f.description.0.is_empty() {
-                ui.label(&f.description.0);
+                widgets::text_with_github_links(ui, &f.description.0);
             }
             workflow::next_task(ui, work, f.id.as_str(), enabled, actions);
             run_controls(ui, work, f, enabled, actions);
             source_control(ui, work, f.id.as_str(), actions);
+            linked_history(ui, work, f.id.as_str(), actions);
             ui.add_space(6.0);
             // Approval and readiness are separate facts, shown apart.
             chip(
@@ -977,9 +1091,13 @@ pub(crate) fn card_detail(
             );
             metadata_summary(ui, w);
             if !w.description.0.is_empty() {
-                ui.label(&w.description.0);
+                widgets::text_with_github_links(ui, &w.description.0);
+            }
+            if matches!(w.kind, WorkKind::Issue) {
+                github_issue_controls(ui, work, w, enabled, actions);
             }
             source_control(ui, work, w.id.as_str(), actions);
+            linked_history(ui, work, w.id.as_str(), actions);
             // Workflow status: moving it never starts, pauses or completes execution.
             let mut target = w.status_id.as_str().to_owned();
             egui::ComboBox::from_id_salt(("card-status", w.id.as_str()))
@@ -1254,6 +1372,155 @@ fn settled_finding_history(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut
     }
 }
 
+/// Shows the state of one part of the linked history (a spinner, its error, an empty note) and
+/// whether its rows are ready; its Load more control follows the rows.
+fn linked_part<T>(ui: &mut Ui, list: &crate::paged::Paged<T>, empty: &str) -> bool {
+    if let Some(error) = &list.error {
+        widgets::caption(ui, error);
+    }
+    if !list.loaded {
+        if list.loading() {
+            ui.spinner();
+        }
+        return false;
+    }
+    if list.items.is_empty() {
+        widgets::caption(ui, empty);
+    }
+    true
+}
+
+/// A root's linked history (HISTORY-01): every related work item, link and event, its evidence
+/// links and its model and tool usage, each read through its `history.*` operation when a person
+/// asks for it.
+pub(crate) fn linked_history(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
+    let Some(linked) = work.linked.get(root) else {
+        if ui.button("Show linked history").clicked() {
+            actions.push(Action::LinkedHistory(root.to_owned(), None));
+        }
+        return;
+    };
+    let busy = linked.lineage.loading() || linked.evidence.loading() || linked.usage.loading();
+    egui::CollapsingHeader::new("Linked history")
+        .id_salt(("work-linked", root))
+        .default_open(true)
+        .show(ui, |ui| {
+            if ui
+                .add_enabled(!busy, egui::Button::new("Refresh linked history"))
+                .clicked()
+            {
+                actions.push(Action::LinkedHistory(root.to_owned(), None));
+            }
+            let more = |ui: &mut Ui, label: &str, more: bool, loading: bool| {
+                more && ui.add_enabled(!loading, egui::Button::new(label)).clicked()
+            };
+            ui.label(RichText::new("Lineage").strong());
+            if linked_part(ui, &linked.lineage, "No linked work, links or events.") {
+                for r in &linked.lineage.items {
+                    let who = r
+                        .actor_id
+                        .as_ref()
+                        .map(|a| a.0.as_str())
+                        .unwrap_or("unknown");
+                    ui.label(format!(
+                        "{} · {}: {}",
+                        r.kind.0,
+                        r.related_id.as_str(),
+                        r.summary.0
+                    ));
+                    widgets::caption(
+                        ui,
+                        format!(
+                            "{who} · {}",
+                            crate::jobs_screen::local_time(r.occurred_at_ms.as_ref())
+                        ),
+                    );
+                }
+                if more(
+                    ui,
+                    "Load more lineage",
+                    linked.lineage.more(),
+                    linked.lineage.loading(),
+                ) {
+                    actions.push(Action::LinkedHistory(
+                        root.to_owned(),
+                        Some(LinkedPart::Lineage),
+                    ));
+                }
+            }
+            ui.label(RichText::new("Evidence links").strong());
+            if linked_part(ui, &linked.evidence, "No evidence links.") {
+                for e in &linked.evidence.items {
+                    ui.label(format!("Evidence: {}", e.summary.0));
+                    widgets::caption(
+                        ui,
+                        format!(
+                            "artifact {} · {}",
+                            e.artifact.artifact_id.as_str(),
+                            crate::jobs_screen::local_time(e.occurred_at_ms.as_ref())
+                        ),
+                    );
+                }
+                if more(
+                    ui,
+                    "Load more evidence",
+                    linked.evidence.more(),
+                    linked.evidence.loading(),
+                ) {
+                    actions.push(Action::LinkedHistory(
+                        root.to_owned(),
+                        Some(LinkedPart::Evidence),
+                    ));
+                }
+            }
+            ui.label(RichText::new("Tool usage").strong());
+            if linked_part(ui, &linked.usage, "No model requests or tool calls.") {
+                for u in &linked.usage.items {
+                    match u {
+                        wops::UsageRow::Model(m) => {
+                            ui.label(format!(
+                                "Model {} · {}: {} in, {} out tokens",
+                                m.model_id.as_str(),
+                                m.purpose.0,
+                                m.input_tokens.get(),
+                                m.output_tokens.get()
+                            ));
+                        }
+                        wops::UsageRow::Tool(t) => {
+                            let mut line = format!("Tool {} · {:?}", t.tool_name.0, t.outcome);
+                            if let Some(d) = &t.duration_ms {
+                                line.push_str(&format!(" · {} ms", d.get()));
+                            }
+                            if let Some(code) = &t.error_code {
+                                line.push_str(&format!(" · {}", code.0));
+                            }
+                            ui.label(line);
+                            widgets::caption(
+                                ui,
+                                format!(
+                                    "session {} · {}",
+                                    t.session_id.as_str(),
+                                    crate::widgets::local_time(t.occurred_at_ms.get())
+                                ),
+                            );
+                        }
+                    }
+                }
+                if more(
+                    ui,
+                    "Load more usage",
+                    linked.usage.more(),
+                    linked.usage.loading(),
+                ) {
+                    actions.push(Action::LinkedHistory(
+                        root.to_owned(),
+                        Some(LinkedPart::Usage),
+                    ));
+                }
+            }
+        });
+}
+
 pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &mut Vec<Action>) {
     egui::CollapsingHeader::new("Source control")
         .id_salt(("work-git", root))
@@ -1291,7 +1558,9 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
             for link in latest.values() {
                 ui.separator();
                 if let Some(url) = &link.repository_url {
-                    ui.hyperlink_to(link.repository_id.as_str(), &url.0);
+                    let repo_label = widgets::github_link_label(&url.0)
+                        .unwrap_or_else(|| link.repository_id.as_str().to_owned());
+                    ui.hyperlink_to(repo_label, &url.0);
                 } else {
                     ui.label(link.repository_id.as_str());
                 }
@@ -1373,7 +1642,36 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                     ui.monospace(&link.head.hex);
                 }
                 if let Some(url) = &link.pull_request_url {
-                    ui.hyperlink_to("Pull request", &url.0);
+                    let pr_label = widgets::github_link_label(&url.0).map_or_else(
+                        || "Pull request".to_owned(),
+                        |repo| format!("Pull request · {repo}"),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.hyperlink_to(pr_label, &url.0);
+                        if ui.small_button("Read checks & reviews").clicked() {
+                            actions.push(Action::ReadGithubPullObservations {
+                                repository_id: link.repository_id.as_str().to_owned(),
+                                pull_request_url: url.0.clone(),
+                                expected_head: link.head.hex.clone(),
+                            });
+                        }
+                    });
+                    for obs in work
+                        .github_pr_checks
+                        .get(&url.0)
+                        .into_iter()
+                        .flatten()
+                        .chain(work.github_pr_reviews.get(&url.0).into_iter().flatten())
+                    {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!("{} · {}", obs.kind.0, obs.state.0));
+                            if let Some(obs_url) = &obs.url {
+                                let label = widgets::github_link_label(&obs_url.0)
+                                    .unwrap_or_else(|| obs.subject_id.as_str().to_owned());
+                                ui.hyperlink_to(label, &obs_url.0);
+                            }
+                        });
+                    }
                 }
                 if let Some(session) = &link.agent_session_id
                     && ui
@@ -1383,5 +1681,83 @@ pub(crate) fn source_control(ui: &mut Ui, work: &WorkUi, root: &str, actions: &m
                     actions.push(Action::OpenGitSession(session.as_str().to_owned()));
                 }
             }
+        });
+}
+
+fn github_issue_controls(
+    ui: &mut Ui,
+    work: &mut WorkUi,
+    w: &WorkRecord,
+    enabled: bool,
+    actions: &mut Vec<Action>,
+) {
+    let Some(repo_id) = w.repository_ids.0.first() else {
+        return;
+    };
+    egui::CollapsingHeader::new("GitHub issue")
+        .id_salt(("work-github-issue", w.id.as_str()))
+        .show(ui, |ui| {
+            let mut is_linked = false;
+            if let Some(tracked) = &w.github_issue {
+                is_linked = true;
+                ui.horizontal_wrapped(|ui| {
+                    let label = widgets::github_link_label(&tracked.url.0).unwrap_or_else(|| {
+                        format!("GitHub issue #{}", tracked.remote_issue_number.0)
+                    });
+                    ui.hyperlink_to(label, &tracked.url.0);
+                    widgets::chip(
+                        ui,
+                        format!(
+                            "remote: {} · intake: {:?}",
+                            tracked.remote_state.0, tracked.intake_state
+                        ),
+                        widgets::Tone::Neutral,
+                    );
+                });
+            } else if let Some(linked) = work.github_links.get(w.id.as_str()) {
+                is_linked = true;
+                let label = widgets::github_link_label(&linked.url.0)
+                    .unwrap_or_else(|| format!("GitHub issue #{}", linked.remote_issue_number.0));
+                ui.hyperlink_to(label, &linked.url.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        enabled && !is_linked,
+                        egui::Button::new("Publish to GitHub"),
+                    )
+                    .clicked()
+                {
+                    actions.push(Action::PublishGithubIssue {
+                        issue_id: w.id.as_str().to_owned(),
+                        expected_revision: w.revision.as_str().to_owned(),
+                        repository_id: repo_id.as_str().to_owned(),
+                    });
+                }
+                let draft = work
+                    .github_link_number_drafts
+                    .entry(w.id.as_str().to_owned())
+                    .or_default();
+                let input = ui.add(
+                    egui::TextEdit::singleline(draft)
+                        .hint_text("Issue #")
+                        .desired_width(80.0),
+                );
+                input.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, "GitHub issue number")
+                });
+                let valid_num = draft.trim().parse::<i64>().is_ok_and(|n| n > 0);
+                if ui
+                    .add_enabled(enabled && valid_num, egui::Button::new("Link GitHub issue"))
+                    .clicked()
+                {
+                    actions.push(Action::LinkGithubIssue {
+                        issue_id: w.id.as_str().to_owned(),
+                        expected_revision: w.revision.as_str().to_owned(),
+                        repository_id: repo_id.as_str().to_owned(),
+                        remote_issue_number: draft.trim().to_owned(),
+                    });
+                }
+            });
         });
 }

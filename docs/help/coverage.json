@@ -33,7 +33,8 @@
     {"path":"crates/devworks-core/src/services/mcp.rs","topics":["mcp-servers"]},
     {"path":"crates/devworks-core/src/services/process","topics":["process-tools","watchers"]},
     {"path":"crates/devworks-core/src/services/containers","topics":["containers","settings-Containers"]},
-    {"path":"crates/devworks-core/src/services/desktop","topics":["desktop-control"]}
+    {"path":"crates/devworks-core/src/services/desktop","topics":["desktop-control"]},
+    {"path":"crates/devworks-core/src/services/github","topics":["settings-GitHub","issues","git-delivery"]}
   ],
   "extensionOwners": [
     {"path":"crates/devworks-extension-protocol/src/package.rs","topics":["sdk-manifest","sdk-tools","sdk-workflows-events","sdk-context","sdk-native-ui","sdk-semantic"]},

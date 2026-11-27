@@ -368,7 +368,7 @@ impl WebService {
         let (diagnostics, owned_ctx, authorization) =
             (self.diagnostics.clone(), ctx.clone(), authorization.clone());
         let recorded = run_write(&*self.store, WriteOptions::observed(), move |tx| {
-            if !crate::authority::authorization_holds_in(tx, &owned_ctx, &authorization)? {
+            if !crate::services::fences::authorization_holds_in(tx, &owned_ctx, &authorization)? {
                 return Ok(false);
             }
             diagnostics.log_in(tx, &e).map_err(|e| match e {

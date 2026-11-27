@@ -65,8 +65,8 @@ pub const INDEX_OPERATIONS: &[&str] = &[
     "documents.remove_index",
 ];
 pub const RETRIEVAL_OPERATIONS: &[&str] = &["documents.search", "documents.resolve_citation"];
-const DETAILS_REVISION: u32 = 10;
-const ACTIVITY_REVISION: u32 = 13;
+const DETAILS_REVISION: u32 = 25;
+const ACTIVITY_REVISION: u32 = 28;
 const LISTED_VERSIONS: u16 = 10;
 
 /// The artifact-backed document library. Its handlers can be tested through the gateway before

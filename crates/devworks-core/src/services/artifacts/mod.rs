@@ -389,6 +389,63 @@ pub(crate) fn visible_in(
                     && version.media_type == source.media_type
             }));
     }
+    if database_intent(artifact) {
+        return Ok(false);
+    }
+    if database_output(artifact) {
+        let same_scope = match (&viewer.authorized, artifact.scope.project(), project) {
+            (Some(AuthorizedScope::Workspace), owner, selected) => owner == selected,
+            (Some(AuthorizedScope::Project(bound)), Some(owner), Some(selected)) => {
+                bound == owner && owner == selected
+            }
+            _ => false,
+        };
+        if artifact.owner.as_ref() != Some(viewer.ctx.principal()) || !same_scope {
+            return Ok(false);
+        }
+        let data = artifact.provenance["derived"]["access"].clone();
+        let Ok(access) =
+            serde_json::from_value::<crate::ports::storage::DatabaseArtifactAccess>(data)
+        else {
+            return Ok(false);
+        };
+        return Ok(access.restore_epoch == viewer.ctx.restore_epoch().get()
+            && access.scope_policy == viewer.ctx.policy_revision().get()
+            && read.database_artifact_available(&access, viewer.ctx.principal(), project)?);
+    }
+    if artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "repository_analysis"
+    {
+        let original = artifact.scope.project();
+        let allowed = match (&viewer.authorized, original, project) {
+            (Some(AuthorizedScope::Workspace), _, None) => true,
+            (Some(AuthorizedScope::Workspace), Some(owner), Some(selected)) => owner == selected,
+            (Some(AuthorizedScope::Project(bound)), Some(owner), selected) => {
+                bound == owner && selected.is_none_or(|selected| selected == bound)
+            }
+            _ => false,
+        };
+        let Some(run) = artifact.provenance["derived"]["runId"]
+            .as_str()
+            .and_then(|id| Id::new(id).ok())
+        else {
+            return Ok(false);
+        };
+        return if allowed {
+            read.analysis_artifact_available(
+                &artifact.id,
+                &run,
+                original,
+                viewer
+                    .ctx
+                    .worktree()
+                    .map(|tree| (tree.id(), tree.ownership_revision())),
+                viewer.ctx.restore_epoch().get(),
+            )
+        } else {
+            Ok(false)
+        };
+    }
     if artifact.retention == ArtifactRetention::Receipt {
         if !viewer.sees_owned(artifact.owner.as_ref()) {
             return Ok(false);
@@ -538,6 +595,16 @@ pub(crate) fn named_scope(
     }
 }
 
+fn database_intent(artifact: &StoredArtifact) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "database_intent"
+}
+
+fn database_output(artifact: &StoredArtifact) -> bool {
+    artifact.provenance["principalKind"] == "Host"
+        && artifact.provenance["derived"]["purpose"] == "database_cell"
+}
+
 /// The live artifact `id` if this invocation may see it (otherwise `NotFound`).
 fn visible_artifact(
     read: &dyn crate::ports::storage::ArtifactRead,
@@ -614,6 +681,13 @@ fn require_explicit(
     artifact: &StoredArtifact,
     host: &crate::protocol::ActorId,
 ) -> Result<(), Refusal> {
+    if database_intent(artifact) || database_output(artifact) {
+        return Err(Refusal::new(
+            DomainErrorCode::Conflict,
+            "database_artifact",
+            Some(artifact.id.clone()),
+        ));
+    }
     if retained_convention(artifact, host) {
         return Err(Refusal::new(
             DomainErrorCode::Conflict,
@@ -708,6 +782,9 @@ fn label(title: &str) -> BoundedText<1, 256> {
 
 /// The schema revision that introduced artifact tags (ART-02).
 pub const TAGS_SINCE: SchemaRevision = SchemaRevision(2);
+/// The schema revision that returns the artifact, reference and live-version identities that
+/// `artifacts.tag` and `artifacts.delete` expect.
+pub const IDENTITIES_SINCE: SchemaRevision = SchemaRevision(19);
 
 /// The wire record of `a` at version `v` for a caller that negotiated `revision`. Tags are read
 /// (and their stored form validated) only for a caller that can receive them.
@@ -753,7 +830,16 @@ fn record(
     } else {
         None
     };
+    let identities = revision >= IDENTITIES_SINCE;
+    let versions_digest = if identities {
+        Some(Digest(versions_digest(&read.versions(&a.id)?)))
+    } else {
+        None
+    };
     Ok(ArtifactRecord {
+        revision: identities.then(|| rev(a.revision)),
+        reference_revision: identities.then(|| rev(a.reference_revision)),
+        versions_digest,
         tested_repository: tested_repository(v, revision)?,
         artifact: version_ref(v),
         name: label(&a.title),
@@ -1472,7 +1558,10 @@ fn usage(
     }
 }
 
-fn check_quota(tx: &mut dyn WriteTransaction, scope: &ArtifactScope) -> Result<(), Failure> {
+pub(crate) fn check_quota(
+    tx: &mut dyn WriteTransaction,
+    scope: &ArtifactScope,
+) -> Result<(), Failure> {
     let quota = setting_i64(tx.configuration(), scope.project(), ARTIFACT_QUOTA_KEY)?;
     if quota > 0 && usage(tx.artifacts(), scope)? > quota {
         return Err(Refusal::new(
@@ -2627,4 +2716,4 @@ impl CommandHandler for ArtifactService {
     }
 }
 
-pub(crate) use lifecycle::exact_reference_readable_in;
+pub use lifecycle::exact_reference_readable_in;

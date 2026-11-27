@@ -367,6 +367,9 @@ jobs:
         with:
           shared-key: test-foundation
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Exercise the Windows dev-host broker across accounts
+        shell: powershell
+        run: .\tools\ci\test-windows-disk-budget.ps1
       - name: Run complete foundation partition
         shell: bash
         run: bash tools/ci/native-tests.sh foundation
@@ -394,7 +397,7 @@ jobs:
   windows_desktop_1:
     name: test (windows-desktop-1)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml

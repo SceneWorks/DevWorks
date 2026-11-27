@@ -35,6 +35,8 @@
 
 pub mod addons;
 pub mod addons_ops;
+pub mod agents_screen;
+pub mod analysis_screen;
 pub mod artifacts_screen;
 pub mod attachments;
 pub mod backend;

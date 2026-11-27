@@ -250,14 +250,11 @@ fn settings_nothing_reads_are_marked_not_yet_active_in_the_settings_ui() {
     let _case = native_runtime_case();
     let root = Root::new("dw226-inactive-settings");
     let engine = Engine::start(config(&root.0)).unwrap();
-    let h = screen(&engine, &root, "delivery.autoMerge");
-    assert!(has_text(&h, "Not yet active"));
-    assert!(has_text(
-        &h,
-        descriptor("delivery.autoMerge").unwrap().description
-    ));
+    // Vision extraction is active now, and no listed setting awaits a reader.
+    let h = screen(&engine, &root, "knowledge.visionExtraction");
+    assert!(!has_text(&h, "Not yet active"));
     drop(h);
-    let h = screen(&engine, &root, "web.timeoutMs");
+    let h = screen(&engine, &root, "delivery.autoMerge");
     assert!(!has_text(&h, "Not yet active"));
     drop(h);
     engine.shutdown();

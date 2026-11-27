@@ -26,6 +26,12 @@ pub enum GraphSlot {
     GraphRead(u64),
     /// A trust change of one node (node ID).
     GraphTrust(String),
+    /// A scoped analysis report read.
+    AnalysisRead(u64),
+    /// One command slot per displayed graph scope.
+    AnalysisCommand(String),
+    /// An authorized report artifact preview.
+    AnalysisEvidence(u64),
 }
 screen_slot!(GraphSlot, Graph);
 

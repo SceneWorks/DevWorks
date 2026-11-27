@@ -41,7 +41,7 @@
     },
     {
       "path": "docs/architecture/devworks-storage-evaluation.html",
-      "localLinks": 14,
+      "localLinks": 15,
       "images": 0,
       "pageErrors": []
     },
@@ -53,13 +53,13 @@
     },
     {
       "path": "docs/architecture/domain-operation-reference.html",
-      "localLinks": 33,
+      "localLinks": 34,
       "images": 0,
       "pageErrors": []
     },
     {
       "path": "docs/architecture/implementation-plan.html",
-      "localLinks": 84,
+      "localLinks": 86,
       "images": 1,
       "pageErrors": []
     },
@@ -124,7 +124,7 @@
       "pageErrors": []
     }
   ],
-  "localTargetsChecked": 481,
+  "localTargetsChecked": 484,
   "images": 104,
   "visibleTabsOpened": 0
 }

@@ -3,7 +3,9 @@
 //! the web store all answer a storage error through [`storage_fault`].
 use crate::ports::storage::{StorageError, Unavailable};
 use crate::protocol::support::{BoundedList, BoundedText};
-use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, HoldId, Id, RetryAdvice};
+use crate::protocol::{
+    CorrelationId, DomainErrorCode, DomainFault, HoldId, Id, RetryAdvice, Revision,
+};
 
 /// A typed refusal: a durable `Refused` decision for commands, a fault for queries.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,10 +138,18 @@ pub fn storage_fault(e: &StorageError) -> (DomainErrorCode, RetryAdvice) {
     }
 }
 
+pub(crate) fn not_found(kind: &'static str, id: &Id) -> Refusal {
+    Refusal::new(DomainErrorCode::NotFound, kind, Some(id.clone()))
+}
+
+pub(crate) fn rev(n: i64) -> Revision {
+    Revision::new(n.max(1)).expect("positive revision")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Revision, RevisionDimension};
+    use crate::protocol::RevisionDimension;
 
     /// One error of every variant. The match has no wildcard arm, so a new variant does not
     /// compile until it is listed here and given its row in the table below.

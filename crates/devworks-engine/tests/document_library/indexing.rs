@@ -297,7 +297,7 @@ fn invalid_native_text_reports_a_terminal_failure_without_an_index() {
     assert_eq!(status.stage, DocumentIndexStage::Failed);
     assert_eq!(status.diagnostic, Some(id("TextInvalidEncoding")));
     assert!(status.published.is_none());
-    let detail = result(f.read_ref(&a, "documents.read", exact, 10));
+    let detail = result(f.read_ref(&a, "documents.read", exact, 25));
     assert!(
         matches!(detail, OperationResult::DocumentsRead { value: DocumentResult::Current(detail) }
         if matches!(detail.extraction_state, ItemState::Failed)
@@ -505,13 +505,13 @@ fn check_stale_source(change: StaleSource) {
             }
             StaleSource::Move => {
                 let moved = applied(f.command(&f.human, "documents.move", json!({
-                "protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"move-index-source",
+                "protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"move-index-source",
                 "command":{"kind":"Move","artifactId":one.id,"targetProjectId":"document-b",
                     "expectedScopeRevision":one.scope_revision}
             })));
                 assert!(matches!(moved, OperationResult::DocumentsMove { .. }));
                 assert!(matches!(
-                    f.read_ref(&a, "documents.read", exact, 10),
+                    f.read_ref(&a, "documents.read", exact, 25),
                     DomainQueryReply::Rejected { .. }
                 ));
                 None
@@ -556,7 +556,7 @@ fn check_stale_source(change: StaleSource) {
 }
 
 pub(super) fn management_frame(kind: &str, request: &str, doc: &DocumentDetail) -> Value {
-    json!({"protocol":"1.0-draft.1","schemaRevision":10,"requestKey":request,
+    json!({"protocol":"1.0-draft.1","schemaRevision":25,"requestKey":request,
         "command":{"kind":kind,"artifactId":doc.id,"expectedRevision":doc.revision}})
 }
 
@@ -605,7 +605,7 @@ fn disable_and_remove_preserve_extraction_until_explicit_version_deletion() {
         devworks_core::protocol::records::ItemState::Healthy
     ));
     assert!(matches!(removed.coverage.state, CoverageState::Complete));
-    let detail = result(f.read_ref(&a, "documents.read", exact, 10));
+    let detail = result(f.read_ref(&a, "documents.read", exact, 25));
     assert!(
         matches!(detail, OperationResult::DocumentsRead { value: DocumentResult::Current(detail) }
         if matches!(detail.extraction_state, devworks_core::protocol::records::ItemState::Healthy)
@@ -677,7 +677,7 @@ fn purge_planning_preserves_a_shared_documents_extraction_and_index() {
         &f.human,
         "documents.share",
         json!({
-            "protocol":"1.0-draft.1","schemaRevision":10,"requestKey":"share-indexed",
+            "protocol":"1.0-draft.1","schemaRevision":25,"requestKey":"share-indexed",
             "command":{"kind":"Share","artifactId":note.id,"targetProjectId":"document-b",
                 "expectedScopeRevision":note.scope_revision}
         }),

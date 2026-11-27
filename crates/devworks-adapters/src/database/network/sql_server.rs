@@ -1,3 +1,4 @@
+pub(super) mod data;
 use super::catalog::{Catalog, Query, profile, qualified_release};
 use super::*;
 use futures_util::TryStreamExt;
@@ -53,7 +54,7 @@ fn classify(error: tiberius::error::Error) -> MetadataFailure {
     }
 }
 async fn connect(
-    c: &Collector,
+    credentials: WireCredentials<'_>,
     target: &Target,
     database: &str,
 ) -> Result<Client<Compat<TcpStream>>, MetadataFailure> {
@@ -64,19 +65,15 @@ async fn connect(
     config.database(database);
     config.authentication(AuthMethod::sql_server(
         &target.username,
-        c.request
-            .password
-            .as_ref()
-            .ok_or(MetadataFailure::CredentialsRequired)?
-            .expose(),
+        credentials.password()?,
     ));
     match target.tls {
         SchemaTlsMode::LoopbackPlaintext => config.encryption(EncryptionLevel::NotSupported),
         SchemaTlsMode::VerifyFull => config.encryption(EncryptionLevel::Required),
         SchemaTlsMode::VerifyCa => return Err(MetadataFailure::UnsupportedProfile),
     };
-    if let Some(pem) = &c.request.ca_certificate {
-        config.trust_cert_ca_bundle(pem.clone());
+    if let Some(pem) = credentials.ca {
+        config.trust_cert_ca_bundle(pem.to_owned());
     }
     let tcp = TcpStream::connect((target.host.as_str(), target.port))
         .await
@@ -96,7 +93,7 @@ pub(super) async fn read(
     } else {
         &target.catalog
     };
-    let mut conn = connect(&c, &target, database).await?;
+    let mut conn = connect(WireCredentials::metadata(&c.request), &target, database).await?;
     let row = conn
         .simple_query("SELECT CONVERT(varchar(128),SERVERPROPERTY('ProductVersion'))")
         .await
@@ -194,7 +191,7 @@ pub(super) async fn read(
         // A selected server-only source probes its actual catalogs after bounded discovery,
         // without constructing a structural snapshot or querying source rows.
         for name in names {
-            connect(&c, &target, &name)
+            connect(WireCredentials::metadata(&c.request), &target, &name)
                 .await?
                 .close()
                 .await
@@ -203,7 +200,7 @@ pub(super) async fn read(
         return Ok(c.finish(profile));
     }
     for name in names {
-        let mut conn = connect(&c, &target, &name).await?;
+        let mut conn = connect(WireCredentials::metadata(&c.request), &target, &name).await?;
         conn.simple_query("SET LOCK_TIMEOUT 500; SET XACT_ABORT ON; BEGIN TRANSACTION")
             .await
             .map_err(classify)?

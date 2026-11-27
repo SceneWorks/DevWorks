@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2144), 2144);
+    assert_eq!(run("domain-fixtures.json", 2302), 2302);
 }
 
 #[test]
@@ -460,12 +460,23 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
     // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8;
     // router.catalog revision 4 (offeredEfforts) adds one.
-    // Document detail and exact citation opening cover seven revision-10 and one revision-11
+    // Document detail and exact citation opening cover seven revision-25 and one revision-26
     // bindings alongside the original revision-1 document operations.
-    // Document re-extraction adds one revision-12 admission, and activity adds seven at revision 13.
+    // Document re-extraction adds one revision-27 admission, and activity adds seven at revision 28.
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
-    // The new Dreaming revision covers ten command and query bindings.
-    assert_eq!(admitted.len(), 699);
+    // Dreaming revision 24 covers ten command and query bindings.
+    // Coordinator document transfers introduce three bindings at revision 29.
+    // DW-F7 adds 26 bindings: sixteen analysis bindings at revision 3, eight database
+    // bindings at revisions 9 and 10, and two package contributions at revision 9.
+    // GitHub synchronization and native remote watchers add nine negotiated bindings.
+    // DW-41 negotiates the seven review bindings at revision 15.
+    // DW-F14 negotiates watch.create, .list, .inspect and .cancel at revision 18.
+    // DW-181 negotiates artifacts.save and artifacts.list at revision 19.
+    // DW-182 negotiates runs.start, .pause, .continue, .inspect and .eligibility at revision 20.
+    // DW-183 introduces agents.list at revision 21.
+    // DW-184 negotiates resources.holders and .waiters at revision 22.
+    // DW-175 introduces sessions.append_screen_context at revision 23.
+    assert_eq!(admitted.len(), 762);
 }
 
 #[test]
@@ -601,7 +612,9 @@ fn every_gated_envelope_member_is_refused_before_its_revision() {
             "artifact-command-request/workspace",
             "artifact-query-request/tags",
             "artifact-query-request/workspace",
+            "git-command-request/barrier",
             "git-command-request/coveredWorkIds",
+            "git-command-request/taskIntegration",
             "graph-read-request/current",
             "graph-read-request/depth",
             "graph-read-request/internalModule",

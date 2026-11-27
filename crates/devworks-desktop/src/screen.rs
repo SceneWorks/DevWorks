@@ -30,6 +30,7 @@ pub enum ScreenId {
     Conventions,
     Artifacts,
     Resources,
+    Agents,
     Browser,
     /// All projects and Repositories.
     Projects,
@@ -65,6 +66,7 @@ impl ScreenId {
             Self::Conventions => "conventions",
             Self::Artifacts => "artifacts",
             Self::Resources => "resources",
+            Self::Agents => "agents",
             Self::Browser => "browser",
             Self::Projects => "projects",
             Self::Indexing => "indexing",
@@ -115,6 +117,7 @@ pub enum Effect {
     ReviewPurge(ProjectRecord),
     /// Opens a repository's graph (its ID and name).
     OpenGraph(String, String),
+    OpenFleetAnalysis,
     /// Opens a repository's graph on the detail of one of its nodes.
     OpenGraphNode {
         repository: String,
@@ -320,6 +323,20 @@ impl Cx<'_> {
             op,
             frame,
         )
+    }
+    /// Runs a multi-step task off the UI thread; `false` when nothing was submitted.
+    pub fn task(
+        &mut self,
+        slot: impl Into<Slot>,
+        label: &str,
+        task: impl FnOnce(&dyn Backend) -> Result<crate::backend::TaskOutput, String> + Send + 'static,
+    ) -> bool {
+        if self.online.is_err() {
+            return false;
+        }
+        self.client
+            .as_deref_mut()
+            .is_some_and(|c| c.task(slot.into(), label, task))
     }
     /// Reports a reply its screen has no handling for (`slot` is the screen's own slot).
     pub fn unhandled(&mut self, slot: &dyn Debug, reply: Reply) {

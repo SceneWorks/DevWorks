@@ -268,7 +268,7 @@ pub(super) fn import(
         ctx,
         "documents.import",
         json!({"protocol":"1.0-draft.1",
-        "schemaRevision":10,"mode":"Command","requestKey":key,"body":body}),
+        "schemaRevision":25,"mode":"Command","requestKey":key,"body":body}),
     );
     let OperationResult::DocumentsImport {
         value: devworks_core::protocol::records::DocumentResult::Current(value),
@@ -442,7 +442,7 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
         1,
         "reconciliation uses observation only"
     );
-    let view = inspect_document(&f, &cases, &a, exact, 13);
+    let view = inspect_document(&f, &cases, &a, exact, 28);
     let activity = view.index_activity.unwrap();
     assert_eq!(activity.chunk_count.unwrap().get(), 1);
     assert_eq!(activity.attempts.0.len(), 1);
@@ -679,7 +679,7 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
         &cases,
         &human,
         "documents.share",
-        json!({"protocol":"1.0-draft.1","schemaRevision":10,
+        json!({"protocol":"1.0-draft.1","schemaRevision":25,
         "requestKey":"share-native","command":{"kind":"Share","artifactId":note.id,
             "targetProjectId":"documents-b","expectedScopeRevision":note.scope_revision}}),
     );
@@ -773,7 +773,7 @@ fn real_document_index_and_hybrid_search_account_once_and_scope_exact_vectors() 
         &cases,
         &human,
         "documents.move",
-        json!({"protocol":"1.0-draft.1","schemaRevision":10,
+        json!({"protocol":"1.0-draft.1","schemaRevision":25,
         "requestKey":"move-native","command":{"kind":"Move","artifactId":note.id,
             "targetProjectId":"documents-b","expectedScopeRevision":current.scope_revision.to_string()}}),
     );
@@ -827,7 +827,7 @@ fn deselecting_a_qualified_space_invalidates_the_native_send_fence() {
         source_digest: resolved.source_digest().to_owned(),
     }];
     write(f.store.as_ref(), move |tx| {
-        assert!(devworks_core::authority::service::inference_fences_hold(
+        assert!(devworks_core::services::fences::inference_fences_hold(
             tx, &ctx, &fences
         )?);
         let selection = tx.router().embedding_selection()?;
@@ -837,7 +837,7 @@ fn deselecting_a_qualified_space_invalidates_the_native_send_fence() {
             tx.router().connection(&id("connection"))?.unwrap().revision,
             connection_revision
         );
-        assert!(!devworks_core::authority::service::inference_fences_hold(
+        assert!(!devworks_core::services::fences::inference_fences_hold(
             tx, &ctx, &fences
         )?);
         Ok(())

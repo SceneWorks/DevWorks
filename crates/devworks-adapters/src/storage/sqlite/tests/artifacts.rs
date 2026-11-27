@@ -5234,6 +5234,142 @@ fn a_use_case_cannot_pin_collect_or_write_receipt_reply_records() {
     assert_eq!(versions, vec![receipt_version]);
 }
 
+/// An F8 build published an F8 command's reply under the old revision's reply schema. The
+/// reconciliation's revision remap moves both the receipt and that schema reference, so project
+/// purge can still prove and remove the published reply.
+#[test]
+fn renumbered_f8_receipt_replies_stay_purgeable() {
+    use devworks_core::registry::SchemaRevision;
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome, reply_schema,
+    };
+    use devworks_core::services::documents::DocumentLibrary;
+    let fx = Fx::new();
+    let source = fx.saved("f8-reply-source", "Notes", "text/plain", b"plain notes");
+    let cases = UseCases::new()
+        .with_artifacts(fx.svc.clone())
+        .with_document_library(Arc::new(DocumentLibrary::new(
+            fx.svc.clone(),
+            fx.h.ids.clone(),
+            fx.h.clock.clone(),
+        )));
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let frame = json!({"protocol": "1.0-draft.1", "mode": "Command", "schemaRevision": 25,
+        "requestKey": "f8-import", "body": {"kind": "documents.import",
+            "scope": {"kind": "Project", "projectId": "project-a"},
+            "source": source.artifact, "title": "Notes"}});
+    applied(
+        cases
+            .command_with(
+                &gateway,
+                &fx.user(),
+                "documents.import",
+                frame.to_string().as_bytes(),
+                WriteOptions::fixture(),
+            )
+            .expect("addressable"),
+    );
+    let claims = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("f8-reply-publisher"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    let publisher = ReceiptReplies::new(fx.svc.clone());
+    for claim in &claims {
+        assert!(matches!(
+            publisher.publish(fx.store.as_ref(), claim),
+            ReplyOutcome::Published(_)
+        ));
+    }
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    assert!(assess().is_resolved(), "{:?}", assess().unresolved);
+    let descriptor = devworks_core::registry::find("documents.import").unwrap();
+    let current = serde_json::to_value(reply_schema(descriptor, SchemaRevision(25))).unwrap();
+    // What the F8 build stored: the receipt and its reply schema reference at revision 10.
+    let mut published = current.clone();
+    published["revision"] = json!("10");
+    published["sha256"] = json!("a".repeat(64));
+    let conn = fx.h.raw();
+    let reply_of_import = "EXISTS(SELECT 1 FROM command_receipts r WHERE \
+        r.actor_id=receipt_replies.actor_id AND r.scope_key=receipt_replies.scope_key AND \
+        r.idempotency_key=receipt_replies.idempotency_key AND r.command_kind='documents.import')";
+    assert_eq!(
+        conn.execute(
+            &format!("UPDATE receipt_replies SET schema_json=?1 WHERE {reply_of_import}"),
+            [published.to_string()],
+        )
+        .unwrap(),
+        1
+    );
+    conn.execute(
+        "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',10) \
+         WHERE command_kind='documents.import'",
+        [],
+    )
+    .unwrap();
+    // A purged receipt of an F8 operation records its revision the same way.
+    let purged = json!({"contract": "fixture", "schemaRevision": 10, "purged": {}}).to_string();
+    conn.execute(
+        "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,\
+            payload_digest,result_json,created_at) \
+            SELECT actor_id,scope_key,'f8-purged',command_kind,payload_digest,?1,created_at \
+            FROM command_receipts WHERE command_kind='documents.import'",
+        [&purged],
+    )
+    .unwrap();
+    // Before the remap the old reference no longer matches the reply schema purge rebuilds.
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "receipt_replies"),
+        "the F8 reply reference blocks purge before the remap"
+    );
+    super::super::migrations::remap_feature_revisions(&conn).unwrap();
+    let (schema, revision, purged_revision): (String, i64, i64) = conn
+        .query_row(
+            &format!(
+                "SELECT (SELECT schema_json FROM receipt_replies WHERE {reply_of_import}),\
+                    (SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                        WHERE command_kind='documents.import' AND idempotency_key<>'f8-purged'),\
+                    (SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                        WHERE idempotency_key='f8-purged')"
+            ),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&schema).unwrap(), current);
+    assert_eq!((revision, purged_revision), (25, 25));
+    conn.execute(
+        "DELETE FROM command_receipts WHERE idempotency_key='f8-purged'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let plan = assess();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    assert!(
+        plan.rows
+            .iter()
+            .any(|r| r.table == "receipt_replies" && r.action == ProjectPurgeRowAction::Delete)
+    );
+}
+
 #[test]
 fn purge_planning_compacts_only_the_validated_published_receipt_and_its_content_lineage() {
     use devworks_core::services::artifacts::replies::{
@@ -6519,4 +6655,40 @@ fn purge_client_keeper_retains_only_its_exact_version_and_minimal_artifact_heade
             .purge_inventory_with_client_keepers(&project("project-a"), &[forged]))
         .is_err()
     );
+}
+
+/// Revision 19 lists the artifact, reference and live-version identities, and they are exactly
+/// what `artifacts.tag` and a whole-artifact `artifacts.delete` expect; earlier revisions omit
+/// them.
+#[test]
+fn listed_identities_are_the_ones_tag_and_delete_expect() {
+    let fx = Fx::new();
+    let user = fx.user();
+    saved(fx.save_tagged("i-1", "Report", b"report", json!(["draft"])));
+    let (items, _) = fx.listed(&list_frame(Some(4), None, None, 50));
+    for member in ["revision", "referenceRevision", "versionsDigest"] {
+        assert!(items[0].get(member).is_none(), "{member} at revision 4");
+    }
+    let (items, _) = fx.listed(&list_frame(Some(19), None, None, 50));
+    let item = &items[0];
+    let aid = id(item["artifact"]["artifactId"].as_str().unwrap());
+    let revision: i64 = item["revision"].as_str().unwrap().parse().unwrap();
+    let stored = fx.artifact(&aid);
+    assert_eq!(revision, stored.revision);
+    assert_eq!(
+        item["referenceRevision"].as_str().unwrap(),
+        stored.reference_revision.to_string()
+    );
+    // Tagging under the listed revision applies; the next list shows the advanced revision.
+    assert!(tagged(fx.retag(&user, &aid, revision, json!(["release"]))).changed);
+    let (items, _) = fx.listed(&list_frame(Some(19), None, None, 50));
+    let item = &items[0];
+    assert_eq!(item["tags"], json!(["release"]));
+    // The whole artifact is deleted under the listed identities.
+    let deletion = json!({"kind": "DeleteArtifact", "artifactId": aid,
+        "expectedRevision": item["revision"], "expectedReferenceRevision": item["referenceRevision"],
+        "expectedVersionsDigest": item["versionsDigest"]});
+    summary(fx.delete(&user, deletion));
+    let (items, _) = fx.listed(&list_frame(Some(19), None, None, 50));
+    assert!(items.is_empty(), "{items:?}");
 }

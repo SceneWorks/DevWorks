@@ -164,7 +164,24 @@ fn overview_can_enable_and_stop_keep_working_without_taking_a_manual_reservation
     h.get_by_role_and_label(Role::Button, "Stop keep-working")
         .click();
     settle(&mut h);
-    h.get_by_role_and_label(Role::Button, "Enable keep-working");
+    // Under load the stop's reply can land after the shell first settles; wait for the control.
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while h
+        .query_by_role_and_label(Role::Button, "Enable keep-working")
+        .is_none()
+    {
+        h.step();
+        if h.query_by_role_and_label(Role::Button, "Enable keep-working")
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "keep-working control returns to Enable"
+        );
+        std::thread::yield_now();
+    }
     let result = backend.query(
         "next_work.inspect_claim",
         &wops::allocation_inspect(&*backend, claim.id.as_str()),
@@ -1118,9 +1135,35 @@ fn save_plan_now(
         }];
     }
     h.run_steps(3);
-    // Keep uploads in flight while activating the actual Save control, even offscreen.
-    h.get_by_role_and_label(Role::Button, "Save plan draft")
-        .click_accesskit();
+    // Keep uploads in flight while activating the actual Save control, even offscreen. A detail
+    // refresh can disable Save for a frame, and a click on a disabled button is ignored, so
+    // click again until this feature's save has started. An accepted click records the save in
+    // the frame that handles it, before any reply can end it, so it is checked right after that
+    // one frame and never clicked twice.
+    let saving = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>| {
+        h.state()
+            .work
+            .plan_saving
+            .values()
+            .any(|p| p.snapshot.title.0 == title)
+    };
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the plan save of {title} never started: {:?}",
+            h.state().work.message
+        );
+        let clicked = h
+            .query_by_role_and_label(Role::Button, "Save plan draft")
+            .filter(|node| !node.accesskit_node().is_disabled())
+            .map(|button| button.click_accesskit())
+            .is_some();
+        h.step();
+        if clicked && saving(h) {
+            break;
+        }
+    }
     h.run_steps(3);
 }
 fn pending_statement(backend: &dyn Backend, feature: &WorkRecord) -> Option<String> {
@@ -1458,6 +1501,210 @@ fn show_its_history_opens_overviews_activity_for_that_item() {
         "the Activity tab"
     );
     assert!(has_text(&h, "older history on demand"), "Activity is shown");
+}
+
+/// Records, for `issue`, one evidence link and one agent session that made a model request
+/// and a completed tool call: what an agent's work on it leaves in history.
+fn seed_linked_history(engine: &devworks_desktop::host::Engine, project: &str, issue: &str) {
+    use devworks_core::ports::IdKind;
+    use devworks_core::ports::storage::*;
+    use devworks_core::protocol::{EventId, Id, ProjectId, RootId};
+    let (project, root) = (
+        ProjectId(Id::new(project).unwrap()),
+        RootId(Id::new(issue).unwrap()),
+    );
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::fixture(),
+        move |tx| {
+            let actor = tx.store().host_actor.clone();
+            let now = tx.now_ms();
+            let event = EventId(tx.new_id(IdKind::Event));
+            let sequence = tx.history().append(NewEvent {
+                id: event.clone(),
+                actor: actor.clone(),
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                operation_id: None,
+                aggregate_kind: "fixture".into(),
+                aggregate_id: root.0.as_str().into(),
+                aggregate_revision: 1,
+                kind: "EvidenceRecorded".into(),
+                payload: json!({}),
+            })?;
+            tx.sessions().insert_link(&StoredLink {
+                id: Id::new("evidence-link-1").unwrap(),
+                project_id: project.clone(),
+                root_id: root.clone(),
+                kind: "evidence".into(),
+                target_kind: "artifact".into(),
+                target_id: "report-v1".into(),
+                parent_id: None,
+                supersedes_id: None,
+                actor: actor.clone(),
+                event_id: event.0.clone(),
+                sequence,
+                repository_id: None,
+                revision: None,
+                summary: "Crash reproduction log".into(),
+                body: json!({"artifact": {"artifactId": "report-1", "versionId": "report-v1",
+                    "sha256": "b".repeat(64), "byteLength": "10", "mediaType": "text/plain"}}),
+                created_at_ms: now,
+            })?;
+            let session = Id::new("issue-session-1").unwrap();
+            let conversation_id = tx.new_id(IdKind::Conversation);
+            tx.sessions().insert_session(&StoredSession {
+                id: session.clone(),
+                conversation_id,
+                agent_id: actor.clone(),
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                title: "Fix the crash".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor.clone(),
+                created_at_ms: now,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+            let batch = Id::new("issue-batch-1").unwrap();
+            let batch_event = EventId(tx.new_id(IdKind::Event));
+            let committed = tx.history().append(NewEvent {
+                id: batch_event.clone(),
+                actor: actor.clone(),
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                operation_id: None,
+                aggregate_kind: "session".into(),
+                aggregate_id: session.as_str().into(),
+                aggregate_revision: 2,
+                kind: "TranscriptAppended".into(),
+                payload: json!({}),
+            })?;
+            tx.sessions().insert_batch(&StoredBatch {
+                batch_id: batch.clone(),
+                session_id: session.clone(),
+                payload_digest: "c".repeat(64),
+                actor: actor.clone(),
+                context_epoch: 0,
+                first_sequence: 1,
+                last_sequence: 2,
+                event_id: batch_event.0.clone(),
+                committed_sequence: committed,
+                accepted_at_ms: now,
+            })?;
+            for (sequence, entry, kind) in [
+                (1, "call-entry-1", "ToolCallRecorded"),
+                (2, "response-entry-1", "ToolResponseRecorded"),
+            ] {
+                tx.sessions().insert_entry(&StoredEntry {
+                    session_id: session.clone(),
+                    sequence,
+                    entry_id: Id::new(entry).unwrap(),
+                    batch_id: batch.clone(),
+                    context_epoch: 0,
+                    actor: actor.clone(),
+                    kind: kind.into(),
+                    created_at_ms: now,
+                    body: json!({"kind": kind}),
+                })?;
+            }
+            tx.sessions().insert_invocation(&StoredInvocation {
+                session_id: session.clone(),
+                response_sequence: 2,
+                call_sequence: 1,
+                committed_sequence: committed,
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                call_entry_id: Id::new("call-entry-1").unwrap(),
+                capability_id: "repository.read_file".into(),
+                outcome: "Completed".into(),
+                error_code: None,
+                operation_id: None,
+                actor: actor.clone(),
+                called_at_ms: now,
+                responded_at_ms: now + 42,
+            })?;
+            tx.usage().insert_usage_origin(&StoredUsageOrigin {
+                source_kind: "SessionUsage".into(),
+                source_id: json!([session.as_str(), batch.as_str(), 0]).to_string(),
+                attempt_id: None,
+                request_id: Some(Id::new("issue-request-1").unwrap()),
+                project_id: Some(project.clone()),
+                feature_id: None,
+                work_id: Some(root.0.clone()),
+                session_id: Some(session.clone()),
+                job_run_id: None,
+                payload: json!({"actorId": actor.0.as_str(), "providerId": "openrouter",
+                    "reportCategory": "Assistant", "item": {"requestId": "issue-request-1",
+                    "purpose": "Conversation", "modelId": "model-a", "inputTokens": "120",
+                    "outputTokens": "30", "cacheReadTokens": "0", "cacheWriteTokens": "0",
+                    "priceKind": "Untracked", "priceOrigin": "Untracked", "incomplete": true}}),
+                recorded_at_ms: now,
+                priced_micro_usd: None,
+                classification: devworks_core::ports::usage::CostClassification::Untracked,
+                monetary_complete: false,
+                incomplete: true,
+                unknown_tail: false,
+                committed_sequence: Some(committed),
+            })
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn work_detail_shows_lineage_evidence_links_and_tool_usage_from_history() {
+    let root = Root::new("linked-history");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    let issue = command(
+        &*backend,
+        "issues.create",
+        json!({"projectId": pid, "title": "Crash", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 0}),
+    );
+    seed_linked_history(&engine, &pid, issue.id.as_str());
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click_row(&mut h, "Crash  ·");
+    click(&mut h, Role::Button, "Show linked history");
+    settle(&mut h);
+    // history.work_lineage: the issue's events and its links.
+    assert!(has_text(&h, "Lineage"));
+    assert!(has_text(&h, "evidence · report-v1: Crash reproduction log"));
+    // history.evidence_links.
+    assert!(has_text(&h, "Evidence: Crash reproduction log"));
+    assert!(has_text(&h, "artifact report-1"));
+    // history.tool_usage: the model request and the tool call.
+    assert!(has_text(
+        &h,
+        "Model model-a · Conversation: 120 in, 30 out tokens"
+    ));
+    assert!(has_text(
+        &h,
+        "Tool repository.read_file · Completed · 42 ms"
+    ));
+    assert!(has_text(&h, "session issue-session-1"));
+    // A refresh keeps what is shown until its replies replace it.
+    click(&mut h, Role::Button, "Refresh linked history");
+    assert!(has_text(&h, "Evidence: Crash reproduction log"));
+    settle(&mut h);
+    assert!(has_text(&h, "Tool repository.read_file"));
 }
 
 #[test]
@@ -2009,7 +2256,8 @@ fn restored_requirement_case(delayed_detail: bool) {
     } else {
         shell(&engine, &root, Script::default())
     };
-    let mut h = harness(shell, 1600.0, 1100.0);
+    // Tall enough to show the run controls, the plan editor and its requirement rows together.
+    let mut h = harness(shell, 1600.0, 1500.0);
     settle(&mut h);
     let feature = initial_approved_plan(&engine, &*backend, &mut h);
     h.state_mut().work.plan.as_mut().unwrap().text = "Revised checkout plan".into();
@@ -2080,7 +2328,16 @@ fn restored_requirement_case(delayed_detail: bool) {
         .insert(feature.id.as_str().to_owned(), approved_drop);
     if delayed_detail {
         h.step();
+        // The run controls sit above the plan: scroll to it as a person would (the held
+        // detail read keeps the shell busy, so frames are stepped, not settled).
+        h.get_by_role_and_label(Role::Button, "Edit plan")
+            .scroll_to_me();
+        h.step();
+        h.step();
         h.get_by_role_and_label(Role::Button, "Edit plan").click();
+        h.step();
+        h.step();
+        h.get_by_label("Dropped requirements").scroll_to_me();
         h.step();
         h.step();
         h.get_by_label("Dropped requirements").click();
@@ -2794,4 +3051,434 @@ fn the_work_card_assigns_its_working_agent_and_clears_the_assignment_through_tas
         h.query_by_role_and_label(Role::Button, "Clear assignment")
             .is_none()
     );
+}
+
+fn snapshot(backend: &dyn Backend, root: &str) -> devworks_core::protocol::records::RootSnapshot {
+    wops::run_snapshot(backend.query("runs.inspect", &wops::run_inspect(backend, root))).unwrap()
+}
+
+/// Run controls: a held root names every cause holding it, a redirect shows its stage, a
+/// started root can be stopped, and after a restart one action continues every paused root.
+#[test]
+fn run_controls_explain_holds_redirect_stop_and_continue_all_paused_roots() {
+    use devworks_core::protocol::DesiredState;
+    let root = Root::new("work-run-controls");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let mut roots = features_from_screen(&mut h, &*backend, &pid, &["Checkout", "Search"]);
+    // A standalone task paused before it is linked to Checkout keeps its own pause.
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    roots.push(command(
+        &*backend,
+        "tasks.create",
+        json!({"projectId": pid, "title": "Card", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 1}),
+    ));
+    // Pause all three through the same command a person sends.
+    for w in &roots {
+        let s = snapshot(&*backend, w.id.as_str());
+        wops::run_changed(backend.command(
+            "runs.pause",
+            &wops::run_control(&*backend, "runs.pause", w, &s),
+        ))
+        .unwrap();
+    }
+    let card = roots[2].clone();
+    roots[2] = command(
+        &*backend,
+        "tasks.set_feature",
+        json!({"taskId": card.id, "expectedRevision": card.revision, "featureId": roots[0].id,
+            "clearFeature": false}),
+    );
+    assert!(
+        roots[2].parent_id.is_some(),
+        "the task is linked to Checkout"
+    );
+
+    // A held root lists its pause and the derived condition the eligibility read names.
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    click(&mut h, Role::Button, "Refresh");
+    assert!(
+        has_text(&h, "Why this work is waiting"),
+        "{:?}",
+        h.state().work.runs.get(roots[0].id.as_str())
+    );
+    assert!(has_text(&h, "Paused:"), "the pause hold is named");
+    assert!(
+        has_text(&h, "Needs an approved plan:"),
+        "the missing plan is named"
+    );
+
+    // A redirect is sent through the gateway and shows its stage; later stages read the same
+    // way once the coordinator acknowledges and incorporates it.
+    h.get_by_label("Redirect (0)").scroll_to_me();
+    settle(&mut h);
+    h.get_by_label("Redirect (0)").click();
+    settle(&mut h);
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Redirect message",
+        "Ship the CLI first",
+    );
+    click(&mut h, Role::Button, "Send redirect");
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("Redirect sent"))
+    );
+    assert!(
+        has_text(
+            &h,
+            "Redirect “Ship the CLI first”: sent, waiting for the coordinator"
+        ),
+        "{:?}",
+        h.state().status()
+    );
+    click(&mut h, Role::Button, "Refresh");
+
+    // After a restart, one action continues every paused root, the linked task included.
+    h.state_mut().on_exit();
+    drop(h);
+    drop(backend);
+    engine.shutdown().unwrap();
+    let engine = start(&root);
+    let backend = engine.backend();
+    for w in &roots {
+        assert!(matches!(
+            snapshot(&*backend, w.id.as_str()).root.desired_state,
+            DesiredState::Paused
+        ));
+    }
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Features);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Continue all paused work");
+    for w in &roots {
+        assert!(
+            matches!(
+                snapshot(&*backend, w.id.as_str()).root.desired_state,
+                DesiredState::Enabled
+            ),
+            "{} continues",
+            w.title.0
+        );
+    }
+
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Stop").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    // Stop on running work is recorded: applied at once or accepted to stop at a safe boundary.
+    click(&mut h, Role::Button, "Stop");
+    let status = h.state().status().unwrap_or_default().to_owned();
+    assert!(
+        status.contains("Stop accepted") || status.contains("is stopped"),
+        "{status}"
+    );
+
+    // Run state that changes outside the screen (here a pause sent by another client) is read
+    // again on Refresh, as redirect stages are.
+    click_row(&mut h, "Search  ·");
+    if h.query_by_role_and_label(Role::Button, "Pause").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    assert!(!has_text(&h, "Paused:"), "Search was continued");
+    let s = snapshot(&*backend, roots[1].id.as_str());
+    wops::run_changed(backend.command(
+        "runs.pause",
+        &wops::run_control(&*backend, "runs.pause", &roots[1], &s),
+    ))
+    .unwrap();
+    click(&mut h, Role::Button, "Refresh");
+    assert!(
+        has_text(&h, "Paused:"),
+        "Refresh reads the root's run state again"
+    );
+    // Stop stays offered on work with no live activation; the service decides what it stops.
+    assert!(
+        !h.get_by_role_and_label(Role::Button, "Stop")
+            .accesskit_node()
+            .is_disabled()
+    );
+    click(&mut h, Role::Button, "Stop");
+    let status = h.state().status().unwrap_or_default().to_owned();
+    assert!(
+        status.contains("Stop accepted") || status.contains("is stopped"),
+        "{status}"
+    );
+}
+
+/// A redirect draft edited while its send is in flight is kept when the send finishes.
+#[test]
+fn a_redirect_draft_edited_during_its_send_is_kept() {
+    let root = Root::new("work-redirect-draft");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let gate = Gate::new("runs.redirect");
+    let mut h = harness(
+        shell_with(
+            Ok(gate.over(backend.clone())),
+            &root,
+            Script::default(),
+            None,
+        ),
+        1600.0,
+        1300.0,
+    );
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]);
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    h.get_by_label("Redirect (0)").click();
+    settle(&mut h);
+    type_into(
+        &mut h,
+        Role::TextInput,
+        "Redirect message",
+        "Ship the CLI first",
+    );
+    gate.close();
+    h.get_by_role_and_label(Role::Button, "Send redirect")
+        .click();
+    step_until(&mut h, "the redirect is in flight", |_| gate.has_waiter());
+    // While it is in flight a second send is not offered.
+    h.step();
+    assert!(
+        h.get_by_label("Sending redirect…")
+            .accesskit_node()
+            .is_disabled(),
+        "Send is disabled while a redirect is in flight"
+    );
+    h.get_by_label("Sending redirect…").click();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Redirect message")
+        .focus();
+    h.step();
+    h.get_by_role_and_label(Role::TextInput, "Redirect message")
+        .type_text(", then the GUI");
+    h.step();
+    gate.open();
+    settle(&mut h);
+    assert!(
+        h.state()
+            .status()
+            .is_some_and(|s| s.contains("Redirect sent"))
+    );
+    assert_eq!(
+        h.get_by_role_and_label(Role::TextInput, "Redirect message")
+            .value()
+            .as_deref(),
+        Some("Ship the CLI first, then the GUI"),
+        "the newer draft is kept"
+    );
+    // Exactly one redirect was recorded.
+    let checkout = list(&*backend, "features.list", project.id.0.as_str()).remove(0);
+    let redirects = snapshot(&*backend, checkout.id.as_str())
+        .redirects
+        .map(|r| r.0.len())
+        .unwrap_or_default();
+    assert_eq!(redirects, 1);
+}
+
+/// Each redirect stage reads as itself in the run controls. A real redirect is sent through the
+/// gateway (Received); the Acknowledged and Incorporated records the runtime returns once a
+/// coordinator handles it (driven through the substrate in the engine test
+/// `revision_20_shows_each_redirect_stage`) are rendered from that same wire record.
+#[test]
+fn every_redirect_stage_is_shown_with_its_outcome() {
+    use devworks_core::protocol::records::RedirectStage;
+    let root = Root::new("work-redirect-stages");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let feature =
+        features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]).remove(0);
+    let id = feature.id.as_str().to_owned();
+    let s = snapshot(&*backend, &id);
+    wops::run_redirected(backend.command(
+        "runs.redirect",
+        &wops::run_redirect(&*backend, &id, &s, "Ship the CLI first"),
+    ))
+    .unwrap();
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    let sent = "Redirect “Ship the CLI first”: sent, waiting for the coordinator";
+    assert!(has_text(&h, sent), "the runtime's Received record is shown");
+    let received = h.state().work.runs[&id].clone();
+    for (stage, outcome, text) in [
+        (
+            RedirectStage::Acknowledged,
+            None,
+            "Redirect “Ship the CLI first”: acknowledged by the coordinator",
+        ),
+        (
+            RedirectStage::Incorporated,
+            Some("CLI moved ahead of the GUI"),
+            "Redirect “Ship the CLI first”: incorporated · CLI moved ahead of the GUI",
+        ),
+    ] {
+        let mut s = received.clone();
+        let r = &mut s.redirects.as_mut().unwrap().0[0];
+        r.stage = stage;
+        r.outcome = outcome.map(|o| devworks_core::protocol::support::BoundedText(o.into()));
+        h.state_mut().work.runs.insert(id.clone(), s);
+        h.step();
+        h.step();
+        assert!(has_text(&h, text), "{text}");
+    }
+}
+
+/// Each kind of hold reads as its own cause with its recorded reason: a real paused root's
+/// eligibility read supplies the record, and every other gate the runtime reports (engine test
+/// `revision_20_lists_the_gate_and_reason_of_every_hold`) is rendered from that same wire shape.
+#[test]
+fn every_hold_cause_is_named_with_its_reason() {
+    use devworks_core::protocol::Cause;
+    use devworks_core::protocol::records::{HoldCondition, HoldGate};
+    use devworks_core::protocol::support::{BoundedList, BoundedText};
+    let root = Root::new("work-hold-causes");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1300.0);
+    settle(&mut h);
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let feature =
+        features_from_screen(&mut h, &*backend, project.id.0.as_str(), &["Checkout"]).remove(0);
+    let id = feature.id.as_str().to_owned();
+    let s = snapshot(&*backend, &id);
+    wops::run_changed(backend.command(
+        "runs.pause",
+        &wops::run_control(&*backend, "runs.pause", &feature, &s),
+    ))
+    .unwrap();
+    click_row(&mut h, "Checkout  ·");
+    if h.query_by_role_and_label(Role::Button, "Start").is_none() {
+        click(&mut h, Role::Button, "Show run controls");
+    }
+    assert!(
+        has_text(&h, "Paused:"),
+        "the runtime's own pause record is shown"
+    );
+    let real = h.state().work.eligibility[&id].clone();
+    let hold = |n: &str, gate, cause, rate_limited, reason: &str| HoldCondition {
+        hold_id: devworks_core::protocol::HoldId(devworks_core::protocol::Id::new(n).unwrap()),
+        gate,
+        cause,
+        rate_limited,
+        reason: BoundedText(reason.into()),
+    };
+    let causes = [
+        (
+            hold(
+                "h1",
+                HoldGate::Pause,
+                Cause::HumanPause,
+                false,
+                "Paused by you",
+            ),
+            "Paused: Paused by you",
+        ),
+        (
+            hold(
+                "h2",
+                HoldGate::Prerequisite,
+                Cause::Dependency,
+                false,
+                "Search is not accepted",
+            ),
+            "Waiting for a prerequisite: Search is not accepted",
+        ),
+        (
+            hold(
+                "h3",
+                HoldGate::Plan,
+                Cause::Approval,
+                false,
+                "No approved plan",
+            ),
+            "Needs an approved plan: No approved plan",
+        ),
+        (
+            hold(
+                "h4",
+                HoldGate::Readiness,
+                Cause::Policy,
+                false,
+                "Readiness is stale",
+            ),
+            "Readiness not current: Readiness is stale",
+        ),
+        (
+            hold(
+                "h5",
+                HoldGate::Hold,
+                Cause::Capacity,
+                false,
+                "No worker slot",
+            ),
+            "Waiting for capacity: No worker slot",
+        ),
+        (
+            hold(
+                "h6",
+                HoldGate::Hold,
+                Cause::Capacity,
+                true,
+                "Provider limit until 12:00",
+            ),
+            "Rate limited: Provider limit until 12:00",
+        ),
+        (
+            hold(
+                "h7",
+                HoldGate::Question,
+                Cause::Dependency,
+                false,
+                "Which payment provider?",
+            ),
+            "Waiting for your answer: Which payment provider?",
+        ),
+    ];
+    let mut shown = real;
+    shown.conditions = Some(BoundedList(causes.iter().map(|(c, _)| c.clone()).collect()));
+    h.state_mut().work.eligibility.insert(id.clone(), shown);
+    h.step();
+    h.step();
+    for (_, text) in &causes {
+        assert!(has_text(&h, text), "{text}");
+    }
 }

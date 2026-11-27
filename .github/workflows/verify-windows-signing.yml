@@ -1,0 +1,78 @@
+name: Verify Windows signing
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Sign and verify the test executable
+    if: github.repository == 'SceneWorks/DevWorks' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: windows-signing
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    steps:
+      - name: Build an unsigned test executable
+        id: probe
+        shell: powershell
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP 'devworks-signing-probe.exe'
+          Add-Type -Language CSharp -OutputAssembly $probe -OutputType ConsoleApplication -TypeDefinition @'
+          public static class DevWorksSigningProbe {
+              public static int Main() {
+                  return 0;
+              }
+          }
+          '@
+          if ((Get-AuthenticodeSignature -FilePath $probe).Status -ne 'NotSigned') {
+            throw 'Expected a newly compiled, unsigned executable.'
+          }
+          "path=$probe" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Sign in to Azure using GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Sign the test executable
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: sceneworks-signing
+          certificate-profile-name: sceneworks-public
+          files: ${{ steps.probe.outputs.path }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Verify Authenticode and timestamp
+        shell: powershell
+        env:
+          SIGNING_PROBE: ${{ steps.probe.outputs.path }}
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath $env:SIGNING_PROBE
+          if ($signature.Status -ne 'Valid' -or $signature.SignatureType -ne 'Authenticode') {
+            throw "Expected a valid Authenticode signature, found $($signature.Status): $($signature.StatusMessage)"
+          }
+          if (-not $signature.TimeStamperCertificate) {
+            throw 'The Authenticode signature has no timestamp certificate.'
+          }
+          Write-Output "Signature: $($signature.Status)"
+          Write-Output "Signer: $($signature.SignerCertificate.Subject)"
+          Write-Output "Signer thumbprint: $($signature.SignerCertificate.Thumbprint)"
+          Write-Output "Timestamp signer: $($signature.TimeStamperCertificate.Subject)"
+          Write-Output "SHA256: $((Get-FileHash -Algorithm SHA256 $env:SIGNING_PROBE).Hash)"

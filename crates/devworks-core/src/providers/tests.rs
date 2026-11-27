@@ -1,3 +1,4 @@
+#![cfg(test)]
 use super::capabilities::Support;
 use super::{capabilities::*, context::*, encode::*, materialize::Materials, *};
 use crate::protocol::provider::*;

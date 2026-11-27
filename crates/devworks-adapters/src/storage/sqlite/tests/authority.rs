@@ -2798,6 +2798,9 @@ impl WriteTransaction for Lying<'_> {
     fn indexing(&mut self) -> &mut dyn devworks_core::ports::storage::IndexRepository {
         self.inner.indexing()
     }
+    fn analysis(&mut self) -> &mut dyn devworks_core::ports::storage::AnalysisRepository {
+        self.inner.analysis()
+    }
     fn graph(&mut self) -> &mut dyn devworks_core::ports::storage::GraphRepository {
         self.inner.graph()
     }
@@ -3744,10 +3747,17 @@ fn automatic_task_force_push_is_owned_current_and_fenced() {
     advanced.revision = 2;
     advanced.head.hex = "b".repeat(40);
     fx.write(move |tx| tx.git().update_git_worktree(&advanced, 1));
-    assert!(!fx.write(move |tx| auth::fences_hold(tx, authorization.fences())));
+    assert!(
+        !fx.write(move |tx| devworks_core::services::fences::fences_hold(
+            tx,
+            authorization.fences()
+        ))
+    );
     let current = decide(&fx, &owned, "git.push", Mode::Command, &frame).unwrap();
     fx.write(|tx| tx.work().set_work_repositories(&id("task-git"), &[]));
-    assert!(!fx.write(move |tx| auth::fences_hold(tx, current.fences())));
+    assert!(
+        !fx.write(move |tx| devworks_core::services::fences::fences_hold(tx, current.fences()))
+    );
     assert_eq!(
         reason(decide(&fx, &owned, "git.push", Mode::Command, &frame)),
         Some(DenialReason::ApprovalRequired)
@@ -3767,7 +3777,7 @@ fn automatic_task_force_push_is_owned_current_and_fenced() {
         work.brief = brief.value();
         tx.work().update_work(&work, expected)
     });
-    assert!(!fx.write(move |tx| auth::fences_hold(tx, prior.fences())));
+    assert!(!fx.write(move |tx| devworks_core::services::fences::fences_hold(tx, prior.fences())));
     assert_eq!(
         reason(decide(&fx, &owned, "git.push", Mode::Command, &frame)),
         Some(DenialReason::ApprovalRequired)

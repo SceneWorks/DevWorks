@@ -32,7 +32,7 @@ pub struct RunInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Id", extend("x-since" = 9))]
+    #[schemars(with = "Id", extend("x-since" = 24))]
     pub cancel_run_id: Option<Id>,
 }
 impl Check for RunInput {
@@ -46,7 +46,7 @@ impl Check for RunInput {
 }
 impl Revisioned for RunInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 9 {
+        if revision < 24 {
             self.cancel_run_id = None;
         }
     }
@@ -134,7 +134,7 @@ pub struct InstructionsQueryInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "PageRequest", extend("x-since" = 9))]
+    #[schemars(with = "PageRequest", extend("x-since" = 24))]
     pub page: Option<PageRequest>,
 }
 impl Check for InstructionsQueryInput {
@@ -146,7 +146,7 @@ impl Check for InstructionsQueryInput {
 }
 impl Revisioned for InstructionsQueryInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 9 {
+        if revision < 24 {
             self.page = None;
         }
     }
@@ -185,28 +185,28 @@ pub struct ProposeInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "DreamProposalChange", extend("x-since" = 9))]
+    #[schemars(with = "DreamProposalChange", extend("x-since" = 24))]
     pub change: Option<DreamProposalChange>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "NonEmpty<DreamEvidenceReference>", extend("x-since" = 9))]
+    #[schemars(with = "NonEmpty<DreamEvidenceReference>", extend("x-since" = 24))]
     pub evidence: Option<NonEmpty<DreamEvidenceReference>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Content", extend("x-since" = 9))]
+    #[schemars(with = "Content", extend("x-since" = 24))]
     pub rationale: Option<Content>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "Content", extend("x-since" = 9))]
+    #[schemars(with = "Content", extend("x-since" = 24))]
     pub prevalence: Option<Content>,
 }
 impl Check for ProposeInput {
@@ -224,18 +224,18 @@ impl Check for ProposeInput {
 }
 impl Revisioned for ProposeInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 9 {
+        if revision < 24 {
             self.change = None;
         } else {
             self.change.retain_revision(revision);
         }
-        if revision < 9 {
+        if revision < 24 {
             self.evidence = None;
         }
-        if revision < 9 {
+        if revision < 24 {
             self.rationale = None;
         }
-        if revision < 9 {
+        if revision < 24 {
             self.prevalence = None;
         }
     }
@@ -244,7 +244,7 @@ impl Revisioned for ProposeInput {
 /// `dreaming.revert` Command input.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[schemars(extend("oneOf" = [{"required": ["runId", "expectedRevision", "proposalId", "expectedChangeDigest"], "x-until": 9}, {"required": ["runId", "expectedRevision", "proposalId", "expectedChangeDigest"], "not": {"anyOf": [{"required": ["allChanges"]}]}, "x-since": 9}, {"required": ["runId", "expectedRevision", "expectedChangeDigest", "allChanges"], "not": {"anyOf": [{"required": ["proposalId"]}]}, "x-since": 9}]))]
+#[schemars(extend("oneOf" = [{"required": ["runId", "expectedRevision", "proposalId", "expectedChangeDigest"], "x-until": 24}, {"required": ["runId", "expectedRevision", "proposalId", "expectedChangeDigest"], "not": {"anyOf": [{"required": ["allChanges"]}]}, "x-since": 24}, {"required": ["runId", "expectedRevision", "expectedChangeDigest", "allChanges"], "not": {"anyOf": [{"required": ["proposalId"]}]}, "x-since": 24}]))]
 pub struct RevertInput {
     pub run_id: Id,
     pub expected_revision: Revision,
@@ -261,7 +261,7 @@ pub struct RevertInput {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "gated_member"
     )]
-    #[schemars(with = "bool", extend("x-since" = 9, "const" = true))]
+    #[schemars(with = "bool", extend("x-since" = 24, "const" = true))]
     pub all_changes: Option<bool>,
 }
 impl Check for RevertInput {
@@ -276,7 +276,7 @@ impl Check for RevertInput {
 }
 impl Revisioned for RevertInput {
     fn retain_revision(&mut self, revision: u32) {
-        if revision < 9 {
+        if revision < 24 {
             self.all_changes = None;
         }
     }

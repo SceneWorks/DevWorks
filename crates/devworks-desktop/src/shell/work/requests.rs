@@ -95,6 +95,7 @@ impl WorkCtl<'_, '_> {
             plan_saving: std::mem::take(&mut self.work.plan_saving),
             edit_saving: std::mem::take(&mut self.work.edit_saving),
             create_saving: std::mem::take(&mut self.work.create_saving),
+            linked_spaces: self.work.linked_spaces,
             ..WorkUi::default()
         };
     }
@@ -326,8 +327,77 @@ impl WorkCtl<'_, '_> {
             slot,
             "Reading settled finding history",
             "history.work_lineage",
-            move |be, cursor| wops::readiness_history(be, &root, cursor),
+            move |be, cursor| wops::work_lineage(be, &root, cursor),
         );
+    }
+
+    /// Reads a root's linked history again (every part, the pages shown re-read), or the next
+    /// page of one part.
+    pub(super) fn load_linked_history(&mut self, root: &str, part: Option<LinkedPart>) {
+        if !self.work.linked.contains_key(root) {
+            self.work.linked_spaces += 1;
+            let space = self.work.linked_spaces;
+            let mut linked = LinkedHistory::default();
+            linked.lineage.separate(space);
+            linked.evidence.separate(space);
+            linked.usage.separate(space);
+            self.work.linked.insert(root.to_owned(), linked);
+        }
+        let Some(linked) = self.work.linked.get_mut(root) else {
+            return;
+        };
+        let fetches: Vec<(LinkedPart, Fetch)> = match part {
+            None => vec![
+                (LinkedPart::Lineage, linked.lineage.refresh()),
+                (LinkedPart::Evidence, linked.evidence.refresh()),
+                (LinkedPart::Usage, linked.usage.refresh()),
+            ],
+            Some(part) => {
+                let list_more = match part {
+                    LinkedPart::Lineage => linked.lineage.more_page(),
+                    LinkedPart::Evidence => linked.evidence.more_page(),
+                    LinkedPart::Usage => linked.usage.more_page(),
+                };
+                list_more.map(|f| (part, f)).into_iter().collect()
+            }
+        };
+        for (part, fetch) in fetches {
+            self.send_linked(root, part, fetch);
+        }
+    }
+
+    pub(super) fn send_linked(&mut self, root: &str, part: LinkedPart, fetch: Fetch) {
+        let Some(linked) = self.work.linked.get_mut(root) else {
+            return;
+        };
+        let r = root.to_owned();
+        let generation = fetch.generation;
+        match part {
+            LinkedPart::Lineage => self.cx.paged(
+                &mut linked.lineage,
+                fetch,
+                WorkSlot::WorkLineage(r.clone(), generation),
+                "Reading linked history",
+                "history.work_lineage",
+                move |be, cursor| wops::work_lineage(be, &r, cursor),
+            ),
+            LinkedPart::Evidence => self.cx.paged(
+                &mut linked.evidence,
+                fetch,
+                WorkSlot::WorkEvidence(r.clone(), generation),
+                "Reading evidence links",
+                "history.evidence_links",
+                move |be, cursor| wops::evidence_links(be, &r, cursor),
+            ),
+            LinkedPart::Usage => self.cx.paged(
+                &mut linked.usage,
+                fetch,
+                WorkSlot::WorkToolUsage(r.clone(), generation),
+                "Reading tool usage",
+                "history.tool_usage",
+                move |be, cursor| wops::tool_usage(be, &r, cursor),
+            ),
+        };
     }
 
     /// Reads the root's source-control links: a first read shows its spinner, a re-read keeps
@@ -376,6 +446,15 @@ impl WorkCtl<'_, '_> {
         );
     }
 
+    /// Reads every inspected root's run snapshot again (one at a time per root).
+    pub(super) fn reinspect_runs(&mut self) {
+        let roots: Vec<String> = self.work.runs.keys().cloned().collect();
+        for root in roots {
+            if !self.pending(&WorkSlot::WorkInspect(root.clone())) {
+                self.inspect(&root);
+            }
+        }
+    }
     pub(super) fn inspect(&mut self, root: &str) {
         let r = root.to_owned();
         self.query(

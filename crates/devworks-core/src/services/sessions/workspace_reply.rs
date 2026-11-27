@@ -1,4 +1,4 @@
-//! Durable workspace reply intents, ordered by the human messages that request them.
+//! Durable workspace reply intents, ordered by their conversation input.
 use crate::context::{InvocationContext, PrincipalKind};
 use crate::fingerprint::canonical_digest;
 use crate::ports::IdKind;
@@ -24,6 +24,8 @@ pub struct ReplyIntent {
     pub context_epoch: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<ConversationRoutePreference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watcher_source: Option<Id>,
 }
 
 /// An older Home chat can acquire the configured agent only from its recorded human creator.
@@ -73,15 +75,73 @@ pub(super) fn record(
     sequence: i64,
     route: Option<ConversationRoutePreference>,
 ) -> Result<OperationId, StorageError> {
-    let intent = ReplyIntent {
-        session_id: session.id.clone(),
-        agent_id: session.agent_id.clone(),
-        creator_id: session.created_by.clone(),
-        user_entry_id: entry_id,
-        user_sequence: sequence,
-        context_epoch: session.context_epoch,
-        route,
-    };
+    record_input(
+        tx,
+        ctx,
+        session,
+        ReplyIntent {
+            session_id: session.id.clone(),
+            agent_id: session.agent_id.clone(),
+            creator_id: session.created_by.clone(),
+            user_entry_id: entry_id,
+            user_sequence: sequence,
+            context_epoch: session.context_epoch,
+            route,
+            watcher_source: None,
+        },
+    )
+}
+
+/// Queue a host-written watcher notice on the same partition as human replies.
+pub(crate) fn record_watcher(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    session: &StoredSession,
+    entry_id: Id,
+    sequence: i64,
+    source: Id,
+) -> Result<(), StorageError> {
+    if ctx.principal_kind() != PrincipalKind::Host
+        || ctx.session_id() != Some(&session.id)
+        || session.closed()
+        || session.project_id.is_some()
+        || session.root_id.is_some()
+        || !tx
+            .authority()
+            .principal(&session.agent_id)?
+            .is_some_and(|binding| {
+                binding.active
+                    && binding.kind == PrincipalKind::Agent
+                    && binding.role == Some(AgentRole::WorkspaceCoordinator)
+                    && binding.project_id.is_none()
+            })
+    {
+        return Ok(());
+    }
+    record_input(
+        tx,
+        ctx,
+        session,
+        ReplyIntent {
+            session_id: session.id.clone(),
+            agent_id: session.agent_id.clone(),
+            creator_id: session.created_by.clone(),
+            user_entry_id: entry_id,
+            user_sequence: sequence,
+            context_epoch: session.context_epoch,
+            route: None,
+            watcher_source: Some(source),
+        },
+    )?;
+    Ok(())
+}
+
+fn record_input(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    session: &StoredSession,
+    intent: ReplyIntent,
+) -> Result<OperationId, StorageError> {
     let payload = serde_json::to_value(&intent)
         .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
     let args_digest = canonical_digest(&payload)

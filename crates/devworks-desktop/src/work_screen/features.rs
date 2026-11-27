@@ -77,6 +77,18 @@ impl WorkCtl<'_, '_> {
                             if widgets::secondary_button(ui, "Refresh").clicked() {
                                 st.2.push(Action::Reload);
                             }
+                            if ui
+                                .add_enabled(
+                                    open && project.is_some(),
+                                    egui::Button::new("Continue all paused work"),
+                                )
+                                .on_hover_text(
+                                    "Continues every feature and task in this project that is paused until you continue it",
+                                )
+                                .clicked()
+                            {
+                                st.2.push(Action::ContinueAllHeld);
+                            }
                             let r = ui.add_enabled(
                                 open && !creating && project.is_some(),
                                 egui::Button::new(if tab == 1 {
@@ -194,6 +206,7 @@ impl WorkCtl<'_, '_> {
                                         }
                                     },
                                 );
+                                reviews::section(ui, work, &id, actions);
                             }
                         }
                     });

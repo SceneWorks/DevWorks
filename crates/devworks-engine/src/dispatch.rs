@@ -166,6 +166,16 @@ pub type ReadyFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub trait EffectExecutor: Send + Sync {
     /// Performs the effect of a `Dispatching` operation once.
     fn execute(&self, operation: OperationRecord) -> EffectFuture;
+    /// Checks whether an observed completion still meets its publication requirements inside
+    /// the same transaction that records the outcome. A rejected result will settle as failed.
+    fn completion_current(
+        &self,
+        _tx: &mut dyn WriteTransaction,
+        _operation: &OperationRecord,
+        _evidence: &Value,
+    ) -> Result<bool, StorageError> {
+        Ok(true)
+    }
     fn observes_delivery_cancellation(&self) -> bool {
         false
     }
@@ -191,7 +201,7 @@ pub trait EffectExecutor: Send + Sync {
     fn observe(&self, operation: OperationRecord) -> EffectFuture;
     /// An operation with an established outcome can return to delivery without operator input.
     /// Consumers opt in only when their observation establishes an exact safe continuation.
-    fn resumes_after_observation(&self) -> bool {
+    fn resumes_after_observation(&self, _operation: &OperationRecord) -> bool {
         false
     }
 
@@ -1072,7 +1082,7 @@ impl Dispatcher {
                 .await?;
                 for (delivery, delivery_revision, op) in held {
                     let observed = executor.observe(op.clone()).await;
-                    let auto_resume = executor.resumes_after_observation();
+                    let auto_resume = executor.resumes_after_observation(&op);
                     let established =
                         store::write(&self.inner.store, WriteOptions::settlement(), move |tx| {
                             let Some(current) = tx.operations().operation(&op.id)? else {
@@ -1455,6 +1465,15 @@ impl Dispatcher {
                 .operations()
                 .operation(&operation.id)?
                 .ok_or_else(|| invalid("operation vanished"))?;
+            let result = match &result {
+                EffectResult::Completed(evidence)
+                    if op.state == OperationState::Dispatching
+                        && !executor.completion_current(tx, &op, evidence)? =>
+                {
+                    EffectResult::Failed("completion evidence is no longer current".into())
+                }
+                _ => result,
+            };
             let (to, note) = observation(&result);
             let to = to.unwrap_or(OperationState::OutcomeUnknown);
             if op.state == OperationState::Dispatching {

@@ -56,7 +56,7 @@ pub const OPERATIONS: &[&str] = &[
     "dreaming.review",
 ];
 
-pub const REVISION: u32 = 9;
+pub const REVISION: u32 = 24;
 pub const CONSUMER: &str = "dreaming_sweep";
 pub const NIGHTLY_JOB_ID: &str = "dream-projects";
 const INSTRUCTIONS_LIMIT: i64 = 65_536;

@@ -309,8 +309,10 @@ impl RunSupervisor {
     }
 
     /// Signals every launch to stop and aborts its task at once, without recording anything
-    /// (the drop path: the next boot interrupts and holds whatever was live). Nothing renews a
-    /// lease or writes after this.
+    /// (the drop path: the next boot interrupts and holds whatever was live). The supervisor
+    /// renews no lease and records no activation end after this. Blocking work a launch already
+    /// handed to the blocking pool (a store write or publication of its turn) is not aborted and
+    /// can still commit.
     pub fn abort_launches(&self) {
         self.stop();
         let tasks: Vec<Running> = {
