@@ -6,7 +6,7 @@ mod tests {
     fn native_candidate_queries_resolve_against_the_migrated_schema_and_do_not_mutate_it() {
         let policy: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+            "/src/storage/sqlite/project_purge/policy/native-row-selectors.json"
         )))
         .unwrap();
         let h = crate::storage::sqlite::tests::Harness::new();

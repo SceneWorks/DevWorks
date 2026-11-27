@@ -80,6 +80,23 @@ class PrSizeTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn('hand-written lines changed: 2', out)
 
+    def test_edit_to_a_purge_policy_file_counts_under_the_real_attributes(self):
+        # The purge policy decides which rows a project purge deletes, so the
+        # repository's own .gitattributes must leave it counted (DW-165).
+        root = os.path.dirname(os.path.dirname(os.path.dirname(CHECK)))
+        with open(os.path.join(root, '.gitattributes')) as f:
+            self.repo.write('.gitattributes', f.read())
+        policy = ('crates/devworks-adapters/src/storage/sqlite/project_purge/'
+                  'policy/table-selectors.json')
+        self.repo.write(policy, BODY)
+        base = self.repo.commit('policy')
+        self.repo.write(policy, BODY.replace('line 5 of', 'edited 5 of'))
+        head = self.repo.commit('edit policy')
+        code, out = self.repo.check(base, head)
+        self.assertEqual(code, 0, out)
+        self.assertIn('hand-written lines changed: 2', out)
+        self.assertIn('generated lines not counted: 0', out)
+
     def test_plain_addition_counts(self):
         self.repo.write('new.txt', BODY)
         head = self.repo.commit('add')

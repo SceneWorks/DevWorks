@@ -7,7 +7,7 @@ use rusqlite::Connection;
 type Definitions = Vec<(String, String, String, Option<String>)>;
 
 /// SHA-256 of the persistent schema (every `main.sqlite_schema` row) whose ownership the project
-/// purge policy documents under `docs/architecture/validation/project-purge/` were reviewed
+/// purge policy documents under `project_purge/policy/` were reviewed
 /// against. A test rebuilds that schema from `MIGRATIONS` and fails when it no longer matches, so
 /// any schema change, including a new column on an existing table, needs a deliberate policy
 /// review before purge accepts it.
@@ -120,7 +120,7 @@ mod tests {
             actual, REVIEWED_SCHEMA_SHA256,
             "the schema built from MIGRATIONS changed, so project purge refuses every store. \
              Review each new or changed table, column, index and trigger against the purge \
-             ownership policy (docs/architecture/validation/project-purge/ and the policy \
+             ownership policy (project_purge/policy/ and the policy \
              documents loaded in project_purge/classification.rs), add a policy document for any \
              new owning shape, then set REVIEWED_SCHEMA_SHA256 in \
              crates/devworks-adapters/src/storage/sqlite/project_purge/schema.rs to {actual}."
@@ -141,7 +141,7 @@ mod tests {
         }
         let baseline: serde_json::Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/architecture/validation/project-purge/schema-baseline.json"
+            "/src/storage/sqlite/project_purge/policy/schema-baseline.json"
         )))
         .unwrap();
         let mut stale = Vec::new();
@@ -195,7 +195,7 @@ mod tests {
         assert!(
             stale.is_empty(),
             "schema-baseline.json lists schema objects the migrations dropped; remove them from \
-             docs/architecture/validation/project-purge/schema-baseline.json: {stale:#?}"
+             crates/devworks-adapters/src/storage/sqlite/project_purge/policy/schema-baseline.json: {stale:#?}"
         );
     }
 }

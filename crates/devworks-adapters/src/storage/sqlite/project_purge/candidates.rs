@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 
 const POLICY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+    "/src/storage/sqlite/project_purge/policy/native-row-selectors.json"
 ));
 pub(super) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
