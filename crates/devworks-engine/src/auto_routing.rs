@@ -61,6 +61,18 @@ pub(crate) fn unpinned_selection(
             .map_err(|error| StorageError::InvalidRecord(error.to_string()))?;
         return Ok((route.intent, route.effort));
     }
+    if let Some((run, _)) = crate::agent_turns::scheduled_job(ctx) {
+        // A scheduled run's first route is the one its job saved.
+        let run = read.jobs().job_run(run)?.ok_or(StorageError::ScopeDenied)?;
+        return match serde_json::from_str(&run.definition)
+            .map_err(|error| StorageError::InvalidRecord(error.to_string()))?
+        {
+            devworks_core::protocol::records::JobDefinition::Inference {
+                route, effort, ..
+            } => Ok((route, effort)),
+            _ => Err(StorageError::ScopeDenied),
+        };
+    }
     let existing = read.router().auto_route(session)?.is_some();
     let managed_auto = if ctx.root_id().is_some() {
         let descriptor = devworks_core::settings::catalog::descriptor(
@@ -981,9 +993,10 @@ fn low_invocation(
                     }
                 }
             }
-            (None, None) => Attribution::Workspace {
-                session_id: session.clone(),
-            },
+            (None, None) => crate::agent_turns::unrooted_attribution(ctx, session),
+            (None, Some(_)) if crate::agent_turns::scheduled_job(ctx).is_some() => {
+                crate::agent_turns::unrooted_attribution(ctx, session)
+            }
             _ => return Err(StorageError::ScopeDenied),
         };
         let output_headroom = if candidate.endpoint == "CodexSubscriptionResponses" {

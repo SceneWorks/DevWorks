@@ -92,15 +92,16 @@ pub struct KnowledgeComposition {
 /// the retry policy (none: the default), the coordinator launcher (none until the agent
 /// supervisor exists: accepted activations then stay pending and are held at the next boot),
 /// further lifecycle hooks ([`crate::boot`] always composes the schedules' own hooks first) and
-/// the scheduled-inference dispatch port (none until the coordinator turn pipeline exists: a
-/// scheduled inference run then fails before dispatch with a visible reason).
+/// the scheduled-inference dispatch port (none: the runtime's native pipeline, which runs each
+/// scheduled inference run as an agent turn of the job's principal through the router and the
+/// gateway).
 #[derive(Clone)]
 pub struct RunComposition {
     pub scope: Option<Arc<dyn ExecutionScope>>,
     pub config: Option<ControlConfig>,
     pub launcher: Option<Arc<dyn ActivationLauncher>>,
     pub hooks: Arc<dyn devworks_core::services::runs::recovery::LifecycleHooks>,
-    pub inference: Arc<dyn devworks_core::services::jobs::runner::InferenceJobs>,
+    pub inference: Option<Arc<dyn devworks_core::services::jobs::runner::InferenceJobs>>,
 }
 impl Default for RunComposition {
     fn default() -> Self {
@@ -109,7 +110,7 @@ impl Default for RunComposition {
             config: None,
             launcher: None,
             hooks: Arc::new(devworks_core::services::runs::recovery::NoLifecycleHooks),
-            inference: Arc::new(devworks_core::services::jobs::runner::NoInferencePipeline),
+            inference: None,
         }
     }
 }

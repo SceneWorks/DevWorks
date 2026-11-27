@@ -522,6 +522,8 @@ pub struct Runtime {
     admitter: Arc<Admitter>,
     jobs: Arc<JobService>,
     scheduler: Arc<Scheduler>,
+    #[cfg(any(test, feature = "test-support"))]
+    scheduled_inference: Option<Arc<crate::scheduled_inference::ScheduledInference>>,
     evals: Arc<EvalSupervisor>,
     approvals: Arc<ApprovalService>,
     resumes: Arc<ResumeDispatcher>,
@@ -568,6 +570,8 @@ struct Engine {
     usage: Arc<crate::usage::UsageRuntime>,
     dispatcher: Dispatcher,
     workspace_replies: Option<Arc<crate::workspace_reply::WorkspaceReplies>>,
+    /// The native scheduled-inference pipeline, unless the composition supplied its own.
+    scheduled_inference: Option<Arc<crate::scheduled_inference::ScheduledInference>>,
     auto_decisions: Option<Arc<devworks_core::services::router::decisions::DecisionService>>,
     process_tools: Option<Arc<devworks_core::services::process::tools::ProcessToolService>>,
     containers: Option<Arc<devworks_core::services::containers::service::ContainerService>>,
@@ -1468,11 +1472,25 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         changes: watch::channel(0).0,
         handle: tokio::runtime::Handle::current(),
     });
+    // Scheduled inference runs as an agent turn of the job's principal; the pipeline is bound to
+    // the turn engine once that exists.
+    let scheduled_inference = runs.inference.is_none().then(|| {
+        Arc::new(crate::scheduled_inference::ScheduledInference::new(
+            jobs.clone(),
+            diagnostics.clone(),
+        ))
+    });
+    let inference: Arc<dyn devworks_core::services::jobs::runner::InferenceJobs> =
+        match (&runs.inference, &scheduled_inference) {
+            (Some(supplied), _) => supplied.clone(),
+            (None, Some(native)) => native.clone(),
+            (None, None) => unreachable!("the native pipeline is built when none is supplied"),
+        };
     let scheduler = Scheduler::with_stop(
         store.clone(),
         jobs.clone(),
         admitter.clone(),
-        runs.inference.clone(),
+        inference,
         supervisor.clone(),
         config.shutdown_grace.min(config.shutdown_bound),
         config.shutdown_bound,
@@ -1547,6 +1565,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         usage,
         dispatcher,
         workspace_replies,
+        scheduled_inference,
         auto_decisions: systemone.as_ref().map(|worker| worker.decisions.clone()),
         process_tools,
         containers,
@@ -1659,6 +1678,7 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         usage,
         dispatcher,
         workspace_replies,
+        scheduled_inference,
         auto_decisions,
         process_tools,
         containers,
@@ -1917,6 +1937,9 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
     }
     if let Some(worker) = &github_triage {
         worker.bind(&turn);
+    }
+    if let Some(pipeline) = &scheduled_inference {
+        pipeline.bind(&turn);
     }
     let commits = {
         let (passes, fallback) = (polling_passes.clone(), config.polling_interval);
@@ -2437,6 +2460,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         );
     }
     let (stop, drain) = (scheduler.clone(), scheduler.clone());
+    let (stop_inference, drain_inference) =
+        (scheduled_inference.clone(), scheduled_inference.clone());
     workers.start(
         StopAt::Schedule,
         // Scheduled runs in flight are awaited after index runs (a cancellation one is
@@ -2446,10 +2471,22 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
             Loop::new("scheduler", |_| {
                 scheduler.clone().run(config.scheduler_interval)
             })
-            .on_stop(move || stop.stop())
+            .on_stop(move || {
+                stop.stop();
+                // Agent turns of scheduled runs pause for shutdown: their runs are recorded
+                // interrupted and resume from their sessions at the next boot.
+                if let Some(pipeline) = &stop_inference {
+                    pipeline.stop();
+                }
+            })
             .on_drain(move |deadline| {
-                let scheduler = drain.clone();
-                async move { scheduler.drain(deadline).await }
+                let (scheduler, pipeline) = (drain.clone(), drain_inference.clone());
+                async move {
+                    scheduler.drain(deadline).await;
+                    if let Some(pipeline) = pipeline {
+                        pipeline.drain(deadline).await;
+                    }
+                }
             }),
         ),
     );
@@ -2518,6 +2555,8 @@ pub async fn boot(composition: Composition) -> Result<Runtime, BootError> {
         admitter,
         jobs,
         scheduler,
+        #[cfg(any(test, feature = "test-support"))]
+        scheduled_inference,
         evals,
         approvals,
         resumes,
@@ -3373,6 +3412,15 @@ impl Runtime {
     /// The schedule runner (ticks are paced by [`RuntimeConfig::scheduler_interval`]).
     pub fn scheduler(&self) -> &Arc<Scheduler> {
         &self.scheduler
+    }
+    /// Puts the native scheduled-inference pipeline in the state shutdown's first step leaves it
+    /// in, without stopping anything else (a scheduled run started meanwhile is taken without
+    /// a turn).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn stop_scheduled_inference(&self) {
+        if let Some(pipeline) = &self.scheduled_inference {
+            pipeline.stop();
+        }
     }
 
     /// Stops admission of new deliveries, collection, housekeeping and the diagnostics monitor,

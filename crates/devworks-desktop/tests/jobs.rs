@@ -1,7 +1,7 @@
 //! Scheduled jobs over the real runtime, headless (DW-50): a scheduled inference task is listed on
-//! the Scheduled jobs screen with its schedule and state; Run now records a run whose truthful
-//! outcome (no inference pipeline in this build: failed before dispatch, nothing sent) is shown
-//! on Runs; Disable and Enable change it through the same commands an agent submits; Delete asks
+//! the Scheduled jobs screen with its schedule and state; Run now hands the run to the native
+//! scheduled-inference pipeline the desktop installs, and its truthful outcome (no provider route
+//! is configured: failed before anything was sent) is shown on Runs; Disable and Enable change it through the same commands an agent submits; Delete asks
 //! for confirmation first. The project sidebar on All projects shows the project's job status.
 //! The create form refuses incomplete input locally. No inference.
 mod common;
@@ -113,7 +113,8 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     settle(&mut h);
     assert!(has_text(&h, "Next run:"));
     assert!(has_text(&h, "Enabled"));
-    // Run now: this build has no inference pipeline, so the run fails before dispatch and says so.
+    // Run now: the desktop's native pipeline takes the run; with no provider route configured it
+    // fails before anything is sent and says so.
     click(&mut h, Role::Button, "Run now");
     let job = jobs(&*backend).pop().unwrap();
     assert!(
@@ -135,6 +136,28 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     settle(&mut h);
     assert!(has_text(&h, "Failed"));
     assert!(has_text(&h, "Nothing was sent to a model"));
+    // The real pipeline ran it: not the reason of a composition without one.
+    assert!(!has_text(&h, "not available in this composition"));
+    let run_id = jobs(&*backend).pop().unwrap().last_run_id.unwrap();
+    let run = read_snapshot(
+        &**engine.host().runtime().store(),
+        &ReadOptions::default(),
+        |r| r.jobs().job_run(&run_id),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(run.status, "Failed");
+    assert!(
+        run.agent_actor.is_some(),
+        "the pipeline bound the job's agent: {run:?}"
+    );
+    assert!(
+        !run.reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains(devworks_core::services::jobs::runner::NO_PIPELINE),
+        "{run:?}"
+    );
     click(&mut h, Role::Button, "Schedules");
     click(&mut h, Role::Button, "Disable");
     assert!(!jobs(&*backend).pop().unwrap().enabled);
