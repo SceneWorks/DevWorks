@@ -706,6 +706,7 @@ impl TurnEngine {
                 context: converted,
                 omitted,
                 adoption,
+                previous_lessons: old_lessons,
             },
         )
     }
@@ -855,13 +856,31 @@ impl TurnEngine {
         // that publishes this context (KNOW-06).
         let base = match ctx.session_id() {
             Some(session) => {
-                let rules = devworks_core::ports::storage::read_snapshot(
+                // A rule restricted to tools applies only when the session is offered one.
+                let offered: Vec<String> = match self.providers() {
+                    Some(providers) => providers
+                        .schemas()
+                        .selected_agent_tools(ctx)?
+                        .into_iter()
+                        .flat_map(|tool| [tool.wire_name, tool.capability_id.as_str().to_owned()])
+                        .collect(),
+                    None => Vec::new(),
+                };
+                let selection = devworks_core::ports::storage::read_snapshot(
                     self.store.as_ref(),
                     &devworks_core::ports::storage::ReadOptions::default(),
-                    |read| devworks_core::services::knowledge::session_lesson_rules(read, session),
+                    |read| {
+                        devworks_core::services::knowledge::session_lesson_rules(
+                            read, session, &offered,
+                        )
+                    },
                 )?;
-                devworks_core::providers::instructions::bind_lessons(base, &rules)
-                    .map_err(|e| StorageError::InvalidRecord(format!("lesson binding: {e:?}")))?
+                devworks_core::providers::instructions::bind_lessons(
+                    base,
+                    &selection.rules,
+                    selection.truncated,
+                )
+                .map_err(|e| StorageError::InvalidRecord(format!("lesson binding: {e:?}")))?
             }
             None => base,
         };

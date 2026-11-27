@@ -846,6 +846,9 @@ impl SchemaDocuments for RegisteredSchemas {
                     "documents.transfer_respond" => Some(
                         "As the destination coordinator, decide if your project needs the proposed document. DevWorks shares if both projects need it and moves it if only yours does.",
                     ),
+                    "knowledge.record" => Some(
+                        "Record entities, evidence and claims in project or general knowledge. Cite a repository file as evidence with sourceRef repo:<repository-id>/<path> (repository-relative, / separators): DevWorks takes its revision from the published index, and an index publication that changes or deletes the file marks the claims citing it stale.",
+                    ),
                     "documents.transfer_status" => Some(
                         "Recover a document transfer decision for a proposal one of your coordinating sessions participated in.",
                     ),

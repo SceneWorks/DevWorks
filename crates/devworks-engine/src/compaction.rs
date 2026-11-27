@@ -246,6 +246,7 @@ pub(crate) fn publish_compacted(
             context,
             omitted,
             adoption: None,
+            previous_lessons: source.context.lesson_stamp.clone(),
         },
     )
 }
