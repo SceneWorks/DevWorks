@@ -617,6 +617,14 @@ pub trait KnowledgeRead {
     /// Staleness, open challenges, lesson events and deliveries of a claim in one read.
     fn knowledge_claim_tally(&self, claim: &Id) -> Result<ClaimTally, StorageError>;
     fn knowledge_source_head(&self, source_ref: &str) -> Result<Option<String>, StorageError>;
+    /// Distinct sources a claim's verification basis cites that start with `prefix`, in
+    /// order, strictly after `after`, at most `limit` (an index range, never a claim scan).
+    fn knowledge_basis_sources(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<String>, StorageError>;
     /// Non-deleted claims of exactly `scope` whose source is `source`, by id, strictly after
     /// `after`, at most `limit`.
     fn knowledge_source_claims(

@@ -2585,6 +2585,14 @@ impl KnowledgeRead for Unmodelled {
     fn knowledge_source_head(&self, _: &str) -> Result<Option<String>, StorageError> {
         unmodelled()
     }
+    fn knowledge_basis_sources(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: u16,
+    ) -> Result<Vec<String>, StorageError> {
+        unmodelled()
+    }
     fn knowledge_source_claims(
         &self,
         _: &KnowledgeScope,

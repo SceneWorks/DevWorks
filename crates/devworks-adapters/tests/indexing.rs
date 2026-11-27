@@ -37,6 +37,7 @@ use devworks_core::services::indexing::discover::{self, worktree_id};
 use devworks_core::services::indexing::paths::location_identity;
 use devworks_core::services::indexing::worker::IndexWorker;
 use devworks_core::services::indexing::{IndexCoordinator, IndexEnv, IndexSettings, views};
+use devworks_core::services::knowledge::{KnowledgeService, repository_source_ref};
 use devworks_core::services::process::ProcessSupervisor;
 use devworks_core::services::projects::{ProjectService, RepositoryService};
 use devworks_core::services::resources::ResourceService;
@@ -295,6 +296,11 @@ impl Fx {
             .with_indexing(Arc::new(IndexCoordinator::new(env.clone())))
             .with_projects(Arc::new(ProjectService::new(ids.clone(), control.clone())))
             .with_repositories(Arc::new(RepositoryService::new(ids.clone())))
+            .with_knowledge(Arc::new(KnowledgeService::new(
+                ids.clone(),
+                clock.clone(),
+                None,
+            )))
             .with_artifacts(artifacts);
         let fx = Self {
             root,
@@ -990,6 +996,106 @@ fn incremental_runs_reconcile_edits_deletions_and_renames_and_stale_never_reads_
     let reclaimed = fx.worker.housekeeping(false, &|| false).unwrap();
     assert!(reclaimed.reclaimed_rows > 0);
     let _ = head2;
+}
+
+/// Records, in general knowledge, a fact citing `path` of `repository` at `revision`; returns
+/// the claim id.
+fn cite(fx: &Fx, repository: &Id, path: &str, revision: &str, fact: &str) -> Id {
+    let key = format!("key-{}", fx.n.fetch_add(1, Ordering::SeqCst));
+    let reply = fx.command_frame(
+        &fx.user(),
+        "knowledge.record",
+        json!({"mode": "Command", "protocol": "1.0-draft.1", "requestKey": key,
+            "schemaRevision": 2, "body": {"kind": "knowledge.record",
+            "scope": {"kind": "Workspace"}, "batch": {
+            "entities": [{"clientId": "s", "label": path, "entityType": "file", "aliases": []}],
+            "evidence": [{"id": "ev", "source": {"kind": "Code",
+                "sourceRef": repository_source_ref(repository, path)},
+                "snippet": fact, "sourceRevision": revision}],
+            "claims": [{"kind": "Fact", "subjectId": "s", "predicate": "states", "value": fact,
+                "confidence": 0.7, "evidenceIds": ["ev"], "tags": []}]}}}),
+    );
+    match decision(reply) {
+        DomainDecision::Applied { result } => {
+            let value = serde_json::to_value(result).unwrap();
+            id(value["value"]["claimIds"][0].as_str().unwrap())
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Whether `knowledge.read` reports `claim` stale.
+fn read_stale(fx: &Fx, claim: &Id) -> bool {
+    let reply = fx.query(
+        "knowledge.read",
+        json!({"scope": {"kind": "Workspace"}, "claimId": claim}),
+        Some(2),
+    );
+    match result(reply) {
+        OperationResult::KnowledgeRead { value } => {
+            value
+                .claims
+                .0
+                .iter()
+                .find(|c| c.id == *claim)
+                .unwrap()
+                .stale
+                == Some(true)
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_publication_that_changes_a_cited_file_makes_its_claims_read_stale() {
+    let _s = serial();
+    let fx = Fx::new(|_| {});
+    let src = Temp::new("src");
+    let dir = src.join("cited");
+    repo(
+        &dir,
+        &[
+            ("src/router.rs", "fn route() {}\n"),
+            ("src/kept.rs", "fn kept() {}\n"),
+            ("src/gone.rs", "fn gone() {}\n"),
+        ],
+    );
+    fx.base_directory(&src.0);
+    fx.scan();
+    let repo_id = fx.repository_at(&dir);
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    let first = fx.published(&repo_id);
+    // Each claim cites its file at the revision the published index holds for it.
+    let digest = |path: &str| fx.unit(&first, path).unwrap().1.content_digest;
+    let routed = cite(
+        &fx,
+        &repo_id,
+        "src/router.rs",
+        &digest("src/router.rs"),
+        "routes",
+    );
+    let kept = cite(
+        &fx,
+        &repo_id,
+        "src/kept.rs",
+        &digest("src/kept.rs"),
+        "keeps",
+    );
+    let gone = cite(&fx, &repo_id, "src/gone.rs", &digest("src/gone.rs"), "goes");
+    assert!(!read_stale(&fx, &routed) && !read_stale(&fx, &kept) && !read_stale(&fx, &gone));
+
+    write(&dir, "src/router.rs", "fn route() {}\nfn reroute() {}\n");
+    std::fs::remove_file(dir.join("src/gone.rs")).unwrap();
+    commit(&dir, "change and delete cited files");
+    fx.scan();
+    run_of(decision(fx.index(&repo_id, false, "1")));
+    fx.drain();
+    assert_ne!(first.view.view_id, fx.published(&repo_id).view.view_id);
+    // The changed and the deleted file's claims read stale; the unchanged file's claim does not.
+    assert!(read_stale(&fx, &routed), "a changed cited file");
+    assert!(read_stale(&fx, &gone), "a deleted cited file");
+    assert!(!read_stale(&fx, &kept), "an unchanged cited file");
 }
 
 // ---------------------------------------------------------------------------------------------

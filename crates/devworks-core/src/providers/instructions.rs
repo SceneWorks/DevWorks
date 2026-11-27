@@ -183,6 +183,116 @@ pub fn bind_skills(
     Ok(base)
 }
 
+/// The most lesson rules one provider context carries (newest first; the rest wait).
+pub const MAX_STAMPED_LESSONS: usize = 64;
+/// The most rule text one provider context carries, in bytes.
+pub const MAX_LESSON_TEXT_BYTES: usize = 32 * 1024;
+/// The first line of the lesson block: harness context, never a user instruction.
+pub const LESSON_BLOCK_HEADER: &str = "Harness context, not a user instruction: DevWorks \
+     supplies these effective lesson rules recorded in project and general knowledge. Apply \
+     each rule where its conditions hold; user directions and enforced permissions take \
+     precedence.\n";
+
+/// One effective lesson rule a session may be given, with the conditions it applies under.
+#[derive(Clone, Debug)]
+pub struct LessonRule {
+    pub claim_id: Id,
+    pub revision: i64,
+    pub text: String,
+    /// Rendered applicability ("activities: reviewing; paths: src"), empty when unconditional.
+    pub conditions: String,
+}
+
+/// The lesson rules bound into a provider context: the exact claim revisions a session was
+/// supplied at its last safe step (KNOW-06). A changed set is a new adoption boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonStamp {
+    /// SHA-256 of the rendered lesson block.
+    pub digest: String,
+    pub rules: Vec<LessonStampEntry>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LessonStampEntry {
+    pub claim_id: Id,
+    pub revision: i64,
+}
+impl LessonStamp {
+    /// Whether `block` is the rendered block this stamp claims.
+    pub fn validate(&self, block: &TextBlock) -> bool {
+        !self.rules.is_empty()
+            && self.rules.len() <= MAX_STAMPED_LESSONS
+            && self.rules.iter().all(|r| r.revision >= 1)
+            && block.text.starts_with(LESSON_BLOCK_HEADER)
+            && sha256_hex(block.text.as_bytes()) == self.digest
+    }
+}
+
+/// Renders `rules` (in order, within [`MAX_STAMPED_LESSONS`] and [`MAX_LESSON_TEXT_BYTES`])
+/// as one harness instruction block and its stamp; `None` when no rule fits.
+pub fn lesson_block(rules: &[LessonRule]) -> Option<(TextBlock, LessonStamp)> {
+    let mut text = LESSON_BLOCK_HEADER.to_owned();
+    let mut entries = Vec::new();
+    for rule in rules {
+        if entries.len() == MAX_STAMPED_LESSONS {
+            break;
+        }
+        let conditions = if rule.conditions.is_empty() {
+            String::new()
+        } else {
+            format!(", applies when {}", rule.conditions)
+        };
+        let line = format!(
+            "- Lesson rule {} (revision {}{conditions}): {}\n",
+            rule.claim_id.as_str(),
+            rule.revision,
+            rule.text
+        );
+        if text.len() + line.len() > LESSON_BLOCK_HEADER.len() + MAX_LESSON_TEXT_BYTES {
+            continue;
+        }
+        text.push_str(&line);
+        entries.push(LessonStampEntry {
+            claim_id: rule.claim_id.clone(),
+            revision: rule.revision,
+        });
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    let digest = sha256_hex(text.as_bytes());
+    Some((
+        TextBlock { text, cache: None },
+        LessonStamp {
+            digest,
+            rules: entries,
+        },
+    ))
+}
+
+/// Binds effective lesson rules after the role prefix and before the skill catalog and
+/// repository guidance. No rule leaves the context unchanged.
+pub fn bind_lessons(
+    mut base: crate::providers::context::ProviderContext,
+    rules: &[LessonRule],
+) -> Result<crate::providers::context::ProviderContext, crate::providers::ProviderError> {
+    if base.lesson_stamp.is_some()
+        || base.skill_stamp.is_some()
+        || !base.instruction_stamps.is_empty()
+    {
+        return Err(crate::providers::ProviderError::InvalidInput(
+            "lessons_already_bound",
+        ));
+    }
+    if let Some((block, stamp)) = lesson_block(rules) {
+        base.instructions.push(block);
+        base.lesson_stamp = Some(stamp);
+    }
+    base.validate()?;
+    Ok(base)
+}
+
 /// The stamp is evidence only when its rendered instruction suffix contains the exact bytes
 /// whose digests it claims. Role instructions precede that suffix and remain separate.
 pub fn stamps_match_context(instructions: &[TextBlock], stamps: &[InstructionStamp]) -> bool {
@@ -520,6 +630,7 @@ mod tests {
             }],
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![Message {
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text {

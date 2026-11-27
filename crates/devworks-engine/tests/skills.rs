@@ -2112,6 +2112,7 @@ fn provider_contexts_bind_skills_gate_dispatch_and_adopt_changes_at_an_epoch() {
             }],
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![devworks_core::providers::context::Message {
                 role: devworks_core::providers::context::MessageRole::User,
                 content: vec![devworks_core::providers::context::ContentBlock::Text {

@@ -1025,6 +1025,8 @@ impl Exec<'_> {
             };
             tx.indexing().insert_view(&view)?;
             let revision = tx.indexing().publish(&repo, &view_id, pointer)?;
+            // Claims citing a file this publication changed read stale from the same commit.
+            observe_cited_sources(tx, &repo, &g)?;
             let now = tx.now_ms();
             tx.projects().publish_index_view(&StoredIndexView {
                 view_id: view_id.clone(),
@@ -1117,5 +1119,44 @@ impl Exec<'_> {
             Err(Stop::Lost) => Err(Stop::Lost),
             Err(s) => Err(s),
         }
+    }
+}
+
+/// The revision a cited repository file has when the published baseline no longer holds it.
+const ABSENT_SOURCE_REVISION: &str = "absent";
+
+/// Records, for every repository file a knowledge claim cites, the revision `generation` (the
+/// baseline being published) holds: its unit's content digest, or [`ABSENT_SOURCE_REVISION`]
+/// when the file is gone. Only cited files whose recorded revision differs are observed, so the
+/// work is bounded by the repository's cited files, never its size or its claims (KNOW-03).
+fn observe_cited_sources(
+    tx: &mut dyn WriteTransaction,
+    repository: &Id,
+    generation: &Id,
+) -> Result<(), StorageError> {
+    use crate::ports::storage::KNOWLEDGE_PAGE_MAX;
+    use crate::services::knowledge::{observe_source, repository_source_prefix};
+    let prefix = repository_source_prefix(repository);
+    let mut after: Option<String> = None;
+    loop {
+        let page = tx.knowledge().knowledge_basis_sources(
+            &prefix,
+            after.as_deref(),
+            KNOWLEDGE_PAGE_MAX,
+        )?;
+        for source in &page {
+            let path = &source[prefix.len()..];
+            let revision = tx
+                .indexing()
+                .unit(generation, path)?
+                .map_or_else(|| ABSENT_SOURCE_REVISION.to_owned(), |u| u.content_digest);
+            if tx.knowledge().knowledge_source_head(source)?.as_deref() != Some(revision.as_str()) {
+                observe_source(tx, source, &revision)?;
+            }
+        }
+        if page.len() < usize::from(KNOWLEDGE_PAGE_MAX) {
+            return Ok(());
+        }
+        after = page.last().cloned();
     }
 }

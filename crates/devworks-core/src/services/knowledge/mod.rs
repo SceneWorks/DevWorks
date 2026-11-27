@@ -1157,46 +1157,7 @@ impl KnowledgeService {
         session: &Id,
         rules: &[(Id, i64)],
     ) -> Result<(), StorageError> {
-        let Some(s) = tx.sessions().session(session)? else {
-            return Err(StorageError::NotFound {
-                kind: "session",
-                id: session.as_str().to_owned(),
-            });
-        };
-        let now = tx.now_ms();
-        let mut touched: Vec<KnowledgeScope> = Vec::new();
-        for (claim, revision) in rules {
-            // Only a rule the session may be given: general, or of the session's own project.
-            let scope = match tx.knowledge().knowledge_claim(claim)? {
-                Some(c)
-                    if c.revision >= *revision
-                        && *revision >= 1
-                        && c.scope
-                            .project()
-                            .is_none_or(|p| Some(p) == s.project_id.as_ref()) =>
-                {
-                    c.scope
-                }
-                _ => {
-                    return Err(StorageError::NotFound {
-                        kind: CLAIM,
-                        id: claim.as_str().to_owned(),
-                    });
-                }
-            };
-            if tx
-                .knowledge()
-                .record_knowledge_delivery(session, claim, *revision, now)?
-                && !touched.contains(&scope)
-            {
-                touched.push(scope);
-            }
-        }
-        // A delivery changes the Undelivered view's membership: its listings' cursors expire.
-        for scope in &touched {
-            tx.knowledge().bump_scope(scope)?;
-        }
-        Ok(())
+        record_delivery(tx, session, rules)
     }
 
     /// Records the current revision of a source (a repository path, a document version); claims
@@ -1208,27 +1169,7 @@ impl KnowledgeService {
         source_ref: &str,
         revision: &str,
     ) -> Result<Vec<Id>, StorageError> {
-        if source_ref.is_empty() || revision.is_empty() {
-            return Err(StorageError::InvalidRecord(
-                "source and revision are required".into(),
-            ));
-        }
-        let now = tx.now_ms();
-        let changed = tx
-            .knowledge()
-            .observe_knowledge_source(source_ref, revision, now)?;
-        // A changed stale status changes what a stale-filtered listing returns: every scope it
-        // touched advances, so a cursor read before it expires instead of skipping a claim.
-        let mut scopes: Vec<KnowledgeScope> = Vec::new();
-        for (_, scope) in &changed {
-            if !scopes.contains(scope) {
-                scopes.push(scope.clone());
-            }
-        }
-        for scope in &scopes {
-            tx.knowledge().bump_scope(scope)?;
-        }
-        Ok(changed.into_iter().map(|(id, _)| id).collect())
+        observe_source(tx, source_ref, revision)
     }
 
     /// Every effective rule a session of `project` (`None`: a workspace session) may be given:
@@ -1242,6 +1183,83 @@ impl KnowledgeService {
     ) -> Result<Vec<KnowledgeClaim>, StorageError> {
         rules_for(snapshot, project, activity)
     }
+}
+
+/// See [`KnowledgeService::record_delivery`].
+pub fn record_delivery(
+    tx: &mut dyn WriteTransaction,
+    session: &Id,
+    rules: &[(Id, i64)],
+) -> Result<(), StorageError> {
+    let Some(s) = tx.sessions().session(session)? else {
+        return Err(StorageError::NotFound {
+            kind: "session",
+            id: session.as_str().to_owned(),
+        });
+    };
+    let now = tx.now_ms();
+    let mut touched: Vec<KnowledgeScope> = Vec::new();
+    for (claim, revision) in rules {
+        // Only a rule the session may be given: general, or of the session's own project.
+        let scope = match tx.knowledge().knowledge_claim(claim)? {
+            Some(c)
+                if c.revision >= *revision
+                    && *revision >= 1
+                    && c.scope
+                        .project()
+                        .is_none_or(|p| Some(p) == s.project_id.as_ref()) =>
+            {
+                c.scope
+            }
+            _ => {
+                return Err(StorageError::NotFound {
+                    kind: CLAIM,
+                    id: claim.as_str().to_owned(),
+                });
+            }
+        };
+        if tx
+            .knowledge()
+            .record_knowledge_delivery(session, claim, *revision, now)?
+            && !touched.contains(&scope)
+        {
+            touched.push(scope);
+        }
+    }
+    // A delivery changes the Undelivered view's membership: its listings' cursors expire.
+    for scope in &touched {
+        tx.knowledge().bump_scope(scope)?;
+    }
+    Ok(())
+}
+
+/// See [`KnowledgeService::observe_source`].
+pub fn observe_source(
+    tx: &mut dyn WriteTransaction,
+    source_ref: &str,
+    revision: &str,
+) -> Result<Vec<Id>, StorageError> {
+    if source_ref.is_empty() || revision.is_empty() {
+        return Err(StorageError::InvalidRecord(
+            "source and revision are required".into(),
+        ));
+    }
+    let now = tx.now_ms();
+    let changed = tx
+        .knowledge()
+        .observe_knowledge_source(source_ref, revision, now)?;
+    // A changed stale status changes what a stale-filtered listing returns: every scope it
+    // touched advances, so a cursor read before it expires instead of skipping a claim.
+    let mut scopes: Vec<KnowledgeScope> = Vec::new();
+    for (_, scope) in &changed {
+        if !scopes.contains(scope) {
+            scopes.push(scope.clone());
+        }
+    }
+    for scope in &scopes {
+        tx.knowledge().bump_scope(scope)?;
+    }
+    Ok(changed.into_iter().map(|(id, _)| id).collect())
 }
 
 /// Every effective rule a session of `project` may be given (see [`KnowledgeService::rules_for`]).
@@ -1282,6 +1300,72 @@ pub fn rules_for(
             _ => return Ok(out),
         }
     }
+}
+
+/// The knowledge source a repository file is cited as: `repo:<repository>/<path>`, its
+/// revision the content digest of the file's unit in the published index.
+pub fn repository_source_ref(repository: &Id, path: &str) -> String {
+    format!("{}{path}", repository_source_prefix(repository))
+}
+
+/// The prefix every [`repository_source_ref`] of `repository` starts with.
+pub fn repository_source_prefix(repository: &Id) -> String {
+    format!("repo:{}/", repository.as_str())
+}
+
+/// Whether a rule restricted to repositories applies to a session whose captured repository
+/// scope is `repositories` (an unrestricted rule always does).
+pub(crate) fn applies_to_repositories(applicability: &Applicability, repositories: &[Id]) -> bool {
+    applicability.repository_ids.0.is_empty()
+        || applicability
+            .repository_ids
+            .0
+            .iter()
+            .any(|r| repositories.contains(r))
+}
+
+/// The effective lesson rules a session's provider context carries (KNOW-06): its project's
+/// and general rules ([`rules_for`]) in newest-first order, without those restricted to
+/// repositories outside the session's captured scope. Activity, path, tool and harness
+/// conditions are rendered with the rule rather than guessed from the session.
+pub fn session_lesson_rules(
+    snapshot: &dyn ReadSnapshot,
+    session: &Id,
+) -> Result<Vec<crate::providers::instructions::LessonRule>, StorageError> {
+    let Some(stored) = snapshot.sessions().session(session)? else {
+        return Ok(Vec::new());
+    };
+    let repositories = snapshot.sessions().session_repository_scope(session)?;
+    let mut out = Vec::new();
+    for rule in rules_for(snapshot, stored.project_id.as_ref(), None)? {
+        let (Some(lesson), Some(text)) = (&rule.lesson, &rule.value) else {
+            continue;
+        };
+        let a = &lesson.applicability;
+        if !applies_to_repositories(a, &repositories) {
+            continue;
+        }
+        let mut conditions = Vec::new();
+        let mut list = |name: &str, values: Vec<&str>| {
+            if !values.is_empty() {
+                conditions.push(format!("{name}: {}", values.join(", ")));
+            }
+        };
+        list(
+            "activities",
+            a.activities.0.iter().map(|v| v.0.as_str()).collect(),
+        );
+        list("paths", a.paths.0.iter().map(|v| v.0.as_str()).collect());
+        list("tools", a.tools.0.iter().map(|v| v.0.as_str()).collect());
+        list("harness", a.harness.iter().map(|v| v.0.as_str()).collect());
+        out.push(crate::providers::instructions::LessonRule {
+            claim_id: rule.id.clone(),
+            revision: rule.revision.get(),
+            text: text.0.clone(),
+            conditions: conditions.join("; "),
+        });
+    }
+    Ok(out)
 }
 
 /// Whether a write of `scope` is visible from this invocation.

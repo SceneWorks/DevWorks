@@ -74,7 +74,7 @@ use crate::protocol::{
     RetryAdvice, RevisionDimension,
 };
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::knowledge::rules_for;
+use crate::services::knowledge::{applies_to_repositories, rules_for};
 use serde_json::json;
 use std::sync::Arc;
 use transcript::{AppendPath, BatchOutcome, BatchRefusal, SESSION_AGGREGATE, SessionBatch};
@@ -1019,8 +1019,7 @@ impl SessionService {
             for rule in rules_for(snapshot, session.project_id.as_ref(), None)? {
                 let scoped = rule.lesson.as_ref().is_some_and(|l| {
                     let a = &l.applicability;
-                    (a.repository_ids.0.is_empty()
-                        || a.repository_ids.0.iter().any(|r| repositories.contains(r)))
+                    applies_to_repositories(a, &repositories)
                         && a.paths
                             .0
                             .iter()

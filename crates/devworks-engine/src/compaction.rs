@@ -570,6 +570,7 @@ mod tests {
             instructions: vec![],
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![
                 brief,
                 text(MessageRole::Assistant, "long answer"),
@@ -622,6 +623,7 @@ mod tests {
             instructions: vec![],
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![
                 text(MessageRole::User, "Assignment brief"),
                 asked,

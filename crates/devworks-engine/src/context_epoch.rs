@@ -249,6 +249,25 @@ pub(crate) fn provider_change(
     )
 }
 
+/// Records that `session` was supplied the lesson rules `lessons` names, in the transaction
+/// that publishes the provider context carrying them (KNOW-06). A rule already recorded for the
+/// session at that revision is not recorded again.
+pub(crate) fn record_lesson_delivery(
+    tx: &mut dyn devworks_core::ports::storage::WriteTransaction,
+    session: &Id,
+    lessons: Option<&devworks_core::providers::instructions::LessonStamp>,
+) -> Result<(), StorageError> {
+    let Some(stamp) = lessons else {
+        return Ok(());
+    };
+    let rules: Vec<(Id, i64)> = stamp
+        .rules
+        .iter()
+        .map(|rule| (rule.claim_id.clone(), rule.revision))
+        .collect();
+    devworks_core::services::knowledge::record_delivery(tx, session, &rules)
+}
+
 pub(crate) fn publish(
     store: &dyn ApplicationStore,
     artifacts: &Arc<ArtifactService>,
@@ -308,6 +327,7 @@ pub(crate) fn publish(
     let omitted_for_write = omitted.clone();
     let source_for_write = source.clone();
     let binding_for_write = binding.clone();
+    let lessons = converted.lesson_stamp.clone();
     let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
@@ -429,6 +449,7 @@ pub(crate) fn publish(
         .collect();
         match SessionWriter::append_in(tx, &ctx_for_write, &record)? {
             BatchOutcome::Accepted(_) => {
+                record_lesson_delivery(tx, &session_for_write, lessons.as_ref())?;
                 if let Some(payload) = adoption {
                     let session = tx
                         .sessions()

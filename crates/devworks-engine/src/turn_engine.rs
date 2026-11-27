@@ -654,6 +654,11 @@ impl TurnEngine {
         if old_skills.is_some() {
             base.instructions.pop();
         }
+        // Lesson rules precede the skill catalog: a changed rule set is adopted here too.
+        let old_lessons = base.lesson_stamp.take();
+        if old_lessons.is_some() {
+            base.instructions.pop();
+        }
         // An assignment's context starts with its role's instructions, captured when the work
         // began; a role changed since is adopted here, like changed guidance and skills.
         let mut role_changed = false;
@@ -664,7 +669,11 @@ impl TurnEngine {
             role_changed = true;
         }
         let rebound = self.bind_provider_instructions(ctx, base, targets)?;
-        if !role_changed && rebound.instruction_stamps == old && rebound.skill_stamp == old_skills {
+        if !role_changed
+            && rebound.instruction_stamps == old
+            && rebound.skill_stamp == old_skills
+            && rebound.lesson_stamp == old_lessons
+        {
             return Ok(source.artifact);
         }
         // Recorded in the transaction that publishes the epoch: a refused or failed transition
@@ -841,6 +850,21 @@ impl TurnEngine {
             };
             bundles.push(self.effective_instructions(ctx, repository, &scope)?);
         }
+        // Effective lesson rules of the session's project and general knowledge, as harness
+        // context ahead of the skill catalog; their delivery is recorded by the transaction
+        // that publishes this context (KNOW-06).
+        let base = match ctx.session_id() {
+            Some(session) => {
+                let rules = devworks_core::ports::storage::read_snapshot(
+                    self.store.as_ref(),
+                    &devworks_core::ports::storage::ReadOptions::default(),
+                    |read| devworks_core::services::knowledge::session_lesson_rules(read, session),
+                )?;
+                devworks_core::providers::instructions::bind_lessons(base, &rules)
+                    .map_err(|e| StorageError::InvalidRecord(format!("lesson binding: {e:?}")))?
+            }
+            None => base,
+        };
         let base = match crate::instruction_guard::InstructionGuard::new(self.store.clone(), None)
             .with_skills(self.instructions.clone())
             .current_skills(self.skill_project(ctx)?.as_ref())?
