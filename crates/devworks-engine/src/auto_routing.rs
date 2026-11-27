@@ -558,11 +558,14 @@ async fn wait_for_systemone(
         check_cancel(cancel)?;
         let completion = {
             let (store, ctx, operation) = (engine.store().clone(), ctx.clone(), operation.clone());
-            tokio::task::spawn_blocking(move || {
-                crate::providers::systemone::completion(store.as_ref(), &ctx, &operation)
+            crate::store::blocking(move || {
+                Ok::<_, StorageError>(crate::providers::systemone::completion(
+                    store.as_ref(),
+                    &ctx,
+                    &operation,
+                ))
             })
-            .await
-            .map_err(|error| TurnError::Worker(format!("SystemOne completion worker: {error}")))?
+            .await?
         };
         match completion.map_err(|fault| {
             failure(
@@ -726,8 +729,9 @@ async fn classify_low(
         let Some(invocation) = invocation else {
             return Ok(LowResult::Unusable);
         };
-        // The driver does synchronous store and transport work, as on the agent turn's own
-        // provider call.
+        // The driver does synchronous store and transport work. It runs exactly as the agent
+        // turn's own provider call does (spawn_blocking + block_on, a join failure reported as a
+        // worker failure), so the two provider paths fail the same way.
         let produced = {
             let (providers, stopped) = (std::sync::Arc::clone(providers), cancel.clone());
             let handle = tokio::runtime::Handle::current();

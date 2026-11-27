@@ -72,12 +72,28 @@ where
     E: From<StorageError> + Send + 'static,
     F: FnOnce() -> Result<T, E> + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.unwrap_or_else(|_| {
-        Err(
-            StorageError::unavailable(Unavailable::HandlerPanicked, "blocking store task failed")
-                .into(),
-        )
-    })
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|error| {
+            Err(StorageError::unavailable(
+                Unavailable::HandlerPanicked,
+                format!("blocking store task failed: {}", join_failure(error)),
+            )
+            .into())
+        })
+}
+
+/// The panic message of a failed blocking task, or the join error when it has none.
+fn join_failure(error: tokio::task::JoinError) -> String {
+    if !error.is_panic() {
+        return error.to_string();
+    }
+    let payload = error.into_panic();
+    payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panicked without a message".into())
 }
 
 // ---------------------------------------------------------------------------------------------

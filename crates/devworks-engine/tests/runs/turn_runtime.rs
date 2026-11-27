@@ -39,20 +39,34 @@ impl StreamingHttp for DoneWire {
 struct HoldAfterBegin {
     inner: Arc<dyn ApplicationStore>,
     armed: Mutex<Option<Id>>,
-    held: Arc<Mutex<Option<(Instant, Instant)>>>,
+    held: Arc<Mutex<Option<Hold>>>,
+}
+/// What the writer hold saw.
+#[derive(Clone, Copy)]
+struct Hold {
+    start: Instant,
+    end: Instant,
+    /// Whether the session's epoch-1 handoff boundary had already committed when the hold
+    /// began. Writes are serialized, so `false` means the turn's write commits after the hold.
+    boundary_before: bool,
 }
 impl HoldAfterBegin {
-    fn hold_writer(&self) -> Result<(), StorageError> {
+    fn hold_writer(&self, session: Id) -> Result<(), StorageError> {
         let held = self.held.clone();
         let (entered, admitted) = std::sync::mpsc::sync_channel(1);
         self.inner.submit_write(
             WriteOptions::fixture(),
             write_job(
-                move |_| {
+                move |tx| {
                     let start = Instant::now();
+                    let boundary_before = tx.sessions().epoch(&session, 1)?.is_some();
                     let _ = entered.send(());
                     std::thread::sleep(HOLD);
-                    *held.lock().unwrap() = Some((start, Instant::now()));
+                    *held.lock().unwrap() = Some(Hold {
+                        start,
+                        end: Instant::now(),
+                        boundary_before,
+                    });
                     Ok(())
                 },
                 |_: Result<(), StorageError>| {},
@@ -86,7 +100,7 @@ impl ApplicationStore for HoldAfterBegin {
                 Ok(snapshot.runs().session_turn(&session)?.is_some())
             })?;
             if begun && self.armed.lock().unwrap().take().is_some() {
-                self.hold_writer()?;
+                self.hold_writer(session)?;
             }
         }
         self.inner.read(options, work)
@@ -192,7 +206,11 @@ fn a_held_writer_during_an_agent_turn_does_not_stop_dispatcher_lease_renewal() {
             agent.clone(),
             stop,
         ));
-        let (start, end) = within("the writer hold ends", async {
+        let Hold {
+            start,
+            end,
+            boundary_before,
+        } = within("the writer hold ends", async {
             loop {
                 if let Some(span) = *app_store.held.lock().unwrap() {
                     return span;
@@ -213,14 +231,24 @@ fn a_held_writer_during_an_agent_turn_does_not_stop_dispatcher_lease_renewal() {
             "the dispatcher renewed no lease while the writer was held for {:?}",
             end - start
         );
-        // The turn wrote the handoff boundary that waited on the writer.
+        // The turn's handoff boundary write waited behind the held writer: it had not committed
+        // when the hold began, and it commits only after the hold.
+        assert!(
+            !boundary_before,
+            "the turn's handoff boundary committed before the writer hold began"
+        );
         let session = context.session_id().unwrap().clone();
-        within("the handoff boundary is written", async {
+        let written = within("the handoff boundary is written", async {
             while read(&*inner, |s| s.sessions().epoch(&session, 1)).is_none() {
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
+            Instant::now()
         })
         .await;
+        assert!(
+            written >= end,
+            "the handoff boundary was seen before the hold ended"
+        );
         stop_tx.send(true).unwrap();
         within("the stopped turn ends", turn).await.unwrap();
         dispatcher.stop();
