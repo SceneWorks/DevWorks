@@ -216,7 +216,7 @@ impl WorkCtl<'_, '_> {
                     .insert(tree, ops::git_inspected(q).map_err(|e| e.describe()));
             }
             (WorkSlot::ReadinessHistory(id, generation), Reply::Query(q)) => {
-                let page = wops::readiness_history_result(q)
+                let page = wops::work_lineage_result(q)
                     .map(|page| {
                         Page::new(
                             page.items
@@ -233,6 +233,42 @@ impl WorkCtl<'_, '_> {
                         list.apply_unique(generation, page, |row| row.id.as_str().to_owned())
                 {
                     self.request_readiness_history(&id, fetch);
+                }
+            }
+            (WorkSlot::WorkLineage(id, generation), Reply::Query(q)) => {
+                let page = wops::work_lineage_result(q)
+                    .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
+                    .map_err(|e| e.describe());
+                if let Some(linked) = self.work.linked.get_mut(&id)
+                    && let Applied::Continue(fetch) =
+                        linked
+                            .lineage
+                            .apply_unique(generation, page, |row| row.id.as_str().to_owned())
+                {
+                    self.send_linked(&id, LinkedPart::Lineage, fetch);
+                }
+            }
+            (WorkSlot::WorkEvidence(id, generation), Reply::Query(q)) => {
+                let page = wops::evidence_links_result(q)
+                    .map(|page| Page::new(page.items.0, page.next_cursor.map(|c| c.0)))
+                    .map_err(|e| e.describe());
+                if let Some(linked) = self.work.linked.get_mut(&id)
+                    && let Applied::Continue(fetch) =
+                        linked
+                            .evidence
+                            .apply_unique(generation, page, |row| row.id.as_str().to_owned())
+                {
+                    self.send_linked(&id, LinkedPart::Evidence, fetch);
+                }
+            }
+            (WorkSlot::WorkToolUsage(id, generation), Reply::Query(q)) => {
+                let page = wops::tool_usage_result(q)
+                    .map(|(rows, next)| Page::new(rows, next))
+                    .map_err(|e| e.describe());
+                if let Some(linked) = self.work.linked.get_mut(&id)
+                    && let Applied::Continue(fetch) = linked.usage.apply(generation, page)
+                {
+                    self.send_linked(&id, LinkedPart::Usage, fetch);
                 }
             }
             (WorkSlot::WorkGit(id), Reply::Query(q)) => {

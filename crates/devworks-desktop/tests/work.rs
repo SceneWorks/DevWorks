@@ -164,7 +164,24 @@ fn overview_can_enable_and_stop_keep_working_without_taking_a_manual_reservation
     h.get_by_role_and_label(Role::Button, "Stop keep-working")
         .click();
     settle(&mut h);
-    h.get_by_role_and_label(Role::Button, "Enable keep-working");
+    // Under load the stop's reply can land after the shell first settles; wait for the control.
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    while h
+        .query_by_role_and_label(Role::Button, "Enable keep-working")
+        .is_none()
+    {
+        h.step();
+        if h.query_by_role_and_label(Role::Button, "Enable keep-working")
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "keep-working control returns to Enable"
+        );
+        std::thread::yield_now();
+    }
     let result = backend.query(
         "next_work.inspect_claim",
         &wops::allocation_inspect(&*backend, claim.id.as_str()),
@@ -1118,9 +1135,35 @@ fn save_plan_now(
         }];
     }
     h.run_steps(3);
-    // Keep uploads in flight while activating the actual Save control, even offscreen.
-    h.get_by_role_and_label(Role::Button, "Save plan draft")
-        .click_accesskit();
+    // Keep uploads in flight while activating the actual Save control, even offscreen. A detail
+    // refresh can disable Save for a frame, and a click on a disabled button is ignored, so
+    // click again until this feature's save has started. An accepted click records the save in
+    // the frame that handles it, before any reply can end it, so it is checked right after that
+    // one frame and never clicked twice.
+    let saving = |h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>| {
+        h.state()
+            .work
+            .plan_saving
+            .values()
+            .any(|p| p.snapshot.title.0 == title)
+    };
+    let deadline = std::time::Instant::now() + SETTLE_BOUND;
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the plan save of {title} never started: {:?}",
+            h.state().work.message
+        );
+        let clicked = h
+            .query_by_role_and_label(Role::Button, "Save plan draft")
+            .filter(|node| !node.accesskit_node().is_disabled())
+            .map(|button| button.click_accesskit())
+            .is_some();
+        h.step();
+        if clicked && saving(h) {
+            break;
+        }
+    }
     h.run_steps(3);
 }
 fn pending_statement(backend: &dyn Backend, feature: &WorkRecord) -> Option<String> {
@@ -1458,6 +1501,210 @@ fn show_its_history_opens_overviews_activity_for_that_item() {
         "the Activity tab"
     );
     assert!(has_text(&h, "older history on demand"), "Activity is shown");
+}
+
+/// Records, for `issue`, one evidence link and one agent session that made a model request
+/// and a completed tool call: what an agent's work on it leaves in history.
+fn seed_linked_history(engine: &devworks_desktop::host::Engine, project: &str, issue: &str) {
+    use devworks_core::ports::IdKind;
+    use devworks_core::ports::storage::*;
+    use devworks_core::protocol::{EventId, Id, ProjectId, RootId};
+    let (project, root) = (
+        ProjectId(Id::new(project).unwrap()),
+        RootId(Id::new(issue).unwrap()),
+    );
+    run_write(
+        &**engine.host().runtime().store(),
+        WriteOptions::fixture(),
+        move |tx| {
+            let actor = tx.store().host_actor.clone();
+            let now = tx.now_ms();
+            let event = EventId(tx.new_id(IdKind::Event));
+            let sequence = tx.history().append(NewEvent {
+                id: event.clone(),
+                actor: actor.clone(),
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                operation_id: None,
+                aggregate_kind: "fixture".into(),
+                aggregate_id: root.0.as_str().into(),
+                aggregate_revision: 1,
+                kind: "EvidenceRecorded".into(),
+                payload: json!({}),
+            })?;
+            tx.sessions().insert_link(&StoredLink {
+                id: Id::new("evidence-link-1").unwrap(),
+                project_id: project.clone(),
+                root_id: root.clone(),
+                kind: "evidence".into(),
+                target_kind: "artifact".into(),
+                target_id: "report-v1".into(),
+                parent_id: None,
+                supersedes_id: None,
+                actor: actor.clone(),
+                event_id: event.0.clone(),
+                sequence,
+                repository_id: None,
+                revision: None,
+                summary: "Crash reproduction log".into(),
+                body: json!({"artifact": {"artifactId": "report-1", "versionId": "report-v1",
+                    "sha256": "b".repeat(64), "byteLength": "10", "mediaType": "text/plain"}}),
+                created_at_ms: now,
+            })?;
+            let session = Id::new("issue-session-1").unwrap();
+            let conversation_id = tx.new_id(IdKind::Conversation);
+            tx.sessions().insert_session(&StoredSession {
+                id: session.clone(),
+                conversation_id,
+                agent_id: actor.clone(),
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                title: "Fix the crash".into(),
+                context_epoch: 0,
+                revision: 1,
+                created_by: actor.clone(),
+                created_at_ms: now,
+                closed_at_ms: None,
+                closed_by: None,
+                next_sequence: 1,
+                checkpoint_sequence: 0,
+            })?;
+            let batch = Id::new("issue-batch-1").unwrap();
+            let batch_event = EventId(tx.new_id(IdKind::Event));
+            let committed = tx.history().append(NewEvent {
+                id: batch_event.clone(),
+                actor: actor.clone(),
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                operation_id: None,
+                aggregate_kind: "session".into(),
+                aggregate_id: session.as_str().into(),
+                aggregate_revision: 2,
+                kind: "TranscriptAppended".into(),
+                payload: json!({}),
+            })?;
+            tx.sessions().insert_batch(&StoredBatch {
+                batch_id: batch.clone(),
+                session_id: session.clone(),
+                payload_digest: "c".repeat(64),
+                actor: actor.clone(),
+                context_epoch: 0,
+                first_sequence: 1,
+                last_sequence: 2,
+                event_id: batch_event.0.clone(),
+                committed_sequence: committed,
+                accepted_at_ms: now,
+            })?;
+            for (sequence, entry, kind) in [
+                (1, "call-entry-1", "ToolCallRecorded"),
+                (2, "response-entry-1", "ToolResponseRecorded"),
+            ] {
+                tx.sessions().insert_entry(&StoredEntry {
+                    session_id: session.clone(),
+                    sequence,
+                    entry_id: Id::new(entry).unwrap(),
+                    batch_id: batch.clone(),
+                    context_epoch: 0,
+                    actor: actor.clone(),
+                    kind: kind.into(),
+                    created_at_ms: now,
+                    body: json!({"kind": kind}),
+                })?;
+            }
+            tx.sessions().insert_invocation(&StoredInvocation {
+                session_id: session.clone(),
+                response_sequence: 2,
+                call_sequence: 1,
+                committed_sequence: committed,
+                project_id: Some(project.clone()),
+                root_id: Some(root.clone()),
+                call_entry_id: Id::new("call-entry-1").unwrap(),
+                capability_id: "repository.read_file".into(),
+                outcome: "Completed".into(),
+                error_code: None,
+                operation_id: None,
+                actor: actor.clone(),
+                called_at_ms: now,
+                responded_at_ms: now + 42,
+            })?;
+            tx.usage().insert_usage_origin(&StoredUsageOrigin {
+                source_kind: "SessionUsage".into(),
+                source_id: json!([session.as_str(), batch.as_str(), 0]).to_string(),
+                attempt_id: None,
+                request_id: Some(Id::new("issue-request-1").unwrap()),
+                project_id: Some(project.clone()),
+                feature_id: None,
+                work_id: Some(root.0.clone()),
+                session_id: Some(session.clone()),
+                job_run_id: None,
+                payload: json!({"actorId": actor.0.as_str(), "providerId": "openrouter",
+                    "reportCategory": "Assistant", "item": {"requestId": "issue-request-1",
+                    "purpose": "Conversation", "modelId": "model-a", "inputTokens": "120",
+                    "outputTokens": "30", "cacheReadTokens": "0", "cacheWriteTokens": "0",
+                    "priceKind": "Untracked", "priceOrigin": "Untracked", "incomplete": true}}),
+                recorded_at_ms: now,
+                priced_micro_usd: None,
+                classification: devworks_core::ports::usage::CostClassification::Untracked,
+                monetary_complete: false,
+                incomplete: true,
+                unknown_tail: false,
+                committed_sequence: Some(committed),
+            })
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn work_detail_shows_lineage_evidence_links_and_tool_usage_from_history() {
+    let root = Root::new("linked-history");
+    let engine = start(&root);
+    let backend = engine.backend();
+    let project = ops::project_changed(backend.command(
+        "projects.create",
+        &ops::project_create(&*backend, "Shop", "", &[]),
+    ))
+    .unwrap();
+    let pid = project.id.0.as_str().to_owned();
+    let backlog = default_status_id(&project.id, "backlog")
+        .as_str()
+        .to_owned();
+    let issue = command(
+        &*backend,
+        "issues.create",
+        json!({"projectId": pid, "title": "Crash", "description": "", "repositoryIds": [],
+            "statusId": backlog, "priority": 0}),
+    );
+    seed_linked_history(&engine, &pid, issue.id.as_str());
+    let mut h = harness(shell(&engine, &root, Script::default()), 1600.0, 1000.0);
+    settle(&mut h);
+    h.state_mut().select_project(Some(pid.clone()));
+    h.state_mut().navigate(Route::Issues);
+    settle(&mut h);
+    click_row(&mut h, "Crash  ·");
+    click(&mut h, Role::Button, "Show linked history");
+    settle(&mut h);
+    // history.work_lineage: the issue's events and its links.
+    assert!(has_text(&h, "Lineage"));
+    assert!(has_text(&h, "evidence · report-v1: Crash reproduction log"));
+    // history.evidence_links.
+    assert!(has_text(&h, "Evidence: Crash reproduction log"));
+    assert!(has_text(&h, "artifact report-1"));
+    // history.tool_usage: the model request and the tool call.
+    assert!(has_text(
+        &h,
+        "Model model-a · Conversation: 120 in, 30 out tokens"
+    ));
+    assert!(has_text(
+        &h,
+        "Tool repository.read_file · Completed · 42 ms"
+    ));
+    assert!(has_text(&h, "session issue-session-1"));
+    // A refresh keeps what is shown until its replies replace it.
+    click(&mut h, Role::Button, "Refresh linked history");
+    assert!(has_text(&h, "Evidence: Crash reproduction log"));
+    settle(&mut h);
+    assert!(has_text(&h, "Tool repository.read_file"));
 }
 
 #[test]
