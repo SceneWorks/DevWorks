@@ -603,10 +603,18 @@ async fn run_native_loop(
     // wakes the wait that follows it.
     let mut changes = engine.state_changes();
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
-    ensure_membership_context(engine, ctx, agent)?;
-    let isolated_code_review = agent.role_id.as_str() == AgentRole::CodeReviewer.as_str()
-        && crate::code_review::bound(engine, ctx)?.is_some();
-    let mut recovered = engine.recover_native_context_head(ctx, session_id)?;
+    let isolated_code_review = {
+        let (engine, ctx, agent) = (engine.clone(), ctx.clone(), agent.clone());
+        store::blocking(move || {
+            ensure_membership_context(&engine, &ctx, &agent)?;
+            Ok::<_, TurnError>(
+                agent.role_id.as_str() == AgentRole::CodeReviewer.as_str()
+                    && crate::code_review::bound(&engine, &ctx)?.is_some(),
+            )
+        })
+        .await?
+    };
+    let mut recovered = recover_head(engine, ctx, session_id).await?;
     let mut sweep = ToolWindowSweep::default();
     // The digest of the last context this turn compacted to.
     let mut compacted: Option<String> = None;
@@ -644,9 +652,18 @@ async fn run_native_loop(
         let (mut head, mut binding, observed_sequence) = match recovered.take() {
             Some(value) => value,
             None => {
-                if crate::auto_routing::needs_assignment(engine, ctx)? {
-                    let material =
-                        initial_assignment_context(engine.store().as_ref(), ctx, agent, false)?;
+                let material = {
+                    let (engine, ctx, agent) = (engine.clone(), ctx.clone(), agent.clone());
+                    store::blocking(move || {
+                        if !crate::auto_routing::needs_assignment(&engine, &ctx)? {
+                            return Ok(None);
+                        }
+                        initial_assignment_context(engine.store().as_ref(), &ctx, &agent, false)
+                            .map(Some)
+                    })
+                    .await?
+                };
+                if let Some(material) = material {
                     crate::auto_routing::assign(
                         engine,
                         ctx,
@@ -700,9 +717,14 @@ async fn run_native_loop(
                 (head, binding, 0)
             }
         };
-        if let Some(unpublished) =
-            unpublished_turn(engine.store().as_ref(), ctx, session_id, observed_sequence)?
-        {
+        let unpublished = {
+            let (engine, ctx, session) = (engine.clone(), ctx.clone(), session_id.clone());
+            store::blocking(move || {
+                unpublished_turn(engine.store().as_ref(), &ctx, &session, observed_sequence)
+            })
+            .await?
+        };
+        if let Some(unpublished) = unpublished {
             let (attempt_id, has_tools) = match unpublished {
                 UnpublishedTurn::Settled {
                     attempt_id,
@@ -713,15 +735,19 @@ async fn run_native_loop(
                     sequence,
                     facts,
                 } => {
-                    publish_interruption(
-                        engine,
-                        ctx,
-                        (&head, &binding),
-                        attempt_id,
-                        sequence,
-                        facts,
-                    )?;
-                    recovered = engine.recover_native_context_head(ctx, session_id)?;
+                    let (worker, worker_ctx) = (engine.clone(), ctx.clone());
+                    store::blocking(move || {
+                        publish_interruption(
+                            &worker,
+                            &worker_ctx,
+                            (&head, &binding),
+                            attempt_id,
+                            sequence,
+                            facts,
+                        )
+                    })
+                    .await?;
+                    recovered = recover_head(engine, ctx, session_id).await?;
                     continue;
                 }
             };
@@ -731,9 +757,14 @@ async fn run_native_loop(
                 engine
                     .dispatch_pending_async(ctx, session_id, Some(cancellation))
                     .await?;
-                if !crate::tool_turn::pending_calls(engine.store().as_ref(), ctx, session_id)?
-                    .is_empty()
-                {
+                let pending = {
+                    let (engine, ctx, session) = (engine.clone(), ctx.clone(), session_id.clone());
+                    store::blocking(move || {
+                        crate::tool_turn::pending_calls(engine.store().as_ref(), &ctx, &session)
+                    })
+                    .await?
+                };
+                if !pending.is_empty() {
                     // A call without an answer yet (an unknown command status, a refusal that
                     // needs reconciliation) is held: dispatch it again only once something
                     // changed, never on a timer that re-admits it every few hundred ms.
@@ -742,21 +773,27 @@ async fn run_native_loop(
                     continue;
                 }
             }
-            let material = crate::tool_turn::continuation_context(
-                engine.store().as_ref(),
-                engine.artifacts(),
-                ctx,
-                crate::tool_turn::TurnSource {
-                    session_id,
-                    attempt_id: &attempt_id,
-                    after_sequence: observed_sequence,
-                    has_tools,
-                },
-                &binding,
-                &head,
-            )?;
-            publish_agent_continuation(engine, ctx, &attempt_id, &binding, material)?;
-            recovered = engine.recover_native_context_head(ctx, session_id)?;
+            {
+                let (engine, ctx, session) = (engine.clone(), ctx.clone(), session_id.clone());
+                store::blocking(move || {
+                    let material = crate::tool_turn::continuation_context(
+                        engine.store().as_ref(),
+                        engine.artifacts(),
+                        &ctx,
+                        crate::tool_turn::TurnSource {
+                            session_id: &session,
+                            attempt_id: &attempt_id,
+                            after_sequence: observed_sequence,
+                            has_tools,
+                        },
+                        &binding,
+                        &head,
+                    )?;
+                    publish_agent_continuation(&engine, &ctx, &attempt_id, &binding, material)
+                })
+                .await?;
+            }
+            recovered = recover_head(engine, ctx, session_id).await?;
             continue;
         }
         wait_for_running_tool_results(engine, ctx, session_id, cancellation, None).await?;
@@ -779,23 +816,20 @@ async fn run_native_loop(
                 stale_preparations = None;
                 prepared
             }
-            Err(TurnError::Store(StorageError::ScopeDenied))
-                if crate::tool_turn::native_head_became_stale(
-                    engine.store().as_ref(),
-                    ctx,
-                    session_id,
-                    &head,
-                )? =>
-            {
-                let failure = (
-                    head.version_id.clone(),
-                    transcript_position(engine.store().as_ref(), session_id)?,
-                );
+            Err(TurnError::Store(StorageError::ScopeDenied)) => {
+                if !head_became_stale(engine, ctx, session_id, &head).await? {
+                    return Err(StorageError::ScopeDenied.into());
+                }
+                let position = {
+                    let (owner, session) = (engine.store().clone(), session_id.clone());
+                    store::blocking(move || transcript_position(owner.as_ref(), &session)).await?
+                };
+                let failure = (head.version_id.clone(), position);
                 if stale_preparations.as_ref() == Some(&failure) {
                     return Err(StorageError::ScopeDenied.into());
                 }
                 stale_preparations = Some(failure);
-                recovered = engine.recover_native_context_head(ctx, session_id)?;
+                recovered = recover_head(engine, ctx, session_id).await?;
                 continue;
             }
             Err(error) => return Err(error),
@@ -808,11 +842,16 @@ async fn run_native_loop(
         }
         // A context this turn just compacted is sent as it is, even if it still reaches the
         // threshold: compacting it again could not shrink it.
-        if !is_plan_reviewer(agent)
+        let due = !is_plan_reviewer(agent)
             && !isolated_code_review
             && compacted.as_deref() != Some(head.sha256.as_str())
-            && compaction_due(engine, ctx, &route, &head, window)?
-        {
+            && {
+                let (engine, ctx, route, head) =
+                    (engine.clone(), ctx.clone(), route.clone(), head.clone());
+                store::blocking(move || compaction_due(&engine, &ctx, &route, &head, window))
+                    .await?
+            };
+        if due {
             match compact(
                 engine,
                 ctx,
@@ -825,16 +864,14 @@ async fn run_native_loop(
             .await
             {
                 Ok(root) => compacted = Some(root.sha256.as_str().to_owned()),
-                Err(TurnError::Store(StorageError::ScopeDenied))
-                    if crate::tool_turn::native_head_became_stale(
-                        engine.store().as_ref(),
-                        ctx,
-                        session_id,
-                        &head,
-                    )? => {}
+                Err(TurnError::Store(StorageError::ScopeDenied)) => {
+                    if !head_became_stale(engine, ctx, session_id, &head).await? {
+                        return Err(StorageError::ScopeDenied.into());
+                    }
+                }
                 Err(error) => return Err(error),
             }
-            recovered = engine.recover_native_context_head(ctx, session_id)?;
+            recovered = recover_head(engine, ctx, session_id).await?;
             continue;
         }
         let invocation = {
@@ -865,14 +902,10 @@ async fn run_native_loop(
         .map_err(|error| TurnError::Worker(format!("agent turn worker: {error}")))?;
         let progress = match progress {
             Ok(progress) => progress,
-            Err(StorageError::ScopeDenied)
-                if crate::tool_turn::native_head_became_stale(
-                    engine.store().as_ref(),
-                    ctx,
-                    session_id,
-                    &head,
-                )? =>
-            {
+            Err(StorageError::ScopeDenied) => {
+                if !head_became_stale(engine, ctx, session_id, &head).await? {
+                    return Err(StorageError::ScopeDenied.into());
+                }
                 // A concurrent publication changes the head or the request on the retry. The
                 // same request refused against the same head again is not a race.
                 stale_refusals = match stale_refusals.take() {
@@ -889,7 +922,7 @@ async fn run_native_loop(
                         version_id.as_str()
                     ))));
                 }
-                recovered = engine.recover_native_context_head(ctx, session_id)?;
+                recovered = recover_head(engine, ctx, session_id).await?;
                 continue;
             }
             Err(error) => return Err(error.into()),
@@ -916,25 +949,27 @@ async fn run_native_loop(
                         // A review may have found a gap that needs the coordinator's disposition
                         // before the same durable effect can dispatch.
                         sweep.restart();
-                        recovered = engine.recover_native_context_head(ctx, session_id)?;
+                        recovered = recover_head(engine, ctx, session_id).await?;
                         continue;
                     }
                     return Ok(());
                 }
-                recovered = engine.recover_native_context_head(ctx, session_id)?;
+                recovered = recover_head(engine, ctx, session_id).await?;
             }
             Some(AttemptEnd::ToolCallsReady) if progress.continuation.is_some() => {
                 sweep.after_tools();
-                recovered = engine.recover_native_context_head(ctx, session_id)?;
+                recovered = recover_head(engine, ctx, session_id).await?;
             }
             Some(AttemptEnd::ToolCallsReady) => {
                 // An approval or a still-running operation can delay the initial result. The
                 // native request is durable: replaying its key resumes the pending dispatches
                 // without sending a second provider request.
                 wait_for_state_change(&mut changes, &mut stop, dispatched).await;
-                recovered = engine
-                    .recover_native_context_head(ctx, session_id)?
-                    .or(Some((head, binding, observed_sequence)));
+                recovered = recover_head(engine, ctx, session_id).await?.or(Some((
+                    head,
+                    binding,
+                    observed_sequence,
+                )));
             }
             Some(AttemptEnd::Cancelled) => return Err(StorageError::Cancelled.into()),
             outcome => {
@@ -952,6 +987,30 @@ async fn run_native_loop(
             }
         }
     }
+}
+
+/// [`TurnEngine::recover_native_context_head`] off the runtime thread.
+async fn recover_head(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session: &Id,
+) -> Result<Option<(ArtifactRef, NativeBinding, i64)>, StorageError> {
+    let (engine, ctx, session) = (engine.clone(), ctx.clone(), session.clone());
+    store::blocking(move || engine.recover_native_context_head(&ctx, &session)).await
+}
+
+/// [`crate::tool_turn::native_head_became_stale`] off the runtime thread.
+async fn head_became_stale(
+    engine: &TurnEngine,
+    ctx: &InvocationContext,
+    session: &Id,
+    head: &ArtifactRef,
+) -> Result<bool, StorageError> {
+    let (engine, ctx, session, head) = (engine.clone(), ctx.clone(), session.clone(), head.clone());
+    store::blocking(move || {
+        crate::tool_turn::native_head_became_stale(engine.store().as_ref(), &ctx, &session, &head)
+    })
+    .await
 }
 
 pub(crate) fn recover_interrupted_workspace_turn(
@@ -1172,34 +1231,41 @@ async fn wait_for_linked_effects(
             return Err(StorageError::Cancelled.into());
         }
         commits.borrow_and_update();
-        let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
-        let pending = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let mut pending = Vec::new();
-            for call in &linked {
-                let Some(operation_id) = &call.operation_id else {
-                    continue;
-                };
-                let operation = read
-                    .operations()
-                    .operation(operation_id)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                // An unknown outcome changes only through an explicit reconcile, so the turn ends
-                // with it held; the agent was told the outcome is unknown. An approval waits for
-                // a person: the agent was told, and the decision arrives later as an update.
-                if operation.capability == devworks_core::services::approvals::held::HELD_CAPABILITY
-                {
-                    continue;
+        let (worker, worker_ctx, session) = (engine.clone(), ctx.clone(), session_id.clone());
+        let pending = store::blocking(move || {
+            let store = worker.store().as_ref();
+            let linked = crate::tool_turn::linked_operations(store, &worker_ctx, &session)?;
+            read_snapshot(store, &ReadOptions::default(), |read| {
+                let mut pending = Vec::new();
+                for call in &linked {
+                    let Some(operation_id) = &call.operation_id else {
+                        continue;
+                    };
+                    let operation = read
+                        .operations()
+                        .operation(operation_id)?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    // An unknown outcome changes only through an explicit reconcile, so the turn
+                    // ends with it held; the agent was told the outcome is unknown. An approval
+                    // waits for a person: the agent was told, and the decision arrives later as
+                    // an update.
+                    if operation.capability
+                        == devworks_core::services::approvals::held::HELD_CAPABILITY
+                    {
+                        continue;
+                    }
+                    match operation.state {
+                        OperationState::ObservedComplete
+                        | OperationState::Failed
+                        | OperationState::CancelledBeforeDispatch
+                        | OperationState::OutcomeUnknown => {}
+                        _ => pending.push(operation.id),
+                    }
                 }
-                match operation.state {
-                    OperationState::ObservedComplete
-                    | OperationState::Failed
-                    | OperationState::CancelledBeforeDispatch
-                    | OperationState::OutcomeUnknown => {}
-                    _ => pending.push(operation.id),
-                }
-            }
-            Ok(pending)
-        })?;
+                Ok(pending)
+            })
+        })
+        .await?;
         if pending.is_empty() {
             return Ok(false);
         }
@@ -1290,37 +1356,42 @@ pub(crate) async fn wait_for_running_tool_results(
     capacity: Option<&mut crate::dispatch::EffectCapacity<'_>>,
 ) -> Result<(), StorageError> {
     let running = || {
-        if cancellation.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-        let linked = crate::tool_turn::linked_operations(engine.store().as_ref(), ctx, session_id)?;
-        read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            for operation_id in linked.iter().filter_map(|call| call.operation_id.as_ref()) {
-                let operation = read
-                    .operations()
-                    .operation(operation_id)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if matches!(
-                    operation.capability.as_str(),
-                    "mcp.tool" | devworks_core::services::router::decisions::OPERATION
-                ) && matches!(
-                    operation.state,
-                    OperationState::IntentRecorded
-                        | OperationState::Preflighted
-                        | OperationState::Dispatching
-                        | OperationState::RetryPending
-                ) {
-                    return Ok(true);
-                }
+        let cancelled = cancellation.is_cancelled();
+        let (engine, ctx, session_id) = (engine.clone(), ctx.clone(), session_id.clone());
+        store::blocking(move || {
+            if cancelled {
+                return Err(StorageError::Cancelled);
             }
-            Ok(false)
+            let store = engine.store().as_ref();
+            let linked = crate::tool_turn::linked_operations(store, &ctx, &session_id)?;
+            read_snapshot(store, &ReadOptions::default(), |read| {
+                for operation_id in linked.iter().filter_map(|call| call.operation_id.as_ref()) {
+                    let operation = read
+                        .operations()
+                        .operation(operation_id)?
+                        .ok_or(StorageError::ScopeDenied)?;
+                    if matches!(
+                        operation.capability.as_str(),
+                        "mcp.tool" | devworks_core::services::router::decisions::OPERATION
+                    ) && matches!(
+                        operation.state,
+                        OperationState::IntentRecorded
+                            | OperationState::Preflighted
+                            | OperationState::Dispatching
+                            | OperationState::RetryPending
+                    ) {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
         })
     };
-    if !running()? {
+    if !running().await? {
         return Ok(());
     }
     let wait = async {
-        while running()? {
+        while running().await? {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         Ok(())
@@ -1737,7 +1808,16 @@ async fn compact(
     cancellation: &Cancellation,
     retry_at_ms: &mut Option<i64>,
 ) -> Result<ArtifactRef, TurnError> {
-    let (source, invocation) = prepare_compaction(engine, ctx, route, binding, head)?;
+    let (source, invocation) = {
+        let (engine, ctx, route, binding, head) = (
+            engine.clone(),
+            ctx.clone(),
+            route.clone(),
+            binding.clone(),
+            head.clone(),
+        );
+        store::blocking(move || prepare_compaction(&engine, &ctx, &route, &binding, &head)).await?
+    };
     let providers = Arc::clone(engine.providers().ok_or(StorageError::ScopeDenied)?);
     let stopped = cancellation.clone();
     let handle = tokio::runtime::Handle::current();

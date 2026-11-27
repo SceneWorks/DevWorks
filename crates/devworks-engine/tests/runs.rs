@@ -8850,6 +8850,8 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+#[path = "runs/turn_runtime.rs"]
+mod turn_runtime;
 
 #[path = "runs/code_review.rs"]
 mod code_review_tests;
