@@ -695,6 +695,52 @@ fn an_interrupted_dependency_install_settles_from_its_owned_process_record() {
         assert_eq!(value.exit_code, Some(0));
         assert_eq!(evidence["outputLost"], json!(true));
 
+        // A process record that is not terminal leaves the install's outcome unknown.
+        let mut lost = operation.clone();
+        lost.id = devworks_core::protocol::OperationId(id("install-with-a-lost-process"));
+        let (lost_id, actor) = (lost.id.clone(), agent.principal().clone());
+        let (intent_id, root_id, payload) = (
+            lost.id.clone(),
+            operation.root_id.clone(),
+            operation.payload.clone(),
+        );
+        fx.tx(move |_, tx| {
+            tx.operations()
+                .record_intent(devworks_core::ports::storage::NewOperation {
+                    id: intent_id,
+                    root_id,
+                    assignment_id: None,
+                    capability: "process.install_project_dependencies".into(),
+                    schema_version: 1,
+                    args_digest: "d".into(),
+                    payload,
+                })?;
+            let process_id = tx.new_id(devworks_core::ports::IdKind::Process);
+            let mut row =
+                tx.resources()
+                    .insert_process(devworks_core::ports::storage::NewProcess {
+                        id: process_id,
+                        platform: "unix".into(),
+                        program: "npm".into(),
+                        argv_sha256: "0".repeat(64),
+                        operation_id: Some(lost_id),
+                        lease_id: None,
+                        actor,
+                        session_id: None,
+                        project_id: None,
+                        root_id: None,
+                        assignment_id: None,
+                    })?;
+            let expected = row.revision;
+            row.revision += 1;
+            row.phase = ProcessPhase::Lost;
+            tx.resources().update_process(&row, expected)
+        });
+        assert!(
+            matches!(service.observe(&lost), EffectOutcome::Unknown(_)),
+            "an install whose process was lost did not stay unknown"
+        );
+
         // With no process record of its own, the install's outcome is unknown, not failed.
         let mut unrecorded = operation.clone();
         unrecorded.id = devworks_core::protocol::OperationId(id("install-without-a-process"));
