@@ -1517,6 +1517,99 @@ fn feature_document_prefix_converges(
     }
 }
 
+/// F8 builds recorded F8 operations at revisions 9–14, which main now owns. Reconciliation moves
+/// only the F8 operations' stored revisions; main's operations at the same numbers keep theirs.
+#[test]
+fn feature_ledger_reconciliation_renumbers_only_f8_operation_revisions() {
+    for base in [63, 66] {
+        let h = Harness::new();
+        drop(SqliteStore::open_with(h.config(), &feature_document_migrations(base, 2)).unwrap());
+        let conn = h.raw();
+        let actor: String = conn
+            .query_row("SELECT id FROM actors ORDER BY id LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        for (id, operation, revision) in [
+            ("op-dream", "dreaming.run", 9),
+            ("op-document", "documents.read", 13),
+            ("op-database", "database.read", 9),
+        ] {
+            conn.execute(
+                "INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,\
+                    state,revision,created_at) VALUES(?1,?2,?3,'digest','{}','Completed',1,0)",
+                params![id, operation, revision],
+            )
+            .unwrap();
+            let result = json!({"contract": "fixture", "schemaRevision": revision}).to_string();
+            conn.execute(
+                "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,\
+                    payload_digest,operation_id,result_json,created_at) \
+                    VALUES(?1,'scope',?2,?3,'digest',?2,?4,0)",
+                params![actor, id, operation, result],
+            )
+            .unwrap();
+            let payload = json!({"operation": operation, "schemaRevision": revision}).to_string();
+            conn.execute(
+                "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,\
+                    kind,created_at,payload_json) VALUES(?1,?2,'command',?4,1,'CommandDecided',0,?3)",
+                params![format!("event-{id}"), actor, payload, id],
+            )
+            .unwrap();
+        }
+        // The nightly Dreaming job an F8 build installed names its old argument schema revision.
+        let current = devworks_core::services::jobs::argument_schema(
+            "dreaming.run",
+            devworks_core::registry::SchemaRevision(24),
+        )
+        .unwrap();
+        let mut schema = serde_json::to_value(&current).unwrap();
+        schema["revision"] = json!("9");
+        let saved = json!({"kind": "Native", "capabilityId": "dreaming-run",
+            "arguments": {"schema": schema, "value": {"scope": {"kind": "Workspace"}}}});
+        conn.execute(
+            "INSERT INTO schedules(id,revision,title,kind,schedule_json,timezone,definition_json,\
+                enabled,authorized,activated_epoch,anchor_at,created_at,updated_at,project_epoch) \
+                VALUES('nightly',1,'Nightly Dreaming','Native','{}','UTC',?1,1,1,0,0,0,0,0)",
+            [devworks_core::jcs::canonicalize(&saved).unwrap()],
+        )
+        .unwrap();
+        drop(conn);
+        drop(SqliteStore::open_with(h.config(), MIGRATIONS).unwrap());
+        let conn = h.raw();
+        let job: String = conn
+            .query_row(
+                "SELECT definition_json FROM schedules WHERE id='nightly'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let job: serde_json::Value = serde_json::from_str(&job).unwrap();
+        assert_eq!(
+            job["arguments"]["schema"],
+            serde_json::to_value(&current).unwrap()
+        );
+        for (id, expected) in [("op-dream", 24), ("op-document", 28), ("op-database", 9)] {
+            let stored: (Option<i64>, Option<i64>, Option<i64>) = conn
+                .query_row(
+                    "SELECT (SELECT schema_version FROM operations WHERE id=?1),\
+                        (SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                            WHERE idempotency_key=?1),\
+                        (SELECT json_extract(payload_json,'$.schemaRevision') FROM events \
+                            WHERE aggregate_id=?1)",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                (Some(expected), Some(expected), Some(expected)),
+                "{base} {id}"
+            );
+        }
+    }
+}
+
 #[test]
 fn feature_document_reconciliation_rejects_a_mixed_ledger() {
     for base in [63, 66] {

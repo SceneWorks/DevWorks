@@ -1493,6 +1493,7 @@ fn reconcile_documents(
                 params![migration.version, migration.checksum(), now_ms, app_build],
             ))?;
         }
+        remap_feature_revisions(&tx)?;
         let latest = &migrations[RECONCILED_DOCUMENT_VERSION - 1];
         db(tx.execute(
             "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
@@ -1505,6 +1506,113 @@ fn reconcile_documents(
     })();
     db(conn.pragma_update(None, "foreign_keys", true))?;
     outcome
+}
+
+/// F8 operations and the schema revisions their published builds recorded. Those numbers now
+/// belong to main, so each F8 revision moved above main's: old revision N is N + 15.
+const FEATURE_OPERATION_REVISIONS: &[(&str, &[i64])] = &[
+    ("dreaming.instructions", &[9]),
+    ("dreaming.run", &[9]),
+    ("dreaming.runs", &[9]),
+    ("dreaming.report", &[9]),
+    ("dreaming.settings", &[9]),
+    ("dreaming.propose", &[9]),
+    ("dreaming.revert", &[9]),
+    ("dreaming.review", &[9]),
+    ("documents.import", &[10, 13]),
+    ("documents.list", &[10, 13]),
+    ("documents.read", &[10, 13]),
+    ("documents.share", &[10, 13]),
+    ("documents.move", &[10, 13]),
+    ("documents.disable_retrieval", &[10, 13]),
+    ("documents.remove_index", &[10, 13]),
+    ("documents.resolve_citation", &[11]),
+    ("documents.index", &[12]),
+    ("documents.transfer_propose", &[14]),
+    ("documents.transfer_respond", &[14]),
+    ("documents.transfer_status", &[14]),
+];
+const FEATURE_REVISION_SHIFT: i64 = 15;
+
+/// Renumbers the schema revision an F8 build stored with an F8 operation: the operation journal,
+/// command receipts and their decision events, approval resumes and saved native job
+/// definitions. Rows are selected by operation name, so main's operations at the same numbers
+/// keep theirs. Published reply artifacts and job run snapshots are immutable evidence and keep
+/// the bytes they were written with.
+fn remap_feature_revisions(conn: &Connection) -> Result<(), StorageError> {
+    for (operation, revisions) in FEATURE_OPERATION_REVISIONS {
+        for &old in *revisions {
+            let new = old + FEATURE_REVISION_SHIFT;
+            db(conn.execute(
+                "UPDATE operations SET schema_version=?1 WHERE capability=?2 AND schema_version=?3",
+                params![new, operation, old],
+            ))?;
+            db(conn.execute(
+                "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',?1) \
+                 WHERE command_kind=?2 AND json_extract(result_json,'$.schemaRevision')=?3",
+                params![new, operation, old],
+            ))?;
+            db(conn.execute(
+                "UPDATE events SET payload_json=json_set(payload_json,'$.schemaRevision',?1) \
+                 WHERE kind='CommandDecided' AND json_extract(payload_json,'$.operation')=?2 \
+                 AND json_extract(payload_json,'$.schemaRevision')=?3",
+                params![new, operation, old],
+            ))?;
+            db(conn.execute(
+                "UPDATE approval_resumes SET schema_revision=?1 WHERE operation=?2 AND schema_revision=?3",
+                params![new, operation, old],
+            ))?;
+        }
+    }
+    remap_feature_job_definitions(conn)
+}
+
+/// Rebinds a saved native job of an F8 operation from its old argument schema revision to the
+/// renumbered one, with that revision's argument schema digest.
+fn remap_feature_job_definitions(conn: &Connection) -> Result<(), StorageError> {
+    use devworks_core::protocol::records::JobDefinition;
+    use devworks_core::registry::SchemaRevision;
+    let mut statement = db(conn.prepare("SELECT id,definition_json FROM schedules"))?;
+    let rows = db(statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }))?
+    .collect::<Result<Vec<_>, _>>();
+    let invalid = || StorageError::InvalidRecord("saved job definition does not decode".into());
+    for (id, definition) in db(rows)? {
+        let Ok(JobDefinition::Native {
+            capability_id,
+            mut arguments,
+        }) = serde_json::from_str::<JobDefinition>(&definition)
+        else {
+            continue;
+        };
+        let old = arguments.schema.revision.get();
+        let Some((operation, _)) =
+            FEATURE_OPERATION_REVISIONS
+                .iter()
+                .find(|(operation, revisions)| {
+                    devworks_core::services::jobs::capability_id(operation) == capability_id
+                        && revisions.contains(&old)
+                })
+        else {
+            continue;
+        };
+        let new = u32::try_from(old + FEATURE_REVISION_SHIFT).map_err(|_| invalid())?;
+        arguments.schema =
+            devworks_core::services::jobs::argument_schema(operation, SchemaRevision(new))
+                .ok_or_else(invalid)?;
+        let value = serde_json::to_value(JobDefinition::Native {
+            capability_id,
+            arguments,
+        })
+        .map_err(|_| invalid())?;
+        let canonical = devworks_core::jcs::canonicalize(&value).map_err(|_| invalid())?;
+        db(conn.execute(
+            "UPDATE schedules SET definition_json=?1 WHERE id=?2",
+            params![canonical, id],
+        ))?;
+    }
+    Ok(())
 }
 
 fn document_lineage_changed() -> StorageError {
