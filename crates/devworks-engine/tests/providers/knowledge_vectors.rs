@@ -22,7 +22,8 @@ use devworks_core::{
 use devworks_engine::knowledge::claim_vector_consumer;
 use devworks_test_support::seed;
 
-/// One recorded embedding reply: a vector per input, in input order.
+/// One recorded embedding reply, for the next request that has none: a vector per input, in
+/// input order.
 fn reply(f: &Fx, vectors: &[[f32; 2]]) {
     let data: Vec<Value> = vectors
         .iter()
@@ -34,7 +35,7 @@ fn reply(f: &Fx, vectors: &[[f32; 2]]) {
     f.http
         .lock()
         .unwrap()
-        .body
+        .replies
         .push_back(body.to_string().into_bytes());
 }
 
@@ -239,6 +240,33 @@ fn embed(f: &Fx, service: &Arc<KnowledgeService>) {
 
 fn vector_jobs(f: &Fx) -> QueueStatus {
     read(f.store.as_ref(), |r| r.queue().status(VECTOR_CONSUMER))
+}
+
+/// One recorded reply for each batch of 32 claims a delivery embeds of `n` pending claims,
+/// each claim's vector near [1, 0] and distinct from every other.
+fn reply_batches(f: &Fx, n: usize) {
+    for start in (0..n).step_by(32) {
+        let vectors: Vec<[f32; 2]> = (start..n.min(start + 32))
+            .map(|k| [1.0, k as f32 / 1000.0])
+            .collect();
+        reply(f, &vectors);
+    }
+}
+
+/// How many claims of `ctx`'s project have no vector in the selected space yet, up to 32.
+fn pending(f: &Fx, index: &IndexService, ctx: &InvocationContext) -> usize {
+    let space = read(f.store.as_ref(), |r| index.configuration_read(r, ctx))
+        .space
+        .unwrap()
+        .id;
+    let space = Id::new(space).unwrap();
+    let scope =
+        devworks_core::ports::storage::KnowledgeScope::Project(ctx.project_id().unwrap().clone());
+    read(f.store.as_ref(), move |r| {
+        r.knowledge()
+            .pending_knowledge_claim_vectors(&scope, &space, 32)
+    })
+    .len()
 }
 
 #[test]
@@ -470,7 +498,7 @@ fn every_meaning_match_past_the_cap_is_listed_once_after_the_fused_head() {
     )
     .unwrap();
     let a = project(&human, "knowledge-a");
-    let (_service, cases) = knowledge(&f, Some(index.clone()));
+    let (service, cases) = knowledge(&f, Some(index.clone()));
     let n = usize::from(devworks_core::services::knowledge::CANDIDATES) + 1;
     let texts: Vec<String> = (0..n).map(|i| format!("plain note {i}")).collect();
     let mut all = Vec::new();
@@ -485,36 +513,13 @@ fn every_meaning_match_past_the_cap_is_listed_once_after_the_fused_head() {
             &values,
         ));
     }
-    // The store keeps their vectors in the selected space (the delivery path is covered above;
-    // here only the search over many vectors matters).
-    let space = read(f.store.as_ref(), |r| index.configuration_read(r, &a))
-        .space
-        .unwrap()
-        .id;
-    let space = Id::new(space).unwrap();
-    let scope =
-        devworks_core::ports::storage::KnowledgeScope::Project(ProjectId(id("knowledge-a")));
-    let mut stored = 0;
-    loop {
-        let (s, sc) = (space.clone(), scope.clone());
-        let pending = read(f.store.as_ref(), move |r| {
-            r.knowledge().pending_knowledge_claim_vectors(&sc, &s, 32)
-        });
-        if pending.is_empty() {
-            break;
-        }
-        let rows: Vec<(Id, String, Vec<f32>)> = pending
-            .into_iter()
-            .map(|(c, text)| (c, text, vec![1.0, stored as f32 / 1000.0]))
-            .collect();
-        stored += rows.len();
-        let s = space.clone();
-        write(&*f.store, move |tx| {
-            tx.knowledge().insert_knowledge_claim_vectors(&s, &rows)
-        })
-        .unwrap();
-    }
-    assert_eq!(stored, n);
+    // The first delivery embeds every claim of the scope, batch by batch; the later ones find
+    // none pending.
+    reply_batches(&f, n);
+    embed(&f, &service);
+    assert_eq!(pending(&f, &index, &a), 0);
+    let jobs = vector_jobs(&f);
+    assert_eq!((jobs.ready, jobs.failed), (0, 0), "{jobs:?}");
     // No claim shares the query's word: every one is a meaning match only.
     let (listed, limited) = every_page(&f, &cases, &a, "zebra", 50, [1.0, 0.0]);
     assert!(limited, "the meaning source is past its cap");
@@ -892,4 +897,47 @@ fn an_unusable_provider_vector_is_recorded_and_the_batch_kept() {
     reply(&f, &[[0.8, 0.2]]);
     embed(&f, &service);
     assert_eq!(sent(&f) - before, 1, "only the new claim is embedded");
+}
+
+#[test]
+fn one_delivery_embeds_every_batch_of_a_scope_and_every_claim_gets_its_vector() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (human, _native, index) = qualify(&f);
+    seed::rows(
+        f.store.as_ref(),
+        &[seed::ProjectSeed::new("knowledge-a")],
+        &[],
+    )
+    .unwrap();
+    let a = project(&human, "knowledge-a");
+    let (service, cases) = knowledge(&f, Some(index.clone()));
+    let texts: Vec<String> = (0..70).map(|i| format!("plain note {i}")).collect();
+    let values: Vec<&str> = texts.iter().map(String::as_str).collect();
+    record_about(&f, &cases, &a, "notes", "Garage", &values);
+    // Two full batches and the rest, each its own request with its own recorded reply.
+    reply_batches(&f, 70);
+    let before = sent(&f);
+    embed(&f, &service);
+    let inputs: Vec<usize> = f.http.lock().unwrap().requests.lock().unwrap()[before..]
+        .iter()
+        .map(|request| {
+            let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
+            body["input"].as_array().unwrap().len()
+        })
+        .collect();
+    assert_eq!(inputs, [32, 32, 6], "one request per batch of at most 32");
+    let jobs = vector_jobs(&f);
+    assert_eq!(
+        (jobs.completed, jobs.ready, jobs.failed),
+        (1, 0, 0),
+        "{jobs:?}"
+    );
+    assert_eq!(pending(&f, &index, &a), 0);
+    let diagnostic = retrieval(&f, &cases, &a);
+    assert_eq!(diagnostic.code.0, "Hybrid");
+    assert!(
+        diagnostic.message.0.contains("70 of 70 claims"),
+        "{}",
+        diagnostic.message.0
+    );
 }

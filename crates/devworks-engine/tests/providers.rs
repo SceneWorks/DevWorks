@@ -71,7 +71,10 @@ impl Entropy for EntropyFixture {
 struct Script {
     status: u16,
     statuses: VecDeque<u16>,
+    /// The read chunks of the next response: the next request takes all of them.
     body: VecDeque<Vec<u8>>,
+    /// Whole responses, one per request in request order, served before `body`.
+    replies: VecDeque<Vec<u8>>,
     repeat_body: Option<Vec<u8>>,
     content_type: &'static str,
     requests: Arc<Mutex<Vec<HttpRequest>>>,
@@ -90,6 +93,7 @@ impl Script {
             status: 200,
             statuses: VecDeque::new(),
             body: VecDeque::from([body.as_bytes().to_vec()]),
+            replies: VecDeque::new(),
             repeat_body: None,
             content_type: "text/event-stream",
             requests: Default::default(),
@@ -136,7 +140,10 @@ impl StreamingHttp for ScriptHttp {
         }
         let body = match &script.repeat_body {
             Some(body) => VecDeque::from([body.clone()]),
-            None => std::mem::take(&mut script.body),
+            None => match script.replies.pop_front() {
+                Some(reply) => VecDeque::from([reply]),
+                None => std::mem::take(&mut script.body),
+            },
         };
         let status = script.statuses.pop_front().unwrap_or(script.status);
         Ok(Box::new(Stream {
