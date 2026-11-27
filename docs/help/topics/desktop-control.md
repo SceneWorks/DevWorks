@@ -12,7 +12,7 @@ DevWorks can let an agent look at your screen and operate the desktop. Reading t
 
 ## See and take back control
 
-Resources shows who holds desktop control or waits for it, and the permission state. Select Take back control to end the holder's lease at once. The agent's next input under that lease is refused, and it must ask again.
+Resources shows who holds desktop control and the permission state; a request still waiting for your OK is on its approval card. Select Take back control to end the holder's lease. If the agent's input is still running, control shows as being released until that input finishes. The agent's next input under that lease is refused, and it must ask again.
 
 ## Consent
 

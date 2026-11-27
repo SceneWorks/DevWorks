@@ -103,6 +103,10 @@ struct ScriptedDesktop {
     input: Mutex<Vec<DesktopInput>>,
     captures: Mutex<usize>,
     pointer_available: AtomicBool,
+    /// While set, an input waits in `inject` (its dispatch stays in flight).
+    hold_input: AtomicBool,
+    /// An input is inside `inject`.
+    injecting: AtomicBool,
 }
 impl Default for ScriptedDesktop {
     fn default() -> Self {
@@ -110,6 +114,8 @@ impl Default for ScriptedDesktop {
             input: Mutex::default(),
             captures: Mutex::default(),
             pointer_available: AtomicBool::new(false),
+            hold_input: AtomicBool::new(false),
+            injecting: AtomicBool::new(false),
         }
     }
 }
@@ -135,7 +141,13 @@ impl DesktopPlatform for ScriptedDesktop {
         Ok(png.into_inner())
     }
     fn inject(&self, action: &DesktopInput) -> Result<(), DesktopFault> {
+        self.injecting.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while self.hold_input.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         self.input.lock().unwrap().push(action.clone());
+        self.injecting.store(false, Ordering::SeqCst);
         Ok(())
     }
     fn accessibility_snapshot(&self) -> Result<AccessibilitySnapshot, DesktopFault> {
@@ -765,110 +777,154 @@ fn desktop_agent(
     )
 }
 
+/// An agent holding desktop control that a person approved, on a runtime with a scripted
+/// desktop whose pointer input is available.
+struct AgentControl {
+    root: Root,
+    platform: Arc<ScriptedDesktop>,
+    engine: devworks_desktop::host::Engine,
+    agent: devworks_core::context::InvocationContext,
+    desktop: DesktopRecord,
+    approval: devworks_core::protocol::Id,
+    lease_id: devworks_core::protocol::Id,
+    fence: i64,
+}
+
+impl AgentControl {
+    fn new(name: &str) -> Self {
+        let root = Root::new(name);
+        let platform = Arc::new(ScriptedDesktop::default());
+        platform.pointer_available.store(true, Ordering::SeqCst);
+        let mut configuration = config(&root.0);
+        configuration.desktop_platform = Some(platform.clone());
+        let engine = devworks_desktop::host::Engine::start(configuration).expect("runtime boot");
+        let backend = engine.backend();
+        let runtime = engine.host().runtime().clone();
+        let agent = desktop_agent(&engine);
+        // The agent asks for control; the request is staged for a person, who approves it.
+        let before = inspect(&*backend);
+        let request = json!({"desktopId":before.desktop_id,"expectedRevision":before.revision,
+            "reason":"Test the local UI", "leaseMs":"30000"});
+        let decoded = devworks_core::services::approvals::requests::decode(
+            "desktop.request_control",
+            1,
+            &request,
+            true,
+        )
+        .expect("selected saved operation");
+        let held = runtime
+            .approvals()
+            .stage_held(
+                &**runtime.store(),
+                &agent,
+                "desktop.request_control",
+                1,
+                &request,
+                decoded.fingerprint.as_str(),
+            )
+            .unwrap_or_else(|e| panic!("the agent's request was not staged: {e:?}"));
+        let proposal = read_snapshot(&**runtime.store(), &ReadOptions::default(), |s| {
+            s.decisions().approval(&held.approval_id)
+        })
+        .unwrap()
+        .expect("staged approval");
+        dops::decided(backend.human_decision(
+            &dops::command(
+                &*backend,
+                command_input(
+                    "approvals.record_human_decision",
+                    json!({
+                        "proposalId":held.approval_id,
+                        "expectedRevision":proposal.revision.to_string(),
+                        "contentDigest":proposal.content_digest,"decision":"Approve",
+                        "rationale":"OK: the agent may test the UI"
+                    }),
+                ),
+            ),
+            backend.control_epoch(),
+        ))
+        .expect("trusted Human OK");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let desktop = loop {
+            let record = inspect(&*backend);
+            if matches!(record.state, ItemState::Enabled) && record.lease_id.is_some() {
+                break record;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "approved desktop control did not resume: {record:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        let lease_id = desktop.lease_id.clone().unwrap();
+        let mut control = Self {
+            root,
+            platform,
+            engine,
+            agent,
+            desktop,
+            approval: held.approval_id,
+            lease_id,
+            fence: 0,
+        };
+        let granted = control.lease();
+        assert_eq!(granted.owner, *control.agent.principal());
+        control.fence = granted.fence;
+        control
+    }
+    fn lease(&self) -> devworks_core::ports::storage::StoredLease {
+        read_snapshot(
+            &**self.engine.host().runtime().store(),
+            &ReadOptions::default(),
+            |s| s.resources().lease(&self.lease_id),
+        )
+        .unwrap()
+        .expect("lease row")
+    }
+    /// The agent's `desktop.input` under its lease at the desktop `revision`.
+    fn input(&self, revision: &devworks_core::protocol::Revision) -> DomainDecision {
+        let backend = self.engine.backend();
+        let frame = devworks_desktop::frame::fixture::command(
+            &*backend,
+            "desktop.input",
+            json!({"desktopId":self.desktop.desktop_id,"leaseId":self.lease_id,
+                "expectedFence":self.fence.to_string(),"consentId":self.approval,
+                "expectedDesktopRevision":revision,"action":{"kind":"Text","text":"hello"}}),
+        );
+        decision(
+            self.engine
+                .host()
+                .runtime()
+                .command(&self.agent, "desktop.input", &frame)
+                .expect("input reply"),
+        )
+    }
+}
+
 #[test]
 fn a_person_takes_desktop_control_back_from_an_agent_on_the_resources_screen() {
     use devworks_core::ports::storage::LeasePhase;
     use devworks_desktop::route::Route;
     use eframe::egui::accesskit::Role;
     let _case = native_runtime_case();
-    let root = Root::new("desktop-take-back");
-    let platform = Arc::new(ScriptedDesktop::default());
-    platform.pointer_available.store(true, Ordering::SeqCst);
-    let mut configuration = config(&root.0);
-    configuration.desktop_platform = Some(platform.clone());
-    let engine = devworks_desktop::host::Engine::start(configuration).expect("runtime boot");
-    let backend = engine.backend();
-    let runtime = engine.host().runtime().clone();
-    let agent = desktop_agent(&engine);
-
-    // The agent asks for control; the request is staged for a person, who approves it.
-    let before = inspect(&*backend);
-    let request = json!({"desktopId":before.desktop_id,"expectedRevision":before.revision,
-        "reason":"Test the local UI", "leaseMs":"30000"});
-    let decoded = devworks_core::services::approvals::requests::decode(
-        "desktop.request_control",
-        1,
-        &request,
-        true,
-    )
-    .expect("selected saved operation");
-    let held = runtime
-        .approvals()
-        .stage_held(
-            &**runtime.store(),
-            &agent,
-            "desktop.request_control",
-            1,
-            &request,
-            decoded.fingerprint.as_str(),
-        )
-        .unwrap_or_else(|e| panic!("the agent's request was not staged: {e:?}"));
-    let proposal = read_snapshot(&**runtime.store(), &ReadOptions::default(), |s| {
-        s.decisions().approval(&held.approval_id)
-    })
-    .unwrap()
-    .expect("staged approval");
-    dops::decided(backend.human_decision(
-        &dops::command(
-            &*backend,
-            command_input(
-                "approvals.record_human_decision",
-                json!({
-                    "proposalId":held.approval_id,"expectedRevision":proposal.revision.to_string(),
-                    "contentDigest":proposal.content_digest,"decision":"Approve",
-                    "rationale":"OK: the agent may test the UI"
-                }),
-            ),
-        ),
-        backend.control_epoch(),
-    ))
-    .expect("trusted Human OK");
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let desktop = loop {
-        let record = inspect(&*backend);
-        if matches!(record.state, ItemState::Enabled) && record.lease_id.is_some() {
-            break record;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "approved desktop control did not resume: {record:?}"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    };
-    let lease_id = desktop.lease_id.clone().unwrap();
-    let lease = |id: &devworks_core::protocol::Id| {
-        read_snapshot(&**runtime.store(), &ReadOptions::default(), |s| {
-            s.resources().lease(id)
-        })
-        .unwrap()
-        .expect("lease row")
-    };
-    let granted = lease(&lease_id);
-    assert_eq!(granted.owner, *agent.principal());
-    let agent_input = |revision: &devworks_core::protocol::Revision| {
-        let frame = devworks_desktop::frame::fixture::command(
-            &*backend,
-            "desktop.input",
-            json!({"desktopId":desktop.desktop_id,"leaseId":lease_id,
-                "expectedFence":granted.fence.to_string(),"consentId":held.approval_id,
-                "expectedDesktopRevision":revision,"action":{"kind":"Text","text":"hello"}}),
-        );
-        decision(
-            runtime
-                .command(&agent, "desktop.input", &frame)
-                .expect("input reply"),
-        )
-    };
+    let c = AgentControl::new("desktop-take-back");
+    let (engine, root, backend) = (&c.engine, &c.root, c.engine.backend());
     assert!(
         matches!(
-            agent_input(&desktop.revision),
+            c.input(&c.desktop.revision),
             DomainDecision::Accepted { .. }
         ),
         "the agent can send input while it holds control"
     );
+    // The input has run, so nothing of the agent's is in flight when control is taken back.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while c.platform.input.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "the input never ran");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     // The Resources screen shows who holds control and the desktop's permission state.
-    let mut h = harness(shell(&engine, &root, Script::default()), 1440.0, 900.0);
+    let mut h = harness(shell(engine, root, Script::default()), 1440.0, 900.0);
     settle(&mut h);
     h.state_mut().navigate(Route::Resources);
     settle(&mut h);
@@ -878,7 +934,7 @@ fn a_person_takes_desktop_control_back_from_an_agent_on_the_resources_screen() {
     // Take back control ends the agent's lease.
     click(&mut h, Role::Button, "Take back control");
     step_until(&mut h, "the agent's lease ended", |_| {
-        lease(&lease_id).phase == LeasePhase::Released
+        c.lease().phase == LeasePhase::Released
     });
     settle(&mut h);
     assert!(has_text(&h, "Nobody holds desktop control."));
@@ -891,7 +947,46 @@ fn a_person_takes_desktop_control_back_from_an_agent_on_the_resources_screen() {
     let after = inspect(&*backend);
     assert!(after.lease_id.is_none());
     assert!(matches!(
-        agent_input(&after.revision),
+        c.input(&after.revision),
         DomainDecision::Refused { .. }
     ));
+}
+
+#[test]
+fn taking_control_back_while_the_agents_input_runs_shows_control_being_released() {
+    use devworks_core::ports::storage::LeasePhase;
+    use devworks_desktop::route::Route;
+    use eframe::egui::accesskit::Role;
+    let _case = native_runtime_case();
+    let c = AgentControl::new("desktop-take-back-running");
+    // The agent's input is still being injected when the person takes control back.
+    c.platform.hold_input.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        c.input(&c.desktop.revision),
+        DomainDecision::Accepted { .. }
+    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !c.platform.injecting.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "the input never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut h = harness(shell(&c.engine, &c.root, Script::default()), 1440.0, 900.0);
+    settle(&mut h);
+    h.state_mut().navigate(Route::Resources);
+    settle(&mut h);
+    click(&mut h, Role::Button, "Take back control");
+    step_until(&mut h, "the agent's lease is being released", |_| {
+        c.lease().phase == LeasePhase::Releasing
+    });
+    settle(&mut h);
+    assert!(has_text(
+        &h,
+        "Desktop control is being released from desktop-worker."
+    ));
+    assert!(
+        h.query_by_role_and_label(Role::Button, "Take back control")
+            .is_none(),
+        "no second take-back is offered while control is being released"
+    );
+    c.platform.hold_input.store(false, Ordering::SeqCst);
 }

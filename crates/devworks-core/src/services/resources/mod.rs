@@ -1044,7 +1044,9 @@ impl ResourceService {
         ctx: &InvocationContext,
         i: &ops::ReleaseInput,
     ) -> Result<DomainDecision, Failure> {
-        self.release_lease(tx, ctx, i, ctx.principal_kind() == PrincipalKind::Human)
+        let human = ctx.principal_kind() == PrincipalKind::Human
+            && tx.actors().actor_kind(ctx.principal())? == Some(PrincipalKind::Human);
+        self.release_lease(tx, ctx, i, human)
     }
 
     fn release_lease(

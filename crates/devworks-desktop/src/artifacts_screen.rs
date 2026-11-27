@@ -945,12 +945,17 @@ fn notices_detail(
     picked: &mut Option<BrowserObservation>,
 ) {
     ui.strong(format!("Activity of {}", notices.session));
+    let tab = notices.tab;
     widgets::tab_row(
         ui,
         "Browser session activity",
         &NOTICE_TABS,
         &mut notices.tab,
     );
+    if notices.tab != tab {
+        // The batch shown belongs to the other view.
+        notices.shown = None;
+    }
     let network = notices.tab == 1;
     let (what, empty) = if network {
         ("network requests", "No network requests recorded.")
@@ -1485,7 +1490,7 @@ impl Screen for ResourcesScreen {
                         e.describe()
                     )),
                 }
-                self.load_desktop(cx);
+                self.read_desktop(cx, true);
             }
             (slot, reply) => cx.unhandled(&slot, reply),
         }
@@ -1620,8 +1625,9 @@ fn lease_detail(ui: &mut Ui, leases: &ResourceLeases, more: &mut [bool; 2]) {
     }
 }
 
-/// Who holds desktop control, or who waits for it, and the desktop's permission state, with a
-/// Take back control button for a held or requested lease. The lease clicked is returned.
+/// Who holds desktop control, or whose control is being released, and the desktop's
+/// permission state, with a Take back control button for a held lease. The lease clicked is
+/// returned.
 fn desktop_card(
     ui: &mut Ui,
     desktop: Option<&Result<DesktopRecord, String>>,
@@ -1655,7 +1661,9 @@ fn desktop_card(
                     "Desktop control is unavailable on this machine.".to_owned()
                 }
                 ItemState::Enabled => format!("{who} holds desktop control."),
-                ItemState::Partial => format!("{who} is waiting for desktop control."),
+                // A lease ending while its owner's work still runs (or whose owner stopped
+                // answering): control is being released.
+                ItemState::Partial => format!("Desktop control is being released from {who}."),
                 _ => "Nobody holds desktop control.".to_owned(),
             };
             ui.label(status);
@@ -1663,9 +1671,7 @@ fn desktop_card(
                 ui,
                 format!("Permissions: {}", record.permission_state.0.as_str()),
             );
-            if let Some(l) =
-                lease.filter(|_| matches!(record.state, ItemState::Enabled | ItemState::Partial))
-            {
+            if let Some(l) = lease.filter(|_| matches!(record.state, ItemState::Enabled)) {
                 let button = ui.add_enabled_ui(!releasing, |ui| {
                     widgets::secondary_button(ui, "Take back control")
                 });
@@ -1681,7 +1687,12 @@ fn desktop_card(
 impl ResourcesScreen {
     /// Reads the desktop's control state and the leases holding it, unless already reading.
     fn load_desktop(&mut self, cx: &mut Cx) {
-        if !cx.pending(&ResourcesSlot::DesktopControl) {
+        self.read_desktop(cx, false);
+    }
+    /// Reads the desktop's control state and its holders; `again` supersedes reads in flight,
+    /// whose replies may predate a change and are then dropped.
+    fn read_desktop(&mut self, cx: &mut Cx, again: bool) {
+        if again || !cx.pending(&ResourcesSlot::DesktopControl) {
             cx.query(
                 ResourcesSlot::DesktopControl,
                 "Reading desktop control",
@@ -1689,7 +1700,7 @@ impl ResourcesScreen {
                 ops::desktop_inspect,
             );
         }
-        if !cx.pending(&ResourcesSlot::DesktopHolders) {
+        if again || !cx.pending(&ResourcesSlot::DesktopHolders) {
             let fetch = self.desktop_holders.reread();
             Self::send_desktop_holders(cx, &mut self.desktop_holders, fetch);
         }

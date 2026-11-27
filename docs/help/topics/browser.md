@@ -2,7 +2,7 @@
 
 Browser sessions are owned test resources reached from Resources. Inspect a session and its current page before navigating or issuing input. Screenshot, console, network, and inspection results are evidence artifacts with exact versions, not proof that an entire feature is correct.
 
-Select a session to see what it recorded. The Console view lists its console messages and the Network view its network requests, each as numbered batches; select a batch to read it.
+Select a session to see what it recorded. The Console view lists its console messages and the Network view its network requests, each as numbered batches; select a batch to read it. Console and Network share one numbering, so a view can skip numbers.
 
 ## Test deliberately
 

@@ -747,6 +747,7 @@ fn a_browser_sessions_console_messages_and_network_requests_are_read_from_the_br
     // The Network view lists its network batch; picking it shows its requests.
     click(&mut h, Role::Button, "Network");
     assert!(!has_text(&h, "Batch 1  ·"));
+    assert!(!has_text(&h, "Uncaught TypeError: widget is undefined"));
     click_row(&mut h, "Batch 2  ·");
     assert!(has_text(&h, "https://example.test/api/widgets"));
     assert!(has_text(&h, "503"));
