@@ -792,3 +792,53 @@ fn a_project_agents_suite_draft_is_confined_to_its_project_until_a_person_approv
         app.shutdown().await;
     });
 }
+
+#[test]
+fn exceptions_never_reach_an_active_suite_except_through_a_persons_acceptance() {
+    let fx = Fx::new();
+    // Someone wrote an exception into a shared suite folder by hand.
+    let forged = serde_json::to_string(
+        &json!([{"checkId": "read-ok", "matchedInstance": instance("1"),
+        "reason": "trust me", "approver": "user", "acceptedAtMs": "1"}]),
+    )
+    .unwrap();
+    write_folder(
+        &fx.shared_evals,
+        "forged",
+        &[
+            ("SUITE.md", &documentation(&["read-ok"])),
+            ("suite.json", &definition(&["read-ok"])),
+            ("exceptions.json", &forged),
+        ],
+    );
+    runtime().block_on(async {
+        let (user, agent) = fx.principals();
+        let app = boot(fx.composition()).await.unwrap();
+        // An agent's draft over the unconfirmed folder keeps no exception, so approving its
+        // proposal activates none.
+        let shared = named(&fx.suites(&app, &user), "forged", "Shared").clone();
+        assert_eq!(shared["exceptions"].as_array().unwrap().len(), 1, "the folder is shown as it is");
+        let draft = applied(fx.command(&app, &agent, "evals.draft_suite", R, json!({"suiteId": shared["id"], "expectedRevision": "1"}).as_object().unwrap().clone().into_iter().chain(fx.draft_body(&agent, "forged", &["read-ok"], &[]).as_object().unwrap().clone()).collect::<serde_json::Map<_, _>>().into()));
+        assert!(draft["exceptions"].as_array().unwrap().is_empty(), "{draft}");
+        let proposal = applied(fx.command(&app, &agent, "evals.propose_suite", R, json!({"suiteId": draft["id"], "expectedRevision": "1", "contentDigest": draft["contentDigest"]})));
+        applied(app.record_human_decision(&user, &fx.decide(&proposal, "Approve")).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        let active = fx.query(&app, &user, "evals.suite", json!({"suiteId": draft["id"]})).unwrap();
+        assert_eq!(active["activeRevision"], "1");
+        assert!(active["exceptions"].as_array().unwrap().is_empty());
+
+        // An agent's draft overtaken by an exception a person accepted is never activated, so
+        // the person's exception is not dropped.
+        let suite = applied(fx.command(&app, &user, "evals.draft_suite", R, fx.draft_body(&user, "reads", &["read-ok"], &[])));
+        let stale = applied(fx.command(&app, &agent, "evals.draft_suite", R, json!({"suiteId": suite["id"], "expectedRevision": "1"}).as_object().unwrap().clone().into_iter().chain(fx.draft_body(&agent, "reads", &["read-ok"], &[]).as_object().unwrap().clone()).collect::<serde_json::Map<_, _>>().into()));
+        let accepted = applied(fx.command(&app, &user, "evals.accept_exception", R, json!({"suiteId": suite["id"], "expectedRevision": "2", "checkId": "read-ok", "matchedInstance": instance("5"), "reason": "Cached by design."})));
+        assert_eq!(accepted["revision"], "3");
+        let proposal = applied(fx.command(&app, &agent, "evals.propose_suite", R, json!({"suiteId": suite["id"], "expectedRevision": "2", "contentDigest": stale["contentDigest"]})));
+        applied(app.record_human_decision(&user, &fx.decide(&proposal, "Approve")).unwrap());
+        app.approval_resumes().tick().await.unwrap();
+        let now = fx.query(&app, &user, "evals.suite", json!({"suiteId": suite["id"]})).unwrap();
+        assert_eq!(now["activeRevision"], "3", "{now}");
+        assert_eq!(now["exceptions"][0]["reason"], "Cached by design.");
+        app.shutdown().await;
+    });
+}

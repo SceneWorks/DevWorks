@@ -948,6 +948,24 @@ impl InstructionService {
                 {
                     return Err(denied("instruction_proposal"));
                 }
+                // An agent's suite draft keeps the active revision's accepted exceptions; one
+                // whose exceptions differ (taken from an unconfirmed folder change, or overtaken
+                // by an exception a person accepted since) is never activated.
+                if kind == InstructionKind::Suite {
+                    let active = match item.active_revision {
+                        Some(n) => tx.instructions().instruction_revision(&item.id, n)?,
+                        None => None,
+                    };
+                    if active.as_ref().and_then(super::suite::exceptions_digest)
+                        != super::suite::exceptions_digest(&target)
+                    {
+                        return Err(refusal(
+                            DomainErrorCode::Conflict,
+                            "eval_exceptions_changed",
+                            Some(&item.id),
+                        ));
+                    }
+                }
                 if target.confined_project.is_some() {
                     if kind == InstructionKind::Suite {
                         let staged = command

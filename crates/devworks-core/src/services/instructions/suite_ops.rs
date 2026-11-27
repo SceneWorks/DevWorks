@@ -161,24 +161,25 @@ impl InstructionService {
             }
             resources.push(ScannedFile::new(path.to_owned(), bytes));
         }
-        // The base the draft replaces, and the accepted exceptions it keeps.
-        let base = match &input.suite_id {
+        // The base the draft replaces, and the accepted exceptions it keeps: those of the active
+        // revision only. An unconfirmed folder change's exceptions were accepted by nobody.
+        let (base, active) = match &input.suite_id {
             Some(id) => env.read(|read| {
                 Ok((|| -> Result<_, Failure> {
                     let item = visible_item(read.instructions(), ctx, id, KIND)?;
                     let current = visible_current(read.instructions(), ctx, &item)?;
-                    Ok(Some(current))
+                    Ok((Some(current), active_revision(read.instructions(), &item)?))
                 })())
             })??,
-            None => None,
+            None => (None, None),
         };
-        let exceptions = match &base {
-            Some(b) => suite::parsed_of(b)?.exceptions,
+        let exceptions = match &active {
+            Some(a) => suite::parsed_of(a)?.exceptions,
             None => Vec::new(),
         };
-        let carried = base
+        let carried = active
             .as_ref()
-            .and_then(|b| suite::resource(b, suite::EXCEPTIONS_FILE).cloned());
+            .and_then(|a| suite::resource(a, suite::EXCEPTIONS_FILE).cloned());
         let definition = Definition {
             measures: input.measures.0.clone(),
             checks: input.checks.0.clone(),
@@ -447,9 +448,18 @@ impl InstructionService {
             .carried
             .as_ref()
             .and_then(|c| c["sha256"].as_str().map(str::to_owned));
-        if base.as_ref().map(|b| b.revision) != prepared.base
-            || base.as_ref().and_then(suite::exceptions_digest) != carried_digest
-        {
+        // The exceptions come from the active revision of the named suite (for a new override,
+        // the shared suite's), which must still hold the same ones.
+        let held = match input.suite_id.as_ref() {
+            Some(id) => {
+                let named = visible_item(tx.instructions(), ctx, id, KIND)?;
+                active_revision(tx.instructions(), &named)?
+                    .as_ref()
+                    .and_then(suite::exceptions_digest)
+            }
+            None => None,
+        };
+        if base.as_ref().map(|b| b.revision) != prepared.base || held != carried_digest {
             return Err(refusal(
                 DomainErrorCode::SourceChanged,
                 "eval_suite",
@@ -836,5 +846,16 @@ pub(crate) fn suite_reply(
             serde_json::from_value(result["value"].clone()).ok()
         }
         _ => None,
+    }
+}
+
+/// The active revision of a suite, if it has one.
+fn active_revision(
+    read: &dyn crate::ports::storage::InstructionRead,
+    item: &StoredInstructionItem,
+) -> Result<Option<StoredInstructionRevision>, StorageError> {
+    match item.active_revision {
+        Some(n) => read.instruction_revision(&item.id, n),
+        None => Ok(None),
     }
 }

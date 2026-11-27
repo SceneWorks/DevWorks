@@ -984,8 +984,6 @@ pub(crate) fn publish_instruction_text(
         .map_err(|e| StorageError::InvalidRecord(e.to_string()))
 }
 
-/// Commits a staged capture as host artifacts in the item's scope and appends its revision
-
 /// Publishes a capture's staged resources as host artifacts in the item's own scope (the
 /// release of a confined suite draft's approved files) and answers their resource entries.
 pub(crate) fn publish_resources(
@@ -1030,6 +1028,7 @@ pub(crate) fn publish_resources(
     Ok(Value::Array(resources))
 }
 
+/// Commits a staged capture as host artifacts in the item's scope and appends its revision
 /// (`item.latest_revision + 1`). The caller updates the item in the same unit of work.
 pub(crate) fn record_capture(
     tx: &mut dyn crate::ports::storage::WriteTransaction,
