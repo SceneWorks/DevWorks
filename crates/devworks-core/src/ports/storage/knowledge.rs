@@ -210,6 +210,16 @@ pub struct StoredClaim {
     pub updated_at_ms: i64,
     pub deleted_at_ms: Option<i64>,
 }
+impl StoredClaim {
+    /// The claim's text: its predicate, value and normalized text, space-separated. The store
+    /// indexes and embeds this text, and `knowledge.search` counts it against a token budget.
+    pub fn text(&self) -> String {
+        let mut parts = vec![self.predicate.as_str()];
+        parts.extend(self.body.value.as_deref());
+        parts.extend(self.body.normalized_text.as_deref());
+        parts.join(" ")
+    }
+}
 
 /// One evidence record.
 #[derive(Clone, Debug, PartialEq)]

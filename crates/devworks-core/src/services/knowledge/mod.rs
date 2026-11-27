@@ -97,6 +97,7 @@ use crate::protocol::records::{
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{
     BoundedList, BoundedText, DynamicJson, Label, Limit, Page, Probability, RelativePath,
+    TokenBudget,
 };
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState, ProjectId};
 use crate::registry::SchemaRevision;
@@ -159,6 +160,13 @@ pub const SUMMARY_OPERATION: &str = "knowledge.render_summary";
 
 /// The setting that configures how many distinct source events make an inferred lesson a rule.
 pub const THRESHOLD_KEY: &str = "knowledge.lessonRecurrenceThreshold";
+/// Setting: the approximate tokens of claim text a `knowledge.search` page holds for an agent
+/// caller that passes no `budgetTokens` (inherited; a project may override).
+pub const SEARCH_BUDGET_KEY: &str = "knowledge.searchTokenBudget";
+/// Setting: the largest `budgetTokens` a `knowledge.search` caller may pass (inherited).
+pub const SEARCH_BUDGET_MAX_KEY: &str = "knowledge.searchTokenBudgetMax";
+/// The smallest `budgetTokens` a `knowledge.search` caller may pass.
+pub const MIN_SEARCH_BUDGET: u32 = 1_000;
 /// History aggregate of a committed Knowledge write (its ID is the write ID).
 pub const WRITE_AGGREGATE: &str = "knowledge_write";
 /// History event of a committed Knowledge write.
@@ -328,21 +336,91 @@ pub(crate) fn thresholds(
     config: &dyn ConfigurationRead,
     scopes: &[KnowledgeScope],
 ) -> Result<BTreeMap<String, i64>, StorageError> {
-    let d = descriptor(THRESHOLD_KEY).expect("catalog setting");
     let mut out = BTreeMap::new();
     for s in scopes {
-        let config_scope = ConfigScope::from(s);
-        let layers = current_chain(config, &config_scope)?;
-        let entries = chain(d, &layers).map_err(|m| {
-            StorageError::InvalidRecord(format!("{} stored under another schema", m.key))
-        })?;
-        let value = entries
-            .first()
-            .map(|e| e.value.value.0.clone())
-            .unwrap_or_else(|| d.default_value());
+        let value = scope_setting(config, THRESHOLD_KEY, s)?;
         out.insert(s.key(), value.as_i64().unwrap_or(3).max(1));
     }
     Ok(out)
+}
+
+/// The effective value of the inherited Knowledge setting `key` for `scope`: the project's own
+/// value, else the workspace's, else the catalog default.
+fn scope_setting(
+    config: &dyn ConfigurationRead,
+    key: &str,
+    scope: &KnowledgeScope,
+) -> Result<Value, StorageError> {
+    let d = descriptor(key).expect("catalog setting");
+    let layers = current_chain(config, &ConfigScope::from(scope))?;
+    let entries = chain(d, &layers).map_err(|m| {
+        StorageError::InvalidRecord(format!("{} stored under another schema", m.key))
+    })?;
+    Ok(entries
+        .first()
+        .map(|e| e.value.value.0.clone())
+        .unwrap_or_else(|| d.default_value()))
+}
+
+/// The token budget of a `knowledge.search` page of `scope`: the caller's `budgetTokens`, which
+/// must lie between [`MIN_SEARCH_BUDGET`] and the scope's [`SEARCH_BUDGET_MAX_KEY`] (otherwise
+/// `InvalidArgument` on `budgetTokens`, its target id the allowed range `<min>-<max>`), else
+/// the scope's [`SEARCH_BUDGET_KEY`] for an agent caller (at most the maximum), else none: a
+/// person, or the host acting for them, pages by count.
+fn search_budget(
+    config: &dyn ConfigurationRead,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+    requested: Option<u32>,
+) -> Result<Option<u32>, Failure> {
+    let setting = |key| -> Result<u32, StorageError> {
+        let value = scope_setting(config, key, scope)?;
+        value
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| StorageError::InvalidRecord(format!("{key} is not a token count")))
+    };
+    let max = setting(SEARCH_BUDGET_MAX_KEY)?;
+    match requested {
+        Some(b) if (MIN_SEARCH_BUDGET..=max).contains(&b) => Ok(Some(b)),
+        Some(_) => Err(Refusal::new(
+            DomainErrorCode::InvalidArgument,
+            "budgetTokens",
+            Id::new(format!("{MIN_SEARCH_BUDGET}-{max}")).ok(),
+        )
+        .into()),
+        None if writes::is_user(ctx) => Ok(None),
+        // Two settings saved apart can disagree; the maximum bounds the default too.
+        None => Ok(Some(setting(SEARCH_BUDGET_KEY)?.min(max))),
+    }
+}
+
+/// A claim's approximate tokens: the characters of its text ([`StoredClaim::text`]) divided by
+/// four, rounded up. No tokenizer: the count is an estimate, and the reply says so.
+/// Characters on purpose (owner-approved), unlike the bytes of `sessions::token_estimate`.
+fn approximate_tokens(c: &StoredClaim) -> u64 {
+    (c.text().chars().count() as u64).div_ceil(4)
+}
+
+/// `rows` cut to `budget` approximate tokens of their claims' text, always keeping the first
+/// ([`cursor::Paged::clip_to_budget`]); no budget keeps the page as the pager read it. Every
+/// `knowledge.search` page, with words or without, is cut here.
+fn budgeted<T>(
+    rows: cursor::Paged<T>,
+    binding: &CursorBinding,
+    budget: Option<u32>,
+    claim: impl Fn(&T) -> &StoredClaim,
+    position_of: impl Fn(&T) -> String,
+) -> cursor::Paged<T> {
+    match budget {
+        Some(b) => rows.clip_to_budget(
+            binding,
+            u64::from(b),
+            |r| approximate_tokens(claim(r)),
+            position_of,
+        ),
+        None => rows,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -671,22 +749,29 @@ fn parse_position(query: &ClaimQuery, at: &str) -> Result<(ClaimRank, String), S
     Ok((rank, id.to_owned()))
 }
 
-/// The `knowledge.search` reply: one page with its retrieval mode and whether a candidate cap
-/// limited it ([`fusion`]).
+/// The `knowledge.search` reply: one page with its retrieval mode, whether a candidate cap
+/// limited it ([`fusion`]), the approximate tokens of its claims' text and the token budget
+/// that bounded it.
 fn search_result(
-    page: Page<KnowledgeClaim>,
+    claims: cursor::Paged<StoredClaim>,
+    wire: impl Fn(&StoredClaim) -> Result<KnowledgeClaim, StorageError>,
     mode: KnowledgeRetrievalMode,
     work_limited: bool,
-) -> OperationResult {
-    OperationResult::KnowledgeSearch {
+    budget: Option<u32>,
+) -> Result<OperationResult, Failure> {
+    let tokens: u64 = claims.items.iter().map(approximate_tokens).sum();
+    let page: Page<KnowledgeClaim> = claims.try_into_page(|c| wire(&c))?;
+    Ok(OperationResult::KnowledgeSearch {
         value: KnowledgeSearchResult::Current(KnowledgeSearchPage {
             items: page.items,
             next_cursor: page.next_cursor,
             has_more: page.has_more,
             mode,
             work_limited,
+            approximate_tokens: Some(counter(i64::try_from(tokens).unwrap_or(i64::MAX))),
+            budget_tokens: budget.and_then(TokenBudget::new),
         }),
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -777,6 +862,14 @@ impl KnowledgeService {
         if words.len() > model::MAX_WORDS {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "text", None).into());
         }
+        // The budget ends a page early; it never changes the order, so the cursor does not
+        // bind it.
+        let budget = search_budget(
+            snapshot.configuration(),
+            ctx,
+            &scoped.exact,
+            i.budget_tokens.as_ref().map(TokenBudget::get),
+        )?;
         let lifecycles: Vec<String> = match &i.states {
             Some(s) if !s.0.is_empty() => s.0.iter().map(model::wire).collect(),
             _ => vec!["Active".into()],
@@ -818,9 +911,22 @@ impl KnowledgeService {
                 |after, n| claims(k, &query, after, n),
                 |c| claim_position(&query, c),
             )?;
-            let page = rows.try_into_page(|c| wire(&c))?;
+            let rows = budgeted(
+                rows,
+                &binding,
+                budget,
+                |c| &c.claim,
+                |c| claim_position(&query, c),
+            )
+            .try_map(|c| Ok::<_, StorageError>(c.claim))?;
             return Ok((
-                search_result(page, KnowledgeRetrievalMode::LexicalOnly, false),
+                search_result(
+                    rows,
+                    wire,
+                    KnowledgeRetrievalMode::LexicalOnly,
+                    false,
+                    budget,
+                )?,
                 exact_revision,
             ));
         }
@@ -859,21 +965,13 @@ impl KnowledgeService {
             vector.map(|v| (&v.space, v.embedded, v.vector.as_slice())),
         ));
         let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
-        let rows = fusion::page(k, &query, near, &binding, &request, &fused)?;
-        let claims = k.knowledge_claims_by_id(&rows.items)?;
-        if claims.len() != rows.items.len() {
-            return Err(StorageError::InvalidRecord("a listed claim was not read".into()).into());
-        }
-        let rows = cursor::Paged {
-            items: claims,
-            next_cursor: rows.next_cursor,
-        };
+        let rows = fusion::page(k, &query, near, &binding, &request, &fused, budget)?;
         let mode = match mode {
             fusion::Mode::Hybrid => KnowledgeRetrievalMode::Hybrid,
             fusion::Mode::Lexical => KnowledgeRetrievalMode::LexicalOnly,
         };
         Ok((
-            search_result(rows.try_into_page(|c| wire(&c))?, mode, fused.work_limited),
+            search_result(rows, wire, mode, fused.work_limited, budget)?,
             exact_revision,
         ))
     }

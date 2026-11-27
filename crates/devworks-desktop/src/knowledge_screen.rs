@@ -764,6 +764,8 @@ impl KnowledgeScreen {
                     )?,
                     source: None,
                     stale: None,
+                    // A person searching here pages by count: no token budget.
+                    budget_tokens: None,
                 },
             )))
         };
@@ -2872,6 +2874,8 @@ mod tests {
                         has_more: false,
                         mode,
                         work_limited,
+                        approximate_tokens: None,
+                        budget_tokens: None,
                     }),
                 },
             })

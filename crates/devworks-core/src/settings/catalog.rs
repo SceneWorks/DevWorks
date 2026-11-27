@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 11;
+pub const CATALOG_REVISION: i64 = 12;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -958,6 +958,38 @@ fn build() -> Vec<SettingDescriptor> {
             INHERITED,
             ValueKind::Integer { min: 2, max: 20 },
             3,
+            NextAdmission
+        ),
+        setting!(
+            "knowledge.searchTokenBudget",
+            "Knowledge search token budget",
+            "Approximate tokens of claim text (characters divided by 4) one Knowledge \
+                search page holds for an agent that names no budget. The best-ranked claims \
+                that fit are returned, always at least one, and the agent pages for more. \
+                Searching in the app has no token limit. Above the largest search token \
+                budget, that maximum applies. Engineering default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer {
+                min: 1000,
+                max: 1000000
+            },
+            8000,
+            NextAdmission
+        ),
+        setting!(
+            "knowledge.searchTokenBudgetMax",
+            "Largest search token budget",
+            "The largest token budget any caller, a person or an agent, may name on one \
+                Knowledge search. A budget above it, or below 1000, is refused. Engineering \
+                default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer {
+                min: 1000,
+                max: 1000000
+            },
+            32000,
             NextAdmission
         ),
         setting!(

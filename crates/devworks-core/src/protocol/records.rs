@@ -14892,6 +14892,20 @@ pub struct KnowledgeSearchPage {
     pub has_more: bool,
     pub mode: KnowledgeRetrievalMode,
     pub work_limited: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 31))]
+    pub approximate_tokens: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TokenBudget", extend("x-since" = 31))]
+    pub budget_tokens: Option<TokenBudget>,
 }
 impl Check for KnowledgeSearchPage {
     fn check(&self) -> Result<(), String> {
@@ -14900,6 +14914,8 @@ impl Check for KnowledgeSearchPage {
         self.has_more.check()?;
         self.mode.check()?;
         self.work_limited.check()?;
+        self.approximate_tokens.check()?;
+        self.budget_tokens.check()?;
         crate::protocol::rules::record(
             "KnowledgeSearchPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -14910,6 +14926,12 @@ impl Check for KnowledgeSearchPage {
 
 impl Revisioned for KnowledgeSearchPage {
     fn retain_revision(&mut self, revision: u32) {
+        if revision < 31 {
+            self.approximate_tokens = None;
+        }
+        if revision < 31 {
+            self.budget_tokens = None;
+        }
         self.items.retain_revision(revision);
     }
 }

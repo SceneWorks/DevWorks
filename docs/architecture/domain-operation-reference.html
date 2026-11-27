@@ -912,7 +912,7 @@
 </thead>
 <tbody><tr>
 <td><code>knowledge.search</code></td>
-<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>text</code>: <code>Text</code><br><code>tags</code>: <code>Items&lt;Label&gt;</code><br><code>kinds</code>: <code>Items&lt;KnowledgeKind&gt;</code><br><code>page</code>: <code>PageRequest</code><br><code>entityLimit</code>: <code>Limit</code><br><code>claimLimit</code>: <code>Limit</code><br><code>states</code>: <code>?Items&lt;KnowledgeLifecycle&gt;</code><br><code>entryKinds</code>: <code>?Items&lt;KnowledgeEntryKind&gt;</code><br><code>source</code>: <code>?Label</code><br><code>stale</code>: <code>?bool</code><br><br><strong>Schema revisions</strong> 1, 2, 3, 8, 30 (<a href="contracts/domain-request.r29.schema.json">revision 30 input</a>)</td>
+<td><strong>Query</strong><br><code>scope</code>: <code>DataScope</code><br><code>text</code>: <code>Text</code><br><code>tags</code>: <code>Items&lt;Label&gt;</code><br><code>kinds</code>: <code>Items&lt;KnowledgeKind&gt;</code><br><code>page</code>: <code>PageRequest</code><br><code>entityLimit</code>: <code>Limit</code><br><code>claimLimit</code>: <code>Limit</code><br><code>states</code>: <code>?Items&lt;KnowledgeLifecycle&gt;</code><br><code>entryKinds</code>: <code>?Items&lt;KnowledgeEntryKind&gt;</code><br><code>source</code>: <code>?Label</code><br><code>stale</code>: <code>?bool</code><br><code>budgetTokens</code>: <code>?TokenBudget</code><br><br><strong>Schema revisions</strong> 1, 2, 3, 8, 30, 31 (<a href="contracts/domain-request.r31.schema.json">revision 31 input</a>)</td>
 <td><code>KnowledgeSearchResult</code></td>
 </tr>
 <tr>
@@ -13810,6 +13810,14 @@
 <tr>
 <td><code>workLimited</code></td>
 <td><code>bool</code></td>
+</tr>
+<tr>
+<td><code>approximateTokens</code></td>
+<td><code>?Counter</code> · <em>revision 31+</em></td>
+</tr>
+<tr>
+<td><code>budgetTokens</code></td>
+<td><code>?TokenBudget</code> · <em>revision 31+</em></td>
 </tr>
 </tbody></table>
 <h3 id="knowledgesearchresult">KnowledgeSearchResult</h3>

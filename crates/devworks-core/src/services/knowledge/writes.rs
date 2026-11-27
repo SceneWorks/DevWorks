@@ -52,7 +52,7 @@ fn revision_conflict(kind: &'static str, id: &Id, expected: &Revision, current: 
         rev(current),
     ))
 }
-fn is_user(ctx: &InvocationContext) -> bool {
+pub(super) fn is_user(ctx: &InvocationContext) -> bool {
     matches!(
         ctx.principal_kind(),
         PrincipalKind::Human | PrincipalKind::Host

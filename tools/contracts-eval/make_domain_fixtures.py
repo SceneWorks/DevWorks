@@ -1564,6 +1564,17 @@ case('r30-result-knowledge.search-mode','operation-result.r30',search_r30)
 case('r30-result-knowledge.search-lexical-empty','operation-result.r30',{'kind':'knowledge.search','value':{'items':[],'hasMore':False,'mode':'LexicalOnly','workLimited':False}})
 case('reject-r29-result-knowledge.search-mode','operation-result.r29',search_r30,False,False)
 case('reject-r30-result-knowledge.search-without-mode','operation-result.r30',{'kind':'knowledge.search','value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Revision 31 (DW-250): a caller may bound a search page by approximate tokens; the page reports its tokens and the budget that applied.
+case('r31-input-knowledge.search-budget','domain-request.r31',domain('knowledge.search',31,budgetTokens=8000))
+case('r31-input-knowledge.search-plain','domain-request.r31',domain('knowledge.search',31))
+case('reject-r30-input-knowledge.search-budget','domain-request.r30',domain('knowledge.search',30,budgetTokens=8000),False,False)
+case('reject-r31-input-knowledge.search-zero-budget','domain-request.r31',domain('knowledge.search',31,budgetTokens=0),False,False)
+case('reject-r31-input-knowledge.search-budget-above-bound','domain-request.r31',domain('knowledge.search',31,budgetTokens=1000001),False,False)
+search_r31={'kind':'knowledge.search','value':{'items':[claim_skills],'nextCursor':'v1.6865.abc','hasMore':True,'mode':'Hybrid','workLimited':False,'approximateTokens':'42','budgetTokens':8000}}
+case('r31-result-knowledge.search-budget','operation-result.r31',search_r31)
+case('r31-result-knowledge.search-unbounded','operation-result.r31',{'kind':'knowledge.search','value':{'items':[],'hasMore':False,'mode':'LexicalOnly','workLimited':False,'approximateTokens':'0'}})
+case('r31-result-knowledge.search-r30-shape','operation-result.r31',search_r30)
+case('reject-r30-result-knowledge.search-tokens','operation-result.r30',search_r31,False,False)
 # Revisions 25 and 28 change document results and retain the existing request envelopes.
 for revision in (25,28):
  for name,mode in [('documents.import','Command'),('documents.list','Query')]:

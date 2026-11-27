@@ -117,6 +117,7 @@ use super::kernel::{
     query_fault, require_project, rev, visible_root, visible_session,
 };
 /// Tokens of `bytes` by the conservative attributed estimate (4 bytes per token, rounded up).
+/// Bytes on purpose; `knowledge.search` budgets count characters instead (owner-approved).
 pub fn token_estimate(bytes: i64) -> i64 {
     (bytes.max(0) + 3) / 4
 }

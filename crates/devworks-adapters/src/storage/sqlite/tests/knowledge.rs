@@ -34,7 +34,9 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::knowledge::import::{IMPORT_SCHEMA_ID, import_schema_digest};
-use devworks_core::services::knowledge::{CANDIDATES, KnowledgeService, THRESHOLD_KEY};
+use devworks_core::services::knowledge::{
+    CANDIDATES, KnowledgeService, SEARCH_BUDGET_KEY, SEARCH_BUDGET_MAX_KEY, THRESHOLD_KEY,
+};
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::model;
 use serde_json::{Value, json};
@@ -356,12 +358,15 @@ impl Fx {
         }
     }
     fn set_threshold(&self, value: i64) {
+        self.set_setting(ConfigScope::Workspace, THRESHOLD_KEY, value);
+    }
+    /// Saves `key` = `value` at `scope` (a new configuration revision there).
+    fn set_setting(&self, scope: ConfigScope, key: &'static str, value: i64) {
         self.write(move |tx| {
-            let current = model::current_layer(tx.configuration(), &ConfigScope::Workspace)?;
-            let schema =
-                serde_json::to_value(descriptor(THRESHOLD_KEY).unwrap().schema_ref()).unwrap();
+            let current = model::current_layer(tx.configuration(), &scope)?;
+            let schema = serde_json::to_value(descriptor(key).unwrap().schema_ref()).unwrap();
             let a: SettingAssignment = serde_json::from_value(
-                json!({"key": THRESHOLD_KEY, "value": {"schema": schema, "value": value}}),
+                json!({"key": key, "value": {"schema": schema, "value": value}}),
             )
             .unwrap();
             let plan = model::plan(&current, &[a]);
@@ -373,7 +378,7 @@ impl Fx {
                 json!({"kind": "test"}),
             );
             tx.configuration().append_revision(
-                &ConfigScope::Workspace,
+                &scope,
                 model::NAMESPACE,
                 current.revision,
                 model::BODY_SCHEMA_VERSION,
@@ -7331,4 +7336,294 @@ fn the_best_matching_entities_by_bm25_fill_the_entity_limit_and_more_limit_the_w
         .map(|c| c.id.as_str().to_owned())
         .collect();
     assert_eq!(graph, [to_short.as_str(), to_long.as_str()]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Token budgets (DW-250, KNOW-09)
+
+/// A wire claim's approximate tokens, counted here independently of the service: the
+/// characters of its predicate, value and normalized text (space-separated) divided by four,
+/// rounded up.
+fn claim_tokens(c: &KnowledgeClaim) -> u64 {
+    let mut parts = vec![c.predicate.0.as_str()];
+    parts.extend(c.value.as_ref().map(|v| v.0.as_str()));
+    parts.extend(c.normalized_text.as_ref().map(|v| v.0.as_str()));
+    (parts.join(" ").chars().count() as u64).div_ceil(4)
+}
+fn page_tokens(page: &KnowledgeSearchPage) -> u64 {
+    page.items.0.iter().map(claim_tokens).sum()
+}
+
+/// Every page of a search of `scope` for `text` by `ctx`, `extra` merged into each request.
+fn budget_pages(
+    fx: &Fx,
+    ctx: &InvocationContext,
+    scope: Value,
+    text: &str,
+    extra: Value,
+) -> Vec<KnowledgeSearchPage> {
+    let mut pages = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page = json!({"limit": 500});
+        if let Some(c) = &cursor {
+            page["cursor"] = json!(c);
+        }
+        let mut body = json!({"page": page, "entityLimit": 500, "claimLimit": 500});
+        if let Value::Object(m) = &extra {
+            for (k, v) in m {
+                body[k] = v.clone();
+            }
+        }
+        let p = fx.search(ctx, scope.clone(), text, body);
+        cursor = p.next_cursor.clone().map(|c| c.0);
+        pages.push(p);
+        if cursor.is_none() {
+            return pages;
+        }
+    }
+}
+
+fn token_fault(fx: &Fx, ctx: &InvocationContext, scope: Value, budget: u32) -> DomainFault {
+    query_fault(fx.q(
+        ctx,
+        "knowledge.search",
+        json!({"scope": scope, "text": "alpha", "tags": [], "kinds": [],
+            "page": {"limit": 50}, "entityLimit": 50, "claimLimit": 50, "budgetTokens": budget}),
+    ))
+}
+
+#[test]
+fn an_agents_token_budget_ends_each_page_at_the_best_claims_that_fit_and_pages_through_the_rest() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let agent = fx.agent("agent-a", Some("project-a"));
+    let cap = usize::from(CANDIDATES);
+    // More word matches than the fused head holds, so the listing continues into the tail;
+    // claims of 12 to 80 tokens, and one of over 2,000 alone.
+    many(&fx, &user, "Notes", cap + 40, |i| {
+        draft(
+            "Fact",
+            &format!("alpha row {i} {}", "x".repeat(30 + (i * 37) % 260)),
+        )
+    });
+    let huge = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Notes",
+        draft("Fact", &format!("alpha huge {}", "y".repeat(8_000))),
+    );
+    for text in ["alpha", " "] {
+        // With words (the fused head, then the tail) and without (newest first). The person
+        // in the app gets every match in one page, with no token bound.
+        let whole = budget_pages(&fx, &user, proj("project-a"), text, json!({}));
+        assert_eq!(whole.len(), 1, "{text:?}");
+        let whole = &whole[0];
+        assert_eq!(whole.items.0.len(), cap + 41, "{text:?}");
+        assert!(whole.budget_tokens.is_none());
+        assert_eq!(
+            whole.approximate_tokens.as_ref().map(Counter::get),
+            Some(page_tokens(whole) as i64)
+        );
+        let pages = budget_pages(
+            &fx,
+            &agent,
+            proj("project-a"),
+            text,
+            json!({"budgetTokens": 1000}),
+        );
+        assert!(pages.len() > 2, "{text:?}: {} pages", pages.len());
+        let mut listed = Vec::new();
+        for (n, page) in pages.iter().enumerate() {
+            let tokens = page_tokens(page);
+            assert!(!page.items.0.is_empty(), "{text:?} page {n} is empty");
+            assert!(
+                tokens <= 1000 || page.items.0.len() == 1,
+                "{text:?} page {n}: {tokens} tokens in {} claims",
+                page.items.0.len()
+            );
+            assert_eq!(
+                page.approximate_tokens.as_ref().map(Counter::get),
+                Some(tokens as i64),
+                "{text:?} page {n}"
+            );
+            assert_eq!(page.budget_tokens.as_ref().map(|b| b.get()), Some(1000));
+            // The page holds every claim that fits: the next one would not.
+            if let Some(next) = pages.get(n + 1) {
+                assert!(
+                    tokens + claim_tokens(&next.items.0[0]) > 1000,
+                    "{text:?} page {n} ends early"
+                );
+            }
+            listed.extend(ids(page));
+        }
+        assert_eq!(
+            listed,
+            ids(whole),
+            "{text:?}: same claims, same order, once"
+        );
+        // The claim over the budget alone still makes a page.
+        let alone = pages
+            .iter()
+            .find(|p| ids(*p).contains(&huge.as_str().to_owned()))
+            .unwrap();
+        assert_eq!(ids(alone), [huge.as_str()]);
+        assert!(page_tokens(alone) > 2_000);
+        // The budget may change between pages: one page at 1,000, one at 5,000, then none
+        // (the 8,000 default applies) until the end, with nothing skipped or repeated.
+        let mut listed = Vec::new();
+        let mut cursor: Option<String> = None;
+        for n in 0.. {
+            let mut page = json!({"limit": 500});
+            if let Some(c) = &cursor {
+                page["cursor"] = json!(c);
+            }
+            let mut body = json!({"page": page, "entityLimit": 500, "claimLimit": 500});
+            match n {
+                0 => body["budgetTokens"] = json!(1000),
+                1 => body["budgetTokens"] = json!(5000),
+                _ => {}
+            }
+            let p = fx.search(&agent, proj("project-a"), text, body);
+            let budget = [1000, 5000].get(n).copied().unwrap_or(8000);
+            assert_eq!(p.budget_tokens.as_ref().map(|b| b.get()), Some(budget));
+            assert!(page_tokens(&p) <= u64::from(budget) || p.items.0.len() == 1);
+            listed.extend(ids(&p));
+            match p.next_cursor {
+                Some(c) => cursor = Some(c.0),
+                None => break,
+            }
+        }
+        assert_eq!(
+            listed,
+            ids(whole),
+            "{text:?}: budgets changed between pages"
+        );
+    }
+}
+
+#[test]
+fn without_a_budget_an_agent_gets_its_scopes_default_and_a_project_may_override_it() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let agent_a = fx.agent("agent-a", Some("project-a"));
+    let agent_b = fx.agent("agent-b", Some("project-b"));
+    // 40 claims of 105 tokens in each project: 4,200 tokens.
+    for p in ["project-a", "project-b"] {
+        let claims: Vec<Value> = (10..50)
+            .map(|i| draft("Fact", &format!("alpha {i} {}", "z".repeat(404))))
+            .collect();
+        receipt(fx.record(
+            &user,
+            proj(p),
+            json!({"entities": [{"clientId": "s", "label": "Notes", "entityType": "topic",
+                "aliases": []}], "evidence": [], "claims": claims}),
+        ));
+    }
+    let first = |ctx: &InvocationContext, p: &str| {
+        fx.search(ctx, proj(p), "alpha", json!({"page": {"limit": 50}}))
+    };
+    let check = |page: &KnowledgeSearchPage, budget: u32| {
+        assert_eq!(page.budget_tokens.as_ref().map(|b| b.get()), Some(budget));
+        assert!(page_tokens(page) <= u64::from(budget));
+        assert!(page.has_more);
+        page.items.0.len()
+    };
+    // The catalog default (8,000) holds every claim; the page is not cut.
+    let page = first(&agent_a, "project-a");
+    assert_eq!(page.budget_tokens.as_ref().map(|b| b.get()), Some(8000));
+    assert_eq!(page_tokens(&page), 40 * 105);
+    assert_eq!(page.items.0.len(), 40);
+    // A workspace value applies to both projects.
+    fx.set_setting(ConfigScope::Workspace, SEARCH_BUDGET_KEY, 1000);
+    let a = check(&first(&agent_a, "project-a"), 1000);
+    let b = check(&first(&agent_b, "project-b"), 1000);
+    assert_eq!((a, b), (9, 9));
+    // Project A's own value changes its pages only; project B keeps the workspace's.
+    fx.set_setting(
+        ConfigScope::Project(project("project-a")),
+        SEARCH_BUDGET_KEY,
+        2000,
+    );
+    assert_eq!(check(&first(&agent_a, "project-a"), 2000), 19);
+    assert_eq!(check(&first(&agent_b, "project-b"), 1000), 9);
+    // A person in the app pages by count only.
+    let person = first(&user, "project-a");
+    assert!(person.budget_tokens.is_none());
+    assert_eq!(person.items.0.len(), 40);
+    // A default above the scope's maximum is bounded by it.
+    fx.set_setting(
+        ConfigScope::Project(project("project-a")),
+        SEARCH_BUDGET_MAX_KEY,
+        1500,
+    );
+    assert_eq!(check(&first(&agent_a, "project-a"), 1500), 14);
+}
+
+#[test]
+fn a_budget_outside_the_allowed_range_is_refused_naming_the_range() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let agent_a = fx.agent("agent-a", Some("project-a"));
+    let agent_b = fx.agent("agent-b", Some("project-b"));
+    fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Notes",
+        draft("Fact", "alpha one"),
+    );
+    for (ctx, budget) in [
+        (&agent_a, 999),
+        (&agent_a, 32_001),
+        // A person passing a budget is held to the same range.
+        (&user, 999),
+    ] {
+        let f = token_fault(&fx, ctx, proj("project-a"), budget);
+        assert_eq!(f.code, DomainErrorCode::InvalidArgument, "{budget}");
+        assert_eq!(
+            f.target_kind.as_ref().map(|t| t.0.as_str()),
+            Some("budgetTokens")
+        );
+        assert_eq!(f.target_id.as_ref().map(Id::as_str), Some("1000-32000"));
+    }
+    // The range's ends are allowed.
+    for budget in [1000, 32_000] {
+        let page = fx.search(
+            &agent_a,
+            proj("project-a"),
+            "alpha",
+            json!({"budgetTokens": budget}),
+        );
+        assert_eq!(page.items.0.len(), 1);
+    }
+    // Project A raises its maximum; project B keeps the workspace's.
+    fx.set_setting(
+        ConfigScope::Project(project("project-a")),
+        SEARCH_BUDGET_MAX_KEY,
+        50_000,
+    );
+    let page = fx.search(
+        &agent_a,
+        proj("project-a"),
+        "alpha",
+        json!({"budgetTokens": 40_000}),
+    );
+    assert_eq!(page.budget_tokens.as_ref().map(|b| b.get()), Some(40_000));
+    let f = token_fault(&fx, &agent_b, proj("project-b"), 40_000);
+    assert_eq!(f.code, DomainErrorCode::InvalidArgument);
+    assert_eq!(f.target_id.as_ref().map(Id::as_str), Some("1000-32000"));
+    let f = token_fault(&fx, &agent_a, proj("project-a"), 50_001);
+    assert_eq!(f.target_id.as_ref().map(Id::as_str), Some("1000-50000"));
+    // Revision 30 does not know budgetTokens: the request is refused there.
+    let reply = fx.query_at(
+        &agent_a,
+        "knowledge.search",
+        json!({"scope": proj("project-a"), "text": "alpha", "tags": [], "kinds": [],
+            "page": {"limit": 50}, "entityLimit": 50, "claimLimit": 50, "budgetTokens": 1000}),
+        Some(30),
+    );
+    assert!(
+        !matches!(reply, DomainQueryReply::Result { .. }),
+        "{reply:?}"
+    );
 }

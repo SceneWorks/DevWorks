@@ -3901,6 +3901,7 @@ pub(super) static CATALOG: [OperationDescriptor; 391] = [
             SchemaRevision(3),
             SchemaRevision(8),
             SchemaRevision(30),
+            SchemaRevision(31),
         ],
         native_execution: false,
         approval_required: false,

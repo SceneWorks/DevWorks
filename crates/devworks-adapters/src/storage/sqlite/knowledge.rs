@@ -2267,10 +2267,7 @@ fn entity_text(e: &StoredEntity) -> String {
     parts.join(" ")
 }
 fn claim_text(c: &StoredClaim) -> String {
-    let mut parts = vec![c.predicate.clone()];
-    parts.extend(c.body.value.iter().cloned());
-    parts.extend(c.body.normalized_text.iter().cloned());
-    parts.join(" ")
+    c.text()
 }
 
 impl KnowledgeRepository for Unit<'_> {
