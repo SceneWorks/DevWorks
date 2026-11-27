@@ -235,7 +235,7 @@ pub static SCREENS: [Screen; 21] = [
         group: NavGroup::Intelligence,
         help_topic: "dreaming",
         subviews: &[],
-        inner_sidebar: None,
+        inner_sidebar: Some("Run history"),
         summary_strip: &[],
         pending: None,
         link: None,
