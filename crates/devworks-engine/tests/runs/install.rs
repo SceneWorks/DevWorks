@@ -635,6 +635,123 @@ fn a_dependency_install_runs_no_lifecycle_script_unless_approved_and_shares_the_
     });
 }
 
+/// An install interrupted by a restart settles from its owned-process record: a reaped process
+/// completes it with the install's own result, and a missing record leaves it unknown rather
+/// than failed.
+#[test]
+fn an_interrupted_dependency_install_settles_from_its_owned_process_record() {
+    use devworks_core::protocol::results::OperationResult;
+    use devworks_core::services::effect::EffectOutcome;
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    let work = fx.h.root.with_extension("install-observe-work");
+    let _ = std::fs::remove_dir_all(&work);
+    for directory in ["tools", "primary", "environments"] {
+        std::fs::create_dir_all(work.join(directory)).unwrap();
+    }
+    let work = work.canonicalize().unwrap();
+    let primary = work.join("primary");
+    std::fs::write(primary.join("package.json"), MANIFEST).unwrap();
+    std::fs::create_dir_all(primary.join("work")).unwrap();
+    let rt = runtime();
+    rt.block_on(async {
+        let app = Arc::new(
+            boot(install_composition(&fx, &work.join("tools")))
+                .await
+                .unwrap(),
+        );
+        let (agent, _) = agent_context(&fx);
+        let manifest =
+            register_manifest(&fx, &primary, "package.json", MANIFEST, "application/json");
+        let decision = decide(
+            &app,
+            &agent,
+            "process.install_project_dependencies",
+            install(None, &manifest),
+            "install-observed",
+        );
+        let DomainDecision::Accepted { operation_id } = decision.clone() else {
+            panic!("expected an accepted install, got {decision:?}");
+        };
+        assert_eq!(
+            settled(&app, decision).await,
+            OperationState::ObservedComplete
+        );
+        let operation =
+            read(&**app.store(), |s| s.operations().operation(&operation_id)).expect("operation");
+        assert_eq!(operation.capability, "process.install_project_dependencies");
+        let service = app.process_tools().expect("process tools");
+
+        // The install's process was reaped: observing it, as a restart does, completes it with
+        // the install's result.
+        let EffectOutcome::Completed(evidence) = service.observe(&operation) else {
+            panic!("a reaped install did not complete");
+        };
+        let result: OperationResult = serde_json::from_value(evidence["result"].clone()).unwrap();
+        let OperationResult::ProcessInstallProjectDependencies { value } = result else {
+            panic!("an observed install reported {result:?}");
+        };
+        assert_eq!(value.state, OperationState::ObservedComplete);
+        assert_eq!(value.exit_code, Some(0));
+        assert_eq!(evidence["outputLost"], json!(true));
+
+        // A process record that is not terminal leaves the install's outcome unknown.
+        let mut lost = operation.clone();
+        lost.id = devworks_core::protocol::OperationId(id("install-with-a-lost-process"));
+        let (lost_id, actor) = (lost.id.clone(), agent.principal().clone());
+        let (intent_id, root_id, payload) = (
+            lost.id.clone(),
+            operation.root_id.clone(),
+            operation.payload.clone(),
+        );
+        fx.tx(move |_, tx| {
+            tx.operations()
+                .record_intent(devworks_core::ports::storage::NewOperation {
+                    id: intent_id,
+                    root_id,
+                    assignment_id: None,
+                    capability: "process.install_project_dependencies".into(),
+                    schema_version: 1,
+                    args_digest: "d".into(),
+                    payload,
+                })?;
+            let process_id = tx.new_id(devworks_core::ports::IdKind::Process);
+            let mut row =
+                tx.resources()
+                    .insert_process(devworks_core::ports::storage::NewProcess {
+                        id: process_id,
+                        platform: "unix".into(),
+                        program: "npm".into(),
+                        argv_sha256: "0".repeat(64),
+                        operation_id: Some(lost_id),
+                        lease_id: None,
+                        actor,
+                        session_id: None,
+                        project_id: None,
+                        root_id: None,
+                        assignment_id: None,
+                    })?;
+            let expected = row.revision;
+            row.revision += 1;
+            row.phase = ProcessPhase::Lost;
+            tx.resources().update_process(&row, expected)
+        });
+        assert!(
+            matches!(service.observe(&lost), EffectOutcome::Unknown(_)),
+            "an install whose process was lost did not stay unknown"
+        );
+
+        // With no process record of its own, the install's outcome is unknown, not failed.
+        let mut unrecorded = operation.clone();
+        unrecorded.id = devworks_core::protocol::OperationId(id("install-without-a-process"));
+        assert!(
+            matches!(service.observe(&unrecorded), EffectOutcome::Unknown(_)),
+            "an install with no process record did not stay unknown"
+        );
+        app.shutdown().await;
+    });
+}
+
 /// Like uv, syncs the project environment (`UV_PROJECT_ENVIRONMENT`, else `<project>/.venv`)
 /// and runs its interpreter to inspect it, and runs the interpreter `--python` names or, without
 /// it, the one `.python-version` names; it records the environment it synced.
