@@ -114,7 +114,9 @@ class SchemaRevisionRules(unittest.TestCase):
             # DW-182: the hold conditions of a root at revision 20.
             'runs.start', 'runs.pause', 'runs.continue', 'runs.inspect', 'runs.eligibility',
             # DW-183: a project's agent assignments, introduced at revision 21.
-            'agents.list'})
+            'agents.list',
+            # DW-175: the host's screen-context notice, introduced at revision 23.
+            'sessions.append_screen_context'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('addons.read_content', 'addons.run_workflow'):

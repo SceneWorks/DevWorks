@@ -55,6 +55,12 @@ pub enum ChatSlot {
     RoutePin(String),
     /// The first routed request of a conversation (session ID): its selection becomes its pin.
     RouteFirst(String),
+    /// The screen-context notice of a coordinator conversation (session ID).
+    ScreenContext(String),
+    /// The text of a host notice shown in a transcript (artifact version ID).
+    NoticeText(String),
+    /// A pasted image being staged for a draft (draft key, its paste number).
+    PastedImage(String, u64),
 }
 crate::backend::screen_slot!(ChatSlot, Chat);
 
@@ -80,6 +86,8 @@ pub const SEND_LABEL: &str = "Send message";
 
 #[derive(Clone, Debug)]
 pub enum AttachState {
+    /// A pasted image being written to a file (it has no path yet): the draft cannot be sent.
+    Pasting,
     /// Waiting for the conversation to exist (its ID is the attachment's provenance tag).
     WaitingForConversation,
     /// Its save is being prepared (hashing, upload ticket); nothing is admitted yet.
@@ -157,12 +165,19 @@ impl Draft {
         self.attachments.iter().any(|a| {
             matches!(
                 a.state,
-                AttachState::Storing
+                AttachState::Pasting
+                    | AttachState::Storing
                     | AttachState::Saving(_)
                     | AttachState::WaitingForConversation
                     | AttachState::Unconfirmed(_)
             )
         })
+    }
+    /// Whether a pasted image is still being written to its file.
+    pub fn pasting(&self) -> bool {
+        self.attachments
+            .iter()
+            .any(|a| matches!(a.state, AttachState::Pasting))
     }
     pub fn is_empty(&self) -> bool {
         self.text.trim().is_empty() && self.attachments.is_empty()
@@ -534,6 +549,13 @@ impl Chat {
             .map(|(k, _)| k.clone())
     }
     /// Takes the attachment with this local ID out of whichever draft holds it.
+    /// The key of the draft holding the pending attachment with this local ID.
+    pub fn attachment_draft(&self, local: u64) -> Option<String> {
+        self.drafts
+            .iter()
+            .find(|(_, d)| d.attachments.iter().any(|a| a.local == local))
+            .map(|(key, _)| key.clone())
+    }
     pub fn take_attachment(&mut self, local: u64) -> Option<Attachment> {
         self.drafts.values_mut().find_map(|d| {
             let i = d.attachments.iter().position(|a| a.local == local)?;
@@ -1249,6 +1271,7 @@ fn attachment_chip(ui: &mut Ui, a: &Attachment, actions: &mut Vec<ChatAction>) {
                         AttachState::WaitingForConversation => {
                             ("Waiting for the conversation".to_owned(), Tone::Neutral)
                         }
+                        AttachState::Pasting => ("Preparing…".to_owned(), Tone::Neutral),
                         AttachState::Storing | AttachState::Saving(_) => {
                             ("Storing…".to_owned(), Tone::Neutral)
                         }

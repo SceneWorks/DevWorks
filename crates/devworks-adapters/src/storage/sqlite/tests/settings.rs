@@ -1594,7 +1594,7 @@ fn repository_values_are_removed_with_their_project_by_the_purge_selectors() {
     ));
     let policy: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+        "/src/storage/sqlite/project_purge/policy/native-row-selectors.json"
     )))
     .unwrap();
     let c = f.h.raw();

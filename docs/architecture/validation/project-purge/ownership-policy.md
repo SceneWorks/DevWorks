@@ -1,5 +1,11 @@
 # DW-83 ownership and purge policy — step0 version1
 
+The policy documents the purge code loads (table-selectors.json,
+native-row-selectors.json, schema-baseline.json and the schemaNN extensions) live
+in `crates/devworks-adapters/src/storage/sqlite/project_purge/policy/` (DW-165).
+They are hand-written source that decides which rows a purge deletes, so review
+covers them and the PR size check counts them.
+
 The owning requirement is the architecture's “Scheduling lifecycle and project
 deletion” section and DW-83 AC1–3. Existing projects.delete only tombstones an
 archived, quiescent project. No purge implementation exists in this branch yet.

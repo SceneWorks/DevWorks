@@ -8360,6 +8360,20 @@
       "authority": "Scoped",
       "rules": "Closes selected conversation at a safe boundary; active root work requires ordinary root stop/pause controls, never silent termination."
     },
+    "sessions.append_screen_context": {
+      "operation": "sessions.append_screen_context",
+      "mode": "Command",
+      "fields": {
+        "session_id": "Id",
+        "screen_id": "Id",
+        "context": "Text"
+      },
+      "result": "SessionRecord",
+      "effect": "Local",
+      "authority": "HostMaintenance",
+      "rules": "The host appends one bounded notice describing the screen the user is on to an open conversation: the text is stored as a host artifact and the transcript entry names it, in one unit of work. Only the host may append it; agents and other callers are refused, and a closed or unknown session is refused without a partial write.",
+      "introducedRevision": 23
+    },
     "ui.current_screen": {
       "operation": "ui.current_screen",
       "mode": "Query",
@@ -12668,6 +12682,9 @@
       1,
       2
     ],
+    "sessions.append_screen_context": [
+      23
+    ],
     "workspace.diagnostics": [
       1,
       2
@@ -13719,6 +13736,7 @@
     "sessions.context_sources": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "sessions.start": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "sessions.end": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "sessions.append_screen_context": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "ui.current_screen": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "history.events": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "history.work_lineage": {"assignmentScope": "root", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

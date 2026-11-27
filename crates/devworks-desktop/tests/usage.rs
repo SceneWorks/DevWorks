@@ -834,7 +834,7 @@ fn native_price_paging_keeps_loaded_rows_and_draft_until_explicit_catalog_reload
     settle(&mut h);
     press(&mut h, "Prices");
     // This positive continuation needs one unchanged real event snapshot.
-    let writer = paging::WriterHold::new(engine.host().runtime().store().clone());
+    let writer = WriterHold::new(engine.host().runtime().store().clone());
     press(&mut h, "Apply price catalog filters");
     assert!(h.state().usage.price_view().unwrap().has_more);
     assert!(

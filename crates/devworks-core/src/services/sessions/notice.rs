@@ -1,75 +1,118 @@
-//! Host-authored coordinator screen context. The artifact and transcript entry commit together;
-//! old notices remain immutable so provider history has its original prefix.
+//! `sessions.append_screen_context`: the host tells a conversation which screen the user is on.
+//! The notice text is staged as host bytes before the unit of work ([`SessionService::prepare`]),
+//! then the artifact and its transcript entry commit together in the command's own unit of work,
+//! with its receipt and history. Old notices remain immutable so provider history keeps its
+//! original prefix. Only the host may append one; any other caller is refused.
+//!
+//! The operation contract bounds the text: `context` is a `Text`, 1 to 4096 characters, and
+//! admission refuses anything outside that before this service runs. No second bound applies;
+//! [`MAX_NOTICE_BYTES`] is the most UTF-8 bytes that bound allows, and readers of host notices
+//! use [`super::MAX_HOST_NOTICE_BYTES`], which covers it.
+use super::{SESSION_CLOSED, SessionService, append_refusal, record_from};
 use crate::context::{InvocationContext, PrincipalKind};
-use crate::ports::IdKind;
-use crate::ports::storage::{
-    ApplicationStore, ArtifactScope, StorageError, WriteOptions, run_write,
-};
-use crate::protocol::Id;
+use crate::gateway::AdmittedCommand;
+use crate::operations::sessions as ops;
+use crate::ports::storage::{ArtifactScope, StorageError, WriteTransaction};
+use crate::ports::{IdKind, Preparation, Prepared};
 use crate::protocol::provider::TranscriptBody;
+use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::{DomainErrorCode, OperationState};
+use crate::services::artifacts::StagedFile;
 use crate::services::artifacts::host::HostArtifactPublication;
-use crate::services::artifacts::{ArtifactService, version_ref};
+use crate::services::artifacts::version_ref;
+use crate::services::kernel::{Failure, Refusal, not_found};
 use crate::services::sessions::transcript::{BatchOutcome, SessionBatch, SessionWriter};
 use crate::services::sessions::turn;
 use serde_json::json;
-use std::sync::Arc;
 
-/// Append one bounded context notice to the selected conversation. The caller is a trusted host
-/// ingress, not a generic agent command. A stale or closed session is refused atomically.
-pub fn append_screen_context(
-    store: &dyn ApplicationStore,
-    artifacts: &Arc<ArtifactService>,
-    host: &InvocationContext,
-    session_id: &Id,
-    screen: &str,
-    context: &str,
-) -> Result<(), StorageError> {
-    if host.principal_kind() != PrincipalKind::Host
-        || context.is_empty()
-        || context.len() > 8_000
-        || screen.is_empty()
-        || screen.len() > 120
-    {
-        return Err(StorageError::InvalidRecord(
-            "invalid coordinator screen context".into(),
-        ));
+/// The most characters the `context` Text of `sessions.append_screen_context` admits.
+pub const MAX_NOTICE_CHARS: u64 = 4096;
+/// The most bytes a stored notice can hold: every admitted character encoded in four UTF-8
+/// bytes. A reader that refused less would fail on a notice the operation accepted.
+pub const MAX_NOTICE_BYTES: u64 = MAX_NOTICE_CHARS * 4;
+
+/// The notice text staged for one command.
+pub(super) struct StagedNotice(StagedFile);
+
+fn provenance(input: &ops::AppendScreenContextInput) -> serde_json::Value {
+    json!({
+        "kind": "CoordinatorScreenContext",
+        "screen": input.screen_id.as_str(),
+        "sessionId": input.session_id.as_str(),
+    })
+}
+
+fn refusal(ctx: &InvocationContext) -> Option<Refusal> {
+    (ctx.principal_kind() != PrincipalKind::Host)
+        .then(|| Refusal::new(DomainErrorCode::PermissionDenied, "session_writer", None))
+}
+
+impl SessionService {
+    /// Stages the notice text outside any transaction. A caller that is refused stages nothing.
+    pub(super) fn prepare_screen_context(
+        &self,
+        ctx: &InvocationContext,
+        input: &ops::AppendScreenContextInput,
+    ) -> Result<Option<Prepared>, StorageError> {
+        let Some(artifacts) = &self.artifacts else {
+            return Ok(None);
+        };
+        if refusal(ctx).is_some() {
+            return Ok(None);
+        }
+        let staged = artifacts
+            .stage_host_bytes(&*self.audit, input.context.0.as_bytes(), provenance(input))?
+            .map_err(|_| StorageError::InvalidRecord("context staging failed".into()))?;
+        Ok(Some(Prepared::new(StagedNotice(staged))))
     }
-    let staged = artifacts
-        .stage_host_bytes(
-            store,
-            context.as_bytes(),
-            json!({
-                "kind":"CoordinatorScreenContext","screen":screen,"sessionId":session_id.as_str(),
-            }),
-        )?
-        .map_err(|_| StorageError::InvalidRecord("context staging failed".into()))?;
-    let pending = staged.clone();
-    let service = artifacts.clone();
-    let session_id = session_id.clone();
-    let host = host.clone().with_session(session_id.clone());
-    let screen = screen.to_owned();
-    let committed = run_write(store, WriteOptions::observed(), move |tx| {
-        let session =
-            tx.sessions()
-                .session(&session_id)?
-                .ok_or_else(|| StorageError::NotFound {
-                    kind: "session",
-                    id: session_id.as_str().into(),
-                })?;
+
+    /// Publishes the staged text and appends its host notice at the session's next sequence.
+    /// A stale or closed session is refused, and the refusal undoes the publication.
+    pub(super) fn append_screen_context(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        command: &AdmittedCommand,
+        input: &ops::AppendScreenContextInput,
+    ) -> Result<DomainDecision, Failure> {
+        if let Some(refused) = refusal(ctx) {
+            return Err(refused.into());
+        }
+        let (Some(artifacts), Some(StagedNotice(staged))) =
+            (&self.artifacts, command.prepared::<StagedNotice>())
+        else {
+            return Err(Refusal::new(
+                DomainErrorCode::UnsupportedCapability,
+                "screen_context",
+                None,
+            )
+            .into());
+        };
+        let session_id = &input.session_id;
+        let session = tx
+            .sessions()
+            .session(session_id)?
+            .ok_or_else(|| not_found("session", session_id))?;
         if session.closed() {
-            return Err(StorageError::InvalidRecord("session closed".into()));
+            return Err(Refusal::new(DomainErrorCode::Conflict, SESSION_CLOSED, None).into());
         }
         let scope = session
             .project_id
             .clone()
             .map_or(ArtifactScope::Workspace, ArtifactScope::Project);
-        let version=service.commit_host_bytes_in_scope(tx,&pending,HostArtifactPublication{
-            title:"Coordinator screen context",media_type:"text/plain; charset=utf-8",
-            provenance:json!({"kind":"CoordinatorScreenContext","screen":screen,"sessionId":session_id.as_str()}),
-            scope,owner:host.principal().clone(),
-        })?;
+        let version = artifacts.commit_host_bytes_in_scope(
+            tx,
+            staged,
+            HostArtifactPublication {
+                title: "Coordinator screen context",
+                media_type: "text/plain; charset=utf-8",
+                provenance: provenance(input),
+                scope,
+                owner: ctx.principal().clone(),
+            },
+        )?;
         let batch = turn::batch_of(
-            &session_id,
+            session_id,
             tx.new_id(IdKind::TranscriptBatch),
             session.context_epoch,
             session.next_sequence,
@@ -79,13 +122,34 @@ pub fn append_screen_context(
             }],
             || tx.new_id(IdKind::TranscriptEntry),
         );
+        let host = ctx.clone().with_session(session_id.clone());
         match SessionWriter::append_in(tx, &host, &SessionBatch::entries(batch))? {
-            BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_) => Ok(()),
-            BatchOutcome::Refused(refusal) => Err(StorageError::InvalidRecord(format!(
-                "context notice refused: {refusal:?}"
-            ))),
+            BatchOutcome::Accepted(_) | BatchOutcome::Replayed(_) => {}
+            BatchOutcome::Refused(refused) => return Err(append_refusal(&refused).into()),
         }
-    });
-    artifacts.settle_host_bytes(store, &staged, committed.is_ok());
-    committed
+        let session = tx
+            .sessions()
+            .session(session_id)?
+            .ok_or_else(|| not_found("session", session_id))?;
+        Ok(DomainDecision::Applied {
+            result: OperationResult::SessionsAppendScreenContext {
+                value: record_from(tx.sessions(), &session)?,
+            },
+        })
+    }
+
+    /// Resolves the staging once the outcome is known: a staging the unit of work did not
+    /// publish (a refusal, replay or rollback) is abandoned.
+    pub(super) fn settle_screen_context(&self, prepared: &Prepared, env: &Preparation<'_>) {
+        if let (Some(artifacts), Some(StagedNotice(staged))) =
+            (&self.artifacts, prepared.get::<StagedNotice>())
+            && let Ok(staging) = env.read(|s| s.operations().operation(&staged.operation_id))
+        {
+            artifacts.settle_host_bytes(
+                &*self.audit,
+                staged,
+                staging.is_some_and(|record| record.state == OperationState::ObservedComplete),
+            );
+        }
+    }
 }

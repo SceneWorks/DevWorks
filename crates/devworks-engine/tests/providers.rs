@@ -2317,15 +2317,45 @@ fn later_operation_revisions_append_to_native_context_once_per_cursor() {
             ContentBlock::Text { text, .. } if text == "Redirect"));
         assert_eq!(app.refresh_native_tool_context(&f.context, &id("session"), &redirected)
             .unwrap().version_id, redirected.version_id);
-        devworks_core::services::sessions::notice::append_screen_context(
-            f.store.as_ref(), &f.artifacts, &f.context, &id("session"),
-            "overview", "Current screen: Overview",
-        ).unwrap();
+        // The host's screen-context notice goes through its operation (with its receipt).
+        let notice = serde_json::to_vec(&serde_json::json!({
+            "mode": "Command", "protocol": "1.0-draft.1", "requestKey": "screen-context-overview",
+            "schemaRevision": 23,
+            "body": {"kind": "sessions.append_screen_context", "sessionId": "session",
+                "screenId": "overview", "context": "Current screen: Overview"},
+        })).unwrap();
+        assert!(matches!(
+            app.command(&f.context, "sessions.append_screen_context", &notice),
+            Ok(devworks_core::protocol::CommandReply::Recorded { receipt, .. })
+                if matches!(receipt.decision,
+                    devworks_core::protocol::results::DomainDecision::Applied { .. })
+        ));
         let noticed = app.refresh_native_tool_context(&f.context, &id("session"), &redirected).unwrap();
         let noticed_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
             f.store.as_ref(), &f.context, &noticed, 1024 * 1024).unwrap().0).unwrap();
         assert!(matches!(&noticed_context.messages.last().unwrap().content[0],
             ContentBlock::Text { text, .. } if text == "Current screen: Overview"));
+        // A notice the operation admits (3,000 characters, 9,000 UTF-8 bytes) is read back
+        // whole when the provider context is built.
+        let wide = "界".repeat(3_000);
+        assert!(wide.len() > 8_000);
+        let wide_notice = serde_json::to_vec(&serde_json::json!({
+            "mode": "Command", "protocol": "1.0-draft.1", "requestKey": "screen-context-wide",
+            "schemaRevision": 23,
+            "body": {"kind": "sessions.append_screen_context", "sessionId": "session",
+                "screenId": "overview", "context": wide},
+        })).unwrap();
+        assert!(matches!(
+            app.command(&f.context, "sessions.append_screen_context", &wide_notice),
+            Ok(devworks_core::protocol::CommandReply::Recorded { receipt, .. })
+                if matches!(receipt.decision,
+                    devworks_core::protocol::results::DomainDecision::Applied { .. })
+        ));
+        let widened = app.refresh_native_tool_context(&f.context, &id("session"), &noticed).unwrap();
+        let widened_context: ProviderContext = serde_json::from_slice(&f.artifacts.read_exact(
+            f.store.as_ref(), &f.context, &widened, 1024 * 1024).unwrap().0).unwrap();
+        assert!(matches!(&widened_context.messages.last().unwrap().content.last().unwrap(),
+            ContentBlock::Text { text, .. } if *text == wide));
         app.shutdown().await;
     });
 }
