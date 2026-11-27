@@ -45,8 +45,6 @@ const NOT_READY: &str = "Scheduled inference is starting: the agent turn engine 
     Nothing was sent to a model.";
 const STOPPING: &str = "Scheduled inference is stopping for shutdown. Nothing was sent to a model.";
 const NOTHING_SENT: &str = "Nothing was sent to a model.";
-const HOLD: &str = "A tool call of the scheduled agent is waiting on an approval or another \
-    hold; the run continues once it is resolved.";
 /// How long a finished turn waits for the scheduler to record its handoff before it leaves the
 /// run to the scheduler's supervision of unsettled starts.
 const REPORT_BOUND: Duration = Duration::from_secs(300);
@@ -474,10 +472,10 @@ impl Reporter {
 }
 
 impl TurnHolds for Reporter {
-    fn held(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    fn held(&self, reason: String) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             if !self.held.swap(true, Ordering::SeqCst) {
-                self.report(InferenceOutcome::Holding(HOLD.into())).await;
+                self.report(InferenceOutcome::Holding(reason)).await;
             }
         })
     }

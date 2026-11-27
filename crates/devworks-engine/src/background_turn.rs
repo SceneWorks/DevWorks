@@ -19,8 +19,10 @@ use devworks_core::protocol::provider::{
 use devworks_core::protocol::records::RouteChoice;
 use devworks_core::protocol::{ActorId, Id, OperationId, OperationState, ProjectId};
 use devworks_core::providers::context::{GenerationParameters, ProviderContext, TextBlock};
+use devworks_core::services::runs::substrate::Fenced;
 use devworks_core::services::sessions::workspace_reply::ReplyIntent;
-use devworks_core::services::usage::{accounting::AttemptEnd, host::DriveOutcome};
+use devworks_core::services::usage::accounting::{Admission, AttemptEnd};
+use devworks_core::services::usage::host::DriveOutcome;
 use devworks_core::settings::catalog::AgentRole;
 use serde_json::{Value, json};
 use std::future::Future;
@@ -230,10 +232,54 @@ pub(crate) enum TurnEnd {
     Stopped,
 }
 
-/// Reports tool calls of the turn that wait on an approval or another hold, and their release.
+/// Reports what the turn waits on (a held tool call, a refused admission that clears later) and
+/// its release. An owner without one ends the turn on a refused admission instead of waiting.
 pub(crate) trait TurnHolds: Send + Sync {
-    fn held(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+    fn held(&self, reason: String) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     fn resumed(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+/// The visible reason of a turn whose tool call waits.
+const TOOL_HOLD: &str = "A tool call of the agent is waiting on a hold that clears later (an \
+    approval, a pause, capacity); the run continues once it is resolved.";
+
+/// Why an inference admission refusal is a hold that clears later (a feature budget, a paused
+/// or otherwise ineligible root), or `None` for a refusal that ends the turn.
+fn admission_hold(admission: &Admission) -> Option<String> {
+    match admission {
+        Admission::Blocked(block) => Some(format!(
+            "The model request is held by its feature budget ({block:?}); the run continues \
+             once the budget allows it."
+        )),
+        Admission::Fenced(Fenced::Blocked(eligibility)) => Some(format!(
+            "The model request is held: its work is paused or not eligible now ({:?}); the run \
+             continues once it is.",
+            eligibility.conditions
+        )),
+        _ => None,
+    }
+}
+
+/// Waits for a committed state change (or the 30 s recheck), at least until `started` + 500 ms;
+/// `Err(Cancelled)` once `stopping` is cancelled.
+async fn wait_for_change(
+    changes: &mut tokio::sync::watch::Receiver<u64>,
+    stopping: &Cancellation,
+    started: tokio::time::Instant,
+) -> Result<(), StorageError> {
+    let stopped = Wake::new();
+    stopping.wake_on_cancel(&stopped);
+    let generation = stopped.generation();
+    if stopping.is_cancelled() {
+        return Err(StorageError::Cancelled);
+    }
+    tokio::select! {
+        _ = changes.changed() => {}
+        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+        _ = stopped.changed_after(generation) => return Err(StorageError::Cancelled),
+    }
+    tokio::time::sleep_until(started + std::time::Duration::from_millis(500)).await;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -464,7 +510,8 @@ pub(crate) async fn drive(
             Err(_) if stopping.is_cancelled() => return TurnEnd::Stopped,
             Err(error) => return unavailable(error, sent),
         };
-    for _ in 0..TURN_LIMIT {
+    let mut generations = 0;
+    while generations < TURN_LIMIT {
         if stopping.is_cancelled() {
             return TurnEnd::Stopped;
         }
@@ -511,7 +558,9 @@ pub(crate) async fn drive(
         if let Err(error) = save_prepared(engine, &operation.id, attempt_no, &prepared).await {
             return TurnEnd::Unknown(error.to_string());
         }
-        let changes = engine.state_changes();
+        let mut changes = engine.state_changes();
+        changes.borrow_and_update();
+        let started = tokio::time::Instant::now();
         sent = true;
         let progress = match engine
             .produce_and_dispatch_native_turn(request, Some(stopping.clone()))
@@ -520,6 +569,24 @@ pub(crate) async fn drive(
             Ok(progress) => progress,
             Err(error) => return TurnEnd::Unknown(error.to_string()),
         };
+        if let (None, Some(holds), DriveOutcome::Refused(admission)) = (
+            &progress.provider.result.outcome,
+            holds,
+            &progress.provider.accounting,
+        ) && let Some(reason) = admission_hold(admission)
+        {
+            // Nothing was admitted: wait for the hold to clear, then retry the same request.
+            holds.held(reason).await;
+            if wait_for_change(&mut changes, stopping, started)
+                .await
+                .is_err()
+            {
+                return TurnEnd::Stopped;
+            }
+            holds.resumed().await;
+            continue;
+        }
+        generations += 1;
         match progress.provider.result.outcome {
             Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
                 if sweep.complete_window() {
@@ -548,7 +615,11 @@ pub(crate) async fn drive(
                 sweep.after_tools();
             }
             Some(AttemptEnd::UnknownTail) | Some(AttemptEnd::Completed) => {
-                return TurnEnd::Unknown("The provider outcome of the turn is unresolved.".into());
+                return TurnEnd::Unknown(
+                    "The model request's outcome is unknown (its response did not end \
+                     verifiably), so what it did must be reconciled before the run is retried."
+                        .into(),
+                );
             }
             None if matches!(
                 progress.provider.accounting,
@@ -730,9 +801,10 @@ async fn resume_recorded_turn(
             }
             Err(TurnEnd::Completed(Box::new(recorded.provider)))
         }
-        _ => Err(TurnEnd::Unknown(
-            "The prior provider outcome requires reconciliation.".into(),
-        )),
+        outcome => Err(TurnEnd::Unknown(format!(
+            "The interrupted turn's last model request has an unknown outcome ({outcome:?}); \
+             what it did must be reconciled before the run is retried."
+        ))),
     }
 }
 
@@ -869,9 +941,6 @@ async fn finish_tools(
     stopping: &Cancellation,
     holds: Option<&dyn TurnHolds>,
 ) -> Result<(), StorageError> {
-    let stopped = Wake::new();
-    stopping.wake_on_cancel(&stopped);
-    let generation = stopped.generation();
     loop {
         if stopping.is_cancelled() {
             return Err(StorageError::Cancelled);
@@ -889,15 +958,10 @@ async fn finish_tools(
             return Ok(());
         }
         if let Some(holds) = holds {
-            holds.held().await;
+            holds.held(TOOL_HOLD.into()).await;
         }
         // Re-drive only the recorded tool identity after a possible approval or receipt change.
-        tokio::select! {
-            _ = changes.changed() => {}
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
-            _ = stopped.changed_after(generation) => return Err(StorageError::Cancelled),
-        }
-        tokio::time::sleep_until(started + std::time::Duration::from_millis(500)).await;
+        wait_for_change(&mut changes, stopping, started).await?;
     }
 }
 
@@ -1097,4 +1161,18 @@ fn prepare_prompt(
         head,
         windows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::services::usage::budget::BudgetBlock;
+
+    #[test]
+    fn a_budget_block_is_a_hold_and_a_stop_or_changed_source_ends_the_turn() {
+        let held = admission_hold(&Admission::Blocked(BudgetBlock::Reached)).unwrap();
+        assert!(held.contains("feature budget"), "{held}");
+        assert!(admission_hold(&Admission::Fenced(Fenced::StopRequested)).is_none());
+        assert!(admission_hold(&Admission::SourceChanged("changed".into())).is_none());
+    }
 }

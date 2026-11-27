@@ -167,35 +167,47 @@ fn job_ports(f: &Fx, wire: Arc<dyn StreamingHttp>) -> Composition {
 
 const PROMPT: &str = "File an issue for the failing nightly check, then report done.";
 
-/// Saves `PROMPT` as a live project artifact owned by the user (its blob written where the
-/// artifact store keeps it) and returns its reference; gives the project a Ready status.
+/// Saves `PROMPT` as a live project artifact owned by the user and returns its reference; gives
+/// the project a Ready status.
 fn seed_job_prompt(f: &Fx) -> Value {
+    f.tx(|_, tx| {
+        tx.work()
+            .insert_status(&devworks_core::ports::storage::StoredStatus {
+                id: id("job-ready"),
+                project_id: ProjectId(id("project-a")),
+                name: "Ready".into(),
+                semantic: "Ready".into(),
+                sort_order: 1,
+                revision: 1,
+            })
+    });
+    seed_prompt_in(f, "job-prompt", Some("project-a"))
+}
+
+/// Saves `PROMPT` as the user's live artifact `artifact` in `project` (`None`: the workspace),
+/// its blob written where the artifact store keeps it, and returns its reference.
+fn seed_prompt_in(f: &Fx, artifact: &'static str, project: Option<&'static str>) -> Value {
     let digest = devworks_core::fingerprint::sha256_hex(PROMPT.as_bytes());
     let relative = format!("artifacts/sha256/{}/{digest}.fixture", &digest[..2]);
     let path = f.h.root.join(&relative);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, PROMPT).unwrap();
     let blob = digest.clone();
+    let version = format!("{artifact}-v1");
+    let version_id = version.clone();
     f.tx(move |_, tx| {
-        let project = ProjectId(id("project-a"));
-        tx.work()
-            .insert_status(&devworks_core::ports::storage::StoredStatus {
-                id: id("job-ready"),
-                project_id: project.clone(),
-                name: "Ready".into(),
-                semantic: "Ready".into(),
-                sort_order: 1,
-                revision: 1,
-            })?;
+        let scope = project.map_or(ArtifactScope::Workspace, |p| {
+            ArtifactScope::Project(ProjectId(id(p)))
+        });
         tx.artifacts()
             .put_blob(&blob, PROMPT.len() as i64, "fixture", &relative)?;
         tx.artifacts().insert_artifact(&StoredArtifact {
-            id: id("job-prompt"),
-            origin_project_id: Some(project.clone()),
+            id: id(artifact),
+            origin_project_id: scope.project().cloned(),
             origin_work_id: None,
             title: "Job prompt".into(),
             revision: 1,
-            scope: ArtifactScope::Project(project),
+            scope,
             owner: Some(ActorId(id("user-a"))),
             retention: ArtifactRetention::Explicit,
             scope_revision: 1,
@@ -206,8 +218,8 @@ fn seed_job_prompt(f: &Fx) -> Value {
             provenance: json!({}),
         })?;
         tx.artifacts().insert_version(&StoredVersion {
-            id: id("job-prompt-v1"),
-            artifact_id: id("job-prompt"),
+            id: id(&version_id),
+            artifact_id: id(artifact),
             version_no: 1,
             blob_digest: blob,
             byte_count: PROMPT.len() as i64,
@@ -218,7 +230,7 @@ fn seed_job_prompt(f: &Fx) -> Value {
             source: json!({}),
         })
     });
-    json!({"artifactId":"job-prompt","versionId":"job-prompt-v1","sha256":digest,
+    json!({"artifactId":artifact,"versionId":version,"sha256":digest,
         "byteLength":PROMPT.len().to_string(),"mediaType":"text/markdown"})
 }
 
@@ -241,6 +253,23 @@ fn job_command(
 
 /// Creates a manual project job over the saved prompt and runs it now; returns the run.
 fn run_job(f: &Fx, app: &devworks_engine::Runtime, prompt: Value, route: Value) -> Id {
+    run_job_in(
+        f,
+        app,
+        prompt,
+        route,
+        json!({"kind":"Project","projectId":"project-a"}),
+    )
+}
+
+/// [`run_job`] for a job of `scope`.
+fn run_job_in(
+    f: &Fx,
+    app: &devworks_engine::Runtime,
+    prompt: Value,
+    route: Value,
+    scope: Value,
+) -> Id {
     let definition = json!({"kind":"Inference","prompt":prompt,"route":route,"effort":"Default"});
     let job = job_command(
         f,
@@ -248,7 +277,7 @@ fn run_job(f: &Fx, app: &devworks_engine::Runtime, prompt: Value, route: Value) 
         "jobs.create",
         "job-create",
         3,
-        json!({"scope":{"kind":"Project","projectId":"project-a"},"title":"Job scan",
+        json!({"scope":scope,"title":"Job scan",
             "schedule":{"kind":"Manual"},"definition":definition,"enabled":true}),
     );
     let run = job_command(
@@ -580,6 +609,165 @@ fn a_scheduled_inference_run_interrupted_by_shutdown_resumes_its_session_after_r
         );
         assert_eq!(second.requests().len(), 1);
         assert!(second.requests()[0].to_string().contains(PROMPT));
+        app.shutdown().await;
+    });
+}
+
+/// A query whose handler refuses every request with a wait that clears later until it is opened;
+/// then it refuses for good, so the call is answered and the turn goes on. A query has no
+/// receipt, so each re-drive of the held call reaches the handler.
+struct Capacity {
+    open: Arc<AtomicBool>,
+    calls: Arc<AtomicUsize>,
+}
+impl devworks_core::ports::QueryHandler for Capacity {
+    fn query(
+        &self,
+        _: &InvocationContext,
+        _: &devworks_core::gateway::AdmittedQuery,
+        _: &dyn devworks_core::ports::storage::ReadSnapshot,
+    ) -> Result<devworks_core::ports::QueryAnswer, devworks_core::protocol::DomainFault> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let (code, retry) = if self.open.load(Ordering::SeqCst) {
+            (
+                DomainErrorCode::NotFound,
+                devworks_core::protocol::RetryAdvice::Never,
+            )
+        } else {
+            (
+                DomainErrorCode::CapacityWait,
+                devworks_core::protocol::RetryAdvice::AfterBlockerClears,
+            )
+        };
+        Err(
+            devworks_core::services::kernel::Refusal::new(code, "fixture_capacity", None)
+                .retry(retry)
+                .fault(devworks_core::protocol::CorrelationId(id(
+                    "job-capacity-fault",
+                ))),
+        )
+    }
+}
+
+#[test]
+fn a_scheduled_run_holds_while_its_tool_call_waits_and_resumes_when_it_clears() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let prompt = seed_job_prompt(&f);
+    let wake_prompt = seed_prompt_in(&f, "wake-prompt", None);
+    let wire = JobWire::new(vec![
+        Answer::Tool {
+            name: "sessions_get_query",
+            arguments: r#"{"sessionId":"session-a"}"#,
+        },
+        Answer::Text("Done after the hold"),
+    ]);
+    let (open, calls) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let mut ports = job_ports(&f, wire.clone());
+    let mut scripted = UseCases::new();
+    scripted.register(
+        "sessions.get",
+        Some(Arc::new(Capacity {
+            open: open.clone(),
+            calls: calls.clone(),
+        })),
+        None,
+    );
+    ports.test_overrides = devworks_engine::TestOverrides::new(scripted);
+    runtime().block_on(async {
+        let app = boot(ports).await.unwrap();
+        let run = run_job(
+            &f,
+            &app,
+            prompt,
+            json!({"kind":"Model","modelId":"watch-model"}),
+        );
+        let holding = within(
+            "the run holds on its waiting tool call",
+            wait_run(&f, &app, &run, |r| r.status == "Holding" || terminal(r)),
+        )
+        .await;
+        assert_eq!(holding.status, "Holding", "{holding:?}");
+        assert!(
+            holding
+                .hold
+                .as_deref()
+                .unwrap()
+                .contains("waiting on a hold"),
+            "{holding:?}"
+        );
+        assert_eq!(wire.requests().len(), 1, "no model request while it holds");
+        // The hold clears; a committed state change wakes the waiting call.
+        open.store(true, Ordering::SeqCst);
+        job_command(
+            &f,
+            &app,
+            "jobs.create",
+            "job-wake",
+            3,
+            json!({"scope":{"kind":"Workspace"},"title":"Wake","schedule":{"kind":"Manual"},
+                "definition":{"kind":"Inference","prompt":wake_prompt,
+                    "route":{"kind":"Model","modelId":"watch-model"},"effort":"Default"},
+                "enabled":false}),
+        );
+        let finished = within("the resumed run", wait_run(&f, &app, &run, terminal)).await;
+        assert_eq!(finished.status, "Succeeded", "{finished:?}");
+        assert!(finished.hold.is_none(), "{finished:?}");
+        assert!(calls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(wire.requests().len(), 2);
+        app.shutdown().await;
+    });
+}
+
+#[test]
+fn an_app_level_scheduled_run_completes_attributed_to_its_run_without_a_project() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let prompt = seed_prompt_in(&f, "app-prompt", None);
+    let wire = JobWire::new(vec![Answer::Text("Workspace scan done")]);
+    runtime().block_on(async {
+        let app = boot(job_ports(&f, wire.clone())).await.unwrap();
+        let run = run_job_in(
+            &f,
+            &app,
+            prompt,
+            json!({"kind":"Model","modelId":"watch-model"}),
+            json!({"kind":"Workspace"}),
+        );
+        let finished = within("an app-level run", wait_run(&f, &app, &run, terminal)).await;
+        assert_eq!(finished.status, "Succeeded", "{finished:?}");
+        assert!(finished.project_id.is_none());
+        let session = finished.session_id.clone().unwrap();
+        let (stored, entries) = {
+            let session = session.clone();
+            read(&*f.store, move |r| {
+                Ok((
+                    r.sessions().session(&session)?.unwrap(),
+                    r.sessions().entries(&session, 0, 50)?,
+                ))
+            })
+        };
+        assert!(stored.project_id.is_none() && stored.root_id.is_none());
+        let attempt = entries
+            .iter()
+            .find_map(
+                |e| match serde_json::from_value::<TranscriptBody>(e.body.clone()).ok()? {
+                    TranscriptBody::AssistantAttempt { attempt_id, .. } => Some(attempt_id.0),
+                    _ => None,
+                },
+            )
+            .expect("the answer's attempt");
+        let usage = read(&*f.store, move |r| r.usage().inference_attempt(&attempt)).unwrap();
+        assert_eq!(usage.job_run_id.as_ref(), Some(&run));
+        assert_eq!(usage.session_id.as_ref(), Some(&session));
+        assert!(usage.project_id.is_none() && usage.work_id.is_none());
+        // The request's `Attribution::Job` itself is not stored; the usage asserted above
+        // records the same ownership: the run, its session, and no project or work.
         app.shutdown().await;
     });
 }
