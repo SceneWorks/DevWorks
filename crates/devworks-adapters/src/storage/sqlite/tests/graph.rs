@@ -684,7 +684,7 @@ fn graph31_project_purge_candidates_select_only_the_typed_project_digest_and_its
     // can substitute for the independently bound project scope digest.
     let policy: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/architecture/validation/project-purge/native-row-selectors.json"
+        "/src/storage/sqlite/project_purge/policy/native-row-selectors.json"
     )))
     .unwrap();
     let anchors = policy["anchors"]

@@ -43,7 +43,7 @@ macro_rules! policy_document {
             shape: Shape::$shape,
             text: include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../docs/architecture/validation/project-purge/",
+                "/src/storage/sqlite/project_purge/policy/",
                 $file
             )),
         }
@@ -697,7 +697,7 @@ mod tests {
     fn assessment_digest_covers_every_policy_document_in_the_directory() {
         let directory = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../docs/architecture/validation/project-purge"
+            "/src/storage/sqlite/project_purge/policy"
         );
         let mut on_disk = std::fs::read_dir(directory)
             .unwrap()
