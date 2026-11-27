@@ -57,6 +57,7 @@
 //! `knowledge.import_user_data`. CodeGraph's `acknowledge` is superseded by KNOW-03 (autonomous
 //! decisions never ask to be acknowledged).
 pub(crate) mod dream_actions;
+mod fusion;
 mod graph;
 pub mod import;
 pub mod model;
@@ -64,8 +65,9 @@ mod vectors;
 mod writes;
 pub(crate) use writes::{reverse_dream_changes, review_dream_change};
 
+pub use fusion::{CANDIDATES, FUSION_K};
 pub use graph::NO_MEMORIES;
-pub use vectors::{VECTOR_CONSUMER, VECTOR_NEIGHBORS};
+pub use vectors::VECTOR_CONSUMER;
 
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
@@ -87,7 +89,8 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     Applicability, ChallengeState, Diagnostic, EvidenceKind, EvidenceLocator, KnowledgeBundle,
     KnowledgeClaim, KnowledgeConflict, KnowledgeEntity, KnowledgeEntryKind, KnowledgeKind,
-    KnowledgeLifecycle, KnowledgeOrigin, KnowledgeRelation, KnowledgeRevisionEntry, KnowledgeState,
+    KnowledgeLifecycle, KnowledgeOrigin, KnowledgeRelation, KnowledgeRetrievalMode,
+    KnowledgeRevisionEntry, KnowledgeSearchPage, KnowledgeSearchResult, KnowledgeState,
     KnowledgeWriteReceipt, LessonAddress, LessonAddressKind, LessonChallenge, LessonRecord,
     LessonSource, RuleEffect, RuleState, SchemaValue, Severity, SourceEvidence,
 };
@@ -632,40 +635,14 @@ fn claims(
     after: Option<&str>,
     n: u16,
 ) -> Result<Vec<RankedClaim>, StorageError> {
-    search_claims(read, query, None, after, n)
-}
-
-/// [`claims`] of a search, followed by its vector matches when it has a query vector (`near`).
-fn search_claims(
-    read: &dyn KnowledgeRead,
-    query: &ClaimQuery,
-    near: Option<&ClaimVectorQuery<'_>>,
-    after: Option<&str>,
-    n: u16,
-) -> Result<Vec<RankedClaim>, StorageError> {
-    let after = after
-        .map(|at| parse_position(query, near.is_some(), at))
-        .transpose()?;
-    // Text matches first; the vector matches follow the last of them ([`vectors`]).
-    if let (Some(near), Some((ClaimRank::Similarity(s), id))) = (near, &after) {
-        return read.knowledge_claim_neighbors(query, near, Some((*s, id.as_str())), n);
-    }
-    let mut rows =
-        read.knowledge_claims(query, after.as_ref().map(|(r, id)| (*r, id.as_str())), n)?;
-    if let Some(near) = near
-        && rows.len() < usize::from(n)
-    {
-        let rest = n - u16::try_from(rows.len()).expect("page size");
-        rows.extend(read.knowledge_claim_neighbors(query, near, None, rest)?);
-    }
-    Ok(rows)
+    let after = after.map(|at| parse_position(query, at)).transpose()?;
+    read.knowledge_claims(query, after.as_ref().map(|(r, id)| (*r, id.as_str())), n)
 }
 
 /// A claim's position in `query`'s order: its sort key as the store ranked it, and its id. A
-/// relevance key is `r` and the exact score (Rust's shortest round-tripping decimal), and a
-/// vector match's `v` and its exact similarity, so the next page resumes strictly after the
-/// last row as it was read; the prefix keeps a time position issued before relevance ranking
-/// from resuming a relevance listing.
+/// relevance key is `r` and the exact score (Rust's shortest round-tripping decimal), so the
+/// next page resumes strictly after the last row as it was read; the prefix keeps a time
+/// position issued before relevance ranking from resuming a relevance listing.
 fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
     debug_assert_eq!(
         query.words.is_empty(),
@@ -675,35 +652,41 @@ fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
     match c.rank {
         ClaimRank::Time(t) => format!("{t}|{}", c.id.as_str()),
         ClaimRank::Relevance(s) => format!("r{s}|{}", c.id.as_str()),
-        ClaimRank::Similarity(s) => format!("v{s}|{}", c.id.as_str()),
     }
 }
 
-/// Parses a position of `query`'s order; a vector position only when the search has a query
-/// vector (`vectors`).
-fn parse_position(
-    query: &ClaimQuery,
-    vectors: bool,
-    at: &str,
-) -> Result<(ClaimRank, String), StorageError> {
+/// Parses a position of `query`'s order.
+fn parse_position(query: &ClaimQuery, at: &str) -> Result<(ClaimRank, String), StorageError> {
     let (key, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
-    let score = |prefix: char| {
-        key.strip_prefix(prefix)
-            .and_then(|s| s.parse().ok())
-            .filter(|s: &f64| s.is_finite())
-    };
     let rank = if query.words.is_empty() {
         ClaimRank::Time(key.parse().map_err(|_| StorageError::CursorExpired)?)
-    } else if let Some(s) = score('r') {
-        ClaimRank::Relevance(s)
     } else {
-        ClaimRank::Similarity(
-            score('v')
-                .filter(|_| vectors)
+        ClaimRank::Relevance(
+            key.strip_prefix('r')
+                .and_then(|s| s.parse().ok())
+                .filter(|s: &f64| s.is_finite())
                 .ok_or(StorageError::CursorExpired)?,
         )
     };
     Ok((rank, id.to_owned()))
+}
+
+/// The `knowledge.search` reply: one page with its retrieval mode and whether a candidate cap
+/// limited it ([`fusion`]).
+fn search_result(
+    page: Page<KnowledgeClaim>,
+    mode: KnowledgeRetrievalMode,
+    work_limited: bool,
+) -> OperationResult {
+    OperationResult::KnowledgeSearch {
+        value: KnowledgeSearchResult::Current(KnowledgeSearchPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
+            mode,
+            work_limited,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -817,21 +800,40 @@ impl KnowledgeService {
         };
         let limit = i.page.limit.get().min(i.claim_limit.get()) as usize;
         let k = knowledge_read(snapshot);
-        // The selected space binds the cursor; this page's query vector is used while the
-        // selection it was embedded under is current. A page without one (the route failed at
-        // query time) lists text matches only ([`vectors`]).
-        let runtime = self.embeddings().filter(|_| !words.is_empty());
-        let selected = match &runtime {
-            Some(runtime) => runtime
-                .configuration_read(snapshot, ctx)?
-                .space
-                .map(|space| space.id),
-            None => None,
-        };
-        let vector = match (&runtime, prepared) {
+        let mut request = i.page.clone();
+        request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
+        let (mut parts, exact_revision) = Self::revision_parts(k, &scoped)?;
+        parts.push(format!("{query:?}"));
+        parts.push(limit.to_string());
+        let th = thresholds(snapshot.configuration(), &scoped.readable)?;
+        let wire = |c: &StoredClaim| with_skills(snapshot, ctx, claim_wire(k, c, &th)?);
+        if words.is_empty() {
+            // Without words: newest first, one store order.
+            parts.push("lexical".into());
+            let binding =
+                CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
+            let rows = cursor::page(
+                &binding,
+                &request,
+                |after, n| claims(k, &query, after, n),
+                |c| claim_position(&query, c),
+            )?;
+            let page = rows.try_into_page(|c| wire(&c))?;
+            return Ok((
+                search_result(page, KnowledgeRetrievalMode::LexicalOnly, false),
+                exact_revision,
+            ));
+        }
+        // This page's query vector is used while the selection it was embedded under is current.
+        // A page without one (no vectors, or the route failed at query time) fuses the word and
+        // graph matches only ([`fusion`]).
+        let vector = match (self.embeddings(), prepared) {
             (Some(runtime), Some(v))
-                if selected.as_deref() == Some(v.space.as_str())
-                    && v.current(runtime, snapshot, ctx)? =>
+                if runtime
+                    .configuration_read(snapshot, ctx)?
+                    .space
+                    .is_some_and(|space| space.id == v.space.as_str())
+                    && v.current(&runtime, snapshot, ctx)? =>
             {
                 Some(v)
             }
@@ -840,30 +842,23 @@ impl KnowledgeService {
         let near = vector.map(|v| ClaimVectorQuery {
             space: &v.space,
             vector: &v.vector,
-            neighbors: VECTOR_NEIGHBORS,
         });
-        let (mut parts, exact_revision) = Self::revision_parts(k, &scoped)?;
-        parts.push(format!("{query:?}"));
-        parts.push(limit.to_string());
-        parts.push(match &selected {
-            Some(space) => format!("vectors={space}"),
-            None => "lexical".into(),
-        });
+        parts.extend(fusion::binding_parts(
+            vector.map(|v| (&v.space, v.embedded)),
+        ));
         let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
-        let mut request = i.page.clone();
-        request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
-        let rows = cursor::page(
-            &binding,
-            &request,
-            |after, n| search_claims(k, &query, near.as_ref(), after, n),
-            |c| claim_position(&query, c),
-        )?;
-        let th = thresholds(snapshot.configuration(), &scoped.readable)?;
+        let fused = fusion::rank(k, &query, near.as_ref())?;
+        let rows = fusion::page(&binding, &request, &fused)?.try_map(|id| {
+            k.knowledge_claim(&id)?
+                .ok_or_else(|| StorageError::InvalidRecord("a fused claim was not read".into()))
+        })?;
+        let mode = if near.is_some() {
+            KnowledgeRetrievalMode::Hybrid
+        } else {
+            KnowledgeRetrievalMode::LexicalOnly
+        };
         Ok((
-            OperationResult::KnowledgeSearch {
-                value: rows
-                    .try_into_page(|c| with_skills(snapshot, ctx, claim_wire(k, &c, &th)?))?,
-            },
+            search_result(rows.try_into_page(|c| wire(&c))?, mode, fused.work_limited),
             exact_revision,
         ))
     }
@@ -2399,7 +2394,7 @@ mod tests {
         };
         // A cursor issued for a search with words before relevance ranking carried a time.
         assert!(matches!(
-            parse_position(&words, false, "1700000000000|knowledgeclaim-1"),
+            parse_position(&words, "1700000000000|knowledgeclaim-1"),
             Err(StorageError::CursorExpired)
         ));
         for bad in [
@@ -2408,7 +2403,7 @@ mod tests {
             "r|knowledgeclaim-1",
         ] {
             assert!(matches!(
-                parse_position(&words, false, bad),
+                parse_position(&words, bad),
                 Err(StorageError::CursorExpired)
             ));
         }
@@ -2438,31 +2433,21 @@ mod tests {
         };
         let at = claim_position(&words, &claim);
         assert_eq!(
-            parse_position(&words, false, &at).unwrap(),
+            parse_position(&words, &at).unwrap(),
             (claim.rank, claim.id.as_str().to_owned())
         );
         // A search without words keeps the time position.
         let none = ClaimQuery::default();
         assert_eq!(
-            parse_position(&none, false, "1700000000000|knowledgeclaim-1").unwrap(),
+            parse_position(&none, "1700000000000|knowledgeclaim-1").unwrap(),
             (
                 ClaimRank::Time(1_700_000_000_000),
                 "knowledgeclaim-1".to_owned()
             )
         );
-        // A vector match resumes exactly where it was read, and only with a query vector.
-        let near = RankedClaim {
-            rank: ClaimRank::Similarity(0.987_654_321_012_345_6),
-            ..claim
-        };
-        let at = claim_position(&words, &near);
-        assert!(at.starts_with('v'), "{at}");
-        assert_eq!(
-            parse_position(&words, true, &at).unwrap(),
-            (near.rank, near.id.as_str().to_owned())
-        );
+        // A vector position (DW-247) never resumes a relevance listing.
         assert!(matches!(
-            parse_position(&words, false, &at),
+            parse_position(&words, "v0.9876543210123456|knowledgeclaim-7"),
             Err(StorageError::CursorExpired)
         ));
     }

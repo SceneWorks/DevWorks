@@ -679,26 +679,20 @@ impl Statistics {
     }
 }
 
-/// One relevance page: the claims passing the filters `w` (values `p`), scored by BM25 (the
-/// shared formula, k1 1.2 and b 0.75) of the query words over the claim's text plus, when its
-/// subject is one of `subjects`, the subject's text. Every statistic (record count, mean length,
-/// document frequency) is read from the query's scopes alone, so no other scope changes a score
-/// or the order, and a change of a read scope advances its revision, which expires a cursor.
-/// Scores are computed in one pass over the filtered claims; only the page is materialized.
-fn relevance_page(
+/// The relevance order of the claims passing the filters `w` (values `p`): BM25 (the shared
+/// formula, k1 1.2 and b 0.75) of the query words over the claim's text plus, when its subject
+/// is one of `subjects`, the subject's text, best first, then id descending. Every statistic
+/// (record count, mean length, document frequency) is read from the query's scopes alone, so no
+/// other scope changes a score or the order, and a change of a read scope advances its revision,
+/// which expires a cursor. Scores are computed in one pass over the filtered claims; no claim is
+/// materialized.
+fn relevance_order(
     conn: &Connection,
     q: &ClaimQuery,
     w: &[String],
     p: Vec<Sql>,
     subjects: &str,
-    after: Option<(ClaimRank, &str)>,
-    limit: i64,
-) -> Result<Vec<RankedClaim>, StorageError> {
-    let after = match after {
-        None => None,
-        Some((ClaimRank::Relevance(s), id)) => Some((s, id)),
-        Some(_) => return Err(invalid("a claim position of another order")),
-    };
+) -> Result<Vec<(f64, String)>, StorageError> {
     let scopes = serde_json::to_string(&q.scopes).expect("scope keys");
     let claim_stats = Statistics::read(
         conn,
@@ -767,11 +761,30 @@ fn relevance_page(
         }
         scored.push((score, id));
     }
-    // Best match first, then id descending; strictly after the cursor's row.
+    scored.sort_by(|(a, x), (b, y)| b.total_cmp(a).then_with(|| y.cmp(x)));
+    Ok(scored)
+}
+
+/// One relevance page ([`relevance_order`]) strictly after the cursor's row; only the page is
+/// materialized.
+fn relevance_page(
+    conn: &Connection,
+    q: &ClaimQuery,
+    w: &[String],
+    p: Vec<Sql>,
+    subjects: &str,
+    after: Option<(ClaimRank, &str)>,
+    limit: i64,
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let after = match after {
+        None => None,
+        Some((ClaimRank::Relevance(s), id)) => Some((s, id)),
+        Some(_) => return Err(invalid("a claim position of another order")),
+    };
+    let mut scored = relevance_order(conn, q, w, p, subjects)?;
     if let Some((a, aid)) = after {
         scored.retain(|(s, id)| *s < a || (*s == a && id.as_str() < aid));
     }
-    scored.sort_by(|(a, x), (b, y)| b.total_cmp(a).then_with(|| y.cmp(x)));
     scored.truncate(usize::try_from(limit).expect("page limit"));
     let ids: Vec<&str> = scored.iter().map(|(_, id)| id.as_str()).collect();
     let mut found: HashMap<String, StoredClaim> = claims_where(
@@ -796,30 +809,48 @@ fn relevance_page(
         .collect()
 }
 
-/// [`KnowledgeRead::knowledge_claim_neighbors`]: the scope and every other filter are in the
+/// The filters of a candidate query, which has words, and the statement naming the entities
+/// its words match.
+fn candidate_filters(q: &ClaimQuery) -> Result<(ClaimFilters, String), StorageError> {
+    let filters = claim_filters(q)?;
+    let subjects = filters
+        .subjects
+        .clone()
+        .ok_or_else(|| invalid("a candidate query has words"))?;
+    Ok((filters, subjects))
+}
+
+fn candidate_ids(found: Vec<String>) -> Result<Vec<Id>, StorageError> {
+    found.into_iter().map(id_of).collect()
+}
+
+/// [`KnowledgeRead::knowledge_text_candidates`].
+fn text_candidates(conn: &Connection, q: &ClaimQuery, limit: u16) -> Result<Vec<Id>, StorageError> {
+    let limit = usize::try_from(page_limit(limit)?).expect("page limit");
+    let (
+        ClaimFilters {
+            p, mut w, lexical, ..
+        },
+        subjects,
+    ) = candidate_filters(q)?;
+    w.extend(lexical);
+    let mut scored = relevance_order(conn, q, &w, p, &subjects)?;
+    scored.truncate(limit);
+    candidate_ids(scored.into_iter().map(|(_, id)| id).collect())
+}
+
+/// [`KnowledgeRead::knowledge_vector_candidates`]: the scope and every other filter are in the
 /// `WHERE` of the one statement that computes a similarity, so sqlite-vec scores only the
-/// claims the query may read, and only the page is materialized.
-fn claim_neighbors(
+/// claims the query may read.
+fn vector_candidates(
     conn: &Connection,
     q: &ClaimQuery,
     near: &ClaimVectorQuery<'_>,
-    after: Option<(f64, &str)>,
     limit: u16,
-) -> Result<Vec<RankedClaim>, StorageError> {
+) -> Result<Vec<Id>, StorageError> {
     let limit = page_limit(limit)?;
-    if q.words.is_empty() || near.neighbors == 0 || near.neighbors > KNOWLEDGE_PAGE_MAX {
-        return Err(invalid(
-            "a vector match query has words and 1..=128 neighbors",
-        ));
-    }
     let dimensions = super::documents::cosine_dimensions(conn, near.space)?;
-    let ClaimFilters {
-        mut p,
-        mut w,
-        lexical,
-        ..
-    } = claim_filters(q)?;
-    w.push(format!("NOT ({})", lexical.join(" AND ")));
+    let (ClaimFilters { mut p, w, .. }, _) = candidate_filters(q)?;
     p.push(Sql::Text(near.space.as_str().to_owned()));
     let space = p.len();
     p.push(Sql::Blob(super::documents::vector_blob(
@@ -827,56 +858,39 @@ fn claim_neighbors(
         dimensions,
     )?));
     let vector = p.len();
-    p.push(Sql::Integer(i64::from(near.neighbors)));
-    let neighbors = p.len();
-    let position = match after {
-        None => "1".to_owned(),
-        Some((s, id)) => {
-            p.push(Sql::Real(s));
-            let a = p.len();
-            p.push(Sql::Text(id.to_owned()));
-            format!(
-                "(n.similarity<?{a} OR (n.similarity=?{a} AND n.id<?{}))",
-                p.len()
-            )
-        }
-    };
     p.push(Sql::Integer(limit));
     let sql = format!(
         "WITH scored AS MATERIALIZED (SELECT c.id, \
          1.0-vec_distance_cosine(v.vector,?{vector}) AS similarity FROM knowledge_claims c \
-         JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?{space} AND v.vector IS NOT NULL WHERE {}), \
-         nearest AS (SELECT id, similarity FROM scored WHERE similarity>0 \
-         ORDER BY similarity DESC, id DESC LIMIT ?{neighbors}) \
-         SELECT n.id, n.similarity FROM nearest n WHERE {position} \
-         ORDER BY n.similarity DESC, n.id DESC LIMIT ?{}",
+         JOIN knowledge_claim_vectors v ON v.claim_id=c.id AND v.space_id=?{space} AND \
+         v.vector IS NOT NULL WHERE {}) \
+         SELECT id FROM scored WHERE similarity>0 ORDER BY similarity DESC, id DESC LIMIT ?{}",
         w.join(" AND "),
         p.len()
     );
-    let scored = rows(conn, &sql, p, |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
-    })?;
-    let ids: Vec<&str> = scored.iter().map(|(id, _)| id.as_str()).collect();
-    let mut found: HashMap<String, StoredClaim> = claims_where(
-        conn,
-        "WHERE c.id IN (SELECT value FROM json_each(?1))",
-        vec![Sql::Text(serde_json::to_string(&ids).expect("claim ids"))],
-    )?
-    .into_iter()
-    .map(|c| (c.id.as_str().to_owned(), c))
-    .collect();
-    scored
-        .into_iter()
-        .map(|(id, similarity)| {
-            let claim = found
-                .remove(&id)
-                .ok_or_else(|| corrupt("a vector match was not read back"))?;
-            Ok(RankedClaim {
-                rank: ClaimRank::Similarity(similarity),
-                claim,
-            })
-        })
-        .collect()
+    candidate_ids(rows(conn, &sql, p, |r| r.get::<_, String>(0))?)
+}
+
+/// [`KnowledgeRead::knowledge_graph_candidates`]: the claims naming a matching entity as
+/// subject or object, with the scope and every other filter in the same `WHERE`.
+fn graph_candidates(
+    conn: &Connection,
+    q: &ClaimQuery,
+    limit: u16,
+) -> Result<Vec<Id>, StorageError> {
+    let limit = page_limit(limit)?;
+    let (ClaimFilters { mut p, mut w, .. }, subjects) = candidate_filters(q)?;
+    w.push(format!(
+        "(c.subject_id IN ({subjects}) OR c.object_id IN ({subjects}))"
+    ));
+    p.push(Sql::Integer(limit));
+    let sql = format!(
+        "SELECT c.id FROM knowledge_claims c WHERE {} ORDER BY c.updated_at DESC, c.id DESC \
+         LIMIT ?{}",
+        w.join(" AND "),
+        p.len()
+    );
+    candidate_ids(rows(conn, &sql, p, |r| r.get::<_, String>(0))?)
 }
 
 /// The SHA-256 of the text a claim's vector embeds.
@@ -1395,14 +1409,27 @@ macro_rules! knowledge_reads {
             ) -> Result<Vec<RankedClaim>, StorageError> {
                 claims_page(self.conn, query, after, limit)
             }
-            fn knowledge_claim_neighbors(
+            fn knowledge_text_candidates(
+                &self,
+                query: &ClaimQuery,
+                limit: u16,
+            ) -> Result<Vec<Id>, StorageError> {
+                text_candidates(self.conn, query, limit)
+            }
+            fn knowledge_vector_candidates(
                 &self,
                 query: &ClaimQuery,
                 near: &ClaimVectorQuery<'_>,
-                after: Option<(f64, &str)>,
                 limit: u16,
-            ) -> Result<Vec<RankedClaim>, StorageError> {
-                claim_neighbors(self.conn, query, near, after, limit)
+            ) -> Result<Vec<Id>, StorageError> {
+                vector_candidates(self.conn, query, near, limit)
+            }
+            fn knowledge_graph_candidates(
+                &self,
+                query: &ClaimQuery,
+                limit: u16,
+            ) -> Result<Vec<Id>, StorageError> {
+                graph_candidates(self.conn, query, limit)
             }
             fn knowledge_vector_coverage(
                 &self,

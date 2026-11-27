@@ -451,17 +451,13 @@ pub enum ClaimRank {
     /// subject entity's (a query with words), listed descending: higher is a better match.
     /// Every statistic comes from the query's own scopes.
     Relevance(f64),
-    /// The cosine similarity of the claim's vector to the query's
-    /// ([`KnowledgeRead::knowledge_claim_neighbors`]), listed descending.
-    Similarity(f64),
 }
 
-/// A query vector in one qualified embedding space, and how many nearest claims it may match.
+/// A query vector in one qualified embedding space.
 #[derive(Clone, Copy, Debug)]
 pub struct ClaimVectorQuery<'a> {
     pub space: &'a Id,
     pub vector: &'a [f32],
-    pub neighbors: u16,
 }
 
 /// A listed claim and its sort key. It reads as the claim it carries.
@@ -536,19 +532,36 @@ pub trait KnowledgeRead {
         after: Option<(ClaimRank, &str)>,
         limit: u16,
     ) -> Result<Vec<RankedClaim>, StorageError>;
+    /// The text matches of a query with words, in the order of [`Self::knowledge_claims`]
+    /// (BM25 descending, then id descending), at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]) ids.
+    /// Only ids are read: no claim is materialized.
+    fn knowledge_text_candidates(
+        &self,
+        query: &ClaimQuery,
+        limit: u16,
+    ) -> Result<Vec<Id>, StorageError>;
     /// The vector matches of a query with words: of the claims that pass every filter of
-    /// `query` but are not its text matches (some word is missing), the `near.neighbors` with
-    /// a vector in `near.space` nearest to `near.vector` and a positive cosine similarity,
-    /// ordered by similarity descending, then id descending; then strictly after `after` (the
-    /// last row's similarity and id as read), at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]).
-    /// The scope and every other filter apply before any similarity is computed.
-    fn knowledge_claim_neighbors(
+    /// `query` except its words, those with a vector in `near.space` and a positive cosine
+    /// similarity to `near.vector`, nearest first (then id descending), at most `limit`
+    /// (1..=[`KNOWLEDGE_PAGE_MAX`]) ids. The scope and every other filter apply before any
+    /// similarity is computed; no claim is materialized.
+    fn knowledge_vector_candidates(
         &self,
         query: &ClaimQuery,
         near: &ClaimVectorQuery<'_>,
-        after: Option<(f64, &str)>,
         limit: u16,
-    ) -> Result<Vec<RankedClaim>, StorageError>;
+    ) -> Result<Vec<Id>, StorageError>;
+    /// The graph matches of a query with words: of the claims that pass every filter of `query`
+    /// except its words, those whose subject or object is an entity the query matches (a live
+    /// entity of the query's scopes whose text has any query word, at most
+    /// `query.entity_limit` of them, as for text matches), newest update first (then id
+    /// descending), at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]) ids. The scope applies to the
+    /// entities and the claims before the limit; no claim is materialized.
+    fn knowledge_graph_candidates(
+        &self,
+        query: &ClaimQuery,
+        limit: u16,
+    ) -> Result<Vec<Id>, StorageError>;
     /// Of the claims of `scopes` that are not deleted: how many have a vector of their current
     /// text in `space`, and how many there are.
     fn knowledge_vector_coverage(

@@ -20,8 +20,9 @@ use devworks_core::ports::storage::contract::StoreHarness;
 use devworks_core::ports::storage::*;
 use devworks_core::protocol::data::ArtifactSource;
 use devworks_core::protocol::records::{
-    ArtifactRecord, Diagnostic, KnowledgeBundle, KnowledgeClaim, KnowledgeWriteReceipt,
-    MutationSummary, SettingAssignment,
+    ArtifactRecord, Diagnostic, KnowledgeBundle, KnowledgeClaim, KnowledgeRetrievalMode,
+    KnowledgeSearchPage, KnowledgeSearchResult, KnowledgeWriteReceipt, MutationSummary,
+    SettingAssignment,
 };
 use devworks_core::protocol::results::{
     DomainCommandReply, DomainDecision, DomainQueryReply, OperationResult,
@@ -33,7 +34,7 @@ use devworks_core::protocol::{
 use devworks_core::services::UseCases;
 use devworks_core::services::artifacts::ArtifactService;
 use devworks_core::services::knowledge::import::{IMPORT_SCHEMA_ID, import_schema_digest};
-use devworks_core::services::knowledge::{KnowledgeService, THRESHOLD_KEY};
+use devworks_core::services::knowledge::{CANDIDATES, KnowledgeService, THRESHOLD_KEY};
 use devworks_core::settings::catalog::{AgentRole, descriptor};
 use devworks_core::settings::model;
 use serde_json::{Value, json};
@@ -295,7 +296,7 @@ impl Fx {
         scope: Value,
         text: &str,
         extra: Value,
-    ) -> Page<KnowledgeClaim> {
+    ) -> KnowledgeSearchPage {
         let mut body = json!({"scope": scope, "text": text, "tags": [], "kinds": [],
             "page": {"limit": 50}, "entityLimit": 50, "claimLimit": 50});
         if let Value::Object(m) = extra {
@@ -304,7 +305,7 @@ impl Fx {
             }
         }
         match result(self.q(ctx, "knowledge.search", body)) {
-            OperationResult::KnowledgeSearch { value } => value,
+            OperationResult::KnowledgeSearch { value } => current(value),
             other => panic!("{other:?}"),
         }
     }
@@ -469,12 +470,32 @@ fn wire_json(v: Value) -> String {
         .unwrap_or_default()
         .to_owned()
 }
-fn ids(page: &Page<KnowledgeClaim>) -> Vec<String> {
-    page.items
-        .0
+/// A listing page of claims: a search page or a lesson page.
+trait Claims {
+    fn claims(&self) -> &[KnowledgeClaim];
+}
+impl Claims for Page<KnowledgeClaim> {
+    fn claims(&self) -> &[KnowledgeClaim] {
+        &self.items.0
+    }
+}
+impl Claims for KnowledgeSearchPage {
+    fn claims(&self) -> &[KnowledgeClaim] {
+        &self.items.0
+    }
+}
+fn ids(page: &impl Claims) -> Vec<String> {
+    page.claims()
         .iter()
         .map(|c| c.id.as_str().to_owned())
         .collect()
+}
+/// The search page of a reply at the current schema revision.
+fn current(value: KnowledgeSearchResult) -> KnowledgeSearchPage {
+    match value {
+        KnowledgeSearchResult::Current(page) => page,
+        KnowledgeSearchResult::Legacy(page) => panic!("a legacy page at revision 30: {page:?}"),
+    }
 }
 fn lesson_draft(source: &str, reference: Option<&str>, words: Option<&str>) -> Value {
     let mut l = json!({"source": source, "applicability": {"activities": ["implementing"],
@@ -1366,7 +1387,7 @@ fn pages_cover_every_row_once_and_cursors_expire_with_the_scope() {
     let mut cursor: Option<String> = None;
     loop {
         let page = match result(fx.q(&user, "knowledge.search", body(cursor.as_deref()))) {
-            OperationResult::KnowledgeSearch { value } => value,
+            OperationResult::KnowledgeSearch { value } => current(value),
             other => panic!("{other:?}"),
         };
         seen.extend(ids(&page));
@@ -1379,7 +1400,7 @@ fn pages_cover_every_row_once_and_cursors_expire_with_the_scope() {
     assert_eq!(seen.iter().collect::<BTreeSet<_>>().len(), 7);
     // A cursor read before a change of its scope expires instead of skipping or repeating.
     let first = match result(fx.q(&user, "knowledge.search", body(None))) {
-        OperationResult::KnowledgeSearch { value } => value.next_cursor.unwrap().0,
+        OperationResult::KnowledgeSearch { value } => current(value).next_cursor.unwrap().0,
         other => panic!("{other:?}"),
     };
     fx.fact(&user, proj("project-a"), "T9", draft("Fact", "paged late"));
@@ -1387,7 +1408,7 @@ fn pages_cover_every_row_once_and_cursors_expire_with_the_scope() {
     assert_eq!(f.code, DomainErrorCode::CursorExpired);
     // A change of general Knowledge (also read by a project page) expires it too.
     let first = match result(fx.q(&user, "knowledge.search", body(None))) {
-        OperationResult::KnowledgeSearch { value } => value.next_cursor.unwrap().0,
+        OperationResult::KnowledgeSearch { value } => current(value).next_cursor.unwrap().0,
         other => panic!("{other:?}"),
     };
     fx.fact(&user, ws(), "G", draft("Fact", "unrelated general"));
@@ -1401,7 +1422,7 @@ fn pages_cover_every_row_once_and_cursors_expire_with_the_scope() {
         "text": "paged", "tags": [], "kinds": [], "page": {"limit": 500}, "entityLimit": 50,
         "claimLimit": 2}),
     )) {
-        OperationResult::KnowledgeSearch { value } => value,
+        OperationResult::KnowledgeSearch { value } => current(value),
         other => panic!("{other:?}"),
     };
     assert_eq!(page.items.0.len(), 2);
@@ -1486,7 +1507,7 @@ fn relevance_pages_cover_every_match_once_in_the_order_of_one_page() {
     let mut cursor: Option<String> = None;
     loop {
         let page = match result(fx.q(&user, "knowledge.search", body(cursor.as_deref()))) {
-            OperationResult::KnowledgeSearch { value } => value,
+            OperationResult::KnowledgeSearch { value } => current(value),
             other => panic!("{other:?}"),
         };
         assert!(page.items.0.len() <= 2);
@@ -1517,7 +1538,7 @@ fn cache_page(
     user: &InvocationContext,
     limit: u32,
     cursor: Option<&str>,
-) -> Page<KnowledgeClaim> {
+) -> KnowledgeSearchPage {
     let mut page = json!({"limit": limit});
     if let Some(c) = cursor {
         page["cursor"] = json!(c);
@@ -1528,7 +1549,7 @@ fn cache_page(
         json!({"scope": proj("project-a"), "text": "cache", "tags": [], "kinds": [],
             "page": page, "entityLimit": 50, "claimLimit": 50}),
     )) {
-        OperationResult::KnowledgeSearch { value } => value,
+        OperationResult::KnowledgeSearch { value } => current(value),
         other => panic!("{other:?}"),
     }
 }
@@ -1580,7 +1601,7 @@ fn another_projects_words_never_change_a_relevance_score_order_or_cursor() {
     let before = cache_pages(&fx, &user);
     assert_eq!(before.0.len(), 5);
     assert!(
-        before.1.iter().all(|p| p.starts_with('r')),
+        before.1.iter().all(|p| p.starts_with('f')),
         "{:?}",
         before.1
     );
@@ -1671,25 +1692,18 @@ fn a_page_of_the_repository_maximum_continues_instead_of_truncating() {
         json!({"scope": proj("project-a"), "text": "bulk", "tags": [], "kinds": [], "page": page,
             "entityLimit": 500, "claimLimit": 500})
     };
+    // A search lists at most the capped candidates of its sources (word and graph matches
+    // here, each with all 504 claims), each once, and says the cap limited it.
     let first = match result(fx.q(&user, "knowledge.search", body(None))) {
-        OperationResult::KnowledgeSearch { value } => value,
+        OperationResult::KnowledgeSearch { value } => current(value),
         other => panic!("{other:?}"),
     };
-    assert_eq!(first.items.0.len(), 500);
-    assert!(
-        first.has_more,
-        "a full page of the maximum says more follow"
-    );
-    let second = match result(fx.q(
-        &user,
-        "knowledge.search",
-        body(Some(&first.next_cursor.unwrap().0)),
-    )) {
-        OperationResult::KnowledgeSearch { value } => value,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(second.items.0.len(), 4);
-    assert!(!second.has_more);
+    let listed = ids(&first);
+    assert!(listed.len() >= usize::from(CANDIDATES));
+    assert!(listed.len() <= 2 * usize::from(CANDIDATES));
+    assert_eq!(listed.iter().collect::<BTreeSet<_>>().len(), listed.len());
+    assert!(first.work_limited);
+    assert!(!first.has_more);
     // The context seam reads every effective rule, beyond one repository page.
     let rules: Vec<Value> = (0..126)
         .map(|i| {
@@ -2364,7 +2378,7 @@ fn an_observation_that_changes_staleness_expires_a_stale_filtered_cursor() {
             "page": page, "entityLimit": 50, "claimLimit": 50, "stale": false})
     };
     let first = match result(fx.q(&user, "knowledge.search", body(None))) {
-        OperationResult::KnowledgeSearch { value } => value.next_cursor.unwrap().0,
+        OperationResult::KnowledgeSearch { value } => current(value).next_cursor.unwrap().0,
         other => panic!("{other:?}"),
     };
     // The same revision again changes nothing: the cursor still continues.
@@ -3731,8 +3745,17 @@ fn search_words_may_split_between_a_claim_and_its_subject() {
     let found = |scope: Value, text: &str| ids(&fx.search(&user, scope, text, json!({})));
     assert_eq!(found(proj("project-a"), "router tiers"), [claim.as_str()]);
     assert_eq!(found(proj("project-a"), "tiers router"), [claim.as_str()]);
-    // Every word is still required, in one or the other.
-    assert!(found(proj("project-a"), "router pins").is_empty());
+    // Every word is still required, in one or the other, for a word match ...
+    assert!(
+        text_matches(
+            &fx,
+            &["project:project-a", "workspace"],
+            &["router", "pins"]
+        )
+        .is_empty()
+    );
+    // ... and the claim is still found one hop from the entity the query names.
+    assert_eq!(found(proj("project-a"), "router pins"), [claim.as_str()]);
     // ... and scope still applies to the claim and to its subject.
     assert!(found(proj("project-b"), "router tiers").is_empty());
     let general = fx.claim_id(&user, ws(), "Gateway", draft("Fact", "routes retry"));
@@ -6803,14 +6826,29 @@ fn embed(fx: &Fx, space: &Id, scope: KnowledgeScope, claim: &str, vector: [f32; 
     })
 }
 
+/// The word matches (store candidates) of a search of `scopes` for `words`.
+fn text_matches(fx: &Fx, scopes: &[&str], words: &[&str]) -> Vec<String> {
+    let query = ClaimQuery {
+        scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        lifecycles: vec!["Active".into()],
+        words: words.iter().map(|w| w.to_string()).collect(),
+        entity_limit: Some(50),
+        ..ClaimQuery::default()
+    };
+    fx.read(|s| s.knowledge().knowledge_text_candidates(&query, 500))
+        .into_iter()
+        .map(|c| c.as_str().to_owned())
+        .collect()
+}
+
+/// The vector candidates of a search of `scopes` for `words` near `vector`, at most `count`.
 fn neighbors(
     fx: &Fx,
     scopes: &[&str],
     words: &[&str],
     vector: [f32; 2],
     count: u16,
-    after: Option<(f64, String)>,
-) -> Vec<(String, f64)> {
+) -> Vec<String> {
     let query = ClaimQuery {
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
         lifecycles: vec!["Active".into()],
@@ -6820,29 +6858,22 @@ fn neighbors(
     };
     fx.read(|s| {
         let space = id("space-1");
-        s.knowledge().knowledge_claim_neighbors(
+        s.knowledge().knowledge_vector_candidates(
             &query,
             &ClaimVectorQuery {
                 space: &space,
                 vector: &vector,
-                neighbors: count,
             },
-            after.as_ref().map(|(s, id)| (*s, id.as_str())),
-            50,
+            count,
         )
     })
     .into_iter()
-    .map(|c| {
-        let ClaimRank::Similarity(s) = c.rank else {
-            panic!("{:?}", c.rank)
-        };
-        (c.id.as_str().to_owned(), s)
-    })
+    .map(|c| c.as_str().to_owned())
     .collect()
 }
 
 #[test]
-fn vector_matches_are_scored_only_inside_the_read_scopes_and_exclude_text_matches() {
+fn vector_matches_are_scored_only_inside_the_read_scopes_and_include_text_matches() {
     let fx = Fx::new();
     let user = fx.user();
     let space = vector_space(&fx);
@@ -6894,32 +6925,19 @@ fn vector_matches_are_scored_only_inside_the_read_scopes_and_exclude_text_matche
     // The nearest vector of all belongs to another project.
     assert_eq!(embed(&fx, &space, b, other.as_str(), [1.0, 0.0]), 1);
     let read_a = ["project:project-a", "workspace"];
-    let found = neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 20, None);
-    let order: Vec<&str> = found.iter().map(|(c, _)| c.as_str()).collect();
-    assert_eq!(order, [near.as_str(), general.as_str(), text.as_str()]);
-    assert!(found.windows(2).all(|w| w[0].1 > w[1].1), "{found:?}");
-    // A text match (every word) is never also a vector match.
-    let found = neighbors(&fx, &read_a, &["kitchen"], [1.0, 0.0], 20, None);
-    assert!(found.iter().all(|(c, _)| c != text.as_str()), "{found:?}");
-    assert_eq!(found.len(), 2);
-    // At most the nearest `neighbors`, and a page resumes strictly after its last row.
+    let found = neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 20);
+    assert_eq!(found, [near.as_str(), general.as_str(), text.as_str()]);
+    // A text match is a vector match too: the fused ranking counts both.
+    let found = neighbors(&fx, &read_a, &["kitchen"], [1.0, 0.0], 20);
+    assert!(found.iter().any(|c| c == text.as_str()), "{found:?}");
+    assert_eq!(found.len(), 3);
+    // At most `count`, nearest first.
     assert_eq!(
-        neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 1, None).len(),
-        1
+        neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 1),
+        [near.as_str()]
     );
-    let first = neighbors(&fx, &read_a, &["automobile"], [1.0, 0.0], 20, None)[0].clone();
-    let rest = neighbors(
-        &fx,
-        &read_a,
-        &["automobile"],
-        [1.0, 0.0],
-        20,
-        Some((first.1, first.0)),
-    );
-    let rest: Vec<&str> = rest.iter().map(|(c, _)| c.as_str()).collect();
-    assert_eq!(rest, [general.as_str(), text.as_str()]);
     // A vector with no positive similarity is no match.
-    assert!(neighbors(&fx, &["project:project-a"], &["x"], [-1.0, 0.0], 20, None).is_empty());
+    assert!(neighbors(&fx, &["project:project-a"], &["x"], [-1.0, 0.0], 20).is_empty());
     let coverage = fx.read(|s| {
         s.knowledge().knowledge_vector_coverage(
             &["project:project-a".into(), "workspace".into()],
@@ -6995,10 +7013,8 @@ fn a_claims_vector_follows_its_current_text_scope_and_deletion() {
         &["x"],
         [1.0, 0.0],
         20,
-        None,
     );
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].0, claim.as_str());
+    assert_eq!(found, [claim.as_str()]);
     // Deletion keeps no vector.
     let rev = fx.revision(&claim);
     assert!(
@@ -7057,12 +7073,156 @@ fn an_unusable_vector_is_recorded_without_a_vector_and_never_matched() {
             .is_empty(),
         "the unusable text is not offered again"
     );
-    let found = neighbors(&fx, &["project:project-a"], &["x"], [1.0, 0.0], 20, None);
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].0, good.as_str());
+    let found = neighbors(&fx, &["project:project-a"], &["x"], [1.0, 0.0], 20);
+    assert_eq!(found, [good.as_str()]);
     let coverage = fx.read(|r| {
         r.knowledge()
             .knowledge_vector_coverage(&["project:project-a".into()], &id("space-1"))
     });
     assert_eq!(coverage, (1, 2));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fused ranking (DW-249)
+
+/// Records, in `scope`, a claim of a new entity `subject` pointing at the entity `object`.
+fn edge(fx: &Fx, user: &InvocationContext, scope: Value, subject: &str, object: &Id) -> Id {
+    fx.claim_id(
+        user,
+        scope,
+        subject,
+        with(
+            draft("Fact", "forwards every request"),
+            json!({"predicate": "forwards_to", "objectId": object}),
+        ),
+    )
+}
+
+#[test]
+fn a_claim_one_hop_from_a_matched_entity_is_found_without_its_words_and_only_where_readable() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // A general entity the query names, with a claim about it (a word match).
+    let about = fx.claim_id(&user, ws(), "Router", draft("Fact", "tiers rotate"));
+    let router = fx.claim(&user, ws(), &about).subject_id;
+    // Claims of other entities pointing at it share no word with the query.
+    let mine = edge(&fx, &user, proj("project-a"), "Gateway", &router);
+    let theirs = edge(&fx, &user, proj("project-b"), "Proxy", &router);
+    assert!(
+        text_matches(&fx, &["project:project-a", "workspace"], &["router"])
+            .iter()
+            .all(|c| c != mine.as_str()),
+        "the edge claim is no word match"
+    );
+    let page = fx.search(&user, proj("project-a"), "router", json!({}));
+    let found = ids(&page);
+    assert!(found.contains(&about.as_str().to_owned()), "{found:?}");
+    assert!(found.contains(&mine.as_str().to_owned()), "{found:?}");
+    // Another project's claim one hop from the same general entity is never read.
+    assert!(!found.contains(&theirs.as_str().to_owned()), "{found:?}");
+    assert_eq!(found.len(), 2);
+    // Without a vector index the search fuses word and graph matches and says so.
+    assert!(matches!(page.mode, KnowledgeRetrievalMode::LexicalOnly));
+    assert!(!page.work_limited);
+    // The word match is found by both sources (its subject is the entity): it ranks first.
+    assert_eq!(found[0], about.as_str());
+    // Project B sees its own claim and never project A's.
+    let found = ids(&fx.search(&user, proj("project-b"), "router", json!({})));
+    assert!(found.contains(&theirs.as_str().to_owned()), "{found:?}");
+    assert!(!found.contains(&mine.as_str().to_owned()), "{found:?}");
+    // An earlier schema revision reads the same claims as a plain page.
+    let body = json!({"scope": proj("project-a"), "text": "router", "tags": [], "kinds": [],
+        "page": {"limit": 50}, "entityLimit": 50, "claimLimit": 50});
+    match result(fx.query_at(&user, "knowledge.search", body, Some(8))) {
+        OperationResult::KnowledgeSearch {
+            value: KnowledgeSearchResult::Legacy(legacy),
+        } => assert_eq!(ids(&legacy), ids(&page)),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Records `n` claims about `subject` in project A, each saying `text <i>`, in batches.
+fn many(
+    fx: &Fx,
+    user: &InvocationContext,
+    subject: &str,
+    n: usize,
+    claim: impl Fn(usize) -> Value,
+) {
+    for start in (0..n).step_by(100) {
+        let claims: Vec<Value> = (start..n.min(start + 100)).map(&claim).collect();
+        receipt(fx.record(
+            user,
+            proj("project-a"),
+            json!({"entities": [{"clientId": "s", "label": subject, "entityType": "topic",
+                "aliases": []}], "evidence": [], "claims": claims}),
+        ));
+    }
+}
+
+/// Every page of project A's search for `text`, `limit` rows each, and the first page.
+fn all_pages(fx: &Fx, user: &InvocationContext, text: &str, limit: u32) -> (Vec<String>, bool) {
+    let (mut seen, mut limited) = (Vec::new(), None);
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page = json!({"limit": limit});
+        if let Some(c) = &cursor {
+            page["cursor"] = json!(c);
+        }
+        let page = fx.search(
+            user,
+            proj("project-a"),
+            text,
+            json!({"page": page, "entityLimit": 500, "claimLimit": 500}),
+        );
+        limited.get_or_insert(page.work_limited);
+        assert_eq!(
+            page.work_limited,
+            limited.unwrap(),
+            "every page says the same"
+        );
+        seen.extend(ids(&page));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => return (seen, limited.unwrap()),
+        }
+    }
+}
+
+#[test]
+fn a_source_past_its_candidate_cap_says_the_results_are_work_limited() {
+    let fx = Fx::new();
+    let user = fx.user();
+    let cap = usize::from(CANDIDATES);
+    // Word matches only: the subject shares no word with the query.
+    many(&fx, &user, "Notes", cap, |i| {
+        draft("Fact", &format!("alpha row {i}"))
+    });
+    let (seen, limited) = all_pages(&fx, &user, "alpha", 500);
+    assert_eq!(seen.len(), cap);
+    assert!(!limited, "exactly the cap is not limited");
+    many(&fx, &user, "Notes", 1, |_| draft("Fact", "alpha extra"));
+    let (whole, limited) = all_pages(&fx, &user, "alpha", 500);
+    assert_eq!(whole.len(), cap);
+    assert!(limited, "one past the cap is");
+    // Small pages list the same claims, each once, in the same order.
+    let (paged, _) = all_pages(&fx, &user, "alpha", 7);
+    assert_eq!(paged, whole);
+    // Graph matches only: claims pointing at an entity the query names.
+    let hub = fx.claim_id(&user, proj("project-a"), "Hub", draft("Fact", "central"));
+    let hub = fx.claim(&user, proj("project-a"), &hub).subject_id;
+    many(&fx, &user, "Spoke", cap, |_| {
+        with(
+            draft("Fact", "links outward"),
+            json!({"predicate": "links", "objectId": hub}),
+        )
+    });
+    let (seen, limited) = all_pages(&fx, &user, "hub", 500);
+    // The claim about the hub is a word and a graph match; the cap cuts the graph list.
+    assert_eq!(
+        seen.len(),
+        cap + 1,
+        "every graph candidate within the cap and the word match"
+    );
+    assert!(limited);
 }

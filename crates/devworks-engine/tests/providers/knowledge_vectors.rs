@@ -9,10 +9,9 @@ use devworks_core::{
     authority::HostAuthority,
     gateway::Gateway,
     protocol::{
-        OperationState, ProjectId,
-        records::{Diagnostic, KnowledgeClaim},
+        DomainErrorCode, OperationState, ProjectId,
+        records::{Diagnostic, KnowledgeRetrievalMode, KnowledgeSearchPage, KnowledgeSearchResult},
         results::{DomainQueryReply, OperationResult},
-        support::Page,
     },
     services::{
         UseCases,
@@ -68,13 +67,14 @@ fn record(f: &Fx, cases: &UseCases, ctx: &InvocationContext, key: &str, value: &
     value.claim_ids.0[0].clone()
 }
 
-fn query(
+fn query_at(
     f: &Fx,
     cases: &UseCases,
     ctx: &InvocationContext,
     op: &str,
     body: Value,
-) -> OperationResult {
+    revision: u32,
+) -> DomainQueryReply {
     let authority = HostAuthority {
         store: f.store.as_ref(),
         clock: &*f.h.clock,
@@ -89,14 +89,41 @@ fn query(
     body["kind"] = json!(op);
     let key = format!("q-{}", f.h.ids.next_id(IdKind::Correlation).as_str());
     let frame = json!({"mode": "Query", "protocol": "1.0-draft.1", "queryId": key,
-        "schemaRevision": 2, "body": body});
-    match cases
+        "schemaRevision": revision, "body": body});
+    cases
         .query(&gateway, ctx, op, frame.to_string().as_bytes())
         .unwrap()
-    {
+}
+
+fn query(
+    f: &Fx,
+    cases: &UseCases,
+    ctx: &InvocationContext,
+    op: &str,
+    body: Value,
+) -> OperationResult {
+    match query_at(f, cases, ctx, op, body, 2) {
         DomainQueryReply::Result { result, .. } => result,
         other => panic!("{other:?}"),
     }
+}
+
+/// One `knowledge.search` reply at the revision that reports the retrieval mode.
+fn search_reply(
+    f: &Fx,
+    cases: &UseCases,
+    ctx: &InvocationContext,
+    text: &str,
+    limit: u32,
+    cursor: Option<&str>,
+) -> DomainQueryReply {
+    let mut page = json!({"limit": limit});
+    if let Some(cursor) = cursor {
+        page["cursor"] = json!(cursor);
+    }
+    let body = json!({"scope": scope(ctx), "text": text, "tags": [], "kinds": [],
+        "page": page, "entityLimit": 50, "claimLimit": 50});
+    query_at(f, cases, ctx, "knowledge.search", body, 30)
 }
 
 fn search(
@@ -106,20 +133,20 @@ fn search(
     text: &str,
     limit: u32,
     cursor: Option<&str>,
-) -> Page<KnowledgeClaim> {
-    let mut page = json!({"limit": limit});
-    if let Some(cursor) = cursor {
-        page["cursor"] = json!(cursor);
-    }
-    let body = json!({"scope": scope(ctx), "text": text, "tags": [], "kinds": [],
-        "page": page, "entityLimit": 50, "claimLimit": 50});
-    match query(f, cases, ctx, "knowledge.search", body) {
-        OperationResult::KnowledgeSearch { value } => value,
+) -> KnowledgeSearchPage {
+    match search_reply(f, cases, ctx, text, limit, cursor) {
+        DomainQueryReply::Result {
+            result:
+                OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Current(page),
+                },
+            ..
+        } => page,
         other => panic!("{other:?}"),
     }
 }
 
-fn ids(page: &Page<KnowledgeClaim>) -> Vec<Id> {
+fn ids(page: &KnowledgeSearchPage) -> Vec<Id> {
     page.items.0.iter().map(|c| c.id.clone()).collect()
 }
 
@@ -225,10 +252,13 @@ fn a_claim_that_shares_no_word_is_found_by_meaning_and_only_in_its_own_project()
         diagnostic.message.0
     );
 
-    // Text matches come first, then vector matches; the cursor resumes across the two.
+    assert!(matches!(found.mode, KnowledgeRetrievalMode::Hybrid));
+    assert!(!found.work_limited);
+
+    // The word match and the meaning match are fused; the cursor resumes across them, and
+    // each is listed once.
     reply(&f, &[[1.0, 0.0]]);
     let first = search(&f, &cases, &a, "kitchen", 1, None);
-    assert_eq!(ids(&first), std::slice::from_ref(&far));
     reply(&f, &[[1.0, 0.0]]);
     let second = search(
         &f,
@@ -238,8 +268,13 @@ fn a_claim_that_shares_no_word_is_found_by_meaning_and_only_in_its_own_project()
         1,
         first.next_cursor.as_ref().map(|c| c.0.as_str()),
     );
-    assert_eq!(ids(&second), [near]);
     assert!(second.next_cursor.is_none());
+    let mut both = ids(&first);
+    both.extend(ids(&second));
+    both.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut want = vec![far, near];
+    want.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(both, want);
 
     // The other project sees its own claim.
     reply(&f, &[[1.0, 0.0]]);
@@ -253,6 +288,95 @@ fn a_claim_that_shares_no_word_is_found_by_meaning_and_only_in_its_own_project()
         (3, 0, 0),
         "{jobs:?}"
     );
+}
+
+#[test]
+fn a_claim_found_by_words_and_by_meaning_ranks_above_claims_found_by_one() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (human, _native, index) = qualify(&f);
+    seed::rows(
+        f.store.as_ref(),
+        &[seed::ProjectSeed::new("knowledge-a")],
+        &[],
+    )
+    .unwrap();
+    let a = project(&human, "knowledge-a");
+    let (service, cases) = knowledge(&f, Some(index));
+    // The best word match points away from the query's meaning ...
+    let words = record(&f, &cases, &a, "words", "kitchen kitchen kitchen");
+    reply(&f, &[[-1.0, 0.1]]);
+    embed(&f, &service);
+    // ... the nearest claim shares no word ...
+    let meaning = record(&f, &cases, &a, "meaning", "a vehicle parked outside");
+    reply(&f, &[[1.0, 0.0]]);
+    embed(&f, &service);
+    // ... and the second of each is found both ways.
+    let both = record(&f, &cases, &a, "both", "kitchen recipe");
+    reply(&f, &[[0.8, 0.2]]);
+    embed(&f, &service);
+    reply(&f, &[[1.0, 0.0]]);
+    let page = search(&f, &cases, &a, "kitchen", 50, None);
+    assert!(matches!(page.mode, KnowledgeRetrievalMode::Hybrid));
+    let found = ids(&page);
+    assert_eq!(found[0], both, "{found:?}");
+    let mut rest = found[1..].to_vec();
+    rest.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut want = vec![words, meaning];
+    want.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(rest, want);
+    // Pages of one list the same claims, each once, in the same order.
+    let mut paged = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        reply(&f, &[[1.0, 0.0]]);
+        let page = search(&f, &cases, &a, "kitchen", 1, cursor.as_deref());
+        paged.extend(ids(&page));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => break,
+        }
+    }
+    assert_eq!(paged, found);
+}
+
+#[test]
+fn a_vector_stored_between_pages_expires_a_fused_cursor() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (human, _native, index) = qualify(&f);
+    seed::rows(
+        f.store.as_ref(),
+        &[seed::ProjectSeed::new("knowledge-a")],
+        &[],
+    )
+    .unwrap();
+    let a = project(&human, "knowledge-a");
+    let (service, cases) = knowledge(&f, Some(index));
+    record(&f, &cases, &a, "first", "kitchen recipe");
+    reply(&f, &[[0.9, 0.1]]);
+    embed(&f, &service);
+    record(&f, &cases, &a, "second", "kitchen knife");
+    // The second claim's vector is not stored yet when the first page is read.
+    reply(&f, &[[1.0, 0.0]]);
+    let page = search(&f, &cases, &a, "kitchen", 1, None);
+    assert!(page.next_cursor.is_some());
+    // Storing a vector does not advance the scope's revision, but it changes the meaning
+    // source: the cursor expires instead of repeating or skipping a claim.
+    reply(&f, &[[0.8, 0.2]]);
+    embed(&f, &service);
+    reply(&f, &[[1.0, 0.0]]);
+    match search_reply(
+        &f,
+        &cases,
+        &a,
+        "kitchen",
+        1,
+        page.next_cursor.as_ref().map(|c| c.0.as_str()),
+    ) {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert_eq!(fault.code, DomainErrorCode::CursorExpired)
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -280,7 +404,9 @@ fn without_an_embedding_route_search_is_lexical_and_diagnostics_say_why() {
         QueueStatus::default(),
         "nothing to embed without a route"
     );
-    assert_eq!(ids(&search(&f, &cases, &a, "kitchen", 50, None)), [claim]);
+    let page = search(&f, &cases, &a, "kitchen", 50, None);
+    assert_eq!(ids(&page), [claim]);
+    assert!(matches!(page.mode, KnowledgeRetrievalMode::LexicalOnly));
     assert!(
         search(&f, &cases, &a, "automobile", 50, None)
             .items
@@ -485,7 +611,7 @@ fn claims_recorded_before_a_space_is_selected_get_vectors_when_it_is() {
 }
 
 #[test]
-fn a_route_failure_at_query_time_keeps_the_word_matches_and_their_cursor() {
+fn a_route_failure_at_query_time_keeps_the_word_matches_and_expires_a_fused_cursor() {
     let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
     let (human, _native, index) = qualify(&f);
     seed::rows(
@@ -505,24 +631,31 @@ fn a_route_failure_at_query_time_keeps_the_word_matches_and_their_cursor() {
     reply(&f, &[[1.0, 0.0]]);
     let page = search(&f, &cases, &a, "kitchen", 1, None);
     assert_eq!(page.items.0.len(), 1);
-    // No reply is recorded for the next query embedding: the route fails at query time, and
-    // the page still lists the next word match under the same cursor.
-    let rest = search(
+    assert!(matches!(page.mode, KnowledgeRetrievalMode::Hybrid));
+    // No reply is recorded for the next query embedding: the route fails at query time. The
+    // fused order without meaning matches is another order, so the cursor expires instead of
+    // repeating or skipping a claim.
+    match search_reply(
         &f,
         &cases,
         &a,
         "kitchen",
         1,
         page.next_cursor.as_ref().map(|c| c.0.as_str()),
-    );
-    let mut all = ids(&page);
-    all.extend(ids(&rest));
+    ) {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert_eq!(fault.code, DomainErrorCode::CursorExpired)
+        }
+        other => panic!("{other:?}"),
+    }
+    // A first page without a query vector lists the word matches and says it is lexical.
+    let lexical = search(&f, &cases, &a, "kitchen", 50, None);
+    let mut all = ids(&lexical);
     all.sort_by(|x, y| x.as_str().cmp(y.as_str()));
     let mut want = vec![first, second];
     want.sort_by(|x, y| x.as_str().cmp(y.as_str()));
     assert_eq!(all, want);
-    // And a first page without a query vector lists the word matches.
-    assert_eq!(search(&f, &cases, &a, "kitchen", 50, None).items.0.len(), 2);
+    assert!(matches!(lexical.mode, KnowledgeRetrievalMode::LexicalOnly));
 }
 
 #[test]

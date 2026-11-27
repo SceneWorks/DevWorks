@@ -28,8 +28,8 @@ use devworks_core::protocol::data::DataScope;
 use devworks_core::protocol::provider::{ArtifactRef, SchemaRef};
 use devworks_core::protocol::records::{
     Applicability, ChallengeOutcome, ClaimDraft, KnowledgeBatch, KnowledgeBundle, KnowledgeClaim,
-    KnowledgeEntityDraft, KnowledgeKind, KnowledgeWriteReceipt, LessonDraft, LessonSource,
-    PromoteAction, RevisionedRef,
+    KnowledgeEntityDraft, KnowledgeKind, KnowledgeSearchResult, KnowledgeWriteReceipt, LessonDraft,
+    LessonSource, PromoteAction, RevisionedRef,
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::{BoundedList, Limit, Probability};
@@ -1134,19 +1134,31 @@ impl KnowledgeScreen {
     /// continuation expired because the scope changed) or a gathering re-read needs its next
     /// page.
     pub fn listed(&mut self, generation: u64, outcome: QueryOutcome) -> Listed {
-        match ops::query_result(outcome) {
-            Ok((
-                OperationResult::KnowledgeSearch { value }
-                | OperationResult::KnowledgeTaggedLessons { value },
-                _,
-            )) => {
-                let page = Page::new(value.items.0, value.next_cursor.map(|c| c.0));
+        // A search page carries its retrieval mode beside the claims; the listing shows claims.
+        let outcome = ops::query_result(outcome).map(|(result, revision)| {
+            let page = match result {
+                OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Current(value),
+                } => Ok((value.items.0, value.next_cursor)),
+                OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Legacy(value),
+                }
+                | OperationResult::KnowledgeTaggedLessons { value } => {
+                    Ok((value.items.0, value.next_cursor))
+                }
+                other => Err(other),
+            };
+            (page, revision)
+        });
+        match outcome {
+            Ok((Ok((items, cursor)), _)) => {
+                let page = Page::new(items, cursor.map(|c| c.0));
                 match self.claims.apply(generation, Ok(page)) {
                     Applied::Continue(fetch) => Listed::Continue(fetch),
                     _ => Listed::Done,
                 }
             }
-            Ok((other, _)) => {
+            Ok((Err(other), _)) => {
                 let error = format!("Unexpected reply {}", other.operation());
                 self.claims.apply(generation, Err(error));
                 Listed::Done

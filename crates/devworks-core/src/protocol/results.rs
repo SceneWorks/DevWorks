@@ -326,7 +326,7 @@ pub enum OperationResult {
     #[serde(rename = "database.edit_sensitive_column_rules")]
     DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
-    KnowledgeSearch { value: Page<KnowledgeClaim> },
+    KnowledgeSearch { value: KnowledgeSearchResult },
     #[serde(rename = "knowledge.read")]
     KnowledgeRead { value: KnowledgeBundle },
     #[serde(rename = "knowledge.record")]
@@ -2020,6 +2020,7 @@ impl Revisioned for OperationResult {
             Self::AnalysisFleetHealth { value } => value.check_revision(revision),
             Self::AnalysisArchivalCandidates { value } => value.check_revision(revision),
             Self::AnalysisFileHotspot { value } => value.check_revision(revision),
+            Self::KnowledgeSearch { value } => value.check_revision(revision),
             Self::DreamingRevert { value } => value.check_revision(revision),
             Self::DocumentsImport { value } => value.check_revision(revision),
             Self::DocumentsList { value } => value.check_revision(revision),
