@@ -11,6 +11,7 @@ use devworks_desktop::chat::ChatSlot;
 use devworks_desktop::conventions_ops::ConventionsSlot;
 use devworks_desktop::databases_ops::DatabasesSlot;
 use devworks_desktop::decision_ops::DecisionsSlot;
+use devworks_desktop::dreaming_screen::DreamingSlot;
 use devworks_desktop::graph_ops::GraphSlot;
 use devworks_desktop::help_ops::HelpSlot;
 use devworks_desktop::indexing_ops::IndexingSlot;
@@ -268,6 +269,7 @@ fn screen_variants() -> Vec<(ScreenId, Vec<String>)> {
         (ScreenId::AddOns, variant_names::<AddonsSlot>()),
         (ScreenId::Knowledge, variant_names::<KnowledgeSlot>()),
         (ScreenId::Purge, variant_names::<PurgeSlot>()),
+        (ScreenId::Dreaming, variant_names::<DreamingSlot>()),
     ]
 }
 
@@ -310,6 +312,7 @@ fn reported(slot: &Slot) -> String {
         ScreenId::AddOns => format!("{:?}", AddonsSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Knowledge => format!("{:?}", KnowledgeSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Purge => format!("{:?}", PurgeSlot::try_from(slot.clone()).unwrap()),
+        ScreenId::Dreaming => format!("{:?}", DreamingSlot::try_from(slot.clone()).unwrap()),
         ScreenId::Placeholder => unreachable!("no slot belongs to the placeholder screens"),
     }
 }

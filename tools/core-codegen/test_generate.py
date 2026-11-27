@@ -121,7 +121,9 @@ class SchemaRevisionRules(unittest.TestCase):
             # DW-183: a project's agent assignments, introduced at revision 21.
             'agents.list',
             # DW-175: the host's screen-context notice, introduced at revision 23.
-            'sessions.append_screen_context'})
+            'sessions.append_screen_context',
+            # DW-423: coordinator document transfers, introduced at revision 29.
+            'documents.transfer_propose', 'documents.transfer_respond', 'documents.transfer_status'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('addons.read_content', 'addons.run_workflow'):

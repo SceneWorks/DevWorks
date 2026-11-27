@@ -415,6 +415,7 @@ mod tests {
             | TaskOutput::TextPreview(_)
             | TaskOutput::DocumentSource(_)
             | TaskOutput::DocumentAccess(_)
+            | TaskOutput::DreamingReport(_)
             | TaskOutput::WorkspaceReplyStatus(_)
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)
