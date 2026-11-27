@@ -19,7 +19,8 @@ use devworks_core::protocol::provider::{
 use devworks_core::protocol::records::{AgentRecord, EffortName, RouteChoice, RouteIntent};
 use devworks_core::protocol::results::{DomainDecision, OperationResult};
 use devworks_core::protocol::{
-    AttemptId, CommandReply, Counter, Id, OperationState, Protocol, RetryAdvice, Revision,
+    AttemptId, CommandReply, Counter, Id, OperationState, ProjectId, Protocol, RetryAdvice,
+    Revision,
 };
 use devworks_core::providers::context::{
     ContentBlock, GenerationParameters, Message, MessageRole, ProviderContext, ResultBlock,
@@ -2972,6 +2973,31 @@ pub(crate) fn plan_compaction(
     plan_request(engine, ctx, route, binding, input, None)
 }
 
+/// The run and project of a scheduled inference job's agent turn: the job's own agent principal,
+/// in the job's project scope (none for an app-level job), outside any root or assignment.
+pub(crate) fn scheduled_job(ctx: &InvocationContext) -> Option<(&Id, Option<&ProjectId>)> {
+    let run = ctx.job_run_id()?;
+    (ctx.principal_kind() == PrincipalKind::Agent
+        && ctx.root_id().is_none()
+        && ctx.assignment_id().is_none()
+        && ctx.workspace_reply().is_none())
+    .then(|| (run, ctx.project_id()))
+}
+
+/// The usage attribution of a turn outside any root: its scheduled job run, else its workspace
+/// session.
+pub(crate) fn unrooted_attribution(ctx: &InvocationContext, session_id: &Id) -> Attribution {
+    match scheduled_job(ctx) {
+        Some((run, project)) => Attribution::Job {
+            run_id: run.clone(),
+            project_id: project.cloned(),
+        },
+        None => Attribution::Workspace {
+            session_id: session_id.clone(),
+        },
+    }
+}
+
 /// `window` selects the offered tools of a generation request; `None` plans a compaction.
 fn plan_request(
     engine: &TurnEngine,
@@ -2982,8 +3008,10 @@ fn plan_request(
     window: Option<usize>,
 ) -> Result<NativeInvocation, StorageError> {
     let session_id = ctx.session_id().ok_or(StorageError::ScopeDenied)?;
+    let job = scheduled_job(ctx);
     let root_scope = match (ctx.root_id(), ctx.project_id()) {
         (Some(root), Some(project)) => Some((root, project)),
+        (None, _) if job.is_some() => None,
         (None, None)
             if ctx.principal_kind() == PrincipalKind::Agent
                 && ctx.assignment_id().is_none()
@@ -3115,14 +3143,32 @@ fn plan_request(
             }
             Some((control, work.is_feature()))
         } else {
-            if session.project_id.is_some()
-                || session.root_id.is_some()
-                || !principal.as_ref().is_some_and(|binding| {
-                    binding.active
-                        && binding.role == Some(AgentRole::WorkspaceCoordinator)
-                        && binding.project_id.is_none()
-                })
-            {
+            let owned = match job {
+                // A scheduled run's own session, while the run is active under this agent.
+                Some((run, project)) => {
+                    session.project_id.as_ref() == project
+                        && session.agent_id == *ctx.principal()
+                        && principal.as_ref().is_some_and(|binding| {
+                            binding.active
+                                && binding.kind == PrincipalKind::Agent
+                                && binding.project_id.as_ref() == project
+                        })
+                        && read.jobs().job_run(run)?.is_some_and(|run| {
+                            matches!(run.status.as_str(), "Running" | "Holding")
+                                && run.agent_actor.as_ref() == Some(ctx.principal())
+                                && run.project_id.as_ref() == project
+                        })
+                }
+                None => {
+                    session.project_id.is_none()
+                        && principal.as_ref().is_some_and(|binding| {
+                            binding.active
+                                && binding.role == Some(AgentRole::WorkspaceCoordinator)
+                                && binding.project_id.is_none()
+                        })
+                }
+            };
+            if session.root_id.is_some() || !owned {
                 return Err(StorageError::ScopeDenied);
             }
             None
@@ -3269,9 +3315,7 @@ fn plan_request(
                 assignment_id: ctx.assignment_id().cloned(),
                 job_run_id: ctx.job_run_id().cloned(),
             },
-            (None, None) => Attribution::Workspace {
-                session_id: session_id.clone(),
-            },
+            (None, None) => unrooted_attribution(ctx, session_id),
             _ => return Err(StorageError::ScopeDenied),
         },
         input: InferenceInput::Generation {
@@ -3297,7 +3341,10 @@ fn plan_request(
             Purpose::Conversation
         },
         session_id: Some(session_id.clone()),
-        project_id: root_scope.map(|(_, project)| project.clone()),
+        project_id: root_scope
+            .map(|(_, project)| project)
+            .or(job.and_then(|(_, project)| project))
+            .cloned(),
         root_id: root_scope.map(|(root, _)| root.clone()),
         model_id: route.model_id.clone(),
         connection_id: route.connection_id.clone(),

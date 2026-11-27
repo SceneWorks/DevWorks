@@ -553,14 +553,14 @@ pub trait InferenceJobs: Send + Sync {
     fn cancel(&self, run: &Id) -> Result<bool, String>;
 }
 
-/// Scheduled inference is not connected in this build: no coordinator turn pipeline (DW-16) and
-/// no provider connection (DW-18). A run fails truthfully before dispatch; nothing is sent.
+/// A composition that explicitly runs no scheduled inference (tests and hosts that compose no
+/// agent turn pipeline; the engine's runtime installs its native pipeline otherwise). A run
+/// fails truthfully before dispatch; nothing is sent.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoInferencePipeline;
-/// The visible reason of a scheduled inference run in a build without the pipeline.
-pub const NO_PIPELINE: &str = "Scheduled inference is not available in this build: the coordinator \
-    turn pipeline and provider connections are not installed. Nothing was \
-    sent to a model.";
+/// The visible reason of a scheduled inference run under [`NoInferencePipeline`].
+pub const NO_PIPELINE: &str = "Scheduled inference is not available in this composition: no agent \
+    turn pipeline is installed. Nothing was sent to a model.";
 impl InferenceJobs for NoInferencePipeline {
     fn availability(&self) -> Result<(), String> {
         Err(NO_PIPELINE.into())
@@ -2257,7 +2257,7 @@ pub fn project_restored(
 
 /// Whether the pipeline took a run under its operation's latest attempt
 /// ([`JobService::settle_inference_start`]).
-fn handed_off(rec: &OperationRecord) -> bool {
+pub fn handed_off(rec: &OperationRecord) -> bool {
     rec.latest_attempt().is_some_and(|a| {
         a.observations
             .iter()
