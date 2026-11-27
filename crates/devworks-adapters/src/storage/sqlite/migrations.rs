@@ -790,6 +790,16 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "7e3c3df3cf96d962469169ba453d7437afb505b060ecb89cb00d6021fd0d0db3",
         rebuilds_tables: true,
     },
+    // Eval suite items (DW-72). An earlier build cannot parse the Suite kind, so neither reads
+    // nor writes a store that may hold one.
+    Migration {
+        version: 71,
+        minimum_reader: 71,
+        minimum_writer: 71,
+        sql: include_str!("migrations/0071_eval_suites.sql"),
+        expected_sha256: "320f11e42691e478c63819c81ec73bf1717e2ef39bcc1f585242870b6e85e6c9",
+        rebuilds_tables: true,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =

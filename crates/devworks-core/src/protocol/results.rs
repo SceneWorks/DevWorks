@@ -811,6 +811,27 @@ pub enum OperationResult {
     EvalsGrade { value: EvalReport },
     #[serde(rename = "evals.results")]
     EvalsResults { value: EvalReportPage },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suites")]
+    EvalsSuites { value: EvalSuitePage },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suite")]
+    EvalsSuite { value: EvalSuiteRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suite_history")]
+    EvalsSuiteHistory { value: EvalSuitePage },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.draft_suite")]
+    EvalsDraftSuite { value: EvalSuiteRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.propose_suite")]
+    EvalsProposeSuite { value: ProposalRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.activate_suite")]
+    EvalsActivateSuite { value: EvalSuiteRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.accept_exception")]
+    EvalsAcceptException { value: EvalSuiteRecord },
     #[schemars(extend("x-since" = 8))]
     #[serde(rename = "watch.create")]
     WatchCreate { value: WatcherRecord },
@@ -1213,6 +1234,13 @@ impl OperationResult {
             Self::McpServerSetClientAccess { .. } => "mcp_server.set_client_access",
             Self::EvalsGrade { .. } => "evals.grade",
             Self::EvalsResults { .. } => "evals.results",
+            Self::EvalsSuites { .. } => "evals.suites",
+            Self::EvalsSuite { .. } => "evals.suite",
+            Self::EvalsSuiteHistory { .. } => "evals.suite_history",
+            Self::EvalsDraftSuite { .. } => "evals.draft_suite",
+            Self::EvalsProposeSuite { .. } => "evals.propose_suite",
+            Self::EvalsActivateSuite { .. } => "evals.activate_suite",
+            Self::EvalsAcceptException { .. } => "evals.accept_exception",
             Self::WatchCreate { .. } => "watch.create",
             Self::WatchList { .. } => "watch.list",
             Self::WatchInspect { .. } => "watch.inspect",
@@ -1605,6 +1633,13 @@ impl Check for OperationResult {
             Self::McpServerSetClientAccess { value } => value.check()?,
             Self::EvalsGrade { value } => value.check()?,
             Self::EvalsResults { value } => value.check()?,
+            Self::EvalsSuites { value } => value.check()?,
+            Self::EvalsSuite { value } => value.check()?,
+            Self::EvalsSuiteHistory { value } => value.check()?,
+            Self::EvalsDraftSuite { value } => value.check()?,
+            Self::EvalsProposeSuite { value } => value.check()?,
+            Self::EvalsActivateSuite { value } => value.check()?,
+            Self::EvalsAcceptException { value } => value.check()?,
             Self::WatchCreate { value } => value.check()?,
             Self::WatchList { value } => value.check()?,
             Self::WatchInspect { value } => value.check()?,
@@ -1925,6 +1960,27 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsSuites { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsSuiteHistory { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsDraftSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsProposeSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsActivateSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsAcceptException { .. } if revision < 23 => {
                 Err("operation result predates its introduction".into())
             }
             Self::WatchCreate { .. } if revision < 8 => {

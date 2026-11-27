@@ -157,6 +157,10 @@ const NEWLY_NATIVE: [&str; 9] = [
 
 /// DW-37 gives only a human administrator control of database sensitive-column policy.
 const HUMAN_DATABASE_POLICY: &str = "database.edit_sensitive_column_rules";
+/// DW-72: an agent's suite activation needs the exact human approval, and only a person accepts
+/// an eval exception.
+const SUITE_ACTIVATION: &str = "evals.activate_suite";
+const SUITE_EXCEPTION: &str = "evals.accept_exception";
 
 #[test]
 fn descriptor_attributes_reproduce_the_former_name_lists() {
@@ -166,12 +170,12 @@ fn descriptor_attributes_reproduce_the_former_name_lists() {
         assert_eq!(d.native_execution, native, "{op} native execution");
         assert_eq!(
             d.approval_required,
-            OLD_APPROVAL_REQUIRED.contains(&op),
+            OLD_APPROVAL_REQUIRED.contains(&op) || op == SUITE_ACTIVATION,
             "{op} approval required"
         );
         assert_eq!(
             d.human_only,
-            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY,
+            OLD_HUMAN_ONLY.contains(&op) || op == HUMAN_DATABASE_POLICY || op == SUITE_EXCEPTION,
             "{op} human only"
         );
         let scope = d.assignment_scope;

@@ -142,6 +142,7 @@ pub(super) fn run_case(writer_race: bool) {
         config.connection_tick = None;
         config.indexing.discover_at_boot = false;
         config.shared_skills = None;
+        config.shared_evals = None;
         config.secrets = Some(secrets.clone());
         config.http = Some(http.clone());
         config.providers =

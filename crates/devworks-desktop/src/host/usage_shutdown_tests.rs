@@ -84,6 +84,7 @@ fn actual_engine_and_tokio_drop_finish_while_owned_start_or_close_is_stalled() {
         config.connection_tick = None;
         config.indexing.discover_at_boot = false;
         config.shared_skills = None;
+        config.shared_evals = None;
         config.secrets = Some(Arc::new(
             devworks_core::ports::secrets::SessionSecrets::new(),
         ));

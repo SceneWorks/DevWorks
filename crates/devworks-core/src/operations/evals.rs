@@ -3,16 +3,17 @@
 
 //! Selected-operation inputs for the `evals` family (owner: EvaluationService).
 //!
-//! Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference, measurement activation or work/repository/Knowledge mutation
+//! Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference or work/repository/Knowledge mutation. Versioned shared and harness suites: agent drafts activate only through their own exact human-approved proposal, and only a person accepts an exception
 //!
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
-use crate::protocol::Id;
+use crate::protocol::provider::{ArtifactRef, Digest};
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
+use crate::protocol::{Id, Revision};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -53,6 +54,159 @@ impl Revisioned for ResultsInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
+/// `evals.suites` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SuitesInput {
+    pub page: PageRequest,
+}
+impl Check for SuitesInput {
+    fn check(&self) -> Result<(), String> {
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SuitesInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `evals.suite` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SuiteInput {
+    pub suite_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<Revision>,
+}
+impl Check for SuiteInput {
+    fn check(&self) -> Result<(), String> {
+        self.suite_id.check()?;
+        self.revision.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SuiteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `evals.suite_history` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SuiteHistoryInput {
+    pub suite_id: Id,
+    pub page: PageRequest,
+}
+impl Check for SuiteHistoryInput {
+    fn check(&self) -> Result<(), String> {
+        self.suite_id.check()?;
+        self.page.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for SuiteHistoryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `evals.draft_suite` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DraftSuiteInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suite_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<Revision>,
+    pub name: Label,
+    pub documentation: ArtifactRef,
+    pub measures: NonEmpty<EvalSubjectRef>,
+    pub checks: NonEmpty<EvalDeterministicCheck>,
+    pub resources: Items<EvalSuiteResourceInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<Content>,
+}
+impl Check for DraftSuiteInput {
+    fn check(&self) -> Result<(), String> {
+        self.suite_id.check()?;
+        self.expected_revision.check()?;
+        self.name.check()?;
+        self.documentation.check()?;
+        self.measures.check()?;
+        self.checks.check()?;
+        self.resources.check()?;
+        self.rationale.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for DraftSuiteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `evals.propose_suite` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProposeSuiteInput {
+    pub suite_id: Id,
+    pub expected_revision: Revision,
+    pub content_digest: Digest,
+}
+impl Check for ProposeSuiteInput {
+    fn check(&self) -> Result<(), String> {
+        self.suite_id.check()?;
+        self.expected_revision.check()?;
+        self.content_digest.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ProposeSuiteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `evals.activate_suite` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivateSuiteInput {
+    pub suite_id: Id,
+    pub expected_revision: Revision,
+    pub target_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<Id>,
+}
+impl Check for ActivateSuiteInput {
+    fn check(&self) -> Result<(), String> {
+        self.suite_id.check()?;
+        self.expected_revision.check()?;
+        self.target_revision.check()?;
+        self.proposal_id.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ActivateSuiteInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `evals.accept_exception` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcceptExceptionInput {
+    pub suite_id: Id,
+    pub expected_revision: Revision,
+    pub check_id: Id,
+    pub matched_instance: EvalStepSource,
+    pub reason: Content,
+}
+impl Check for AcceptExceptionInput {
+    fn check(&self) -> Result<(), String> {
+        self.suite_id.check()?;
+        self.expected_revision.check()?;
+        self.check_id.check()?;
+        self.matched_instance.check()?;
+        self.reason.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for AcceptExceptionInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
 /// An admitted input of the `evals` family, built only for the selected operation and mode.
 #[derive(Clone, Debug)]
 pub enum Input {
@@ -60,18 +214,46 @@ pub enum Input {
     Grade(GradeInput),
     /// `evals.results` (Query).
     Results(ResultsInput),
+    /// `evals.suites` (Query).
+    Suites(SuitesInput),
+    /// `evals.suite` (Query).
+    Suite(SuiteInput),
+    /// `evals.suite_history` (Query).
+    SuiteHistory(SuiteHistoryInput),
+    /// `evals.draft_suite` (Command).
+    DraftSuite(DraftSuiteInput),
+    /// `evals.propose_suite` (Command).
+    ProposeSuite(ProposeSuiteInput),
+    /// `evals.activate_suite` (Command).
+    ActivateSuite(ActivateSuiteInput),
+    /// `evals.accept_exception` (Command).
+    AcceptException(AcceptExceptionInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
         match self {
             Self::Grade(_) => "evals.grade",
             Self::Results(_) => "evals.results",
+            Self::Suites(_) => "evals.suites",
+            Self::Suite(_) => "evals.suite",
+            Self::SuiteHistory(_) => "evals.suite_history",
+            Self::DraftSuite(_) => "evals.draft_suite",
+            Self::ProposeSuite(_) => "evals.propose_suite",
+            Self::ActivateSuite(_) => "evals.activate_suite",
+            Self::AcceptException(_) => "evals.accept_exception",
         }
     }
     pub fn mode(&self) -> Mode {
         match self {
             Self::Grade(_) => Mode::Command,
             Self::Results(_) => Mode::Query,
+            Self::Suites(_) => Mode::Query,
+            Self::Suite(_) => Mode::Query,
+            Self::SuiteHistory(_) => Mode::Query,
+            Self::DraftSuite(_) => Mode::Command,
+            Self::ProposeSuite(_) => Mode::Command,
+            Self::ActivateSuite(_) => Mode::Command,
+            Self::AcceptException(_) => Mode::Command,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -79,6 +261,13 @@ impl Input {
         match self {
             Self::Grade(i) => serde_json::to_value(i),
             Self::Results(i) => serde_json::to_value(i),
+            Self::Suites(i) => serde_json::to_value(i),
+            Self::Suite(i) => serde_json::to_value(i),
+            Self::SuiteHistory(i) => serde_json::to_value(i),
+            Self::DraftSuite(i) => serde_json::to_value(i),
+            Self::ProposeSuite(i) => serde_json::to_value(i),
+            Self::ActivateSuite(i) => serde_json::to_value(i),
+            Self::AcceptException(i) => serde_json::to_value(i),
         }
     }
 }

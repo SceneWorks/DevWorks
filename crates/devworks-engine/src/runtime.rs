@@ -376,6 +376,8 @@ pub struct InstructionComposition {
     pub source: Arc<dyn devworks_core::ports::indexing::SourceTree>,
     pub files: Arc<dyn devworks_core::ports::skill_files::SkillFiles>,
     pub roots: devworks_core::services::instructions::SkillRoots,
+    /// The eval suite folders (`None`: the host keeps no suites).
+    pub suites: Option<devworks_core::services::instructions::SuiteFolders>,
 }
 impl std::fmt::Debug for InstructionComposition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1260,6 +1262,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
                     source: c.source,
                     files: c.files,
                     roots: c.roots,
+                    suites: c.suites,
                 },
                 ids.clone(),
                 Arc::new(devworks_core::authority::HostRoles {

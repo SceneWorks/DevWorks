@@ -13331,6 +13331,203 @@ impl Check for EvalReportPage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalSuiteOrigin {
+    Shared,
+    Harness,
+}
+impl Check for EvalSuiteOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalSubjectKind {
+    Skill,
+    Role,
+    Convention,
+    LessonRule,
+    Routing,
+    Build,
+}
+impl Check for EvalSubjectKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalSuitePart {
+    Case,
+    Grader,
+    Rubric,
+    Fixture,
+    Document,
+}
+impl Check for EvalSuitePart {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSubjectRef {
+    pub kind: EvalSubjectKind,
+    pub name: Label,
+}
+impl Check for EvalSubjectRef {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.name.check()?;
+        super::domain_rules::record(
+            "EvalSubjectRef",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalAcceptedException {
+    pub check_id: Id,
+    pub matched_instance: EvalStepSource,
+    pub reason: Content,
+    pub approver: ActorId,
+    pub accepted_at_ms: Counter,
+}
+impl Check for EvalAcceptedException {
+    fn check(&self) -> Result<(), String> {
+        self.check_id.check()?;
+        self.matched_instance.check()?;
+        self.reason.check()?;
+        self.approver.check()?;
+        self.accepted_at_ms.check()?;
+        super::domain_rules::record(
+            "EvalAcceptedException",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteResource {
+    pub path: RelativePath,
+    pub part: EvalSuitePart,
+    pub artifact: ArtifactRef,
+}
+impl Check for EvalSuiteResource {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        self.part.check()?;
+        self.artifact.check()?;
+        super::domain_rules::record(
+            "EvalSuiteResource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteResourceInput {
+    pub path: RelativePath,
+    pub artifact: ArtifactRef,
+}
+impl Check for EvalSuiteResourceInput {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        self.artifact.check()?;
+        super::domain_rules::record(
+            "EvalSuiteResourceInput",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteRecord {
+    pub id: Id,
+    pub name: Label,
+    pub origin: EvalSuiteOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<RegisteredPath>,
+    pub revision: Revision,
+    pub latest_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_revision: Option<Revision>,
+    pub state: InstructionState,
+    pub approved: bool,
+    pub content_digest: Digest,
+    pub documentation: ArtifactRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Text>,
+    pub measures: Items<EvalSubjectRef>,
+    pub checks: Items<EvalDeterministicCheck>,
+    pub resources: Items<EvalSuiteResource>,
+    pub exceptions: Items<EvalAcceptedException>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_outcome: Option<ApprovalState>,
+}
+impl Check for EvalSuiteRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.name.check()?;
+        self.origin.check()?;
+        self.location.check()?;
+        self.revision.check()?;
+        self.latest_revision.check()?;
+        self.active_revision.check()?;
+        self.state.check()?;
+        self.approved.check()?;
+        self.content_digest.check()?;
+        self.documentation.check()?;
+        self.description.check()?;
+        self.measures.check()?;
+        self.checks.check()?;
+        self.resources.check()?;
+        self.exceptions.check()?;
+        self.author.check()?;
+        self.rationale.check()?;
+        self.approval_outcome.check()?;
+        super::domain_rules::record(
+            "EvalSuiteRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuitePage {
+    pub items: Rows<EvalSuiteRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for EvalSuitePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        super::domain_rules::record(
+            "EvalSuitePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum EvalRecordSource {
     Session,
     HistoryEvent,
@@ -22244,6 +22441,19 @@ pub enum DomainQuery {
     McpServerClients { page: PageRequest },
     #[serde(rename = "evals.results")]
     EvalsResults { session_id: Id, page: PageRequest },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suites")]
+    EvalsSuites { page: PageRequest },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suite")]
+    EvalsSuite {
+        suite_id: Id,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<Revision>,
+    },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suite_history")]
+    EvalsSuiteHistory { suite_id: Id, page: PageRequest },
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "next_work.inspect_queue")]
     NextWorkInspectQueue {
@@ -22447,6 +22657,9 @@ impl DomainQuery {
             Self::McpServerStatus { .. } => "mcp_server.status",
             Self::McpServerClients { .. } => "mcp_server.clients",
             Self::EvalsResults { .. } => "evals.results",
+            Self::EvalsSuites { .. } => "evals.suites",
+            Self::EvalsSuite { .. } => "evals.suite",
+            Self::EvalsSuiteHistory { .. } => "evals.suite_history",
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
             Self::RouterEmbeddingSpaces { .. } => "router.embedding_spaces",
@@ -23696,6 +23909,17 @@ impl Check for DomainQuery {
                 session_id.check()?;
                 page.check()?;
             }
+            Self::EvalsSuites { page } => {
+                page.check()?;
+            }
+            Self::EvalsSuite { suite_id, revision } => {
+                suite_id.check()?;
+                revision.check()?;
+            }
+            Self::EvalsSuiteHistory { suite_id, page } => {
+                suite_id.check()?;
+                page.check()?;
+            }
             Self::NextWorkInspectQueue {
                 project_id,
                 feature_id,
@@ -24258,6 +24482,15 @@ impl Revisioned for DomainQuery {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsSuites { .. } if revision < 23 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsSuite { .. } if revision < 23 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsSuiteHistory { .. } if revision < 23 => {
                 Err("operation predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {
@@ -26283,6 +26516,46 @@ pub enum DomainCommand {
         session_id: Id,
         suite: EvalSuiteSnapshot,
     },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.draft_suite")]
+    EvalsDraftSuite {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        suite_id: Option<Id>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_revision: Option<Revision>,
+        name: Label,
+        documentation: ArtifactRef,
+        measures: NonEmpty<EvalSubjectRef>,
+        checks: NonEmpty<EvalDeterministicCheck>,
+        resources: Items<EvalSuiteResourceInput>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<Content>,
+    },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.propose_suite")]
+    EvalsProposeSuite {
+        suite_id: Id,
+        expected_revision: Revision,
+        content_digest: Digest,
+    },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.activate_suite")]
+    EvalsActivateSuite {
+        suite_id: Id,
+        expected_revision: Revision,
+        target_revision: Revision,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposal_id: Option<Id>,
+    },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.accept_exception")]
+    EvalsAcceptException {
+        suite_id: Id,
+        expected_revision: Revision,
+        check_id: Id,
+        matched_instance: EvalStepSource,
+        reason: Content,
+    },
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "notifications.mark_read")]
     NotificationsMarkRead {
@@ -26535,6 +26808,10 @@ impl DomainCommand {
             Self::TasksSetFeature { .. } => "tasks.set_feature",
             Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::EvalsGrade { .. } => "evals.grade",
+            Self::EvalsDraftSuite { .. } => "evals.draft_suite",
+            Self::EvalsProposeSuite { .. } => "evals.propose_suite",
+            Self::EvalsActivateSuite { .. } => "evals.activate_suite",
+            Self::EvalsAcceptException { .. } => "evals.accept_exception",
             Self::NotificationsMarkRead { .. } => "notifications.mark_read",
             Self::ProjectsPreparePurge { .. } => "projects.prepare_purge",
             Self::ProjectsPurge { .. } => "projects.purge",
@@ -28538,6 +28815,58 @@ impl Check for DomainCommand {
                 session_id.check()?;
                 suite.check()?;
             }
+            Self::EvalsDraftSuite {
+                suite_id,
+                expected_revision,
+                name,
+                documentation,
+                measures,
+                checks,
+                resources,
+                rationale,
+            } => {
+                suite_id.check()?;
+                expected_revision.check()?;
+                name.check()?;
+                documentation.check()?;
+                measures.check()?;
+                checks.check()?;
+                resources.check()?;
+                rationale.check()?;
+            }
+            Self::EvalsProposeSuite {
+                suite_id,
+                expected_revision,
+                content_digest,
+            } => {
+                suite_id.check()?;
+                expected_revision.check()?;
+                content_digest.check()?;
+            }
+            Self::EvalsActivateSuite {
+                suite_id,
+                expected_revision,
+                target_revision,
+                proposal_id,
+            } => {
+                suite_id.check()?;
+                expected_revision.check()?;
+                target_revision.check()?;
+                proposal_id.check()?;
+            }
+            Self::EvalsAcceptException {
+                suite_id,
+                expected_revision,
+                check_id,
+                matched_instance,
+                reason,
+            } => {
+                suite_id.check()?;
+                expected_revision.check()?;
+                check_id.check()?;
+                matched_instance.check()?;
+                reason.check()?;
+            }
             Self::NotificationsMarkRead {
                 notification_id,
                 expected_revision,
@@ -29185,6 +29514,18 @@ impl Revisioned for DomainCommand {
                 Err("operation predates its introduction".into())
             }
             Self::AddonsRunWorkflow { .. } if revision < 9 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsDraftSuite { .. } if revision < 23 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsProposeSuite { .. } if revision < 23 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsActivateSuite { .. } if revision < 23 => {
+                Err("operation predates its introduction".into())
+            }
+            Self::EvalsAcceptException { .. } if revision < 23 => {
                 Err("operation predates its introduction".into())
             }
             Self::NotificationsMarkRead { .. } if revision < 3 => {
@@ -29926,6 +30267,27 @@ pub enum OperationResult {
     EvalsGrade { value: EvalReport },
     #[serde(rename = "evals.results")]
     EvalsResults { value: EvalReportPage },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suites")]
+    EvalsSuites { value: EvalSuitePage },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suite")]
+    EvalsSuite { value: EvalSuiteRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.suite_history")]
+    EvalsSuiteHistory { value: EvalSuitePage },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.draft_suite")]
+    EvalsDraftSuite { value: EvalSuiteRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.propose_suite")]
+    EvalsProposeSuite { value: ProposalRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.activate_suite")]
+    EvalsActivateSuite { value: EvalSuiteRecord },
+    #[schemars(extend("x-since" = 23))]
+    #[serde(rename = "evals.accept_exception")]
+    EvalsAcceptException { value: EvalSuiteRecord },
     #[schemars(extend("x-since" = 3))]
     #[serde(rename = "next_work.inspect_queue")]
     NextWorkInspectQueue { value: AllocationQueueSnapshot },
@@ -30404,6 +30766,13 @@ impl OperationResult {
             Self::ArtifactsTag { .. } => "artifacts.tag",
             Self::EvalsGrade { .. } => "evals.grade",
             Self::EvalsResults { .. } => "evals.results",
+            Self::EvalsSuites { .. } => "evals.suites",
+            Self::EvalsSuite { .. } => "evals.suite",
+            Self::EvalsSuiteHistory { .. } => "evals.suite_history",
+            Self::EvalsDraftSuite { .. } => "evals.draft_suite",
+            Self::EvalsProposeSuite { .. } => "evals.propose_suite",
+            Self::EvalsActivateSuite { .. } => "evals.activate_suite",
+            Self::EvalsAcceptException { .. } => "evals.accept_exception",
             Self::NextWorkInspectQueue { .. } => "next_work.inspect_queue",
             Self::ApprovalsReviewQueue { .. } => "approvals.review_queue",
             Self::NotificationsMarkRead { .. } => "notifications.mark_read",
@@ -30796,6 +31165,13 @@ impl Check for OperationResult {
             Self::ArtifactsTag { value } => value.check()?,
             Self::EvalsGrade { value } => value.check()?,
             Self::EvalsResults { value } => value.check()?,
+            Self::EvalsSuites { value } => value.check()?,
+            Self::EvalsSuite { value } => value.check()?,
+            Self::EvalsSuiteHistory { value } => value.check()?,
+            Self::EvalsDraftSuite { value } => value.check()?,
+            Self::EvalsProposeSuite { value } => value.check()?,
+            Self::EvalsActivateSuite { value } => value.check()?,
+            Self::EvalsAcceptException { value } => value.check()?,
             Self::NextWorkInspectQueue { value } => value.check()?,
             Self::ApprovalsReviewQueue { value } => value.check()?,
             Self::NotificationsMarkRead { value } => value.check()?,
@@ -31156,6 +31532,27 @@ impl Revisioned for OperationResult {
                 Err("operation result predates its introduction".into())
             }
             Self::AddonsInvocation { .. } if revision < 8 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsSuites { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsSuiteHistory { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsDraftSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsProposeSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsActivateSuite { .. } if revision < 23 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::EvalsAcceptException { .. } if revision < 23 => {
                 Err("operation result predates its introduction".into())
             }
             Self::NextWorkInspectQueue { .. } if revision < 3 => {

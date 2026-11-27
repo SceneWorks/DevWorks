@@ -45,14 +45,14 @@ fn proposal_request(
     token: i64,
 ) -> Result<(Value, crate::admission::DecodedRequest), Failure> {
     let args = json!({
-        "instructionId": item.id.as_str(),
+        id_field(item.kind): item.id.as_str(),
         "expectedRevision": token.to_string(),
         "targetRevision": revision.revision.to_string(),
         "proposalId": proposal_id.as_str(),
     });
     let request = crate::services::approvals::requests::decode(
         activation_operation(item.kind),
-        1,
+        activation_revision(item.kind),
         &args,
         true,
     )
@@ -72,6 +72,15 @@ pub(crate) struct PreparedProposal {
 pub(crate) struct PreparedActivation {
     text: Option<String>,
     release: Option<Arc<StagedCapture>>,
+}
+impl PreparedActivation {
+    /// The release copy of a confined draft and nothing to mirror.
+    pub(crate) fn release(staged: Arc<StagedCapture>) -> Self {
+        Self {
+            text: None,
+            release: Some(staged),
+        }
+    }
 }
 
 impl InstructionService {
@@ -205,6 +214,10 @@ impl InstructionService {
                 release: None,
             })));
         }
+        // A confined suite draft carries files of its own: all of them are released.
+        if kind == InstructionKind::Suite {
+            return Ok(Some(Prepared::new(self.prepare_suite_release(id, &r)?)));
+        }
         let text = String::from_utf8(self.artifact_bytes(&r.content)?)
             .map_err(|_| invalid("instruction_content"))?;
         // A confined draft's content is readable in its project only; activating it publishes
@@ -243,7 +256,9 @@ impl InstructionService {
         {
             let committed = applied
                 .as_ref()
-                .is_some_and(|r| r.content.sha256.0 == staged.instruction.digest);
+                .is_some_and(|r| r.content.sha256.0 == staged.instruction.digest)
+                || super::suite_ops::suite_reply(reply, "Applied")
+                    .is_some_and(|r| r.documentation.sha256.0 == staged.instruction.digest);
             self.settle_capture(staged, committed);
         }
         // A save or restore that changed nothing still recreates a deleted directory.
@@ -341,6 +356,26 @@ impl InstructionService {
                 };
                 self.activate(ctx, command, tx, kind, a)
             }
+            OperationInput::Evals(crate::operations::evals::Input::ProposeSuite(i)) => self
+                .propose(
+                    ctx,
+                    tx,
+                    command.prepared::<PreparedProposal>(),
+                    kind,
+                    &i.suite_id,
+                    i.expected_revision.get(),
+                    &i.content_digest.0,
+                ),
+            OperationInput::Evals(crate::operations::evals::Input::ActivateSuite(i)) => {
+                let a = Activation {
+                    id: &i.suite_id,
+                    expected: i.expected_revision.get(),
+                    target: i.target_revision.get(),
+                    proposal: i.proposal_id.as_ref(),
+                };
+                self.activate(ctx, command, tx, kind, a)
+            }
+            OperationInput::Evals(input) => self.decide_suite(ctx, command, tx, input),
             _ => Err(invalid("instruction_operation")),
         }
     }
@@ -419,8 +454,22 @@ impl InstructionService {
         let name = input.name.0.trim().to_owned();
         let now = tx.now_ms();
         let target = match kind {
-            InstructionKind::Skill => self.skill_target(tx, ctx, &scope, &name, &input, now)?,
+            InstructionKind::Skill => self.folder_target(
+                tx,
+                ctx,
+                kind,
+                &scope,
+                &name,
+                FolderRequest {
+                    id: input.instruction_id,
+                    expected: input.expected,
+                    confined: input.confined.as_ref(),
+                },
+                now,
+            )?,
             InstructionKind::Role => role_target(tx, ctx, &scope, &name, &input, now)?,
+            // Suites are drafted through `evals.draft_suite` (`suite_ops`).
+            InstructionKind::Suite => return Err(invalid("instruction_operation")),
         };
         // Role text must satisfy the role setting's own rules for every author, so approved
         // content can always be applied by the activation that mirrors it into settings.
@@ -524,6 +573,7 @@ impl InstructionService {
                 title: format!("{} {}", target_kind(kind), item.name),
                 // Resources carry over from the base revision; they are immutable artifacts.
                 carried_resources: Some(resources),
+                extra_resources: Vec::new(),
                 confined: confined.clone(),
             },
         )?;
@@ -580,31 +630,36 @@ impl InstructionService {
         })
     }
 
-    fn skill_target(
+    /// The item a draft of a file-backed `kind` (skill or suite) writes: the named item, a new
+    /// harness item, or, for a shared one, a same-name harness override.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn folder_target(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
+        kind: InstructionKind,
         scope: &ConfigScope,
         name: &str,
-        input: &Draft<'_>,
+        input: FolderRequest<'_>,
         now: i64,
     ) -> Result<Target, Failure> {
-        let confined = input.confined.as_ref();
+        let confined = input.confined;
+        let names = Names::of(kind);
         // A skill lives in the workspace skill folder or, for one project, in that project's
         // own skill store under the data folder (never in a repository, whose content anyone
         // with write access to it controls).
         if !valid_name(name) {
-            return Err(invalid("skill_name"));
+            return Err(invalid(names.name));
         }
         // An existing skill of that name the caller cannot see (another project's confined
         // draft) is a conflict that names nothing.
         let harness = |tx: &mut dyn WriteTransaction| {
-            harness_named(tx, scope, name)
+            harness_named(tx, kind, scope, name)
                 .map(|found| found.map(|i| item_visible(ctx, &i).then_some(i.id)))
         };
-        match input.instruction_id {
+        match input.id {
             Some(id) => {
-                let source = visible_item(tx.instructions(), ctx, id, InstructionKind::Skill)?;
+                let source = visible_item(tx.instructions(), ctx, id, kind)?;
                 let expected = input
                     .expected
                     .ok_or_else(|| invalid("expected_revision"))?
@@ -614,7 +669,7 @@ impl InstructionService {
                     return Err(stale(&source, expected, current));
                 }
                 if source.name != name {
-                    return Err(invalid("skill_name"));
+                    return Err(invalid(names.name));
                 }
                 // An item is edited in its own scope; only a shared skill (a workspace item)
                 // may also be improved for a single project.
@@ -622,7 +677,7 @@ impl InstructionService {
                     && !(source.origin == InstructionOrigin::Shared
                         && matches!(scope, ConfigScope::Project(_)))
                 {
-                    return Err(invalid("skill_scope"));
+                    return Err(invalid(names.scope));
                 }
                 let base = visible_current(tx.instructions(), ctx, &source).ok();
                 if source.origin == InstructionOrigin::Shared {
@@ -634,12 +689,12 @@ impl InstructionService {
                     if let Some(existing) = harness(tx)? {
                         return Err(refusal(
                             DomainErrorCode::Conflict,
-                            "skill_override",
+                            names.overrides,
                             existing.as_ref(),
                         ));
                     }
                     Ok(Target {
-                        item: self.new_harness_item(tx, scope, name, now, confined)?,
+                        item: self.new_harness_item(tx, kind, scope, name, now, confined)?,
                         base,
                         overrides,
                         created: true,
@@ -660,12 +715,12 @@ impl InstructionService {
                 if let Some(existing) = harness(tx)? {
                     return Err(refusal(
                         DomainErrorCode::Conflict,
-                        "skill",
+                        names.item,
                         existing.as_ref(),
                     ));
                 }
                 Ok(Target {
-                    item: self.new_harness_item(tx, scope, name, now, confined)?,
+                    item: self.new_harness_item(tx, kind, scope, name, now, confined)?,
                     base: None,
                     overrides: None,
                     created: true,
@@ -677,18 +732,19 @@ impl InstructionService {
     fn new_harness_item(
         &self,
         tx: &mut dyn WriteTransaction,
+        kind: InstructionKind,
         scope: &ConfigScope,
         name: &str,
         now: i64,
         confined: Option<&crate::protocol::ProjectId>,
     ) -> Result<StoredInstructionItem, Failure> {
-        self.check_directory(scope, name, None)?;
+        self.check_directory(kind, scope, name, None)?;
         let root = self
-            .skill_root(scope)
-            .ok_or_else(|| invalid("skill_scope"))?;
+            .folder_root(kind, scope)
+            .ok_or_else(|| invalid(Names::of(kind).scope))?;
         let item = StoredInstructionItem {
             id: tx.new_id(IdKind::Operation),
-            kind: InstructionKind::Skill,
+            kind,
             name: name.to_owned(),
             scope: scope.clone(),
             origin: InstructionOrigin::Harness,
@@ -744,6 +800,22 @@ impl InstructionService {
                 Some(&item.id),
             ));
         }
+        // A subject must not change its own measurement (EVAL-06): a skill revision that bundles
+        // an eval suite's files would put the subject and a suite in one proposal.
+        if kind == InstructionKind::Skill
+            && revision
+                .resources
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|r| r["path"].as_str().is_some_and(super::suite::is_suite_file))
+        {
+            return Err(refusal(
+                DomainErrorCode::InvalidArgument,
+                "skill_carries_eval_suite",
+                Some(&item.id),
+            ));
+        }
         let expected_token = visible_latest(tx.instructions(), ctx, &item)?;
         let proposal_id = match prepared {
             Some(p) => p.proposal_id.clone(),
@@ -788,7 +860,7 @@ impl InstructionService {
             "contentDigest": request.fingerprint.as_str(),
             "summary": preview.summary,
             "artifact": revision.content,
-            "payload": {"kind": "SavedOperation", "schemaRevision": "1", "input": args},
+            "payload": {"kind": "SavedOperation", "schemaRevision": activation_revision(kind).to_string(), "input": args},
         }))
         .map_err(|e| StorageError::InvalidRecord(format!("instruction proposal: {e}")))?;
         let approval =
@@ -822,6 +894,7 @@ impl InstructionService {
             result: match kind {
                 InstructionKind::Skill => OperationResult::SkillsPropose { value: record },
                 InstructionKind::Role => OperationResult::RolesPropose { value: record },
+                InstructionKind::Suite => OperationResult::EvalsProposeSuite { value: record },
             },
         })
     }
@@ -875,8 +948,41 @@ impl InstructionService {
                 {
                     return Err(denied("instruction_proposal"));
                 }
+                // An agent's suite draft keeps the active revision's accepted exceptions; one
+                // whose exceptions differ (taken from an unconfirmed folder change, or overtaken
+                // by an exception a person accepted since) is never activated.
+                if kind == InstructionKind::Suite {
+                    let active = match item.active_revision {
+                        Some(n) => tx.instructions().instruction_revision(&item.id, n)?,
+                        None => None,
+                    };
+                    if active.as_ref().and_then(super::suite::exceptions_digest)
+                        != super::suite::exceptions_digest(&target)
+                    {
+                        return Err(refusal(
+                            DomainErrorCode::Conflict,
+                            "eval_exceptions_changed",
+                            Some(&item.id),
+                        ));
+                    }
+                }
                 if target.confined_project.is_some() {
-                    self.release(tx, command, &item, &target)?;
+                    if kind == InstructionKind::Suite {
+                        let staged = command
+                            .prepared::<PreparedActivation>()
+                            .and_then(|p| p.release.clone())
+                            .filter(|s| s.digest == target.content_digest)
+                            .ok_or_else(|| {
+                                refusal(
+                                    DomainErrorCode::SourceChanged,
+                                    "instruction_revision",
+                                    Some(&item.id),
+                                )
+                            })?;
+                        self.release_suite(tx, &staged, &item, &target)?;
+                    } else {
+                        self.release(tx, command, &item, &target)?;
+                    }
                 }
                 if target.state == InstructionRevisionState::Proposed {
                     let now = tx.now_ms();
@@ -910,6 +1016,23 @@ impl InstructionService {
                         Some(&item.id),
                     ));
                 }
+                // Exceptions are accepted one by one through `evals.accept_exception`, which
+                // records each approver; a folder change that alters them is never confirmed.
+                if confirmed && kind == InstructionKind::Suite {
+                    let current = match item.active_revision {
+                        Some(n) => tx.instructions().instruction_revision(&item.id, n)?,
+                        None => None,
+                    };
+                    if current.as_ref().and_then(super::suite::exceptions_digest)
+                        != super::suite::exceptions_digest(&target)
+                    {
+                        return Err(refusal(
+                            DomainErrorCode::InvalidArgument,
+                            "eval_exceptions_changed",
+                            Some(&item.id),
+                        ));
+                    }
+                }
                 // A shared skill's files are never written: restoring a revision other than the
                 // one on disk becomes a harness override with that revision's files, so what is
                 // in effect is what is executed.
@@ -928,11 +1051,10 @@ impl InstructionService {
         if item.active_revision == Some(target.revision) {
             self.check_materializable(&item, &target.resources)?;
             return Ok(DomainDecision::NoChange {
-                result: result(
-                    kind,
-                    Op::Rollback,
-                    record_with_approval(tx.decisions(), &item, &target, None)?,
-                ),
+                result: {
+                    let latest = visible_latest(tx.instructions(), ctx, &item)?;
+                    activation_result(tx.decisions(), &item, &target, latest)?
+                },
             });
         }
         let previous = item.active_revision;
@@ -1003,11 +1125,10 @@ impl InstructionService {
             }),
         )?;
         Ok(DomainDecision::Applied {
-            result: result(
-                kind,
-                Op::Rollback,
-                record_with_approval(tx.decisions(), &item, &target, None)?,
-            ),
+            result: {
+                let latest = visible_latest(tx.instructions(), ctx, &item)?;
+                activation_result(tx.decisions(), &item, &target, latest)?
+            },
         })
     }
 }
@@ -1023,40 +1144,43 @@ impl InstructionService {
     /// below the bound discovery reads, or every later save would be refused.
     fn check_directory(
         &self,
+        kind: InstructionKind,
         scope: &ConfigScope,
         name: &str,
         item: Option<&StoredInstructionItem>,
     ) -> Result<(), Failure> {
+        let names = Names::of(kind);
         let root = self
-            .skill_root(scope)
-            .ok_or_else(|| invalid("skill_scope"))?;
+            .folder_root(kind, scope)
+            .ok_or_else(|| invalid(names.scope))?;
         let id = item.map(|i| &i.id);
         match self.source.canonical_dir(&root.join(name)) {
             Ok(_) if item.is_some_and(|i| i.present) => return Ok(()),
             Err(SourceFault::Missing) => {}
-            _ => return Err(refusal(DomainErrorCode::Conflict, "skill_directory", id)),
+            _ => return Err(refusal(DomainErrorCode::Conflict, names.directory, id)),
         }
         let entries = match self.source.list_dir(&root, scan::MAX_SKILLS + 1) {
             Ok(entries) => entries.len(),
             Err(SourceFault::Missing) => 0,
-            Err(_) => return Err(refusal(DomainErrorCode::SourceChanged, "skill_source", id)),
+            Err(_) => return Err(refusal(DomainErrorCode::SourceChanged, names.source, id)),
         };
         if entries >= scan::MAX_SKILLS {
-            return Err(refusal(DomainErrorCode::Conflict, "skill_capacity", id));
+            return Err(refusal(DomainErrorCode::Conflict, names.capacity, id));
         }
         Ok(())
     }
 
-    fn check_materializable(
+    pub(crate) fn check_materializable(
         &self,
         item: &StoredInstructionItem,
         resources: &Value,
     ) -> Result<(), Failure> {
-        if item.kind != InstructionKind::Skill || item.origin != InstructionOrigin::Harness {
+        if item.kind == InstructionKind::Role || item.origin != InstructionOrigin::Harness {
             return Ok(());
         }
-        self.check_directory(&item.scope, &item.name, Some(item))?;
-        let mut paths = vec![scan::SKILL_FILE.to_owned()];
+        self.check_directory(item.kind, &item.scope, &item.name, Some(item))?;
+        let names = Names::of(item.kind);
+        let mut paths = vec![super::manifest(item.kind).to_owned()];
         for resource in resources.as_array().into_iter().flatten() {
             paths.push(
                 resource["path"]
@@ -1065,19 +1189,19 @@ impl InstructionService {
                     .to_owned(),
             );
         }
-        let Some(files) = self.skill_files(&item.scope) else {
-            return Err(invalid("skill_scope"));
+        let Some(files) = self.folder_files(item.kind, &item.scope) else {
+            return Err(invalid(names.scope));
         };
         match files.uncaptured_collision(&item.name, &paths) {
             Ok(None) => Ok(()),
             Ok(Some(_)) => Err(refusal(
                 DomainErrorCode::Conflict,
-                "skill_uncaptured_entry",
+                names.uncaptured,
                 Some(&item.id),
             )),
             Err(_) => Err(refusal(
                 DomainErrorCode::SourceChanged,
-                "skill_source",
+                names.source,
                 Some(&item.id),
             )),
         }
@@ -1110,8 +1234,12 @@ impl InstructionService {
             &staged,
             &format!("{} {}", target_kind(item.kind), item.name),
         )?;
-        tx.instructions()
-            .release_instruction_revision(&item.id, target.revision, &content)?;
+        tx.instructions().release_instruction_revision(
+            &item.id,
+            target.revision,
+            &content,
+            None,
+        )?;
         Ok(())
     }
 
@@ -1125,15 +1253,16 @@ impl InstructionService {
         let now = tx.now_ms();
         // The rollback's expected revision belongs to the shared item, so it cannot guard an
         // existing override: that override is restored through its own identity and revision.
-        if let Some(existing) = harness_named(tx, &ConfigScope::Workspace, &shared.name)? {
+        let kind = shared.kind;
+        if let Some(existing) = harness_named(tx, kind, &ConfigScope::Workspace, &shared.name)? {
             return Err(refusal(
                 DomainErrorCode::Conflict,
-                "skill_override",
+                Names::of(kind).overrides,
                 Some(&existing.id),
             ));
         }
         let mut item =
-            self.new_harness_item(tx, &ConfigScope::Workspace, &shared.name, now, None)?;
+            self.new_harness_item(tx, kind, &ConfigScope::Workspace, &shared.name, now, None)?;
         let revision = StoredInstructionRevision {
             instruction_id: item.id.clone(),
             revision: item.latest_revision + 1,
@@ -1141,11 +1270,18 @@ impl InstructionService {
             content_digest: target.content_digest.clone(),
             state: InstructionRevisionState::Approved,
             author: ctx.principal().clone(),
-            origin: json!({
-                "kind": "Rollback",
-                "restoredFrom": {"instructionId": shared.id.as_str(), "revision": target.revision},
-                "provenance": provenance(ctx),
-            }),
+            origin: {
+                let mut origin = json!({
+                    "kind": "Rollback",
+                    "restoredFrom": {"instructionId": shared.id.as_str(), "revision": target.revision},
+                    "provenance": provenance(ctx),
+                });
+                // A suite revision's validated contents travel with its files.
+                if kind == InstructionKind::Suite {
+                    origin["suite"] = target.origin["suite"].clone();
+                }
+                origin
+            },
             resources: target.resources.clone(),
             applicability: target.applicability.clone(),
             approval_id: None,
@@ -1173,11 +1309,7 @@ impl InstructionService {
             }),
         )?;
         Ok(DomainDecision::Applied {
-            result: result(
-                InstructionKind::Skill,
-                Op::Rollback,
-                record(&item, &revision, None)?,
-            ),
+            result: activation_result(tx.decisions(), &item, &revision, revision.revision)?,
         })
     }
 }
@@ -1231,11 +1363,18 @@ struct Activation<'a> {
     target: i64,
     proposal: Option<&'a Id>,
 }
-struct Target {
-    item: StoredInstructionItem,
-    base: Option<StoredInstructionRevision>,
-    overrides: Option<(Id, Option<i64>)>,
-    created: bool,
+pub(crate) struct Target {
+    pub item: StoredInstructionItem,
+    pub base: Option<StoredInstructionRevision>,
+    pub overrides: Option<(Id, Option<i64>)>,
+    pub created: bool,
+}
+/// What a draft of a file-backed item names: the item and the revision it binds to, and the
+/// project an agent's draft is confined to.
+pub(crate) struct FolderRequest<'a> {
+    pub id: Option<&'a Id>,
+    pub expected: Option<&'a Revision>,
+    pub confined: Option<&'a crate::protocol::ProjectId>,
 }
 
 fn role_target(
@@ -1291,8 +1430,9 @@ fn role_target(
 /// The harness skill whose directory `name` resolves to. Names are compared case-insensitively:
 /// on Windows and default macOS volumes `foo` and `Foo` are one directory, so a creation must
 /// never resolve onto (and overwrite) another skill's files.
-fn harness_named(
+pub(crate) fn harness_named(
     tx: &mut dyn WriteTransaction,
+    kind: InstructionKind,
     scope: &ConfigScope,
     name: &str,
 ) -> Result<Option<StoredInstructionItem>, StorageError> {
@@ -1301,7 +1441,7 @@ fn harness_named(
     loop {
         let page = tx.instructions().instruction_items(
             &InstructionFilter {
-                kind: Some(InstructionKind::Skill),
+                kind: Some(kind),
                 scopes: vec![scope.clone()],
                 name: None,
             },
@@ -1326,8 +1466,8 @@ fn harness_named(
 /// confirmed or not, becomes replaceable by the new active revision, so a write that fails after
 /// the commit is repaired by the next sync. A change made on disk after the decision is
 /// observed with a new digest and is not replaceable.
-fn supersede_disk(item: &mut StoredInstructionItem) {
-    if item.kind == InstructionKind::Skill
+pub(crate) fn supersede_disk(item: &mut StoredInstructionItem) {
+    if item.kind != InstructionKind::Role
         && item.origin == InstructionOrigin::Harness
         && item.present
         && item.observed_digest.is_some()
@@ -1340,7 +1480,80 @@ pub(crate) fn activation_operation(kind: InstructionKind) -> &'static str {
     match kind {
         InstructionKind::Skill => "skills.rollback",
         InstructionKind::Role => "roles.rollback",
+        InstructionKind::Suite => "evals.activate_suite",
     }
+}
+/// The schema revision a saved activation of `kind` is stored and replayed at: the first one
+/// that has the operation.
+pub(crate) fn activation_revision(kind: InstructionKind) -> u32 {
+    match kind {
+        InstructionKind::Suite => 23,
+        _ => 1,
+    }
+}
+/// The input field naming the item in `kind`'s activation and proposal.
+pub(crate) fn id_field(kind: InstructionKind) -> &'static str {
+    match kind {
+        InstructionKind::Suite => "suiteId",
+        _ => "instructionId",
+    }
+}
+
+/// Refusal target kinds of a file-backed item kind.
+pub(crate) struct Names {
+    pub item: &'static str,
+    pub name: &'static str,
+    pub scope: &'static str,
+    pub overrides: &'static str,
+    pub directory: &'static str,
+    pub source: &'static str,
+    pub capacity: &'static str,
+    pub uncaptured: &'static str,
+}
+impl Names {
+    pub(crate) fn of(kind: InstructionKind) -> Self {
+        match kind {
+            InstructionKind::Suite => Self {
+                item: "eval_suite",
+                name: "eval_suite_name",
+                scope: "eval_suite_scope",
+                overrides: "eval_suite_override",
+                directory: "eval_suite_directory",
+                source: "eval_suite_source",
+                capacity: "eval_suite_capacity",
+                uncaptured: "eval_suite_uncaptured_entry",
+            },
+            _ => Self {
+                item: "skill",
+                name: "skill_name",
+                scope: "skill_scope",
+                overrides: "skill_override",
+                directory: "skill_directory",
+                source: "skill_source",
+                capacity: "skill_capacity",
+                uncaptured: "skill_uncaptured_entry",
+            },
+        }
+    }
+}
+
+/// The reply of an activation of `item` to `revision`, as its own kind's record.
+pub(crate) fn activation_result(
+    decisions: &dyn crate::ports::storage::DecisionRead,
+    item: &StoredInstructionItem,
+    revision: &StoredInstructionRevision,
+    latest: i64,
+) -> Result<OperationResult, Failure> {
+    Ok(match item.kind {
+        InstructionKind::Suite => OperationResult::EvalsActivateSuite {
+            value: super::suite_record(decisions, item, revision, latest)?,
+        },
+        kind => result(
+            kind,
+            Op::Rollback,
+            record_with_approval(decisions, item, revision, None)?,
+        ),
+    })
 }
 
 fn settings_failure(f: crate::settings::service::Failure) -> Failure {
@@ -1390,6 +1603,7 @@ fn result(kind: InstructionKind, op: Op, value: InstructionRecord) -> OperationR
         (InstructionKind::Role, Op::SetEnabled) => unreachable!("roles have no enable switch"),
         (InstructionKind::Role, Op::Draft) => OperationResult::RolesDraft { value },
         (InstructionKind::Role, Op::Rollback) => OperationResult::RolesRollback { value },
+        (InstructionKind::Suite, _) => unreachable!("suites answer with their own record"),
     }
 }
 

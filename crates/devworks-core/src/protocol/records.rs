@@ -13321,6 +13321,203 @@ impl Check for EvalReportPage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalSuiteOrigin {
+    Shared,
+    Harness,
+}
+impl Check for EvalSuiteOrigin {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalSubjectKind {
+    Skill,
+    Role,
+    Convention,
+    LessonRule,
+    Routing,
+    Build,
+}
+impl Check for EvalSubjectKind {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum EvalSuitePart {
+    Case,
+    Grader,
+    Rubric,
+    Fixture,
+    Document,
+}
+impl Check for EvalSuitePart {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSubjectRef {
+    pub kind: EvalSubjectKind,
+    pub name: Label,
+}
+impl Check for EvalSubjectRef {
+    fn check(&self) -> Result<(), String> {
+        self.kind.check()?;
+        self.name.check()?;
+        crate::protocol::rules::record(
+            "EvalSubjectRef",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalAcceptedException {
+    pub check_id: Id,
+    pub matched_instance: EvalStepSource,
+    pub reason: Content,
+    pub approver: ActorId,
+    pub accepted_at_ms: Counter,
+}
+impl Check for EvalAcceptedException {
+    fn check(&self) -> Result<(), String> {
+        self.check_id.check()?;
+        self.matched_instance.check()?;
+        self.reason.check()?;
+        self.approver.check()?;
+        self.accepted_at_ms.check()?;
+        crate::protocol::rules::record(
+            "EvalAcceptedException",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteResource {
+    pub path: RelativePath,
+    pub part: EvalSuitePart,
+    pub artifact: ArtifactRef,
+}
+impl Check for EvalSuiteResource {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        self.part.check()?;
+        self.artifact.check()?;
+        crate::protocol::rules::record(
+            "EvalSuiteResource",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteResourceInput {
+    pub path: RelativePath,
+    pub artifact: ArtifactRef,
+}
+impl Check for EvalSuiteResourceInput {
+    fn check(&self) -> Result<(), String> {
+        self.path.check()?;
+        self.artifact.check()?;
+        crate::protocol::rules::record(
+            "EvalSuiteResourceInput",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuiteRecord {
+    pub id: Id,
+    pub name: Label,
+    pub origin: EvalSuiteOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<RegisteredPath>,
+    pub revision: Revision,
+    pub latest_revision: Revision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_revision: Option<Revision>,
+    pub state: InstructionState,
+    pub approved: bool,
+    pub content_digest: Digest,
+    pub documentation: ArtifactRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Text>,
+    pub measures: Items<EvalSubjectRef>,
+    pub checks: Items<EvalDeterministicCheck>,
+    pub resources: Items<EvalSuiteResource>,
+    pub exceptions: Items<EvalAcceptedException>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<ActorId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_outcome: Option<ApprovalState>,
+}
+impl Check for EvalSuiteRecord {
+    fn check(&self) -> Result<(), String> {
+        self.id.check()?;
+        self.name.check()?;
+        self.origin.check()?;
+        self.location.check()?;
+        self.revision.check()?;
+        self.latest_revision.check()?;
+        self.active_revision.check()?;
+        self.state.check()?;
+        self.approved.check()?;
+        self.content_digest.check()?;
+        self.documentation.check()?;
+        self.description.check()?;
+        self.measures.check()?;
+        self.checks.check()?;
+        self.resources.check()?;
+        self.exceptions.check()?;
+        self.author.check()?;
+        self.rationale.check()?;
+        self.approval_outcome.check()?;
+        crate::protocol::rules::record(
+            "EvalSuiteRecord",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvalSuitePage {
+    pub items: Rows<EvalSuiteRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Cursor>,
+}
+impl Check for EvalSuitePage {
+    fn check(&self) -> Result<(), String> {
+        self.items.check()?;
+        self.next_cursor.check()?;
+        crate::protocol::rules::record(
+            "EvalSuitePage",
+            &serde_json::to_value(self).map_err(|e| e.to_string())?,
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub enum EvalRecordSource {
     Session,
     HistoryEvent,

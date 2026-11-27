@@ -143,7 +143,7 @@ impl InstructionService {
     ) -> Result<SyncReport, StorageError> {
         let _guard = self.sync_lock.locked();
         let mut report = SyncReport::default();
-        if kind != Some(InstructionKind::Role) {
+        if kind.is_none_or(|k| k == InstructionKind::Skill) {
             let harness = self
                 .files
                 .root()
@@ -154,8 +154,13 @@ impl InstructionService {
                 (InstructionOrigin::Harness, harness),
             ] {
                 let Some(root) = root else { continue };
-                if let Err(e) = self.sync_root(origin, &ConfigScope::Workspace, &root, &mut report)
-                {
+                if let Err(e) = self.sync_root(
+                    InstructionKind::Skill,
+                    origin,
+                    &ConfigScope::Workspace,
+                    &root,
+                    &mut report,
+                ) {
                     report
                         .failures
                         .push(format!("{} skills: {e}", origin.as_str().to_lowercase()));
@@ -163,10 +168,36 @@ impl InstructionService {
             }
             self.sync_projects(&mut report);
         }
-        if kind != Some(InstructionKind::Skill)
+        if kind.is_none_or(|k| k == InstructionKind::Role)
             && let Err(e) = self.sync_roles(&mut report)
         {
             report.failures.push(format!("roles: {e}"));
+        }
+        if kind.is_none_or(|k| k == InstructionKind::Suite)
+            && let Some(suites) = &self.suites
+        {
+            let harness = suites
+                .files
+                .root()
+                .ok()
+                .or_else(|| Some(suites.roots.harness.clone()));
+            for (origin, root) in [
+                (InstructionOrigin::Shared, suites.roots.shared.clone()),
+                (InstructionOrigin::Harness, harness),
+            ] {
+                let Some(root) = root else { continue };
+                if let Err(e) = self.sync_root(
+                    InstructionKind::Suite,
+                    origin,
+                    &ConfigScope::Workspace,
+                    &root,
+                    &mut report,
+                ) {
+                    report
+                        .failures
+                        .push(format!("{} suites: {e}", origin.as_str().to_lowercase()));
+                }
+            }
         }
         Ok(report)
     }
@@ -255,7 +286,13 @@ impl InstructionService {
             let Some(root) = self.skill_root(&scope) else {
                 continue;
             };
-            if let Err(e) = self.sync_root(InstructionOrigin::Harness, &scope, &root, report) {
+            if let Err(e) = self.sync_root(
+                InstructionKind::Skill,
+                InstructionOrigin::Harness,
+                &scope,
+                &root,
+                report,
+            ) {
                 report.failures.push(format!("project {id} skills: {e}"));
             }
         }
@@ -263,6 +300,7 @@ impl InstructionService {
 
     fn sync_root(
         &self,
+        kind: InstructionKind,
         origin: InstructionOrigin,
         scope: &ConfigScope,
         root: &Path,
@@ -270,6 +308,9 @@ impl InstructionService {
     ) -> Result<(), StorageError> {
         // Named in reports: the origin, and the project for a project's store.
         let label = match scope {
+            ConfigScope::Workspace if kind == InstructionKind::Suite => {
+                format!("{} suites", origin.as_str().to_lowercase())
+            }
             ConfigScope::Workspace => origin.as_str().to_lowercase(),
             ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
                 format!("project {}", p.0.as_str())
@@ -277,7 +318,7 @@ impl InstructionService {
         };
         let existing: BTreeMap<String, StoredInstructionItem> = self
             .items(&InstructionFilter {
-                kind: Some(InstructionKind::Skill),
+                kind: Some(kind),
                 scopes: vec![scope.clone()],
                 name: None,
             })?
@@ -290,10 +331,33 @@ impl InstructionService {
             Err(SourceFault::Missing) => None,
             Err(e) => return Err(StorageError::InvalidRecord(e.to_string())),
         };
-        let (skills, skipped) = match &canonical {
-            Some(path) => scan::scan_root(&*self.source, path)
+        let (skills, mut skipped) = match &canonical {
+            Some(path) => scan::scan_root_with(&*self.source, path, super::manifest(kind))
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
             None => (Vec::new(), Vec::new()),
+        };
+        // A suite folder is recorded only with valid contents; an invalid one keeps its last
+        // observed state and is reported with the reason, like a folder that cannot be read.
+        let mut suites = BTreeMap::new();
+        let skills = if kind == InstructionKind::Suite {
+            skills
+                .into_iter()
+                .filter_map(|folder| match parse_folder(&folder) {
+                    Ok(parsed) => {
+                        suites.insert(folder.name.clone(), parsed);
+                        Some(folder)
+                    }
+                    Err(reason) => {
+                        skipped.push(scan::SkippedSkill {
+                            name: folder.name,
+                            reason,
+                        });
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            skills
         };
         let mut seen = std::collections::BTreeSet::new();
         for s in skipped {
@@ -326,7 +390,8 @@ impl InstructionService {
             }
             let path = canonical.as_ref().expect("scanned root");
             let name = skill.name.clone();
-            match self.observe_skill(origin, scope, path, item, skill) {
+            let parsed = suites.remove(&name);
+            match self.observe_skill(kind, origin, scope, path, item, skill, parsed) {
                 Ok(()) => report.observed += 1,
                 // Named by origin like a scan failure: a capture that could not be recorded
                 // (an artifact write failed) leaves the directory changed but unrecorded, so a
@@ -341,7 +406,7 @@ impl InstructionService {
         }
         if origin == InstructionOrigin::Harness {
             for item in self.items(&InstructionFilter {
-                kind: Some(InstructionKind::Skill),
+                kind: Some(kind),
                 scopes: vec![scope.clone()],
                 name: None,
             })? {
@@ -417,18 +482,35 @@ impl InstructionService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn observe_skill(
         &self,
+        kind: InstructionKind,
         origin: InstructionOrigin,
         scope: &ConfigScope,
         root: &Path,
         item: Option<&StoredInstructionItem>,
         skill: ScannedSkill,
+        suite: Option<super::suite::Parsed>,
     ) -> Result<(), StorageError> {
         let name = skill.name.clone();
         let source_path = root.join(&name).to_string_lossy().into_owned();
-        let source =
-            json!({"kind": "SkillDirectory", "origin": origin.as_str(), "path": source_path});
+        let source = json!({
+            "kind": if kind == InstructionKind::Suite { "SuiteDirectory" } else { "SkillDirectory" },
+            "origin": origin.as_str(),
+            "path": source_path,
+        });
+        let mut observed = json!({"kind": super::OBSERVED_ORIGIN, "source": source});
+        if let Some(parsed) = &suite {
+            observed["suite"] = serde_json::to_value(parsed)
+                .map_err(|e| StorageError::InvalidRecord(e.to_string()))?;
+            observed["validation"] = super::suite::validation();
+        }
+        let title = if kind == InstructionKind::Suite {
+            "Eval suite"
+        } else {
+            "Skill"
+        };
         let capture = Capture::from(skill);
         let staged = self.stage_capture(&capture, source.clone())?;
         let artifacts = self.artifacts.clone();
@@ -454,7 +536,7 @@ impl InstructionService {
                 None => {
                     let item = StoredInstructionItem {
                         id: tx.new_id(IdKind::Operation),
-                        kind: InstructionKind::Skill,
+                        kind,
                         name: name.clone(),
                         scope: scope.clone(),
                         origin,
@@ -486,10 +568,11 @@ impl InstructionService {
                 RecordedRevision {
                     state: InstructionRevisionState::Draft,
                     author: host.clone(),
-                    origin: json!({"kind": super::OBSERVED_ORIGIN, "source": source}),
+                    origin: observed.clone(),
                     applicability: Vec::new(),
-                    title: format!("Skill {}", item.name),
+                    title: format!("{title} {}", item.name),
                     carried_resources: None,
+                    extra_resources: Vec::new(),
                     confined: None,
                 },
             )?;
@@ -676,6 +759,7 @@ impl InstructionService {
                     applicability: vec![role.as_str().to_owned()],
                     title: format!("Role {}", role.as_str()),
                     carried_resources: None,
+                    extra_resources: Vec::new(),
                     confined: None,
                 },
             )?;
@@ -737,8 +821,8 @@ impl InstructionService {
             {
                 return Ok(wrote);
             }
-            let files = self.revision_files(&revision)?;
-            let store = self.skill_files(&item.scope).ok_or_else(|| {
+            let files = self.revision_files(item.kind, &revision)?;
+            let store = self.folder_files(item.kind, &item.scope).ok_or_else(|| {
                 StorageError::unavailable(
                     crate::ports::storage::Unavailable::Io,
                     "the host keeps no project skills",
@@ -775,10 +859,11 @@ impl InstructionService {
     /// Every file of a revision, read back from its managed artifacts.
     pub(crate) fn revision_files(
         &self,
+        kind: InstructionKind,
         revision: &StoredInstructionRevision,
     ) -> Result<Vec<SkillFile>, StorageError> {
         let mut files = vec![SkillFile {
-            path: scan::SKILL_FILE.into(),
+            path: super::manifest(kind).into(),
             bytes: self.artifact_bytes(&revision.content)?,
             executable: false,
         }];
@@ -857,6 +942,9 @@ pub(crate) struct RecordedRevision {
     pub title: String,
     /// Already-recorded resource artifacts carried over unchanged (a draft of the text only).
     pub carried_resources: Option<Value>,
+    /// Already-recorded resource entries kept beside the staged ones (a suite draft keeps its
+    /// accepted exceptions file).
+    pub extra_resources: Vec<Value>,
     /// A project-confined agent's draft: its content is scoped to this project only.
     pub confined: Option<crate::protocol::ProjectId>,
 }
@@ -881,12 +969,12 @@ pub(crate) fn publish_instruction_text(
         tx,
         &staged.instruction,
         crate::services::artifacts::host::HostArtifactPublication {
-            title: &format!("{title} {}", scan::SKILL_FILE),
+            title: &format!("{title} {}", super::manifest(item.kind)),
             media_type: staged.instruction_media,
             provenance: json!({
                 "kind": crate::services::artifacts::derivation::DerivedKind::Instruction.as_str(),
                 "instructionId": item.id.as_str(),
-                "path": scan::SKILL_FILE
+                "path": super::manifest(item.kind)
             }),
             scope,
             owner,
@@ -894,6 +982,50 @@ pub(crate) fn publish_instruction_text(
     )?;
     serde_json::to_value(version_ref(&version))
         .map_err(|e| StorageError::InvalidRecord(e.to_string()))
+}
+
+/// Publishes a capture's staged resources as host artifacts in the item's own scope (the
+/// release of a confined suite draft's approved files) and answers their resource entries.
+pub(crate) fn publish_resources(
+    tx: &mut dyn crate::ports::storage::WriteTransaction,
+    artifacts: &ArtifactService,
+    item: &StoredInstructionItem,
+    staged: &StagedCapture,
+    title: &str,
+) -> Result<Value, StorageError> {
+    let scope = match &item.scope {
+        ConfigScope::Workspace => crate::ports::storage::ArtifactScope::Workspace,
+        ConfigScope::Project(p) | ConfigScope::Repository { project: p, .. } => {
+            crate::ports::storage::ArtifactScope::Project(p.clone())
+        }
+    };
+    let owner = tx.store().host_actor.clone();
+    let mut resources = Vec::new();
+    for (file, s) in &staged.resources {
+        let version = artifacts.commit_host_bytes_in_scope(
+            tx,
+            s,
+            crate::services::artifacts::host::HostArtifactPublication {
+                title: &format!("{title} {}", file.path),
+                media_type: media_type(&file.path),
+                provenance: json!({
+                    "kind": crate::services::artifacts::derivation::DerivedKind::Instruction.as_str(),
+                    "instructionId": item.id.as_str(),
+                    "path": file.path
+                }),
+                scope: scope.clone(),
+                owner: owner.clone(),
+            },
+        )?;
+        resources.push(json!({
+            "path": file.path,
+            "artifact": serde_json::to_value(version_ref(&version)).map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
+            "sha256": file.sha256, "byteCount": file.bytes.len(), "script": file.script,
+            "executable": file.executable,
+        }));
+    }
+    resources.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    Ok(Value::Array(resources))
 }
 
 /// Commits a staged capture as host artifacts in the item's scope and appends its revision
@@ -940,7 +1072,7 @@ pub(crate) fn record_capture(
         tx,
         &staged.instruction,
         staged.instruction_media,
-        scan::SKILL_FILE,
+        super::manifest(item.kind),
     )?;
     let mut resources = Vec::new();
     for (file, s) in &staged.resources {
@@ -950,6 +1082,8 @@ pub(crate) fn record_capture(
             "byteCount": file.bytes.len(), "script": file.script, "executable": file.executable,
         }));
     }
+    resources.extend(recorded.extra_resources);
+    resources.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     let revision = StoredInstructionRevision {
         instruction_id: item.id.clone(),
         revision: item.latest_revision + 1,
@@ -969,4 +1103,16 @@ pub(crate) fn record_capture(
     };
     tx.instructions().insert_instruction_revision(&revision)?;
     Ok(revision)
+}
+
+/// The validated contents of a scanned suite folder.
+fn parse_folder(folder: &ScannedSkill) -> Result<super::suite::Parsed, String> {
+    let text = std::str::from_utf8(&folder.instruction.bytes)
+        .map_err(|_| format!("{} is not UTF-8", super::suite::SUITE_FILE))?;
+    let files: Vec<(&str, &[u8])> = folder
+        .resources
+        .iter()
+        .map(|r| (r.path.as_str(), r.bytes.as_slice()))
+        .collect();
+    super::suite::parse(text, &files)
 }

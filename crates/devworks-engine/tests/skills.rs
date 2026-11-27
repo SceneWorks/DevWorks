@@ -163,6 +163,7 @@ impl Fx {
                 shared: Some(self.shared.clone()),
                 harness: self.harness.clone(),
             },
+            suites: None,
         });
         Composition {
             store: self.store.clone(),

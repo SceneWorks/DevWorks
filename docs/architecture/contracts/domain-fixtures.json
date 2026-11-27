@@ -2240,6 +2240,55 @@
     "schemaValid": true
   },
   {
+    "id": "input-evals.suites-Query",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"evals.suites\",\"page\":{\"limit\":20}},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.suite-Query",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"evals.suite\",\"suiteId\":\"id-a\"},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.suite_history-Query",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"evals.suite_history\",\"suiteId\":\"id-a\",\"page\":{\"limit\":20}},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.draft_suite-Command",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.draft_suite\",\"name\":\"fixture\",\"documentation\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"measures\":[{\"kind\":\"Skill\",\"name\":\"fixture\"}],\"checks\":[{\"id\":\"id-a\",\"ruleRef\":\"fixture\",\"measurement\":\"Proxy\",\"predicate\":{\"kind\":\"ToolSucceeded\",\"operation\":\"fixture\"}}],\"resources\":[]},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.propose_suite-Command",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.propose_suite\",\"suiteId\":\"id-a\",\"expectedRevision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.activate_suite-Command",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.activate_suite\",\"suiteId\":\"id-a\",\"expectedRevision\":\"1\",\"targetRevision\":\"1\"},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-evals.accept_exception-Command",
+    "entry": "domain-request.r23",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"evals.accept_exception\",\"suiteId\":\"id-a\",\"expectedRevision\":\"1\",\"checkId\":\"id-a\",\"matchedInstance\":{\"sessionId\":\"id-a\",\"sequence\":\"0\",\"entryId\":\"id-a\",\"kind\":\"fixture\"},\"reason\":\"Fixture content\"},\"schemaRevision\":23}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "input-next_work.inspect_queue-Query",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"next_work.inspect_queue\",\"projectId\":\"project-a\"},\"schemaRevision\":3}",
@@ -4532,6 +4581,55 @@
     "id": "result-evals.results",
     "entry": "operation-result",
     "raw": "{\"kind\":\"evals.results\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.suites",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.suites\",\"value\":{\"items\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.suite",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.suite\",\"value\":{\"id\":\"id-a\",\"name\":\"fixture\",\"origin\":\"Shared\",\"revision\":\"1\",\"latestRevision\":\"1\",\"state\":\"Draft\",\"approved\":false,\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"documentation\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"measures\":[],\"checks\":[],\"resources\":[],\"exceptions\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.suite_history",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.suite_history\",\"value\":{\"items\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.draft_suite",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.draft_suite\",\"value\":{\"id\":\"id-a\",\"name\":\"fixture\",\"origin\":\"Shared\",\"revision\":\"1\",\"latestRevision\":\"1\",\"state\":\"Draft\",\"approved\":false,\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"documentation\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"measures\":[],\"checks\":[],\"resources\":[],\"exceptions\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.propose_suite",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.propose_suite\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.activate_suite",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.activate_suite\",\"value\":{\"id\":\"id-a\",\"name\":\"fixture\",\"origin\":\"Shared\",\"revision\":\"1\",\"latestRevision\":\"1\",\"state\":\"Draft\",\"approved\":false,\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"documentation\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"measures\":[],\"checks\":[],\"resources\":[],\"exceptions\":[]}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-evals.accept_exception",
+    "entry": "operation-result.r23",
+    "raw": "{\"kind\":\"evals.accept_exception\",\"value\":{\"id\":\"id-a\",\"name\":\"fixture\",\"origin\":\"Shared\",\"revision\":\"1\",\"latestRevision\":\"1\",\"state\":\"Draft\",\"approved\":false,\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"documentation\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"measures\":[],\"checks\":[],\"resources\":[],\"exceptions\":[]}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -10024,42 +10122,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1432",
+    "id": "r3-preview-source-13-1446",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1432",
+    "id": "r3-delete-source-13-1446",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1434",
+    "id": "r3-preview-source-15-1448",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1434",
+    "id": "r3-delete-source-15-1448",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1436",
+    "id": "r3-preview-source-256-1450",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1436",
+    "id": "r3-delete-source-256-1450",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,

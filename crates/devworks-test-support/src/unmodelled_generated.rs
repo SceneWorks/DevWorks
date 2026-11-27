@@ -1968,6 +1968,7 @@ impl InstructionRepository for Unmodelled {
         _: &Id,
         _: i64,
         _: &Value,
+        _: Option<&Value>,
     ) -> Result<(), StorageError> {
         unmodelled()
     }

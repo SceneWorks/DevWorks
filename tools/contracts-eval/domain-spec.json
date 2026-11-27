@@ -4904,6 +4904,97 @@
         "has_more": "bool"
       }
     },
+    "EvalSuiteOrigin": {
+      "kind": "enum",
+      "values": [
+        "Shared",
+        "Harness"
+      ]
+    },
+    "EvalSubjectKind": {
+      "kind": "enum",
+      "values": [
+        "Skill",
+        "Role",
+        "Convention",
+        "LessonRule",
+        "Routing",
+        "Build"
+      ]
+    },
+    "EvalSuitePart": {
+      "kind": "enum",
+      "values": [
+        "Case",
+        "Grader",
+        "Rubric",
+        "Fixture",
+        "Document"
+      ]
+    },
+    "EvalSubjectRef": {
+      "kind": "record",
+      "fields": {
+        "kind": "EvalSubjectKind",
+        "name": "Label"
+      }
+    },
+    "EvalAcceptedException": {
+      "kind": "record",
+      "fields": {
+        "check_id": "Id",
+        "matched_instance": "EvalStepSource",
+        "reason": "Content",
+        "approver": "ActorId",
+        "accepted_at_ms": "Counter"
+      }
+    },
+    "EvalSuiteResource": {
+      "kind": "record",
+      "fields": {
+        "path": "RelativePath",
+        "part": "EvalSuitePart",
+        "artifact": "ArtifactRef"
+      }
+    },
+    "EvalSuiteResourceInput": {
+      "kind": "record",
+      "fields": {
+        "path": "RelativePath",
+        "artifact": "ArtifactRef"
+      }
+    },
+    "EvalSuiteRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "name": "Label",
+        "origin": "EvalSuiteOrigin",
+        "location": "?RegisteredPath",
+        "revision": "Revision",
+        "latest_revision": "Revision",
+        "active_revision": "?Revision",
+        "state": "InstructionState",
+        "approved": "bool",
+        "content_digest": "Digest",
+        "documentation": "ArtifactRef",
+        "description": "?Text",
+        "measures": "Items<EvalSubjectRef>",
+        "checks": "Items<EvalDeterministicCheck>",
+        "resources": "Items<EvalSuiteResource>",
+        "exceptions": "Items<EvalAcceptedException>",
+        "author": "?ActorId",
+        "rationale": "?Content",
+        "approval_outcome": "?ApprovalState"
+      }
+    },
+    "EvalSuitePage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<EvalSuiteRecord>",
+        "next_cursor": "?Cursor"
+      }
+    },
     "EvalRecordSource": {
       "kind": "enum",
       "values": [
@@ -12269,6 +12360,108 @@
       "authority": "Scoped",
       "rules": "Read immutable reports for one currently visible session through bounded, scope-revalidated pagination. Historical reports retain their source watermark, supplied measurement digest, suite snapshot, per-step revision attribution, explicit outcomes and coverage; no report is recomputed or adopted by this query."
     },
+    "evals.suites": {
+      "operation": "evals.suites",
+      "mode": "Query",
+      "fields": {
+        "page": "PageRequest"
+      },
+      "result": "EvalSuitePage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "List the workspace's shared and harness eval suites in ID order, each at its active revision (else its latest visible one) with its origin, folder location, active and latest revision, documentation, measured subjects, checks, resources and accepted exceptions. Reads only.",
+      "introducedRevision": 23
+    },
+    "evals.suite": {
+      "operation": "evals.suite",
+      "mode": "Query",
+      "fields": {
+        "suite_id": "Id",
+        "revision": "?Revision"
+      },
+      "result": "EvalSuiteRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Read one visible suite at a revision (default: its active revision, else its latest visible one).",
+      "introducedRevision": 23
+    },
+    "evals.suite_history": {
+      "operation": "evals.suite_history",
+      "mode": "Query",
+      "fields": {
+        "suite_id": "Id",
+        "page": "PageRequest"
+      },
+      "result": "EvalSuitePage",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Every visible revision of one suite, newest first, with its state, author, rationale and approval outcome. Revisions are immutable.",
+      "introducedRevision": 23
+    },
+    "evals.draft_suite": {
+      "operation": "evals.draft_suite",
+      "mode": "Command",
+      "fields": {
+        "suite_id": "?Id",
+        "expected_revision": "?Revision",
+        "name": "Label",
+        "documentation": "ArtifactRef",
+        "measures": "NonEmpty<EvalSubjectRef>",
+        "checks": "NonEmpty<EvalDeterministicCheck>",
+        "resources": "Items<EvalSuiteResourceInput>",
+        "rationale": "?Content"
+      },
+      "result": "EvalSuiteRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Write a complete new suite revision: SUITE.md documentation (what it measures, each grader with what it checks and cannot check, how to run it, how to read its results), measured subjects, deterministic checks, and case, grader, rubric, fixture and document resources. A person's save is approved and active at once; an agent's draft takes effect only through its own approved proposal. A shared suite is never written: a change becomes a same-name harness suite. Accepted exceptions carry over unchanged. A suite carries no skill (SKILL.md) and no exceptions file of its own.",
+      "introducedRevision": 23
+    },
+    "evals.propose_suite": {
+      "operation": "evals.propose_suite",
+      "mode": "Command",
+      "fields": {
+        "suite_id": "Id",
+        "expected_revision": "Revision",
+        "content_digest": "Digest"
+      },
+      "result": "ProposalRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Stage an agent's exact suite draft for a person's approval as its own proposal; the approval activates that revision through evals.activate_suite. A proposal changes one suite and never a subject it measures.",
+      "introducedRevision": 23
+    },
+    "evals.activate_suite": {
+      "operation": "evals.activate_suite",
+      "mode": "Command",
+      "fields": {
+        "suite_id": "Id",
+        "expected_revision": "Revision",
+        "target_revision": "Revision",
+        "proposal_id": "?Id"
+      },
+      "result": "EvalSuiteRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "Make a revision the suite's active one: a person restores an approved revision or confirms a folder change observed on disk; agent content activates only with its exact approved proposal. Confirming a folder change that alters accepted exceptions is refused.",
+      "introducedRevision": 23
+    },
+    "evals.accept_exception": {
+      "operation": "evals.accept_exception",
+      "mode": "Command",
+      "fields": {
+        "suite_id": "Id",
+        "expected_revision": "Revision",
+        "check_id": "Id",
+        "matched_instance": "EvalStepSource",
+        "reason": "Content"
+      },
+      "result": "EvalSuiteRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "rules": "A person accepts an exception to one check of the suite's active revision for one matched instance, with a reason; it is recorded with its approver in a new approved, active suite revision. Only a person may accept an exception.",
+      "introducedRevision": 23
+    },
     "next_work.inspect_queue": {
       "operation": "next_work.inspect_queue",
       "mode": "Query",
@@ -12526,6 +12719,27 @@
   "schemaRevisions": {
     "agents.list": [
       21
+    ],
+    "evals.suites": [
+      23
+    ],
+    "evals.suite": [
+      23
+    ],
+    "evals.suite_history": [
+      23
+    ],
+    "evals.draft_suite": [
+      23
+    ],
+    "evals.propose_suite": [
+      23
+    ],
+    "evals.activate_suite": [
+      23
+    ],
+    "evals.accept_exception": [
+      23
     ],
     "runs.start": [
       1,
@@ -14026,6 +14240,13 @@
     "mcp_server.set_client_access": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "evals.grade": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "evals.results": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "evals.suites": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "evals.suite": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "evals.suite_history": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "evals.draft_suite": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "evals.propose_suite": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "evals.activate_suite": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": true, "humanOnly": false},
+    "evals.accept_exception": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": true},
     "watch.create": {"assignmentScope": "project", "nativeExecution": true, "approvalRequired": false, "humanOnly": false},
     "watch.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "watch.inspect": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
