@@ -304,7 +304,7 @@ impl AnalysisService {
         };
         if run.state != OperationState::ObservedComplete
             || run.active_operation != operation.id
-            || !crate::authority::authorization_holds_in(tx, &ctx, &authority)?
+            || !crate::services::fences::authorization_holds_in(tx, &ctx, &authority)?
         {
             return Ok(false);
         }

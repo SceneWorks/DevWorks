@@ -20,6 +20,7 @@ pub mod dreaming;
 pub mod effect;
 pub(crate) mod effect_job;
 pub mod evals;
+pub mod fences;
 pub use crate::kernel::failure;
 pub mod git;
 pub mod github;

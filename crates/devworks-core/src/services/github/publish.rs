@@ -4,7 +4,6 @@ use super::GitHubService;
 use super::api::Endpoint;
 use super::issue_poll::{self, IssueObservation, PollTarget};
 use super::issues;
-use crate::authority::authorization_holds;
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
 use crate::gateway::AdmittedCommand;
@@ -20,6 +19,7 @@ use crate::protocol::{
     AssignmentId, DomainErrorCode, EventId, Id, OperationId, OperationState, ProjectId, RootId,
 };
 use crate::services::effect::EffectOutcome;
+use crate::services::fences::authorization_holds;
 use crate::services::git::github::Fault;
 use crate::services::kernel::{Failure, Refusal, not_found};
 use crate::services::runs::control_of;

@@ -31,7 +31,7 @@ pub(crate) fn restore(
 ) -> Result<(PrincipalKind, InvocationContext), StorageError> {
     if tx.store().store_id != *job.store_id
         || tx.store().restore_epoch != job.restore_epoch
-        || !crate::authority::fences_hold(tx, job.fences)?
+        || !crate::services::fences::fences_hold(tx, job.fences)?
     {
         return Err(StorageError::ScopeDenied);
     }

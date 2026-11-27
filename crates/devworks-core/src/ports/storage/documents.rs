@@ -1,11 +1,9 @@
 //! Document index metadata and immutable extracted passages. Artifact rows still own the
 //! original bytes, versions and access. A checkpoint is separate from a published index.
 use super::{ArtifactScope, StorageError};
+use crate::kernel::document_evidence::{ExtractedBlock, VisionTarget, VisionUnit};
 use crate::protocol::records::DocumentTransferState;
 use crate::protocol::{ActorId, AssignmentId, Id, ProjectId, Revision, RootId, data::Coverage};
-use crate::services::documents::extraction::ExtractedBlock;
-use crate::services::documents::vision::VisionTarget;
-use crate::services::documents::vision::VisionUnit;
 use serde::{Deserialize, Serialize};
 
 /// The exact project and primary coordinator custody when a transfer was proposed.

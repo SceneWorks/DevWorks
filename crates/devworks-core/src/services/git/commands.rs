@@ -875,7 +875,7 @@ impl GitService {
                 .git()
                 .git_worktree(&j.tree.id)?
                 .ok_or(StorageError::ScopeDenied)?;
-            if tree != j.tree || !crate::authority::fences_hold(tx, &j.fences)? {
+            if tree != j.tree || !crate::services::fences::fences_hold(tx, &j.fences)? {
                 return Err(StorageError::ScopeDenied);
             }
             let work = tx
@@ -1686,7 +1686,7 @@ impl GitService {
         }
         read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
             let authorization = crate::ports::Authorization::direct().fenced_by(job.fences.clone());
-            if !crate::authority::authorization_holds(snapshot, &authorization)?
+            if !crate::services::fences::authorization_holds(snapshot, &authorization)?
                 || snapshot
                     .projects()
                     .repository(&job.tree.repository_id)?

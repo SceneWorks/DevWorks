@@ -4,6 +4,7 @@
 pub(crate) mod analysis;
 pub mod checkout;
 pub mod derivation;
+pub mod document_evidence;
 pub mod egress;
 pub mod failure;
 pub(crate) mod graph_request;

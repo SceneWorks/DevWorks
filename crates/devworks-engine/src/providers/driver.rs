@@ -1554,7 +1554,7 @@ impl OwnedInferenceSource for LazySource {
                     if let Some(fence) = &context_head_fence {
                         fence.check(tx)?;
                     }
-                    if !devworks_core::authority::service::inference_fences_hold(
+                    if !devworks_core::services::fences::inference_fences_hold(
                         tx,
                         &context,
                         &source_fences,

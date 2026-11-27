@@ -84,7 +84,7 @@ impl AdmittedQuery {
     }
     /// What current authority established for this query (its fences and grants). A use case
     /// that writes during preparation re-checks it inside that write
-    /// ([`crate::authority::authorization_holds_in`]), as a command's unit of work does.
+    /// ([`crate::authority::authorization_holds_in_with`]), as a command's unit of work does.
     pub fn authorization(&self) -> &Authorization {
         &self.authorization
     }
@@ -517,8 +517,11 @@ impl Gateway<'_> {
                 options.clone()
             };
             let holds = read_snapshot(self.store, &fresh, |s| {
-                if !(crate::authority::authorization_holds(s, &authorization)?
-                    && (!scoped_worktree || checkout::live_custody(s, ctx)?))
+                if !(crate::authority::authorization_holds_with(
+                    s,
+                    &authorization,
+                    &crate::authority::AuthorityFencesOnly,
+                )? && (!scoped_worktree || checkout::live_custody(s, ctx)?))
                 {
                     return Ok((false, None));
                 }
@@ -1178,7 +1181,12 @@ fn unit_of_work(
         // Receipts and history are attributed to a host-registered principal.
         return Ok(Unit::Denied);
     }
-    if !crate::authority::fences_hold(tx, authorization.fences())? {
+    if !crate::authority::fences_hold_with(
+        tx,
+        None,
+        authorization.fences(),
+        &crate::authority::AuthorityFencesOnly,
+    )? {
         // Authority changed after it was resolved (revoked or re-bound principal, narrowed
         // policy). Checked before the receipt lookup, so a revoked caller is denied rather
         // than handed an old receipt.

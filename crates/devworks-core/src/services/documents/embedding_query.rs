@@ -104,7 +104,7 @@ pub(super) fn prepare(
     };
     let (configuration, space, searchable) = env.read(|read| {
         Ok((|| {
-            if !crate::authority::authorization_holds(read, query.authorization())? {
+            if !crate::services::fences::authorization_holds(read, query.authorization())? {
                 return Err(StorageError::ScopeDenied.into());
             }
             let (scope, viewer) = retrieval::audience(read, ctx, request)?;
@@ -197,7 +197,11 @@ pub(super) fn prepare(
                     ..WriteOptions::host_state()
                 },
                 move |tx| {
-                    if !crate::authority::authorization_holds_in(tx, &context, &authorization)? {
+                    if !crate::services::fences::authorization_holds_in(
+                        tx,
+                        &context,
+                        &authorization,
+                    )? {
                         return Err(StorageError::ScopeDenied);
                     }
                     let resolved = embedding_spaces::resolve_selected_in(tx, &context)?;

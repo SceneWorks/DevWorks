@@ -827,7 +827,7 @@ fn deselecting_a_qualified_space_invalidates_the_native_send_fence() {
         source_digest: resolved.source_digest().to_owned(),
     }];
     write(f.store.as_ref(), move |tx| {
-        assert!(devworks_core::authority::service::inference_fences_hold(
+        assert!(devworks_core::services::fences::inference_fences_hold(
             tx, &ctx, &fences
         )?);
         let selection = tx.router().embedding_selection()?;
@@ -837,7 +837,7 @@ fn deselecting_a_qualified_space_invalidates_the_native_send_fence() {
             tx.router().connection(&id("connection"))?.unwrap().revision,
             connection_revision
         );
-        assert!(!devworks_core::authority::service::inference_fences_hold(
+        assert!(!devworks_core::services::fences::inference_fences_hold(
             tx, &ctx, &fences
         )?);
         Ok(())

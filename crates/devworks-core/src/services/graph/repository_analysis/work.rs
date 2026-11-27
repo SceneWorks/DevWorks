@@ -38,7 +38,7 @@ impl Claim {
         let boot = tx.store().boot_id.clone();
         let now = tx.now_ms();
         let gate = Authorization::direct().fenced_by(self.work.authority.fences.clone());
-        if !crate::authority::authorization_holds_in(tx, &self.context, &gate)?
+        if !crate::services::fences::authorization_holds_in(tx, &self.context, &gate)?
             || tx.actors().actor_kind(self.context.principal())?
                 != Some(self.context.principal_kind())
         {

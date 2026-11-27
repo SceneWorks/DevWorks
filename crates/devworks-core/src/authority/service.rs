@@ -1079,28 +1079,48 @@ fn policy_holds(
     Ok(resolve_policy(read, project)?.digest() == digest)
 }
 
+/// The checks for fences a service owns: a document index run, the document vision setting, a
+/// dreaming sweep request and the qualified embedding choice. Authority cannot evaluate them
+/// without reaching the services, so each check here takes their owner as an argument;
+/// `services::fences` supplies it and holds the entry points services, the engine and the
+/// adapters call. A check given [`AuthorityFencesOnly`] refuses every service-owned fence.
+pub trait ServiceFences {
+    /// Whether `fence` holds inside a write transaction, in the native invocation context
+    /// when the caller has one.
+    fn holds_in(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: Option<&InvocationContext>,
+        fence: &AuthorityFence,
+    ) -> Result<bool, StorageError>;
+    /// Whether `fence` holds in a fresh read snapshot.
+    fn holds(&self, s: &dyn ReadSnapshot, fence: &AuthorityFence) -> Result<bool, StorageError>;
+}
+
+/// The owner for checks of authorizations minted here, which carry no service-owned fence.
+pub struct AuthorityFencesOnly;
+
+impl ServiceFences for AuthorityFencesOnly {
+    fn holds_in(
+        &self,
+        _: &mut dyn WriteTransaction,
+        _: Option<&InvocationContext>,
+        _: &AuthorityFence,
+    ) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+    fn holds(&self, _: &dyn ReadSnapshot, _: &AuthorityFence) -> Result<bool, StorageError> {
+        Ok(false)
+    }
+}
+
 /// Re-checks every fence inside the command's write transaction (the commit linearization
-/// point). Called by the gateway before the receipt lookup.
-pub fn fences_hold(
-    tx: &mut dyn WriteTransaction,
-    fences: &[AuthorityFence],
-) -> Result<bool, StorageError> {
-    fences_hold_with_context(tx, None, fences)
-}
-
-/// Checks the exact qualified embedding choice in the real native invocation context.
-pub fn inference_fences_hold(
-    tx: &mut dyn WriteTransaction,
-    ctx: &InvocationContext,
-    fences: &[AuthorityFence],
-) -> Result<bool, StorageError> {
-    fences_hold_with_context(tx, Some(ctx), fences)
-}
-
-fn fences_hold_with_context(
+/// point), in the native invocation context when `ctx` is given.
+pub fn fences_hold_with(
     tx: &mut dyn WriteTransaction,
     ctx: Option<&InvocationContext>,
     fences: &[AuthorityFence],
+    owners: &dyn ServiceFences,
 ) -> Result<bool, StorageError> {
     for fence in fences {
         let holds = match fence {
@@ -1118,25 +1138,10 @@ fn fences_hold_with_context(
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(tx.authority(), actor, *revision)?
             }
-            AuthorityFence::DocumentIndex { run, generation } => {
-                crate::services::documents::indexing::embedding_source_in(tx, run, *generation)?
-                    .is_some()
-            }
-            AuthorityFence::DreamingSweep {
-                run,
-                generation,
-                request,
-            } => crate::services::dreaming::inference_fence_in(tx, run, *generation, request)?,
-            AuthorityFence::QualifiedEmbedding { source_digest } => {
-                let Some(ctx) = ctx else { return Ok(false) };
-                let current =
-                    crate::services::router::embedding_spaces::resolve_selected_in(tx, ctx)?;
-                current.binding().is_some() && current.source_digest() == source_digest
-            }
-            AuthorityFence::DocumentVision { settings_witness } => {
-                let current = crate::services::documents::vision::policy(tx.configuration())?;
-                current.enabled && current.witness == *settings_witness
-            }
+            AuthorityFence::DocumentIndex { .. }
+            | AuthorityFence::DreamingSweep { .. }
+            | AuthorityFence::QualifiedEmbedding { .. }
+            | AuthorityFence::DocumentVision { .. } => owners.holds_in(tx, ctx, fence)?,
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(tx.configuration(), project_id.as_ref(), digest)?
             }
@@ -1148,20 +1153,21 @@ fn fences_hold_with_context(
     Ok(true)
 }
 
-/// [`authorization_holds`] inside a write transaction, together with the invocation's store and
-/// restore epoch: the linearization point of a write a query makes during preparation (the web
-/// tools' evidence and activity records). A principal revoked or re-bound, a narrowed policy or
-/// a changed grant since authorization makes it `false`, and the caller writes nothing.
-pub fn authorization_holds_in(
+/// [`authorization_holds_with`] inside a write transaction, together with the invocation's store
+/// and restore epoch: the linearization point of a write a query makes during preparation (the
+/// web tools' evidence and activity records). A principal revoked or re-bound, a narrowed policy
+/// or a changed grant since authorization makes it `false`, and the caller writes nothing.
+pub fn authorization_holds_in_with(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     authorization: &Authorization,
+    owners: &dyn ServiceFences,
 ) -> Result<bool, StorageError> {
     let store = tx.store();
     if &store.store_id != ctx.store_id() || store.restore_epoch != ctx.restore_epoch().get() {
         return Ok(false);
     }
-    if !fences_hold(tx, authorization.fences())? {
+    if !fences_hold_with(tx, None, authorization.fences(), owners)? {
         return Ok(false);
     }
     for g in authorization.authority_grants() {
@@ -1177,9 +1183,10 @@ pub fn authorization_holds_in(
 
 /// Re-checks fences and the grants an authorization relies on against a fresh snapshot (the
 /// publication point of a read). A grant revoked or changed since authorization denies output.
-pub fn authorization_holds(
+pub fn authorization_holds_with(
     s: &dyn ReadSnapshot,
     authorization: &Authorization,
+    owners: &dyn ServiceFences,
 ) -> Result<bool, StorageError> {
     for fence in authorization.fences() {
         let holds = match fence {
@@ -1197,15 +1204,10 @@ pub fn authorization_holds(
             AuthorityFence::Principal { actor, revision } => {
                 principal_holds(s.authority(), actor, *revision)?
             }
-            AuthorityFence::DocumentIndex { run, generation } => {
-                crate::services::documents::indexing::embedding_fence_read(s, run, *generation)?
-            }
-            AuthorityFence::DreamingSweep { .. } => false,
-            AuthorityFence::QualifiedEmbedding { .. } => false,
-            AuthorityFence::DocumentVision { settings_witness } => {
-                let current = crate::services::documents::vision::policy(s.configuration())?;
-                current.enabled && current.witness == *settings_witness
-            }
+            AuthorityFence::DocumentIndex { .. }
+            | AuthorityFence::DreamingSweep { .. }
+            | AuthorityFence::QualifiedEmbedding { .. }
+            | AuthorityFence::DocumentVision { .. } => owners.holds(s, fence)?,
             AuthorityFence::Policy { project_id, digest } => {
                 policy_holds(s.configuration(), project_id.as_ref(), digest)?
             }

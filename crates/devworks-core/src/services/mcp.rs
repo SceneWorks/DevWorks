@@ -644,7 +644,7 @@ impl McpClientService {
                 if tx.store().store_id != *ctx.store_id()
                     || tx.store().restore_epoch != ctx.restore_epoch().get()
                     || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-                    || !crate::authority::fences_hold(tx, &fences)?
+                    || !crate::services::fences::fences_hold(tx, &fences)?
                 {
                     return Err(StorageError::ScopeDenied);
                 }
@@ -785,7 +785,7 @@ impl McpClientService {
                     "MCP effect journal fence changed".into(),
                 ));
             }
-            if !crate::authority::authorization_holds(
+            if !crate::services::fences::authorization_holds(
                 snapshot,
                 &Authorization::direct().fenced_by(fences),
             )? {
@@ -1043,7 +1043,7 @@ impl McpClientService {
         .with_session(session_id.clone());
         let selected = read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
             if snapshot.operations().operation(&op.id)?.as_ref() != Some(op)
-                || !crate::authority::authorization_holds(
+                || !crate::services::fences::authorization_holds(
                     snapshot,
                     &Authorization::direct().fenced_by(fences.clone()),
                 )?
@@ -1128,7 +1128,7 @@ impl McpClientService {
                     let still_authorized =
                         read_snapshot(&*native.store, &ReadOptions::default(), |snapshot| {
                             if snapshot.operations().operation(&op.id)?.as_ref() != Some(op)
-                                || !crate::authority::authorization_holds(
+                                || !crate::services::fences::authorization_holds(
                                     snapshot,
                                     &Authorization::direct().fenced_by(fences.clone()),
                                 )?
@@ -2523,7 +2523,7 @@ fn sampling_decision(
         return Ok(Err("mcp_sampling_principal"));
     }
     if tx.actors().actor_kind(&principal)? != Some(PrincipalKind::Agent)
-        || !crate::authority::fences_hold(tx, &fences)?
+        || !crate::services::fences::fences_hold(tx, &fences)?
     {
         return Ok(Err("mcp_sampling_authority"));
     }

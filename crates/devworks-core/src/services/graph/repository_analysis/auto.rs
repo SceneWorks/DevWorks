@@ -142,7 +142,7 @@ pub(super) fn index_published(
             return Err(StorageError::Busy);
         }
         for (context, selected, fence) in offers {
-            if !crate::authority::fences_hold(tx, std::slice::from_ref(&fence))? {
+            if !crate::services::fences::fences_hold(tx, std::slice::from_ref(&fence))? {
                 return Err(StorageError::Busy);
             }
             selected
