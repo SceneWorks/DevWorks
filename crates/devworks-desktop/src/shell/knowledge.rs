@@ -8,6 +8,7 @@ use crate::backend::{Reply, Unresolved};
 use crate::documents_ops::DocumentSlot;
 use crate::documents_screen::{self, StagedImport, Upload};
 use crate::knowledge_ops::KnowledgeSlot;
+use crate::knowledge_screen::graph::GraphAction;
 use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
 use crate::memory::{RouteMemory, UnconfirmedImport};
 use crate::project_purge::Live;
@@ -17,11 +18,15 @@ use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
 use crate::widgets;
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::Id;
+use devworks_core::protocol::provider::ArtifactRef;
 use eframe::egui::Ui;
 use serde_json::json;
 use std::path::PathBuf;
 
 controller!(KnowledgeCtl, knowledge: KnowledgeScreen);
+
+/// Why a graph read or summary was not sent.
+const OFFLINE: &str = "Not sent: DevWorks is offline or closing.";
 
 impl Screen for KnowledgeScreen {
     type Slot = KnowledgeSlot;
@@ -70,11 +75,17 @@ impl Screen for KnowledgeScreen {
             && self.claims.loaded
             && !self.claims.loading()
         {
-            KnowledgeCtl {
+            let running = self.last_write.as_ref().is_some_and(|w| w.running);
+            let mut ctl = KnowledgeCtl {
                 knowledge: self,
                 cx,
+            };
+            ctl.refresh_knowledge();
+            // A write still running (a delete by source continuing as a job) is read again
+            // until its receipt says it is done.
+            if running {
+                ctl.read_write_status();
             }
-            .refresh_knowledge();
         }
     }
     fn apply(&mut self, cx: &mut Cx, slot: KnowledgeSlot, reply: Reply) {
@@ -197,7 +208,8 @@ impl Screen for KnowledgeScreen {
         }
         put(
             "knowledgeSearch",
-            json!({"text":self.text,"reason":self.reason,"source":self.cleanup_source}),
+            json!({"text":self.text,"reason":self.reason,"source":self.cleanup_source,
+                "graphQuery":self.graph.query,"lessonActivity":self.lesson_activity}),
         );
     }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
@@ -528,8 +540,98 @@ impl KnowledgeCtl<'_, '_> {
                     }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
+                KnowledgeAction::Relate => match self.knowledge.relate_input() {
+                    Ok(body) => {
+                        let submitted = knowledge_screen::Submitted::Relation(
+                            self.knowledge.relate_object.clone(),
+                        );
+                        self.knowledge_write("Relate", "knowledge.relate", body, submitted)
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::Graph(action) => self.graph_action(action),
             }
         }
+    }
+
+    /// A graph view request, in the listed scope.
+    fn graph_action(&mut self, action: GraphAction) {
+        let scope = self.knowledge.graph_scope();
+        let request = match action {
+            GraphAction::Open(read) => Ok(self.knowledge.graph.begin(scope, read)),
+            GraphAction::Expand => self.knowledge.graph.begin_expand(scope),
+            GraphAction::Summary => {
+                match self.knowledge.graph.begin_summary(scope) {
+                    Ok((generation, body)) => {
+                        if !self.query(
+                            KnowledgeSlot::KnowledgeSummary(generation),
+                            "Rendering a Knowledge summary",
+                            "knowledge.render_summary",
+                            move |b| knowledge_screen::query(b, body),
+                        ) {
+                            self.knowledge.graph.abandon_summary(generation, OFFLINE);
+                        }
+                    }
+                    Err(m) => self.knowledge.graph.error = Some(m),
+                }
+                return;
+            }
+            GraphAction::Select(id) => {
+                self.knowledge_actions(vec![KnowledgeAction::Select(id)]);
+                return;
+            }
+            GraphAction::Close => {
+                self.knowledge.graph.close();
+                return;
+            }
+        };
+        match request {
+            Ok((generation, op, body)) => self.send_graph(generation, op, body),
+            Err(m) => self.knowledge.graph.error = Some(m),
+        }
+    }
+    /// Submits a graph read just started; one nothing took is not left in flight.
+    fn send_graph(
+        &mut self,
+        generation: u64,
+        op: &'static str,
+        body: Option<devworks_core::operations::OperationInput>,
+    ) {
+        if !self.query(
+            KnowledgeSlot::KnowledgeGraph(generation),
+            "Reading the Knowledge graph",
+            op,
+            move |b| knowledge_screen::query(b, body),
+        ) {
+            self.knowledge.graph.abandon(generation, OFFLINE);
+        }
+    }
+    /// Reads one page of a published summary's text.
+    fn read_summary(&mut self, generation: u64, artifact: ArtifactRef, cursor: Option<String>) {
+        if !self.query(
+            KnowledgeSlot::KnowledgeSummaryText(generation),
+            "Reading a Knowledge summary",
+            "artifacts.read",
+            move |b| crate::ops::artifact_read_after(b, &artifact, cursor.as_deref()),
+        ) {
+            self.knowledge.graph.abandon_summary(generation, OFFLINE);
+        }
+    }
+    /// Reads back the last recorded write's receipt.
+    fn read_write_status(&mut self) {
+        let Some((write_id, body)) = self.knowledge.write_status_input() else {
+            return;
+        };
+        let slot = KnowledgeSlot::KnowledgeWriteStatus(write_id);
+        if self.pending(&slot) {
+            return;
+        }
+        self.query(
+            slot,
+            "Checking a Knowledge write",
+            "knowledge.write_status",
+            move |b| knowledge_screen::query(b, body),
+        );
     }
 
     /// Admits a Knowledge import file's exact save frame (prepared, or unconfirmed).
@@ -607,7 +709,30 @@ impl KnowledgeCtl<'_, '_> {
                     if let Some(id) = self.knowledge.selected.clone() {
                         self.read_knowledge(id);
                     }
+                    // The graph shown is read again; it stays on screen until the reply.
+                    let scope = self.knowledge.graph_scope();
+                    if let Some((generation, op, body)) = self.knowledge.graph.begin_refresh(scope)
+                    {
+                        self.send_graph(generation, op, body);
+                    }
+                    self.read_write_status();
                 }
+            }
+            (KnowledgeSlot::KnowledgeGraph(generation), Reply::Query(q)) => {
+                self.knowledge.graph.reply(generation, q)
+            }
+            (KnowledgeSlot::KnowledgeSummary(generation), Reply::Query(q)) => {
+                if let Some(artifact) = self.knowledge.graph.summary_published(generation, q) {
+                    self.read_summary(generation, artifact, None);
+                }
+            }
+            (KnowledgeSlot::KnowledgeSummaryText(generation), Reply::Query(q)) => {
+                if let Some((artifact, cursor)) = self.knowledge.graph.summary_text(generation, q) {
+                    self.read_summary(generation, artifact, Some(cursor));
+                }
+            }
+            (KnowledgeSlot::KnowledgeWriteStatus(write_id), Reply::Query(q)) => {
+                self.knowledge.write_status_reply(&write_id, q)
             }
             other => return Some(other),
         }
