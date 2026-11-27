@@ -824,38 +824,53 @@ impl KnowledgeService {
                 exact_revision,
             ));
         }
-        // This page's query vector is used while the selection it was embedded under is current.
-        // A page without one (no vectors, or the route failed at query time) fuses the word and
-        // graph matches only ([`fusion`]).
+        // A continued listing keeps its first page's mode ([`fusion`]). A first page fuses
+        // meaning matches when its query vector was embedded under the current selection.
+        let continued = fusion::continued_mode(&request)?;
         let vector = match (self.embeddings(), prepared) {
             (Some(runtime), Some(v))
-                if runtime
-                    .configuration_read(snapshot, ctx)?
-                    .space
-                    .is_some_and(|space| space.id == v.space.as_str())
+                if continued != Some(fusion::Mode::Lexical)
+                    && runtime
+                        .configuration_read(snapshot, ctx)?
+                        .space
+                        .is_some_and(|space| space.id == v.space.as_str())
                     && v.current(&runtime, snapshot, ctx)? =>
             {
                 Some(v)
             }
             _ => None,
         };
+        if continued == Some(fusion::Mode::Hybrid) && vector.is_none() {
+            // Without a query vector the order is another one: the client starts again.
+            return Err(StorageError::CursorExpired.into());
+        }
         let near = vector.map(|v| ClaimVectorQuery {
             space: &v.space,
             vector: &v.vector,
         });
+        let fused = fusion::rank(k, &query, near)?;
+        let mode = if near.is_some() {
+            fusion::Mode::Hybrid
+        } else {
+            fusion::Mode::Lexical
+        };
         parts.extend(fusion::binding_parts(
-            vector.map(|v| (&v.space, v.embedded)),
+            mode,
+            vector.map(|v| (&v.space, v.embedded, v.vector.as_slice())),
         ));
         let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
-        let fused = fusion::rank(k, &query, near.as_ref())?;
-        let rows = fusion::page(&binding, &request, &fused)?.try_map(|id| {
-            k.knowledge_claim(&id)?
-                .ok_or_else(|| StorageError::InvalidRecord("a fused claim was not read".into()))
-        })?;
-        let mode = if near.is_some() {
-            KnowledgeRetrievalMode::Hybrid
-        } else {
-            KnowledgeRetrievalMode::LexicalOnly
+        let rows = fusion::page(k, &query, near, &binding, &request, &fused)?;
+        let claims = k.knowledge_claims_by_id(&rows.items)?;
+        if claims.len() != rows.items.len() {
+            return Err(StorageError::InvalidRecord("a listed claim was not read".into()).into());
+        }
+        let rows = cursor::Paged {
+            items: claims,
+            next_cursor: rows.next_cursor,
+        };
+        let mode = match mode {
+            fusion::Mode::Hybrid => KnowledgeRetrievalMode::Hybrid,
+            fusion::Mode::Lexical => KnowledgeRetrievalMode::LexicalOnly,
         };
         Ok((
             search_result(rows.try_into_page(|c| wire(&c))?, mode, fused.work_limited),

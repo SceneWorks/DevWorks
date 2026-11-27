@@ -28,8 +28,8 @@ use devworks_core::protocol::data::DataScope;
 use devworks_core::protocol::provider::{ArtifactRef, SchemaRef};
 use devworks_core::protocol::records::{
     Applicability, ChallengeOutcome, ClaimDraft, KnowledgeBatch, KnowledgeBundle, KnowledgeClaim,
-    KnowledgeEntityDraft, KnowledgeKind, KnowledgeSearchResult, KnowledgeWriteReceipt, LessonDraft,
-    LessonSource, PromoteAction, RevisionedRef,
+    KnowledgeEntityDraft, KnowledgeKind, KnowledgeRetrievalMode, KnowledgeSearchResult,
+    KnowledgeWriteReceipt, LessonDraft, LessonSource, PromoteAction, RevisionedRef,
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::{BoundedList, Limit, Probability};
@@ -551,6 +551,9 @@ pub struct KnowledgeScreen {
     pub detail_error: Option<String>,
     /// The retrieval diagnostic's code and message (`knowledge.diagnostics`).
     pub retrieval: Option<(String, String)>,
+    /// How the shown search was ranked: its retrieval mode and whether fusion ranked only its
+    /// head (`None` for a lesson listing or a reply without them).
+    pub search_ranking: Option<(KnowledgeRetrievalMode, bool)>,
     pub draft: Option<Draft>,
     /// The write in flight (its label); further writes wait for its outcome.
     pub writing: Option<String>,
@@ -1135,11 +1138,15 @@ impl KnowledgeScreen {
     /// page.
     pub fn listed(&mut self, generation: u64, outcome: QueryOutcome) -> Listed {
         // A search page carries its retrieval mode beside the claims; the listing shows claims.
+        let mut ranking = None;
         let outcome = ops::query_result(outcome).map(|(result, revision)| {
             let page = match result {
                 OperationResult::KnowledgeSearch {
                     value: KnowledgeSearchResult::Current(value),
-                } => Ok((value.items.0, value.next_cursor)),
+                } => {
+                    ranking = Some((value.mode, value.work_limited));
+                    Ok((value.items.0, value.next_cursor))
+                }
                 OperationResult::KnowledgeSearch {
                     value: KnowledgeSearchResult::Legacy(value),
                 }
@@ -1153,7 +1160,14 @@ impl KnowledgeScreen {
         match outcome {
             Ok((Ok((items, cursor)), _)) => {
                 let page = Page::new(items, cursor.map(|c| c.0));
-                match self.claims.apply(generation, Ok(page)) {
+                let applied = self.claims.apply(generation, Ok(page));
+                if matches!(
+                    applied,
+                    Applied::Replaced | Applied::Appended | Applied::Continue(_)
+                ) {
+                    self.search_ranking = ranking;
+                }
+                match applied {
                     Applied::Continue(fetch) => Listed::Continue(fetch),
                     _ => Listed::Done,
                 }
@@ -1956,6 +1970,18 @@ impl KnowledgeScreen {
             }
             if let Some((code, message)) = &self.retrieval {
                 chip(ui, retrieval_label(code, message), Tone::Neutral);
+            }
+            if let Some((mode, limited)) = &self.search_ranking {
+                let (shown, notice) = ranking_label(mode, *limited);
+                // The diagnostic above names the mode searches run in; the shown search's own
+                // mode is named only where it differs (its query could not be embedded).
+                let diagnosed = self.retrieval.as_ref().map(|(code, _)| code.as_str());
+                if diagnosed != Some(mode_code(mode)) {
+                    chip(ui, shown, Tone::Neutral);
+                }
+                if let Some(notice) = notice {
+                    chip(ui, notice, Tone::Attention);
+                }
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -2824,6 +2850,56 @@ mod tests {
     }
 
     #[test]
+    fn a_search_page_shows_its_mode_and_says_when_its_results_are_limited() {
+        use devworks_core::protocol::records::KnowledgeSearchPage;
+        use devworks_core::protocol::results::DomainQueryReply;
+        use devworks_core::protocol::{Counter, Protocol, QueryId, ReadStamp, Revision, StoreId};
+        let reply = |mode, work_limited| {
+            Ok(DomainQueryReply::Result {
+                protocol: Protocol::Draft1,
+                query_id: QueryId(Id::new("q").unwrap()),
+                stamp: ReadStamp {
+                    store_id: StoreId(Id::new("store-1").unwrap()),
+                    restore_epoch: Counter::new(0).unwrap(),
+                    sequence: Counter::new(1).unwrap(),
+                    policy_revision: Revision::new(1).unwrap(),
+                    scope_revision: Revision::new(1).unwrap(),
+                },
+                result: OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Current(KnowledgeSearchPage {
+                        items: BoundedList(Vec::new()),
+                        next_cursor: None,
+                        has_more: false,
+                        mode,
+                        work_limited,
+                    }),
+                },
+            })
+        };
+        let mut s = KnowledgeScreen::new();
+        s.begin_listing(false);
+        let generation = s.claims.generation();
+        s.listed(generation, reply(KnowledgeRetrievalMode::Hybrid, true));
+        let Some((mode, limited)) = &s.search_ranking else {
+            panic!("the ranking is kept")
+        };
+        let (shown, notice) = ranking_label(mode, *limited);
+        assert!(shown.contains("meaning"), "{shown}");
+        assert!(notice.unwrap().starts_with("Results limited"));
+        s.begin_listing(false);
+        let generation = s.claims.generation();
+        s.listed(
+            generation,
+            reply(KnowledgeRetrievalMode::LexicalOnly, false),
+        );
+        let (mode, limited) = s.search_ranking.as_ref().unwrap();
+        let (shown, notice) = ranking_label(mode, *limited);
+        assert!(!shown.contains("meaning"), "{shown}");
+        assert!(notice.is_none());
+        assert_eq!(mode_code(mode), "LexicalOnly");
+    }
+
+    #[test]
     fn a_reply_of_a_superseded_listing_is_ignored() {
         let mut s = KnowledgeScreen::new();
         s.begin_listing(false);
@@ -2842,6 +2918,31 @@ mod tests {
             "a stale reply never overwrites state"
         );
     }
+}
+
+/// The retrieval diagnostic's code for a search's mode.
+fn mode_code(mode: &KnowledgeRetrievalMode) -> &'static str {
+    match mode {
+        KnowledgeRetrievalMode::Hybrid => "Hybrid",
+        KnowledgeRetrievalMode::LexicalOnly => "LexicalOnly",
+    }
+}
+
+/// What the shown search's ranking says: its mode, and a notice when fusion ranked only its
+/// first claims.
+fn ranking_label(mode: &KnowledgeRetrievalMode, limited: bool) -> (String, Option<String>) {
+    let shown = match mode {
+        KnowledgeRetrievalMode::Hybrid => "This search: words, meaning and related entities",
+        KnowledgeRetrievalMode::LexicalOnly => "This search: words and related entities",
+    };
+    let notice = limited.then(|| {
+        format!(
+            "Results limited: the best {} matches of each kind are ranked together; the rest \
+             follow in each kind's own order",
+            devworks_core::services::knowledge::CANDIDATES
+        )
+    });
+    (shown.into(), notice)
 }
 
 /// The retrieval mode as the user reads it: what kind of search runs, then the diagnostic's

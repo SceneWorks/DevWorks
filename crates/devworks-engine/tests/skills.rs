@@ -1445,6 +1445,20 @@ fn a_skill_revision_records_the_lessons_it_came_from_and_both_sides_show_the_lin
         assert_eq!(skills(&in_graph["lesson"]).len(), 2, "{entity_bundle}");
         assert_eq!(skills(&lesson_of(&a, in_a_scope("project-a"), &of_a, 2)), []);
         assert!(lesson_of(&a, in_a_scope("project-a"), &of_a, 2).get("skills").is_none());
+        // A search page at revision 30 carries the skills (revision 8) and the retrieval mode; the
+        // same claim read at revision 2 has neither, and at revision 1 no lesson (revision 2).
+        let search_at = |revision: u32| fx.query_at(&app, &a, "knowledge.search", revision, json!({"scope":in_a_scope("project-a"),
+            "text":"fridays","tags":[],"kinds":[],"page":{"limit":10},"entityLimit":10,"claimLimit":10})).unwrap();
+        let found = |page: &Value| page["items"].as_array().unwrap().iter().find(|c| c["id"] == of_a).cloned().unwrap();
+        let current = search_at(30);
+        assert_eq!(skills(&found(&current)["lesson"]).len(), 2, "{current}");
+        assert_eq!(current["mode"], "LexicalOnly", "{current}");
+        let second = search_at(2);
+        assert!(found(&second)["lesson"].is_object(), "{second}");
+        assert!(found(&second)["lesson"].get("skills").is_none(), "{second}");
+        assert!(second.get("mode").is_none() && second.get("workLimited").is_none(), "{second}");
+        let first = search_at(1);
+        assert!(found(&first).get("lesson").is_none() && found(&first).get("lifecycle").is_none(), "{first}");
         // Another project sees neither the confined drafts nor the lessons of project A.
         assert_eq!(skills(&lesson_of(&b, json!({"kind":"Workspace"}), &general, 8)), []);
         // A person's save is a workspace revision everyone can read. It names both lessons, and

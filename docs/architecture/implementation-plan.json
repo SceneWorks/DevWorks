@@ -16,7 +16,7 @@
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "f672863519b6d71c35d7640a8b96b0ae1308e410c5669da301db969c09624576",
+    "contracts/family-coverage.json": "58493ab94f7bccc3ecda53c4983d334146ef364bb90ef8d2120b285d315a0507",
     "mcp-publication-candidates.json": "39f3f3495d050deaf46d1a5e5be94d95a371b4b3ab15941f2b4c3e5c09456901",
     "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },

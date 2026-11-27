@@ -2458,18 +2458,14 @@ impl KnowledgeRead for Unmodelled {
     ) -> Result<Vec<RankedClaim>, StorageError> {
         unmodelled()
     }
-    fn knowledge_text_candidates(&self, _: &ClaimQuery, _: u16) -> Result<Vec<Id>, StorageError> {
-        unmodelled()
-    }
-    fn knowledge_vector_candidates(
+    fn knowledge_candidates(
         &self,
         _: &ClaimQuery,
-        _: &ClaimVectorQuery<'_>,
-        _: u16,
-    ) -> Result<Vec<Id>, StorageError> {
+        _: &ClaimCandidateRead<'_>,
+    ) -> Result<ClaimCandidates, StorageError> {
         unmodelled()
     }
-    fn knowledge_graph_candidates(&self, _: &ClaimQuery, _: u16) -> Result<Vec<Id>, StorageError> {
+    fn knowledge_claims_by_id(&self, _: &[Id]) -> Result<Vec<StoredClaim>, StorageError> {
         unmodelled()
     }
     fn knowledge_vector_coverage(&self, _: &[String], _: &Id) -> Result<(i64, i64), StorageError> {

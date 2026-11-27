@@ -1601,7 +1601,7 @@ fn another_projects_words_never_change_a_relevance_score_order_or_cursor() {
     let before = cache_pages(&fx, &user);
     assert_eq!(before.0.len(), 5);
     assert!(
-        before.1.iter().all(|p| p.starts_with('f')),
+        before.1.iter().all(|p| p.starts_with("Lf")),
         "{:?}",
         before.1
     );
@@ -1692,18 +1692,32 @@ fn a_page_of_the_repository_maximum_continues_instead_of_truncating() {
         json!({"scope": proj("project-a"), "text": "bulk", "tags": [], "kinds": [], "page": page,
             "entityLimit": 500, "claimLimit": 500})
     };
-    // A search lists at most the capped candidates of its sources (word and graph matches
-    // here, each with all 504 claims), each once, and says the cap limited it.
+    // Every one of the 504 matches is listed exactly once: the fused head (word and graph
+    // matches here, each source past its cap, so fusion ranked only the head), then the rest
+    // of the word matches in their own order.
     let first = match result(fx.q(&user, "knowledge.search", body(None))) {
         OperationResult::KnowledgeSearch { value } => current(value),
         other => panic!("{other:?}"),
     };
-    let listed = ids(&first);
-    assert!(listed.len() >= usize::from(CANDIDATES));
-    assert!(listed.len() <= 2 * usize::from(CANDIDATES));
-    assert_eq!(listed.iter().collect::<BTreeSet<_>>().len(), listed.len());
+    assert_eq!(first.items.0.len(), 500);
+    assert!(
+        first.has_more,
+        "a full page of the maximum says more follow"
+    );
     assert!(first.work_limited);
-    assert!(!first.has_more);
+    let second = match result(fx.q(
+        &user,
+        "knowledge.search",
+        body(Some(&first.next_cursor.clone().unwrap().0)),
+    )) {
+        OperationResult::KnowledgeSearch { value } => current(value),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(second.items.0.len(), 4);
+    assert!(!second.has_more);
+    let mut listed = ids(&first);
+    listed.extend(ids(&second));
+    assert_eq!(listed.iter().collect::<BTreeSet<_>>().len(), 504);
     // The context seam reads every effective rule, beyond one repository page.
     let rules: Vec<Value> = (0..126)
         .map(|i| {
@@ -6835,10 +6849,23 @@ fn text_matches(fx: &Fx, scopes: &[&str], words: &[&str]) -> Vec<String> {
         entity_limit: Some(50),
         ..ClaimQuery::default()
     };
-    fx.read(|s| s.knowledge().knowledge_text_candidates(&query, 500))
-        .into_iter()
-        .map(|c| c.as_str().to_owned())
-        .collect()
+    fx.read(|s| {
+        s.knowledge().knowledge_candidates(
+            &query,
+            &ClaimCandidateRead {
+                source: ClaimSource::Words,
+                near: None,
+                tail: false,
+                exclude: &[],
+                after: None,
+                limit: 500,
+            },
+        )
+    })
+    .items
+    .into_iter()
+    .map(|c| c.id.as_str().to_owned())
+    .collect()
 }
 
 /// The vector candidates of a search of `scopes` for `words` near `vector`, at most `count`.
@@ -6858,17 +6885,24 @@ fn neighbors(
     };
     fx.read(|s| {
         let space = id("space-1");
-        s.knowledge().knowledge_vector_candidates(
+        s.knowledge().knowledge_candidates(
             &query,
-            &ClaimVectorQuery {
-                space: &space,
-                vector: &vector,
+            &ClaimCandidateRead {
+                source: ClaimSource::Vector,
+                near: Some(ClaimVectorQuery {
+                    space: &space,
+                    vector: &vector,
+                }),
+                tail: false,
+                exclude: &[],
+                after: None,
+                limit: count,
             },
-            count,
         )
     })
+    .items
     .into_iter()
-    .map(|c| c.as_str().to_owned())
+    .map(|c| c.id.as_str().to_owned())
     .collect()
 }
 
@@ -7190,7 +7224,7 @@ fn all_pages(fx: &Fx, user: &InvocationContext, text: &str, limit: u32) -> (Vec<
 }
 
 #[test]
-fn a_source_past_its_candidate_cap_says_the_results_are_work_limited() {
+fn a_source_past_its_candidate_cap_is_listed_whole_and_says_fusion_was_work_limited() {
     let fx = Fx::new();
     let user = fx.user();
     let cap = usize::from(CANDIDATES);
@@ -7203,7 +7237,8 @@ fn a_source_past_its_candidate_cap_says_the_results_are_work_limited() {
     assert!(!limited, "exactly the cap is not limited");
     many(&fx, &user, "Notes", 1, |_| draft("Fact", "alpha extra"));
     let (whole, limited) = all_pages(&fx, &user, "alpha", 500);
-    assert_eq!(whole.len(), cap);
+    assert_eq!(whole.len(), cap + 1, "the match past the head follows it");
+    assert_eq!(whole.iter().collect::<BTreeSet<_>>().len(), cap + 1);
     assert!(limited, "one past the cap is");
     // Small pages list the same claims, each once, in the same order.
     let (paged, _) = all_pages(&fx, &user, "alpha", 7);
@@ -7211,18 +7246,89 @@ fn a_source_past_its_candidate_cap_says_the_results_are_work_limited() {
     // Graph matches only: claims pointing at an entity the query names.
     let hub = fx.claim_id(&user, proj("project-a"), "Hub", draft("Fact", "central"));
     let hub = fx.claim(&user, proj("project-a"), &hub).subject_id;
-    many(&fx, &user, "Spoke", cap, |_| {
+    many(&fx, &user, "Spoke", cap + 1, |_| {
         with(
             draft("Fact", "links outward"),
             json!({"predicate": "links", "objectId": hub}),
         )
     });
     let (seen, limited) = all_pages(&fx, &user, "hub", 500);
-    // The claim about the hub is a word and a graph match; the cap cuts the graph list.
-    assert_eq!(
-        seen.len(),
-        cap + 1,
-        "every graph candidate within the cap and the word match"
-    );
+    // The claim about the hub is a word and a graph match; the graph source is past its cap,
+    // and its remaining match follows the head.
+    assert_eq!(seen.len(), cap + 2, "every graph match and the word match");
+    assert_eq!(seen.iter().collect::<BTreeSet<_>>().len(), cap + 2);
     assert!(limited);
+}
+
+#[test]
+fn the_best_matching_entities_by_bm25_fill_the_entity_limit_and_more_limit_the_work() {
+    let fx = Fx::new();
+    let user = fx.user();
+    // The longer label's entity has the lower id (checked below): an order by id would pick it.
+    let short = fx.claim_id(&user, proj("project-a"), "Router", draft("Fact", "rotates"));
+    let long = fx.claim_id(
+        &user,
+        proj("project-a"),
+        "Router gateway proxy edge",
+        draft("Fact", "forwards"),
+    );
+    let entity = |c: &Id| fx.claim(&user, proj("project-a"), c).subject_id;
+    let (long_entity, short_entity) = (entity(&long), entity(&short));
+    assert!(
+        long_entity.as_str() < short_entity.as_str(),
+        "{long_entity:?} {short_entity:?}: an order by id would pick the long label"
+    );
+    let search = |limit: u32| {
+        fx.search(
+            &user,
+            proj("project-a"),
+            "router",
+            json!({"entityLimit": limit}),
+        )
+    };
+    let one = search(1);
+    assert_eq!(
+        ids(&one),
+        [short.as_str()],
+        "the shorter, better BM25 label"
+    );
+    assert!(
+        one.work_limited,
+        "a matched entity past the limit limits the listing"
+    );
+    let both = search(2);
+    assert_eq!(both.items.0.len(), 2);
+    assert!(ids(&both).contains(&long.as_str().to_owned()));
+    assert!(!both.work_limited);
+    // Graph matches follow their entity's BM25 before their age: the claim pointing at the
+    // better-matching entity comes first although the other is newer.
+    let to_short = edge(&fx, &user, proj("project-a"), "Gateway", &short_entity);
+    fx.h.set_now(fx.h.now() + 1_000);
+    let to_long = edge(&fx, &user, proj("project-a"), "Proxy", &long_entity);
+    let query = ClaimQuery {
+        scopes: vec!["project:project-a".into(), "workspace".into()],
+        lifecycles: vec!["Active".into()],
+        words: vec!["router".into()],
+        entity_limit: Some(50),
+        ..ClaimQuery::default()
+    };
+    let graph: Vec<String> = fx
+        .read(|s| {
+            s.knowledge().knowledge_candidates(
+                &query,
+                &ClaimCandidateRead {
+                    source: ClaimSource::Graph,
+                    near: None,
+                    tail: true,
+                    exclude: &[],
+                    after: None,
+                    limit: 50,
+                },
+            )
+        })
+        .items
+        .into_iter()
+        .map(|c| c.id.as_str().to_owned())
+        .collect();
+    assert_eq!(graph, [to_short.as_str(), to_long.as_str()]);
 }

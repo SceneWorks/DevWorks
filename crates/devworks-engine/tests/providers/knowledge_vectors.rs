@@ -47,8 +47,27 @@ fn scope(ctx: &InvocationContext) -> Value {
     json!({"kind": "Project", "projectId": ctx.project_id()})
 }
 
-/// Records one claim about `subject` saying `value`, returning its id.
+/// Records one claim about the entity "Garage" saying `value`, returning its id.
 fn record(f: &Fx, cases: &UseCases, ctx: &InvocationContext, key: &str, value: &str) -> Id {
+    record_about(f, cases, ctx, key, "Garage", &[value]).remove(0)
+}
+
+/// Records claims about the entity `subject`, one saying each of `values`, returning their ids.
+fn record_about(
+    f: &Fx,
+    cases: &UseCases,
+    ctx: &InvocationContext,
+    key: &str,
+    subject: &str,
+    values: &[&str],
+) -> Vec<Id> {
+    let claims: Vec<Value> = values
+        .iter()
+        .map(|value| {
+            json!({"kind": "Fact", "subjectId": "s", "predicate": "describes",
+                "value": value, "confidence": 0.7, "evidenceIds": [], "tags": []})
+        })
+        .collect();
     let result = command(
         f,
         cases,
@@ -56,15 +75,47 @@ fn record(f: &Fx, cases: &UseCases, ctx: &InvocationContext, key: &str, value: &
         "knowledge.record",
         json!({"protocol": "1.0-draft.1", "mode": "Command", "requestKey": key,
             "schemaRevision": 2, "body": {"kind": "knowledge.record", "scope": scope(ctx),
-            "batch": {"entities": [{"clientId": "s", "label": "Garage", "entityType": "topic",
-                "aliases": []}], "evidence": [],
-                "claims": [{"kind": "Fact", "subjectId": "s", "predicate": "describes",
-                    "value": value, "confidence": 0.7, "evidenceIds": [], "tags": []}]}}}),
+            "batch": {"entities": [{"clientId": "s", "label": subject, "entityType": "topic",
+                "aliases": []}], "evidence": [], "claims": claims}}}),
     );
     let OperationResult::KnowledgeRecord { value } = result else {
         panic!("{result:?}")
     };
-    value.claim_ids.0[0].clone()
+    value.claim_ids.0
+}
+
+/// Every page of `ctx`'s search for `text`, `limit` claims each, a query vector `near` recorded
+/// for each page; the claims listed and whether the first page was work-limited.
+fn every_page(
+    f: &Fx,
+    cases: &UseCases,
+    ctx: &InvocationContext,
+    text: &str,
+    limit: u32,
+    near: [f32; 2],
+) -> (Vec<Id>, bool) {
+    let (mut listed, mut limited) = (Vec::new(), None);
+    let mut cursor: Option<String> = None;
+    loop {
+        reply(f, &[near]);
+        let page = search(f, cases, ctx, text, limit, cursor.as_deref());
+        assert!(matches!(page.mode, KnowledgeRetrievalMode::Hybrid));
+        limited.get_or_insert(page.work_limited);
+        listed.extend(ids(&page));
+        match page.next_cursor {
+            Some(c) => cursor = Some(c.0),
+            None => return (listed, limited.unwrap()),
+        }
+    }
+}
+
+fn expired(reply: DomainQueryReply) {
+    match reply {
+        DomainQueryReply::Rejected { fault, .. } => {
+            assert_eq!(fault.code, DomainErrorCode::CursorExpired)
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 fn query_at(
@@ -377,6 +428,157 @@ fn a_vector_stored_between_pages_expires_a_fused_cursor() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_word_match_found_through_its_subject_ranks_below_a_word_and_meaning_match() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (human, _native, index) = qualify(&f);
+    seed::rows(
+        f.store.as_ref(),
+        &[seed::ProjectSeed::new("knowledge-a")],
+        &[],
+    )
+    .unwrap();
+    let a = project(&human, "knowledge-a");
+    let (service, cases) = knowledge(&f, Some(index));
+    // The best word match is about the entity the query names, so the graph source lists it
+    // too; its meaning is far from the query's.
+    let subject =
+        record_about(&f, &cases, &a, "subject", "Kitchen", &["kitchen kitchen"]).remove(0);
+    reply(&f, &[[-1.0, 0.1]]);
+    embed(&f, &service);
+    let meaning = record(&f, &cases, &a, "meaning", "a vehicle parked outside");
+    reply(&f, &[[1.0, 0.0]]);
+    embed(&f, &service);
+    let both = record(&f, &cases, &a, "both", "kitchen recipe");
+    reply(&f, &[[0.8, 0.2]]);
+    embed(&f, &service);
+    reply(&f, &[[1.0, 0.0]]);
+    let found = ids(&search(&f, &cases, &a, "kitchen", 50, None));
+    assert_eq!(found, [both, subject, meaning]);
+}
+
+#[test]
+fn every_meaning_match_past_the_cap_is_listed_once_after_the_fused_head() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (human, _native, index) = qualify(&f);
+    seed::rows(
+        f.store.as_ref(),
+        &[seed::ProjectSeed::new("knowledge-a")],
+        &[],
+    )
+    .unwrap();
+    let a = project(&human, "knowledge-a");
+    let (_service, cases) = knowledge(&f, Some(index.clone()));
+    let n = usize::from(devworks_core::services::knowledge::CANDIDATES) + 1;
+    let texts: Vec<String> = (0..n).map(|i| format!("plain note {i}")).collect();
+    let mut all = Vec::new();
+    for (i, chunk) in texts.chunks(100).enumerate() {
+        let values: Vec<&str> = chunk.iter().map(String::as_str).collect();
+        all.extend(record_about(
+            &f,
+            &cases,
+            &a,
+            &format!("notes-{i}"),
+            "Garage",
+            &values,
+        ));
+    }
+    // The store keeps their vectors in the selected space (the delivery path is covered above;
+    // here only the search over many vectors matters).
+    let space = read(f.store.as_ref(), |r| index.configuration_read(r, &a))
+        .space
+        .unwrap()
+        .id;
+    let space = Id::new(space).unwrap();
+    let scope =
+        devworks_core::ports::storage::KnowledgeScope::Project(ProjectId(id("knowledge-a")));
+    let mut stored = 0;
+    loop {
+        let (s, sc) = (space.clone(), scope.clone());
+        let pending = read(f.store.as_ref(), move |r| {
+            r.knowledge().pending_knowledge_claim_vectors(&sc, &s, 32)
+        });
+        if pending.is_empty() {
+            break;
+        }
+        let rows: Vec<(Id, String, Vec<f32>)> = pending
+            .into_iter()
+            .map(|(c, text)| (c, text, vec![1.0, stored as f32 / 1000.0]))
+            .collect();
+        stored += rows.len();
+        let s = space.clone();
+        write(&*f.store, move |tx| {
+            tx.knowledge().insert_knowledge_claim_vectors(&s, &rows)
+        })
+        .unwrap();
+    }
+    assert_eq!(stored, n);
+    // No claim shares the query's word: every one is a meaning match only.
+    let (listed, limited) = every_page(&f, &cases, &a, "zebra", 50, [1.0, 0.0]);
+    assert!(limited, "the meaning source is past its cap");
+    assert_eq!(listed.len(), n);
+    let mut sorted = listed.clone();
+    sorted.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    sorted.dedup();
+    all.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(sorted, all, "every claim exactly once");
+}
+
+#[test]
+fn a_lexical_listing_stays_lexical_and_another_query_vector_expires_a_hybrid_one() {
+    let f = Fx::new("Embedding", Script::aggregate(VECTOR), true);
+    let (human, _native, index) = qualify(&f);
+    seed::rows(
+        f.store.as_ref(),
+        &[seed::ProjectSeed::new("knowledge-a")],
+        &[],
+    )
+    .unwrap();
+    let a = project(&human, "knowledge-a");
+    let (service, cases) = knowledge(&f, Some(index));
+    let first = record(&f, &cases, &a, "first", "kitchen recipe");
+    reply(&f, &[[0.9, 0.1]]);
+    embed(&f, &service);
+    let second = record(&f, &cases, &a, "second", "kitchen knife");
+    reply(&f, &[[0.1, 0.9]]);
+    embed(&f, &service);
+    // No reply is recorded: the route fails and the first page is lexical.
+    let page = search(&f, &cases, &a, "kitchen", 1, None);
+    assert!(matches!(page.mode, KnowledgeRetrievalMode::LexicalOnly));
+    // The provider recovers, but the listing stays lexical and asks for no embedding.
+    reply(&f, &[[1.0, 0.0]]);
+    let before = sent(&f);
+    let rest = search(
+        &f,
+        &cases,
+        &a,
+        "kitchen",
+        1,
+        page.next_cursor.as_ref().map(|c| c.0.as_str()),
+    );
+    assert_eq!(sent(&f), before, "a lexical listing embeds no query");
+    assert!(matches!(rest.mode, KnowledgeRetrievalMode::LexicalOnly));
+    let mut listed = ids(&page);
+    listed.extend(ids(&rest));
+    listed.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    let mut want = vec![first, second];
+    want.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(listed, want);
+    assert!(rest.next_cursor.is_none());
+    // A hybrid listing (the recorded reply above) whose next query vector differs expires.
+    let page = search(&f, &cases, &a, "kitchen", 1, None);
+    assert!(matches!(page.mode, KnowledgeRetrievalMode::Hybrid));
+    reply(&f, &[[0.9, 0.1]]);
+    expired(search_reply(
+        &f,
+        &cases,
+        &a,
+        "kitchen",
+        1,
+        page.next_cursor.as_ref().map(|c| c.0.as_str()),
+    ));
 }
 
 #[test]

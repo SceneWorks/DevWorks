@@ -32,10 +32,18 @@
 //! Vectors of a space that is no longer selected are kept, as document vectors are: no query
 //! reads them (every query names the selected space), a text change or deletion removes the
 //! claim's vectors in every space, purge removes them with their claims, and selecting that
-//! space again needs no paid embedding. The vector query scores every claim of the read scopes
-//! that has a vector (on the development machine, debug build, 20,000 claims of 1,536
-//! dimensions took 110 ms per page before fusion) and keeps the nearest
-//! [`super::fusion::CANDIDATES`]; a search with more is work-limited.
+//! space again needs no paid embedding.
+//!
+//! **Decision · confidence medium: exact vector scoring, no rows-scanned bound.** The meaning
+//! source scores every claim vector of the read scopes, so its recall is exact; its head keeps
+//! the nearest [`super::fusion::CANDIDATES`] and the tail lists the rest by keyset. Measured on
+//! the development machine (release build, 1,536 dimensions, store work of one fused page: the
+//! vector count preparation reads, the three head reads and 20 claims read by id): 8,000
+//! claims took 34 to 41 ms per page, 32,000 claims 143 to 144 ms, of which the vector scan was
+//! 85 ms and the vector count 43 ms. That is within the 150 ms per page this feature accepts
+//! at 32,000 claims, so recall wins over a bound that would make results depend on which rows
+//! were scanned. A larger corpus, or a regression past that budget, would add a bound like
+//! the document index's `max_blocks` that sets `workLimited`.
 use super::{Scoped, knowledge_read, model, ops, resolve_scope, writable};
 use crate::context::InvocationContext;
 use crate::fingerprint::sha256_hex;
@@ -495,6 +503,13 @@ pub(super) fn prepare_search(
 ) -> Result<Option<QueryVector>, Failure> {
     let words = model::words(&i.text.0);
     if words.is_empty() || words.len() > model::MAX_WORDS || runtime.is_stopped() {
+        return Ok(None);
+    }
+    // A lexical listing stays lexical: its later pages never pay for a query embedding.
+    if matches!(
+        super::fusion::continued_mode(&i.page),
+        Ok(Some(super::fusion::Mode::Lexical))
+    ) {
         return Ok(None);
     }
     let env = Preparation::new(runtime.store.as_ref(), env.cancellation, env.deadline_ms);
