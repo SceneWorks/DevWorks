@@ -5392,7 +5392,13 @@
         "next_cursor": "?Cursor",
         "has_more": "bool",
         "mode": "KnowledgeRetrievalMode",
-        "work_limited": "bool"
+        "work_limited": "bool",
+        "approximate_tokens": "?Counter",
+        "budget_tokens": "?TokenBudget"
+      },
+      "since": {
+        "approximate_tokens": 31,
+        "budget_tokens": 31
       }
     },
     "KnowledgeSearchResult": {
@@ -9320,17 +9326,19 @@
         "states": "?Items<KnowledgeLifecycle>",
         "entry_kinds": "?Items<KnowledgeEntryKind>",
         "source": "?Label",
-        "stale": "?bool"
+        "stale": "?bool",
+        "budget_tokens": "?TokenBudget"
       },
       "result": "KnowledgeSearchResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Scoped search: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies to every candidate source before any candidate is materialized. Without words, newest first. With words, three sources are fused by reciprocal rank into a head (k 400, each source at most 200 candidates), ordered by how many of the word and meaning sources list a claim, then the fused score: word matches (every word of text appears, Unicode case-folded, in the claim or its subject entity), meaning matches (the nearest claim vectors in the selected embedding space, when the read scopes have vectors in it) and graph matches (claims whose subject or object is one of the entityLimit entities whose text best matches a word). After the head, every other match follows in its source's own order (word, then graph, then meaning matches), so each matching claim is listed once. Lifecycle Active by default (revision 1: Active only). Cursors bind the query, the retrieval inputs and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state. Schema revision 30: the page reports its listing's retrieval mode (Hybrid with meaning matches, otherwise LexicalOnly; a listing keeps its first page's mode) and workLimited, true when fusion ranked only the head (a source had more candidates than its cap, or more entities matched than entityLimit).",
+      "rules": "Scoped search: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies to every candidate source before any candidate is materialized. Without words, newest first. With words, three sources are fused by reciprocal rank into a head (k 400, each source at most 200 candidates), ordered by how many of the word and meaning sources list a claim, then the fused score: word matches (every word of text appears, Unicode case-folded, in the claim or its subject entity), meaning matches (the nearest claim vectors in the selected embedding space, when the read scopes have vectors in it) and graph matches (claims whose subject or object is one of the entityLimit entities whose text best matches a word). After the head, every other match follows in its source's own order (word, then graph, then meaning matches), so each matching claim is listed once. Lifecycle Active by default (revision 1: Active only). Cursors bind the query, the retrieval inputs and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state. Schema revision 30: the page reports its listing's retrieval mode (Hybrid with meaning matches, otherwise LexicalOnly; a listing keeps its first page's mode) and workLimited, true when fusion ranked only the head (a source had more candidates than its cap, or more entities matched than entityLimit). Schema revision 31: budgetTokens bounds a page by the approximate tokens of its claims' text (predicate, value and normalized text; characters divided by 4, rounded up): the page holds the best-ranked claims that fit, always at least one, and its cursor continues with the next claim, so the budget changes only where a page ends. Without budgetTokens (and at earlier revisions, which cannot pass it) an agent, package, MCP client or schedule gets the scope's knowledge.searchTokenBudget setting (at most the maximum) and a person or the host acting for them gets no token bound. A budget below 1000 or above the scope's knowledge.searchTokenBudgetMax setting is refused: InvalidArgument, targetKind budgetTokens, targetId the allowed range as <min>-<max>. page.limit and claimLimit still bound the page. The page reports approximateTokens and the budgetTokens that applied.",
       "since": {
         "states": 2,
         "entry_kinds": 2,
         "source": 2,
-        "stale": 2
+        "stale": 2,
+        "budget_tokens": 31
       }
     },
     "knowledge.read": {
@@ -13229,7 +13237,8 @@
       2,
       3,
       8,
-      30
+      30,
+      31
     ],
     "knowledge.read": [
       1,

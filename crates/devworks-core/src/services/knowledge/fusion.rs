@@ -62,10 +62,14 @@
 //! claim appears exactly once across the pages while those hold. A position of another format
 //! (`r…`, `v…`, `f…` without a mode, or a time) is `CursorExpired`, as is a hybrid cursor when the
 //! page has no query vector.
+//!
+//! A token budget ([`super::budgeted`]) ends a page early, at the position of its last claim
+//! that fits, head or tail alike. It never changes the order or a position, so it is not bound:
+//! a caller may pass another budget on the next page.
 use crate::fingerprint::sha256_hex;
 use crate::ports::storage::{
     ClaimCandidateRead, ClaimCandidates, ClaimQuery, ClaimSource, ClaimVectorQuery, KnowledgeRead,
-    StorageError,
+    StorageError, StoredClaim,
 };
 use crate::protocol::Id;
 use crate::protocol::records::PageRequest;
@@ -340,7 +344,9 @@ fn parse(at: &str, mode: Mode) -> Result<Position<'_>, StorageError> {
 /// One page of a fused listing, through the shared pager: the head's claims strictly after the
 /// request's position, then each source's remaining claims in its own order (word matches,
 /// then graph matches that are not word matches, then meaning matches that are neither), the
-/// head's claims left out, at most the request's limit. Every fused listing pages here.
+/// head's claims left out, at most the request's limit, then cut to `budget`
+/// ([`super::budgeted`]), which ends the page early at a claim's own head or tail position.
+/// Every fused listing pages here.
 pub(super) fn page(
     read: &dyn KnowledgeRead,
     query: &ClaimQuery,
@@ -348,7 +354,8 @@ pub(super) fn page(
     binding: &CursorBinding,
     request: &PageRequest,
     fused: &Fused,
-) -> Result<Paged<Id>, StorageError> {
+    budget: Option<u32>,
+) -> Result<Paged<StoredClaim>, StorageError> {
     let mode = fused.mode;
     let rows = cursor::page(
         binding,
@@ -406,7 +413,30 @@ pub(super) fn page(
         },
         |(position, _)| position.clone(),
     )?;
-    rows.try_map(|(_, id)| Ok(id))
+    let ids: Vec<Id> = rows.items.iter().map(|(_, id)| id.clone()).collect();
+    let claims = read.knowledge_claims_by_id(&ids)?;
+    if claims.len() != ids.len() {
+        return Err(StorageError::InvalidRecord(
+            "a listed claim was not read".into(),
+        ));
+    }
+    let rows = Paged {
+        items: rows
+            .items
+            .into_iter()
+            .map(|(position, _)| position)
+            .zip(claims)
+            .collect(),
+        next_cursor: rows.next_cursor,
+    };
+    super::budgeted(
+        rows,
+        binding,
+        budget,
+        |(_, c)| c,
+        |(position, _)| position.clone(),
+    )
+    .try_map(|(_, c)| Ok(c))
 }
 
 #[cfg(test)]

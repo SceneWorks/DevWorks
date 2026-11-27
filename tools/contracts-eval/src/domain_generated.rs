@@ -14905,6 +14905,20 @@ pub struct KnowledgeSearchPage {
     pub has_more: bool,
     pub mode: KnowledgeRetrievalMode,
     pub work_limited: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "Counter", extend("x-since" = 31))]
+    pub approximate_tokens: Option<Counter>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TokenBudget", extend("x-since" = 31))]
+    pub budget_tokens: Option<TokenBudget>,
 }
 impl Check for KnowledgeSearchPage {
     fn check(&self) -> Result<(), String> {
@@ -14913,6 +14927,8 @@ impl Check for KnowledgeSearchPage {
         self.has_more.check()?;
         self.mode.check()?;
         self.work_limited.check()?;
+        self.approximate_tokens.check()?;
+        self.budget_tokens.check()?;
         super::domain_rules::record(
             "KnowledgeSearchPage",
             &serde_json::to_value(self).map_err(|e| e.to_string())?,
@@ -14924,6 +14940,12 @@ impl Check for KnowledgeSearchPage {
 impl Revisioned for KnowledgeSearchPage {
     fn retain_revision(&mut self, revision: u32) {
         self.items.retain_revision(revision);
+        if revision < 31 {
+            self.approximate_tokens = None;
+        }
+        if revision < 31 {
+            self.budget_tokens = None;
+        }
     }
 }
 
@@ -22040,6 +22062,13 @@ pub enum DomainQuery {
         )]
         #[schemars(with = "bool", extend("x-since" = 2))]
         stale: Option<bool>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "gated_member"
+        )]
+        #[schemars(with = "TokenBudget", extend("x-since" = 31))]
+        budget_tokens: Option<TokenBudget>,
     },
     #[serde(rename = "knowledge.read")]
     KnowledgeRead {
@@ -23743,6 +23772,7 @@ impl Check for DomainQuery {
                 entry_kinds,
                 source,
                 stale,
+                budget_tokens,
             } => {
                 scope.check()?;
                 text.check()?;
@@ -23755,6 +23785,7 @@ impl Check for DomainQuery {
                 entry_kinds.check()?;
                 source.check()?;
                 stale.check()?;
+                budget_tokens.check()?;
             }
             Self::KnowledgeRead {
                 scope,
@@ -24714,6 +24745,7 @@ impl Revisioned for DomainQuery {
                 entry_kinds,
                 source,
                 stale,
+                budget_tokens,
                 ..
             } => {
                 if revision < 2 {
@@ -24727,6 +24759,9 @@ impl Revisioned for DomainQuery {
                 }
                 if revision < 2 {
                     *stale = None;
+                }
+                if revision < 31 {
+                    *budget_tokens = None;
                 }
             }
             Self::KnowledgeDiagnostics {

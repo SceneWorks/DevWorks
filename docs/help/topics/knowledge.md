@@ -4,7 +4,7 @@ Knowledge stores scoped claims, evidence, relations, and lessons. Inspect a clai
 
 ## Record and retrieve
 
-Record concrete facts, decisions, constraints, failed attempts, and corrections with evidence and useful paths. Use the existing Knowledge operations to search, inspect, revise, relate, or challenge them. Lexical retrieval works without embeddings and reports its mode. Semantic support is used only when its configured embedding space and producer are available; an unavailable metric is not zero.
+Record concrete facts, decisions, constraints, failed attempts, and corrections with evidence and useful paths. Use the existing Knowledge operations to search, inspect, revise, relate, or challenge them. Lexical retrieval works without embeddings and reports its mode. Semantic support is used only when its configured embedding space and producer are available; an unavailable metric is not zero. An agent's search page holds the best-ranked claims that fit its token budget, counted approximately as characters divided by four, and always at least one claim; the agent pages for the rest.
 
 ## Explore the graph
 

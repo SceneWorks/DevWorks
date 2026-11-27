@@ -510,6 +510,30 @@ Lesson recurrence threshold.
 
 Distinct source events after which a lesson an agent or reviewer inferred takes effect as a rule, without approval. A rule from your own words takes effect at once. Engineering default.
 
+## knowledge.searchTokenBudget
+
+Knowledge search token budget.
+
+- Default: `8000`
+- Scope: Workspace → Project
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Knowledge
+
+Approximate tokens of claim text (characters divided by 4) one Knowledge search page holds for an agent that names no budget. The best-ranked claims that fit are returned, always at least one, and the agent pages for more. Searching in the app has no token limit. Above the largest search token budget, that maximum applies. Engineering default.
+
+## knowledge.searchTokenBudgetMax
+
+Largest search token budget.
+
+- Default: `32000`
+- Scope: Workspace → Project
+- Adoption: NextAdmission
+- Policy: Configurable
+- Section: Knowledge
+
+The largest token budget an agent may name on one Knowledge search. A budget above it, or below 1000, is refused. Engineering default.
+
 ## power.keepAwake
 
 Keep the computer awake while DevWorks is open.
