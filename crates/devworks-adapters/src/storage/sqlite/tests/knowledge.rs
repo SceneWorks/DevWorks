@@ -7469,6 +7469,36 @@ fn an_agents_token_budget_ends_each_page_at_the_best_claims_that_fit_and_pages_t
             .unwrap();
         assert_eq!(ids(alone), [huge.as_str()]);
         assert!(page_tokens(alone) > 2_000);
+        // The budget may change between pages: one page at 1,000, one at 5,000, then none
+        // (the 8,000 default applies) until the end, with nothing skipped or repeated.
+        let mut listed = Vec::new();
+        let mut cursor: Option<String> = None;
+        for n in 0.. {
+            let mut page = json!({"limit": 500});
+            if let Some(c) = &cursor {
+                page["cursor"] = json!(c);
+            }
+            let mut body = json!({"page": page, "entityLimit": 500, "claimLimit": 500});
+            match n {
+                0 => body["budgetTokens"] = json!(1000),
+                1 => body["budgetTokens"] = json!(5000),
+                _ => {}
+            }
+            let p = fx.search(&agent, proj("project-a"), text, body);
+            let budget = [1000, 5000].get(n).copied().unwrap_or(8000);
+            assert_eq!(p.budget_tokens.as_ref().map(|b| b.get()), Some(budget));
+            assert!(page_tokens(&p) <= u64::from(budget) || p.items.0.len() == 1);
+            listed.extend(ids(&p));
+            match p.next_cursor {
+                Some(c) => cursor = Some(c.0),
+                None => break,
+            }
+        }
+        assert_eq!(
+            listed,
+            ids(whole),
+            "{text:?}: budgets changed between pages"
+        );
     }
 }
 

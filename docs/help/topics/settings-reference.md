@@ -532,7 +532,7 @@ Largest search token budget.
 - Policy: Configurable
 - Section: Knowledge
 
-The largest token budget an agent may name on one Knowledge search. A budget above it, or below 1000, is refused. Engineering default.
+The largest token budget any caller, a person or an agent, may name on one Knowledge search. A budget above it, or below 1000, is refused. Engineering default.
 
 ## power.keepAwake
 

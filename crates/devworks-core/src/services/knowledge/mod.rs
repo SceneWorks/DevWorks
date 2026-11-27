@@ -397,7 +397,8 @@ fn search_budget(
 
 /// A claim's approximate tokens: the characters of its text ([`StoredClaim::text`]) divided by
 /// four, rounded up. No tokenizer: the count is an estimate, and the reply says so.
-pub fn approximate_tokens(c: &StoredClaim) -> u64 {
+/// Characters on purpose (owner-approved), unlike the bytes of `sessions::token_estimate`.
+fn approximate_tokens(c: &StoredClaim) -> u64 {
     (c.text().chars().count() as u64).div_ceil(4)
 }
 
