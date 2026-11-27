@@ -74,7 +74,7 @@ pub(super) const FAMILIES: [&str; 50] = [
     "watch",
 ];
 
-pub(super) static CATALOG: [OperationDescriptor; 386] = [
+pub(super) static CATALOG: [OperationDescriptor; 393] = [
     OperationDescriptor {
         name: "projects.list",
         family: "projects",
@@ -10229,6 +10229,188 @@ pub(super) static CATALOG: [OperationDescriptor; 386] = [
         assignment_scope: AssignmentScope::Project,
     },
     OperationDescriptor {
+        name: "evals.suites",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.suites",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "evals::SuitesInput",
+            decode: decode_evals_suites_query,
+            input_schema: schema_of::<ops::evals::SuitesInput>,
+        }],
+        result_type: "EvalSuitePage",
+        result_schema: schema_of::<EvalSuitePage>,
+        completion: false,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "evals.suite",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.suite",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "evals::SuiteInput",
+            decode: decode_evals_suite_query,
+            input_schema: schema_of::<ops::evals::SuiteInput>,
+        }],
+        result_type: "EvalSuiteRecord",
+        result_schema: schema_of::<EvalSuiteRecord>,
+        completion: false,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "evals.suite_history",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.suite_history",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Query,
+            authority: AuthorityClass::ScopedRead,
+            effect: EffectClass::ReadOnly,
+            input_type: "evals::SuiteHistoryInput",
+            decode: decode_evals_suite_history_query,
+            input_schema: schema_of::<ops::evals::SuiteHistoryInput>,
+        }],
+        result_type: "EvalSuitePage",
+        result_schema: schema_of::<EvalSuitePage>,
+        completion: false,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "evals.draft_suite",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.draft_suite",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Local,
+            input_type: "evals::DraftSuiteInput",
+            decode: decode_evals_draft_suite_command,
+            input_schema: schema_of::<ops::evals::DraftSuiteInput>,
+        }],
+        result_type: "EvalSuiteRecord",
+        result_schema: schema_of::<EvalSuiteRecord>,
+        completion: true,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "evals.propose_suite",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.propose_suite",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Local,
+            input_type: "evals::ProposeSuiteInput",
+            decode: decode_evals_propose_suite_command,
+            input_schema: schema_of::<ops::evals::ProposeSuiteInput>,
+        }],
+        result_type: "ProposalRecord",
+        result_schema: schema_of::<ProposalRecord>,
+        completion: true,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: false,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "evals.activate_suite",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.activate_suite",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Local,
+            input_type: "evals::ActivateSuiteInput",
+            decode: decode_evals_activate_suite_command,
+            input_schema: schema_of::<ops::evals::ActivateSuiteInput>,
+        }],
+        result_type: "EvalSuiteRecord",
+        result_schema: schema_of::<EvalSuiteRecord>,
+        completion: true,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: true,
+        human_only: false,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
+        name: "evals.accept_exception",
+        family: "evals",
+        owner: "EvaluationService",
+        envelope: Envelope::Domain,
+        selector: Some(Selector {
+            pointer: "/body/kind",
+            equals: "evals.accept_exception",
+        }),
+        modes: &[ModeBinding {
+            mode: Mode::Command,
+            authority: AuthorityClass::Scoped,
+            effect: EffectClass::Local,
+            input_type: "evals::AcceptExceptionInput",
+            decode: decode_evals_accept_exception_command,
+            input_schema: schema_of::<ops::evals::AcceptExceptionInput>,
+        }],
+        result_type: "EvalSuiteRecord",
+        result_schema: schema_of::<EvalSuiteRecord>,
+        completion: true,
+        revisions: &[SchemaRevision(23)],
+        native_execution: false,
+        approval_required: false,
+        human_only: true,
+        assignment_scope: AssignmentScope::Project,
+    },
+    OperationDescriptor {
         name: "watch.create",
         family: "watch",
         owner: "WatchService",
@@ -10718,10 +10900,17 @@ pub(super) fn index_of(name: &str) -> Option<usize> {
         "mcp_server.set_client_access" => Some(379),
         "evals.grade" => Some(380),
         "evals.results" => Some(381),
-        "watch.create" => Some(382),
-        "watch.list" => Some(383),
-        "watch.inspect" => Some(384),
-        "watch.cancel" => Some(385),
+        "evals.suites" => Some(382),
+        "evals.suite" => Some(383),
+        "evals.suite_history" => Some(384),
+        "evals.draft_suite" => Some(385),
+        "evals.propose_suite" => Some(386),
+        "evals.activate_suite" => Some(387),
+        "evals.accept_exception" => Some(388),
+        "watch.create" => Some(389),
+        "watch.list" => Some(390),
+        "watch.inspect" => Some(391),
+        "watch.cancel" => Some(392),
         _ => None,
     }
 }
@@ -14804,6 +14993,79 @@ fn decode_evals_results_query(
     decode_domain_body::<ops::evals::ResultsInput>("evals.results", Mode::Query, revision, v, |i| {
         OperationInput::Evals(ops::evals::Input::Results(i))
     })
+}
+fn decode_evals_suites_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::SuitesInput>("evals.suites", Mode::Query, revision, v, |i| {
+        OperationInput::Evals(ops::evals::Input::Suites(i))
+    })
+}
+fn decode_evals_suite_query(v: Value, revision: SchemaRevision) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::SuiteInput>("evals.suite", Mode::Query, revision, v, |i| {
+        OperationInput::Evals(ops::evals::Input::Suite(i))
+    })
+}
+fn decode_evals_suite_history_query(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::SuiteHistoryInput>(
+        "evals.suite_history",
+        Mode::Query,
+        revision,
+        v,
+        |i| OperationInput::Evals(ops::evals::Input::SuiteHistory(i)),
+    )
+}
+fn decode_evals_draft_suite_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::DraftSuiteInput>(
+        "evals.draft_suite",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Evals(ops::evals::Input::DraftSuite(i)),
+    )
+}
+fn decode_evals_propose_suite_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::ProposeSuiteInput>(
+        "evals.propose_suite",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Evals(ops::evals::Input::ProposeSuite(i)),
+    )
+}
+fn decode_evals_activate_suite_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::ActivateSuiteInput>(
+        "evals.activate_suite",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Evals(ops::evals::Input::ActivateSuite(i)),
+    )
+}
+fn decode_evals_accept_exception_command(
+    v: Value,
+    revision: SchemaRevision,
+) -> Result<Decoded, AdmissionError> {
+    decode_domain_body::<ops::evals::AcceptExceptionInput>(
+        "evals.accept_exception",
+        Mode::Command,
+        revision,
+        v,
+        |i| OperationInput::Evals(ops::evals::Input::AcceptException(i)),
+    )
 }
 fn decode_watch_create_command(
     v: Value,

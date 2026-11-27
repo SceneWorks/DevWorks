@@ -144,6 +144,9 @@ pub struct DesktopConfig {
     /// The user's shared skill folder read in place (`~/.agents/skills` by default); `None`
     /// reads no shared skills. Harness skills always live under `<data_root>/skills`.
     pub shared_skills: Option<PathBuf>,
+    /// The user's shared eval suite folder read in place (`~/.agents/evals` by default); `None`
+    /// reads no shared suites. Harness suites always live under `<data_root>/evals`.
+    pub shared_evals: Option<PathBuf>,
     /// The search path the container CLIs (`docker`, `podman`, `container`) resolve against.
     /// `None` (production) is the process `PATH`. Tests pass an empty path so opening Settings
     /// never runs a host container CLI; process tools keep resolving from `PATH` either way.
@@ -183,6 +186,9 @@ impl DesktopConfig {
             shared_skills: std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(|home| PathBuf::from(home).join(".agents").join("skills")),
+            shared_evals: std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".agents").join("evals")),
             container_search_path: None,
         }
     }
@@ -192,6 +198,8 @@ impl DesktopConfig {
 const CONTAINER_EXECUTABLES: &[&str] = &["docker", "podman", "container"];
 
 use devworks_adapters::fs::skills::PROJECT_SKILLS_DIR as PROJECT_SKILLS;
+/// The harness eval suite folder under the data root.
+const EVALS: &str = "evals";
 
 /// What every command launch is checked against: the application data folder and the skill
 /// folders, so an agent's command can never write a skill change that sync would observe.
@@ -205,9 +213,11 @@ pub(crate) fn protected_roots(config: &DesktopConfig) -> ProtectedRoots {
         [
             config.data_root.join("skills"),
             config.data_root.join(PROJECT_SKILLS),
+            config.data_root.join(EVALS),
         ]
         .into_iter()
         .chain(config.shared_skills.clone())
+        .chain(config.shared_evals.clone())
         .map(|p| p.display().to_string()),
     )
 }
@@ -470,6 +480,15 @@ async fn compose(
             shared: config.shared_skills.clone(),
             harness: config.data_root.join("skills"),
         },
+        suites: Some(devworks_core::services::instructions::SuiteFolders {
+            files: Arc::new(devworks_adapters::fs::skills::NativeSkillFiles::new(
+                config.data_root.join(EVALS),
+            )),
+            roots: devworks_core::services::instructions::SkillRoots {
+                shared: config.shared_evals.clone(),
+                harness: config.data_root.join(EVALS),
+            },
+        }),
     });
     runtime_config.schemas = Some(devworks_engine::schemas::SchemaComposition {
         reader: Arc::new(devworks_adapters::database::NativeMetadataReader),

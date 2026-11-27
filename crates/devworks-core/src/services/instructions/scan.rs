@@ -132,6 +132,16 @@ pub fn scan_root(
     source: &dyn SourceTree,
     root: &Path,
 ) -> Result<(Vec<ScannedSkill>, Vec<SkippedSkill>), SourceFault> {
+    scan_root_with(source, root, SKILL_FILE)
+}
+
+/// Every folder directly beneath `root` that holds `manifest` (`SKILL.md` for skills,
+/// `SUITE.md` for eval suites), captured by the same bounded rules.
+pub fn scan_root_with(
+    source: &dyn SourceTree,
+    root: &Path,
+    manifest: &str,
+) -> Result<(Vec<ScannedSkill>, Vec<SkippedSkill>), SourceFault> {
     let entries = match source.list_dir(root, MAX_SKILLS + 1) {
         Ok(entries) => entries,
         Err(SourceFault::Missing) => return Ok((Vec::new(), Vec::new())),
@@ -150,7 +160,7 @@ pub fn scan_root(
         if entry.kind != EntryKind::Directory || !valid_name(&entry.name) {
             continue;
         }
-        match scan_skill(source, root, &entry.name) {
+        match scan_folder(source, root, &entry.name, manifest) {
             Ok(Some(skill)) => skills.push(skill),
             Ok(None) => {}
             Err(reason) => skipped.push(SkippedSkill {
@@ -168,14 +178,24 @@ pub fn scan_skill(
     root: &Path,
     name: &str,
 ) -> Result<Option<ScannedSkill>, String> {
+    scan_folder(source, root, name, SKILL_FILE)
+}
+
+/// One folder whose instruction file is `manifest`: `Ok(None)` when it has none.
+pub fn scan_folder(
+    source: &dyn SourceTree,
+    root: &Path,
+    name: &str,
+    manifest: &str,
+) -> Result<Option<ScannedSkill>, String> {
     let instruction =
-        match source.read_file(root, &format!("{name}/{SKILL_FILE}"), MAX_INSTRUCTION_BYTES) {
+        match source.read_file(root, &format!("{name}/{manifest}"), MAX_INSTRUCTION_BYTES) {
             Ok(bytes) => bytes,
             Err(SourceFault::Missing) => return Ok(None),
-            Err(e) => return Err(format!("{SKILL_FILE}: {e}")),
+            Err(e) => return Err(format!("{manifest}: {e}")),
         };
     if std::str::from_utf8(&instruction).is_err() {
-        return Err(format!("{SKILL_FILE} is not UTF-8"));
+        return Err(format!("{manifest} is not UTF-8"));
     }
     let mut resources = Vec::new();
     let mut total = instruction.len() as u64;
@@ -204,10 +224,10 @@ pub fn scan_skill(
         let instruction_entry = relative.is_empty().then(|| {
             entries
                 .iter()
-                .find(|e| e.name == SKILL_FILE)
+                .find(|e| e.name == manifest)
                 .or_else(|| {
                     let mut variants = entries.iter().filter(|e| {
-                        e.kind == EntryKind::File && e.name.eq_ignore_ascii_case(SKILL_FILE)
+                        e.kind == EntryKind::File && e.name.eq_ignore_ascii_case(manifest)
                     });
                     variants.next().filter(|_| variants.next().is_none())
                 })
@@ -266,7 +286,7 @@ pub fn scan_skill(
     // Paths that differ only in case are one file on case-insensitive volumes: such a revision
     // could never be written back there (the second file would collide with the first).
     let mut folded = std::collections::BTreeSet::new();
-    folded.insert(SKILL_FILE.to_lowercase());
+    folded.insert(manifest.to_lowercase());
     for r in &resources {
         if !folded.insert(r.path.to_lowercase()) {
             return Err(format!("{}: another file differs only in case", r.path));
@@ -274,7 +294,7 @@ pub fn scan_skill(
     }
     Ok(Some(ScannedSkill::from_files(
         name.to_owned(),
-        ScannedFile::new(SKILL_FILE.into(), instruction),
+        ScannedFile::new(manifest.into(), instruction),
         resources,
     )))
 }

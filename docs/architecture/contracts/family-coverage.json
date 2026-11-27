@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-24",
-  "catalogSha256": "4f063eb85a76dc96c6e5f41e7a91a239d4d8455418bb17b3cb7dba1320b84104",
+  "catalogSha256": "4df0dfc68cdf1c14909074bbbc44c2e472c6432492d6b07d804483be706ff8e4",
   "familyCount": 50,
-  "operationCount": 386,
-  "concreteInputCandidates": 386,
+  "operationCount": 393,
+  "concreteInputCandidates": 393,
   "domainInputsPending": 0,
   "families": [
     {
@@ -20502,7 +20502,7 @@
     {
       "family": "evals",
       "owner": "EvaluationService",
-      "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference, measurement activation or work/repository/Knowledge mutation",
+      "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference or work/repository/Knowledge mutation. Versioned shared and harness suites: agent drafts activate only through their own exact human-approved proposal, and only a person accepts an exception",
       "operations": [
         {
           "operation": "evals.grade",
@@ -20590,6 +20590,335 @@
           "authority": "Scoped",
           "effect": "Local",
           "semanticRules": "Read immutable reports for one currently visible session through bounded, scope-revalidated pagination. Historical reports retain their source watermark, supplied measurement digest, suite snapshot, per-step revision attribution, explicit outcomes and coverage; no report is recomputed or adopted by this query.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.suites",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.suites",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.suites"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.suites"
+          },
+          "resultValueType": "EvalSuitePage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": "domain-query-reply.r23.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "List the workspace's shared and harness eval suites in ID order, each at its active revision (else its latest visible one) with its origin, folder location, active and latest revision, documentation, measured subjects, checks, resources and accepted exceptions. Reads only.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.suite",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.suite",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.suite"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.suite"
+          },
+          "resultValueType": "EvalSuiteRecord",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": "domain-query-reply.r23.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Read one visible suite at a revision (default: its active revision, else its latest visible one).",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.suite_history",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.suite_history",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.suite_history"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.suite_history"
+          },
+          "resultValueType": "EvalSuitePage",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": "domain-query-reply.r23.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Every visible revision of one suite, newest first, with its state, author, rationale and approval outcome. Revisions are immutable.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.draft_suite",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.draft_suite",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.draft_suite"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.draft_suite"
+          },
+          "resultValueType": "EvalSuiteRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r23.schema.json",
+              "completionSchema": "operation-completion.r23.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Write a complete new suite revision: SUITE.md documentation (what it measures, each grader with what it checks and cannot check, how to run it, how to read its results), measured subjects, deterministic checks, and case, grader, rubric, fixture and document resources. A person's save is approved and active at once; an agent's draft takes effect only through its own approved proposal. A shared suite is never written: a change becomes a same-name harness suite. Accepted exceptions carry over unchanged. A suite carries no skill (SKILL.md) and no exceptions file of its own.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.propose_suite",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.propose_suite",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.propose_suite"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.propose_suite"
+          },
+          "resultValueType": "ProposalRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r23.schema.json",
+              "completionSchema": "operation-completion.r23.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Stage an agent's exact suite draft for a person's approval as its own proposal; the approval activates that revision through evals.activate_suite. A proposal changes one suite and never a subject it measures.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.activate_suite",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.activate_suite",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.activate_suite"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.activate_suite"
+          },
+          "resultValueType": "EvalSuiteRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r23.schema.json",
+              "completionSchema": "operation-completion.r23.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Make a revision the suite's active one: a person restores an approved revision or confirms a folder change observed on disk; agent content activates only with its exact approved proposal. Confirming a folder change that alters accepted exceptions is refused.",
+          "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 23,
+          "operation": "evals.accept_exception",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "evals.accept_exception",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "evals.accept_exception"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "evals.accept_exception"
+          },
+          "resultValueType": "EvalSuiteRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 23,
+              "inputSchema": "domain-request.r23.schema.json",
+              "resultSchema": "operation-result.r23.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r23.schema.json",
+              "completionSchema": "operation-completion.r23.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "A person accepts an exception to one check of the suite's active revision for one matched instance, with a reason; it is recorded with its approver in a new approved, active suite revision. Only a person may accept an exception.",
           "familyRules": "Shared gateway host authority validates current session/project visibility on admission and publication. Supplied snapshots are draft measurements, never active suites or approval evidence. Deterministic evaluation reads immutable durable records and writes only evaluation reports, receipts and their audit history; no work, repository or Knowledge mutation. Only passed and failed enter rates; preserve all explicit ungraded outcomes and reason counts at every level. Per-step complete effective revision manifests are required for Exact attribution; missing attribution is Mixed, never stamped with current revisions.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

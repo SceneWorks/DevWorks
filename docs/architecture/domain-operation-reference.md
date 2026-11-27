@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 386 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 393 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -730,6 +730,13 @@ All 386 qualified operations have typed input/result candidates. Existing input 
 | --- | --- | --- |
 | `evals.grade` | **Command**<br>`sessionId`: `Id`<br>`suite`: `EvalSuiteSnapshot` | `EvalReport` |
 | `evals.results` | **Query**<br>`sessionId`: `Id`<br>`page`: `PageRequest` | `EvalReportPage` |
+| `evals.suites` | **Query**<br>`page`: `PageRequest`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `EvalSuitePage` |
+| `evals.suite` | **Query**<br>`suiteId`: `Id`<br>`revision`: `?Revision`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `EvalSuiteRecord` |
+| `evals.suite_history` | **Query**<br>`suiteId`: `Id`<br>`page`: `PageRequest`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `EvalSuitePage` |
+| `evals.draft_suite` | **Command**<br>`suiteId`: `?Id`<br>`expectedRevision`: `?Revision`<br>`name`: `Label`<br>`documentation`: `ArtifactRef`<br>`measures`: `NonEmpty<EvalSubjectRef>`<br>`checks`: `NonEmpty<EvalDeterministicCheck>`<br>`resources`: `Items<EvalSuiteResourceInput>`<br>`rationale`: `?Content`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `EvalSuiteRecord` |
+| `evals.propose_suite` | **Command**<br>`suiteId`: `Id`<br>`expectedRevision`: `Revision`<br>`contentDigest`: `Digest`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `ProposalRecord` |
+| `evals.activate_suite` | **Command**<br>`suiteId`: `Id`<br>`expectedRevision`: `Revision`<br>`targetRevision`: `Revision`<br>`proposalId`: `?Id`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `EvalSuiteRecord` |
+| `evals.accept_exception` | **Command**<br>`suiteId`: `Id`<br>`expectedRevision`: `Revision`<br>`checkId`: `Id`<br>`matchedInstance`: `EvalStepSource`<br>`reason`: `Content`<br><br>**Schema revisions** 23 ([revision 23 input](contracts/domain-request.r23.schema.json)) | `EvalSuiteRecord` |
 
 ### Watch
 
@@ -4412,6 +4419,81 @@ Before revision 3: exact legacy `Page<GithubObservation>`. Revision 3 and later:
 | `items` | `Rows<EvalReport>` |
 | `nextCursor` | `?Cursor` |
 | `hasMore` | `bool` |
+
+### EvalSuiteOrigin
+
+`Shared`, `Harness`.
+
+### EvalSubjectKind
+
+`Skill`, `Role`, `Convention`, `LessonRule`, `Routing`, `Build`.
+
+### EvalSuitePart
+
+`Case`, `Grader`, `Rubric`, `Fixture`, `Document`.
+
+### EvalSubjectRef
+
+| Field | Type |
+| --- | --- |
+| `kind` | `EvalSubjectKind` |
+| `name` | `Label` |
+
+### EvalAcceptedException
+
+| Field | Type |
+| --- | --- |
+| `checkId` | `Id` |
+| `matchedInstance` | `EvalStepSource` |
+| `reason` | `Content` |
+| `approver` | `ActorId` |
+| `acceptedAtMs` | `Counter` |
+
+### EvalSuiteResource
+
+| Field | Type |
+| --- | --- |
+| `path` | `RelativePath` |
+| `part` | `EvalSuitePart` |
+| `artifact` | `ArtifactRef` |
+
+### EvalSuiteResourceInput
+
+| Field | Type |
+| --- | --- |
+| `path` | `RelativePath` |
+| `artifact` | `ArtifactRef` |
+
+### EvalSuiteRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `name` | `Label` |
+| `origin` | `EvalSuiteOrigin` |
+| `location` | `?RegisteredPath` |
+| `revision` | `Revision` |
+| `latestRevision` | `Revision` |
+| `activeRevision` | `?Revision` |
+| `state` | `InstructionState` |
+| `approved` | `bool` |
+| `contentDigest` | `Digest` |
+| `documentation` | `ArtifactRef` |
+| `description` | `?Text` |
+| `measures` | `Items<EvalSubjectRef>` |
+| `checks` | `Items<EvalDeterministicCheck>` |
+| `resources` | `Items<EvalSuiteResource>` |
+| `exceptions` | `Items<EvalAcceptedException>` |
+| `author` | `?ActorId` |
+| `rationale` | `?Content` |
+| `approvalOutcome` | `?ApprovalState` |
+
+### EvalSuitePage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<EvalSuiteRecord>` |
+| `nextCursor` | `?Cursor` |
 
 ### EvalRecordSource
 

@@ -12,18 +12,22 @@ use serde_json::Value;
 pub enum InstructionKind {
     Skill,
     Role,
+    /// An eval suite (DW-72): a file-backed folder measuring other instruction kinds.
+    Suite,
 }
 impl InstructionKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Skill => "Skill",
             Self::Role => "Role",
+            Self::Suite => "Suite",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "Skill" => Some(Self::Skill),
             "Role" => Some(Self::Role),
+            "Suite" => Some(Self::Suite),
             _ => None,
         }
     }
@@ -224,12 +228,16 @@ pub trait InstructionRepository: InstructionRead {
     ) -> Result<(), StorageError>;
     /// Releases a confined revision to its item's scope: replaces its content with `content`,
     /// a copy of the same bytes (same `sha256`) published at that scope, and clears the
-    /// confinement. Refused unless the revision is confined and the bytes are the same.
+    /// confinement. `resources`, when given, replaces its resources the same way: the same
+    /// paths in the same order with the same `sha256`, published at that scope (an eval suite
+    /// draft carries resources of its own). Refused unless the revision is confined and the
+    /// bytes are the same.
     fn release_instruction_revision(
         &mut self,
         id: &Id,
         revision: i64,
         content: &Value,
+        resources: Option<&Value>,
     ) -> Result<(), StorageError>;
     /// Records the lessons a just-inserted revision came from. Each must be a Knowledge claim
     /// that exists; the revision's visibility rules are the caller's.

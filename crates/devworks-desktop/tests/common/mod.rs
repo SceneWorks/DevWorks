@@ -130,6 +130,7 @@ pub fn config(root: &Path) -> DesktopConfig {
     c.indexing.discover_at_boot = false;
     // Nor the user's shared skill folder.
     c.shared_skills = None;
+    c.shared_evals = None;
     // Never the real OS secret store or the network.
     c.secrets = Some(Arc::new(
         devworks_core::ports::secrets::SessionSecrets::new(),

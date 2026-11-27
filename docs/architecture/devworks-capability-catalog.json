@@ -771,9 +771,16 @@
       "owner": "EvaluationService",
       "operations": [
         "grade",
-        "results"
+        "results",
+        "suites",
+        "suite",
+        "suite_history",
+        "draft_suite",
+        "propose_suite",
+        "activate_suite",
+        "accept_exception"
       ],
-      "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference, measurement activation or work/repository/Knowledge mutation",
+      "effectAndAuthority": "Scoped recorded-session grading with immutable supplied measurement and bounded report reads; no inference or work/repository/Knowledge mutation. Versioned shared and harness suites: agent drafts activate only through their own exact human-approved proposal, and only a person accepts an exception",
       "status": "DW-71 deterministic walking-skeleton contract; remaining EVAL surface has separate tracked acceptance"
     },
     {

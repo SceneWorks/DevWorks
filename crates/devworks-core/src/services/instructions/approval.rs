@@ -52,7 +52,11 @@ pub(crate) fn preview(
             "origin": target.origin,
             "author": target.author.0.as_str(),
             "shadows": shadows.map(|name| format!("workspace skill {name}")),
-            "effect": "Activation only: a skill or role instruction grants no tool, permission or scope.",
+            "effect": if item.kind == InstructionKind::Suite {
+                "Activation only: the suite changes how the subjects it measures are graded and grants no tool, permission or scope; it changes no subject."
+            } else {
+                "Activation only: a skill or role instruction grants no tool, permission or scope."
+            },
         }),
         binding: binding(item, target, proposal_id, expected),
     }
@@ -107,6 +111,13 @@ fn request(request: &DecodedRequest) -> Result<Request<'_>, Failure> {
         OperationInput::Roles(role_ops::Input::Rollback(i)) => (
             InstructionKind::Role,
             &i.instruction_id,
+            i.expected_revision.get(),
+            i.target_revision.get(),
+            i.proposal_id.as_ref(),
+        ),
+        OperationInput::Evals(crate::operations::evals::Input::ActivateSuite(i)) => (
+            InstructionKind::Suite,
+            &i.suite_id,
             i.expected_revision.get(),
             i.target_revision.get(),
             i.proposal_id.as_ref(),
@@ -273,7 +284,10 @@ pub(crate) fn shadowed_workspace_skill(
 
 impl crate::services::approvals::SavedOperationOwners for InstructionService {
     fn supports(&self, operation: &str) -> bool {
-        matches!(operation, "skills.rollback" | "roles.rollback")
+        matches!(
+            operation,
+            "skills.rollback" | "roles.rollback" | "evals.activate_suite"
+        )
     }
     fn prepare(
         &self,

@@ -302,6 +302,7 @@ fn native_plan_review_holds_until_routing_is_repaired_and_reviews_without_planni
                 shared: Some(shared),
                 harness: fx.h.root.join("harness-skills"),
             },
+            suites: None,
         });
         let app = Arc::new(boot(composed).await.unwrap());
         let skill = read(&*fx.store, |snapshot| {

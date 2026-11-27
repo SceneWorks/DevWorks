@@ -62,6 +62,8 @@ mod approval;
 mod commands;
 mod queries;
 pub mod scan;
+pub mod suite;
+mod suite_ops;
 mod sync;
 
 pub use adoption::{
@@ -97,8 +99,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-/// The thirteen operations this owner is registered for.
-pub const OPERATIONS: [&str; 13] = [
+/// The twenty operations this owner is registered for.
+pub const OPERATIONS: [&str; 20] = [
     "skills.discover",
     "skills.read",
     "skills.resources",
@@ -112,6 +114,13 @@ pub const OPERATIONS: [&str; 13] = [
     "roles.propose",
     "roles.history",
     "roles.rollback",
+    "evals.suites",
+    "evals.suite",
+    "evals.suite_history",
+    "evals.draft_suite",
+    "evals.propose_suite",
+    "evals.activate_suite",
+    "evals.accept_exception",
 ];
 
 /// Registered root of the user-owned shared skills (`~/.agents/skills`).
@@ -140,13 +149,24 @@ pub struct SkillRoots {
     pub harness: PathBuf,
 }
 
-/// The skill and role instruction owner.
+/// Where file-backed eval suites are found and the harness suite folder's file access.
+#[derive(Clone)]
+pub struct SuiteFolders {
+    /// The managed harness suite root (`<data-root>/evals`).
+    pub files: Arc<dyn SkillFiles>,
+    /// `shared`: `~/.agents/evals`, read in place; `harness`: `<data-root>/evals`.
+    pub roots: SkillRoots,
+}
+
+/// The skill, role instruction and eval suite owner.
 pub struct InstructionService {
     pub(crate) store: Arc<dyn ApplicationStore>,
     pub(crate) artifacts: Arc<ArtifactService>,
     pub(crate) source: Arc<dyn SourceTree>,
     pub(crate) files: Arc<dyn SkillFiles>,
     pub(crate) roots: SkillRoots,
+    /// Eval suite folders; `None` when the host keeps no suites.
+    pub(crate) suites: Option<SuiteFolders>,
     pub(crate) ids: Arc<dyn IdSource>,
     pub(crate) roles: Arc<dyn PrincipalRoles>,
     pub(crate) clock: Arc<dyn crate::ports::Clock>,
@@ -161,6 +181,8 @@ pub struct SkillAccess {
     pub source: Arc<dyn SourceTree>,
     pub files: Arc<dyn SkillFiles>,
     pub roots: SkillRoots,
+    /// The eval suite folders (`None`: the host keeps no suites).
+    pub suites: Option<SuiteFolders>,
 }
 
 impl InstructionService {
@@ -178,6 +200,7 @@ impl InstructionService {
             source: access.source,
             files: access.files,
             roots: access.roots,
+            suites: access.suites,
             ids,
             roles,
             clock,
@@ -192,6 +215,40 @@ impl InstructionService {
             ConfigScope::Project(p) => self.files.project(p.0.as_str()),
             // Skills are never repository-scoped.
             ConfigScope::Repository { .. } => None,
+        }
+    }
+    /// The folder files of `kind` in `scope`: skills as [`Self::skill_files`], eval suites in the
+    /// workspace only.
+    pub(crate) fn folder_files(
+        &self,
+        kind: InstructionKind,
+        scope: &ConfigScope,
+    ) -> Option<Arc<dyn SkillFiles>> {
+        match (kind, scope) {
+            (InstructionKind::Suite, ConfigScope::Workspace) => {
+                self.suites.as_ref().map(|s| s.files.clone())
+            }
+            (InstructionKind::Suite | InstructionKind::Role, _) => None,
+            (InstructionKind::Skill, _) => self.skill_files(scope),
+        }
+    }
+    /// The folder items of `kind` in `scope` are written to (and observed in).
+    pub(crate) fn folder_root(
+        &self,
+        kind: InstructionKind,
+        scope: &ConfigScope,
+    ) -> Option<PathBuf> {
+        match (kind, scope) {
+            (InstructionKind::Suite, ConfigScope::Workspace) => {
+                let suites = self.suites.as_ref()?;
+                suites
+                    .files
+                    .root()
+                    .ok()
+                    .or_else(|| Some(suites.roots.harness.clone()))
+            }
+            (InstructionKind::Suite | InstructionKind::Role, _) => None,
+            (InstructionKind::Skill, _) => self.skill_root(scope),
         }
     }
     /// The folder a scope's skills are written to (and observed in).
@@ -421,6 +478,14 @@ pub(crate) fn target_kind(kind: InstructionKind) -> &'static str {
     match kind {
         InstructionKind::Skill => "skill",
         InstructionKind::Role => "role",
+        InstructionKind::Suite => "eval_suite",
+    }
+}
+/// The instruction file of a file-backed item of `kind`.
+pub(crate) fn manifest(kind: InstructionKind) -> &'static str {
+    match kind {
+        InstructionKind::Suite => suite::SUITE_FILE,
+        _ => scan::SKILL_FILE,
     }
 }
 
@@ -606,24 +671,48 @@ pub(crate) fn record_with_approval(
     standing: Option<queries::Standing>,
 ) -> Result<InstructionRecord, Failure> {
     let mut record = record(item, revision, standing)?;
-    if let Some(id) = &revision.approval_id {
-        record.approval_outcome = Some(match decisions.approval(id)?.map(|a| a.state) {
-            Some(state) => match state.as_str() {
-                "Approved" => ApprovalState::Approved,
-                "Rejected" => ApprovalState::Rejected,
-                "Superseded" => ApprovalState::Superseded,
-                "Expired" => ApprovalState::Expired,
-                _ => ApprovalState::Pending,
-            },
-            // The approval row is gone: what the revision's own state recorded stands.
-            None => match revision.state {
-                InstructionRevisionState::Approved => ApprovalState::Approved,
-                InstructionRevisionState::Rejected => ApprovalState::Rejected,
-                _ => ApprovalState::Pending,
-            },
-        });
-    }
+    record.approval_outcome = approval_outcome(decisions, revision)?;
     Ok(record)
+}
+/// The outcome of the approval staged for a revision (`None`: it never had one).
+pub(crate) fn approval_outcome(
+    decisions: &dyn crate::ports::storage::DecisionRead,
+    revision: &StoredInstructionRevision,
+) -> Result<Option<ApprovalState>, Failure> {
+    let Some(id) = &revision.approval_id else {
+        return Ok(None);
+    };
+    Ok(Some(match decisions.approval(id)?.map(|a| a.state) {
+        Some(state) => match state.as_str() {
+            "Approved" => ApprovalState::Approved,
+            "Rejected" => ApprovalState::Rejected,
+            "Superseded" => ApprovalState::Superseded,
+            "Expired" => ApprovalState::Expired,
+            _ => ApprovalState::Pending,
+        },
+        // The approval row is gone: what the revision's own state recorded stands.
+        None => match revision.state {
+            InstructionRevisionState::Approved => ApprovalState::Approved,
+            InstructionRevisionState::Rejected => ApprovalState::Rejected,
+            _ => ApprovalState::Pending,
+        },
+    }))
+}
+/// The suite record of a revision with its approval outcome. `latest` is the newest revision
+/// the invocation can see ([`visible_latest`]), so another project's confined drafts are not
+/// counted.
+pub(crate) fn suite_record(
+    decisions: &dyn crate::ports::storage::DecisionRead,
+    item: &StoredInstructionItem,
+    revision: &StoredInstructionRevision,
+    latest: i64,
+) -> Result<crate::protocol::records::EvalSuiteRecord, Failure> {
+    suite::record(
+        item,
+        revision,
+        latest,
+        approval_outcome(decisions, revision)?,
+    )
 }
 
 /// The revision a read without an explicit revision shows: the active one, else the latest.
@@ -745,6 +834,7 @@ impl QueryHandler for InstructionService {
         let result = match query.input() {
             OperationInput::Skills(input) => self.skill_query(read, ctx, input),
             OperationInput::Roles(input) => self.role_query(read, ctx, input),
+            OperationInput::Evals(input) => self.suite_query(read, ctx, input),
             _ => Err(invalid("instruction_operation")),
         };
         let (result, revision) =
@@ -777,15 +867,27 @@ impl CommandHandler for InstructionService {
             // A save or activation may replace the harness directory of its target: refuse it
             // while that directory (or the harness root) cannot be observed completely, so a
             // stale snapshot never replaces live changes that could not be captured.
-            if kind == InstructionKind::Skill
-                && let Some(name) = self.target_skill_name(command)?
-                && (report.failures.iter().any(|f| f.starts_with("harness"))
+            if kind != InstructionKind::Role
+                && let Some(name) = self.target_folder_name(command)?
+                && (report
+                    .failures
+                    .iter()
+                    .any(|f| f.starts_with(harness_label(kind)))
                     || report.skipped.iter().any(|(n, reason)| {
-                        n.eq_ignore_ascii_case(&name) && reason.starts_with("harness:")
+                        n.eq_ignore_ascii_case(&name)
+                            && reason.starts_with(&format!("{}:", harness_label(kind)))
                     }))
             {
                 return Ok(Some(Prepared::new(commands::PreparedRefusal(
-                    Refusal::new(DomainErrorCode::SourceChanged, "skill_source", None),
+                    Refusal::new(
+                        DomainErrorCode::SourceChanged,
+                        if kind == InstructionKind::Suite {
+                            "eval_suite_source"
+                        } else {
+                            "skill_source"
+                        },
+                        None,
+                    ),
                 ))));
             }
         }
@@ -808,6 +910,7 @@ impl CommandHandler for InstructionService {
             OperationInput::Roles(role_ops::Input::Rollback(i)) => {
                 self.prepare_activation(ctx, env, &i.instruction_id, i.target_revision.get())
             }
+            OperationInput::Evals(input) => self.prepare_suite_command(ctx, env, input),
             _ => Ok(None),
         };
         match result {
@@ -824,6 +927,7 @@ impl CommandHandler for InstructionService {
         env: &Preparation<'_>,
     ) {
         self.settle_command(prepared, reply, env);
+        self.settle_suite(prepared, reply);
     }
     fn decide(
         &self,
@@ -841,13 +945,23 @@ impl CommandHandler for InstructionService {
 }
 
 impl InstructionService {
-    /// The skill name a draft or activation writes (`None` for other commands).
-    fn target_skill_name(&self, command: &AdmittedCommand) -> Result<Option<String>, StorageError> {
+    /// The skill or suite folder name a draft, activation or exception writes (`None` for other
+    /// commands).
+    fn target_folder_name(
+        &self,
+        command: &AdmittedCommand,
+    ) -> Result<Option<String>, StorageError> {
+        use crate::operations::evals as eval_ops;
         let id = match command.input() {
             OperationInput::Skills(skill_ops::Input::Draft(i)) => {
                 return Ok(Some(i.name.0.trim().to_owned()));
             }
+            OperationInput::Evals(eval_ops::Input::DraftSuite(i)) => {
+                return Ok(Some(i.name.0.trim().to_owned()));
+            }
             OperationInput::Skills(skill_ops::Input::Rollback(i)) => i.instruction_id.clone(),
+            OperationInput::Evals(eval_ops::Input::ActivateSuite(i)) => i.suite_id.clone(),
+            OperationInput::Evals(eval_ops::Input::AcceptException(i)) => i.suite_id.clone(),
             _ => return Ok(None),
         };
         crate::ports::storage::read_snapshot(&*self.store, &Default::default(), |read| {
@@ -856,10 +970,27 @@ impl InstructionService {
     }
 }
 
+/// How sync names failures and skipped folders of the harness root of `kind`.
+pub(crate) fn harness_label(kind: InstructionKind) -> &'static str {
+    match kind {
+        InstructionKind::Suite => "harness suites",
+        _ => "harness",
+    }
+}
+
 pub(crate) fn kind_of(input: &OperationInput) -> Option<InstructionKind> {
     match input {
         OperationInput::Skills(_) => Some(InstructionKind::Skill),
         OperationInput::Roles(_) => Some(InstructionKind::Role),
+        OperationInput::Evals(
+            crate::operations::evals::Input::Suites(_)
+            | crate::operations::evals::Input::Suite(_)
+            | crate::operations::evals::Input::SuiteHistory(_)
+            | crate::operations::evals::Input::DraftSuite(_)
+            | crate::operations::evals::Input::ProposeSuite(_)
+            | crate::operations::evals::Input::ActivateSuite(_)
+            | crate::operations::evals::Input::AcceptException(_),
+        ) => Some(InstructionKind::Suite),
         _ => None,
     }
 }

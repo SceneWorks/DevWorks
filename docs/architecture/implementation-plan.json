@@ -10,26 +10,26 @@
     }
   ],
   "sourceSha256": {
-    "implementation-slices.json": "25c016b75a9c713127c3b9aeec0971bff221aca5509a0d69320bc76d8c31dce2",
-    "devworks-capability-catalog.json": "4f063eb85a76dc96c6e5f41e7a91a239d4d8455418bb17b3cb7dba1320b84104",
+    "implementation-slices.json": "6074b73247ca336b49cf4fe4c8bab9e6fbf18a8e88d733b975d8032ff1c0ad04",
+    "devworks-capability-catalog.json": "4df0dfc68cdf1c14909074bbbc44c2e472c6432492d6b07d804483be706ff8e4",
     "devworks-requirements-traceability.json": "85ab62c6e3282f2ba9eaf813aa80a8cd81dc96d614a924c17fae9943e3db232d",
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "86233e685729ed55eefe592ad187a59904a52a7d82645a4a8275ab15fab0ee3f",
-    "mcp-publication-candidates.json": "3c531208f245e4ebe67e44b1ddd510d5778d914815bf6ceda15edfe89a115411",
+    "contracts/family-coverage.json": "5dc0bf5ba65e68de964a7043284a2d8770738f9f4bfff2e3c373b7129ef3d740",
+    "mcp-publication-candidates.json": "83f2755b5277d74d5874301224a57faa7edde6c85c38973fc31173a55ddba889",
     "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },
   "counts": {
     "slices": 81,
     "operationFamilies": 50,
-    "operations": 386,
+    "operations": 393,
     "requirements": 392,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 149
     },
-    "inputSchemaCandidates": 386,
+    "inputSchemaCandidates": 393,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -4967,7 +4967,15 @@
       "id": "DW-072",
       "type": "Feature",
       "title": "Manage versioned suites with separate measurement",
-      "operations": [],
+      "operations": [
+        "evals.suites",
+        "evals.suite",
+        "evals.suite_history",
+        "evals.draft_suite",
+        "evals.propose_suite",
+        "evals.activate_suite",
+        "evals.accept_exception"
+      ],
       "dependsOnKeys": [
         "approvals",
         "eval_recorded"
@@ -4980,12 +4988,20 @@
       "codegraphItem": "DW-72",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items",
+      "operationContractOwner": "DW-72 owns evals.suites/suite/suite_history/draft_suite/propose_suite/activate_suite/accept_exception",
       "dependsOn": [
         "DW-014",
         "DW-071"
       ],
-      "ownedOperations": [],
+      "ownedOperations": [
+        "evals.suites",
+        "evals.suite",
+        "evals.suite_history",
+        "evals.draft_suite",
+        "evals.propose_suite",
+        "evals.activate_suite",
+        "evals.accept_exception"
+      ],
       "primaryRequirements": [
         "EVAL-01",
         "EVAL-06",
@@ -18243,6 +18259,104 @@
       "resultValueType": "EvalReportPage",
       "requestModes": [
         "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.suites",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalSuitePage",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.suite",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalSuiteRecord",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.suite_history",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalSuitePage",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.draft_suite",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalSuiteRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.propose_suite",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "ProposalRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.activate_suite",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalSuiteRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "evals.accept_exception",
+      "family": "evals",
+      "serviceOwner": "EvaluationService",
+      "primarySlice": "eval_suites",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "EvalSuiteRecord",
+      "requestModes": [
+        "Command"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
@@ -36679,8 +36793,8 @@
   ],
   "mcpPublication": {
     "counts": {
-      "catalogOperations": 386,
-      "modeDispositions": 391,
+      "catalogOperations": 393,
+      "modeDispositions": 398,
       "tools": 161,
       "readTools": 102,
       "commandTools": 59

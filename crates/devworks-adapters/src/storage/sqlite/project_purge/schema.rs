@@ -69,8 +69,11 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// and session owners. The source is an observation selector and adds no ownership reference.
 /// Migration 70 gives watchers external process and direct child identities. The owning
 /// project and session are retained unchanged.
+/// Migration 71 rebuilds instructions to admit the eval suite kind, with the same columns and
+/// indexes. A suite is always a workspace item; a project-confined suite draft is owned through
+/// the existing confined_project_id like a confined skill draft, so the same purge rule applies.
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "4abb22743c4140692045d267233a953f3e717a91f6507d5044bf1c554b7addd0";
+    "0959565e291f1eb320fd9ac7d36ea6d72199f91413ff462254bb82f9a760539b";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

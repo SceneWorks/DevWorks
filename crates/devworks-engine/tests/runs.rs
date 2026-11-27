@@ -1753,6 +1753,7 @@ fn agent_first_context_publishes_the_assignment_brief_and_recovers_exactly() {
                 shared: Some(shared.clone()),
                 harness: harness.clone(),
             },
+            suites: None,
         });
         let app = Arc::new(boot(composed).await.unwrap());
         // The person confirms the shared skill seen for the first time, so it is in effect.

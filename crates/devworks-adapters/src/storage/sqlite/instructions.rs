@@ -319,7 +319,7 @@ instruction_reads!(Snapshot<'_>);
 instruction_reads!(Unit<'_>);
 
 fn check_item(item: &StoredInstructionItem) -> Result<(), StorageError> {
-    let file_backed = item.kind == InstructionKind::Skill;
+    let file_backed = matches!(item.kind, InstructionKind::Skill | InstructionKind::Suite);
     if item.name.is_empty()
         || item.name.chars().count() > 128
         || item.name.contains(['\0', '/', '\\'])
@@ -553,6 +553,7 @@ impl InstructionRepository for Unit<'_> {
         key: &Id,
         number: i64,
         content: &Value,
+        resources: Option<&Value>,
     ) -> Result<(), StorageError> {
         let current =
             get_revision(self.conn, key, number)?.ok_or_else(|| StorageError::NotFound {
@@ -566,11 +567,31 @@ impl InstructionRepository for Unit<'_> {
         {
             return Err(invalid("instruction revision release"));
         }
+        // Released resources are the same files: the same paths, in order, with the same bytes.
+        let same_files = |next: &Value| {
+            let shape = |v: &Value| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .map(|r| (r.get("path").cloned(), r.get("sha256").cloned()))
+                        .collect::<Vec<_>>()
+                })
+            };
+            shape(next).is_some() && shape(next) == shape(&current.resources)
+        };
+        if resources.is_some_and(|r| !same_files(r)) {
+            return Err(invalid("instruction revision release"));
+        }
+        let resources = resources.unwrap_or(&current.resources);
         db(self.conn.execute(
-            "UPDATE instruction_revisions SET content_json=?3,\
+            "UPDATE instruction_revisions SET content_json=?3,resources_json=?4,\
                 confined_project_id=NULL WHERE instruction_id=?1 AND revision=?2 AND \
                 confined_project_id IS NOT NULL",
-            params![key.as_str(), number, content.to_string()],
+            params![
+                key.as_str(),
+                number,
+                content.to_string(),
+                resources.to_string()
+            ],
         ))?;
         Ok(())
     }

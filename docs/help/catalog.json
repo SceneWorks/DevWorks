@@ -764,7 +764,14 @@
     "settingsSections": [],
     "relatedCapabilityIds": [
       "evals.grade",
-      "evals.results"
+      "evals.results",
+      "evals.suites",
+      "evals.suite",
+      "evals.suite_history",
+      "evals.draft_suite",
+      "evals.propose_suite",
+      "evals.activate_suite",
+      "evals.accept_exception"
     ]
   },
   {

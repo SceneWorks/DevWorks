@@ -1400,7 +1400,15 @@
       "id": "DW-072",
       "type": "Feature",
       "title": "Manage versioned suites with separate measurement",
-      "operations": [],
+      "operations": [
+        "evals.suites",
+        "evals.suite",
+        "evals.suite_history",
+        "evals.draft_suite",
+        "evals.propose_suite",
+        "evals.activate_suite",
+        "evals.accept_exception"
+      ],
       "dependsOnKeys": [
         "approvals",
         "eval_recorded"
@@ -1413,7 +1421,7 @@
       "codegraphItem": "DW-72",
       "codegraphFeature": "DW-F13",
       "codegraphStateAtSync": "backlog",
-      "operationContractOwner": "DW-71 owns evals.grade/results; additional operation contracts are introduced with their owning implementation items"
+      "operationContractOwner": "DW-72 owns evals.suites/suite/suite_history/draft_suite/propose_suite/activate_suite/accept_exception"
     },
     {
       "key": "eval_judges",

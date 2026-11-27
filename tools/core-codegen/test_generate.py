@@ -114,7 +114,10 @@ class SchemaRevisionRules(unittest.TestCase):
             # DW-182: the hold conditions of a root at revision 20.
             'runs.start', 'runs.pause', 'runs.continue', 'runs.inspect', 'runs.eligibility',
             # DW-183: a project's agent assignments, introduced at revision 21.
-            'agents.list'})
+            'agents.list',
+            # DW-72: versioned eval suites and accepted exceptions, introduced at revision 23.
+            'evals.suites', 'evals.suite', 'evals.suite_history', 'evals.draft_suite',
+            'evals.propose_suite', 'evals.activate_suite', 'evals.accept_exception'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('addons.read_content', 'addons.run_workflow'):
