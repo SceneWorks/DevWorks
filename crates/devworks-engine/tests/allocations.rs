@@ -793,8 +793,38 @@ fn an_additional_reservation_cannot_start_until_the_running_root_quiesces() {
     let second = outcome(f.next3(json!({"another":true})));
     assert_eq!(second["claim"]["workId"], json!(b));
     let control = read(&*f.store, |s| control_of(s.runs(), &RootId(b.clone())));
-    refused(f.command("runs.start",json!({"rootId":b,"expectedWorkRevision":"1","expectedControlRevision":control.revision.to_string()})));
+    let reply = f.command("runs.start",json!({"rootId":b,"expectedWorkRevision":"1","expectedControlRevision":control.revision.to_string()}));
+    assert!(
+        matches!(&reply, CommandReply::Recorded { receipt, .. }
+            if matches!(&receipt.decision, DomainDecision::Refused { fault }
+                if fault.code == devworks_core::protocol::DomainErrorCode::Conflict
+                    && fault.target_kind.as_ref().is_some_and(|kind| kind.0 == "project_execution_owned"))),
+        "{reply:?}"
+    );
     assert!(read(&*f.store, |s| s.runs().live_activation(&RootId(b))).is_none());
+}
+
+#[test]
+fn a_manual_start_of_an_unclaimed_root_runs_beside_a_claimed_root() {
+    let f = Fx::new();
+    let a = f.issue("claimed", 2);
+    let b = f.issue("manual", 1);
+    let reserved = outcome(f.next3(json!({})));
+    assert_eq!(reserved["claim"]["workId"], json!(a));
+    f.start(&a);
+    let claim_id = id(reserved["claim"]["id"].as_str().unwrap());
+    assert_eq!(
+        read(&*f.store, |s| s.work().allocation_claim(&claim_id))
+            .unwrap()
+            .state,
+        ClaimState::Transferred
+    );
+    f.start(&b);
+    read(&*f.store, |s| {
+        assert!(s.runs().live_activation(&RootId(a))?.is_some());
+        assert!(s.runs().live_activation(&RootId(b))?.is_some());
+        Ok(())
+    });
 }
 
 #[test]

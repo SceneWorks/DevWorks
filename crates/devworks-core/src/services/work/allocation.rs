@@ -1026,12 +1026,17 @@ pub fn check_start(
             Some(&work.id),
         ));
     }
-    if all.iter().any(|c| {
-        c.queue_key == PROJECT_QUEUE
-            && c.automatic == automatic
-            && c.root_id != w.id
-            && matches!(c.state, ClaimState::Transferred | ClaimState::Yielding)
-    }) {
+    // AGENT-16: a claimed execution excludes only other claimed starts in its slot. A manual
+    // Start of a root that holds no claim takes no allocation and runs beside it.
+    let claimed = automatic || all.iter().any(|c| c.work_id == w.id.0 || c.root_id == w.id);
+    if claimed
+        && all.iter().any(|c| {
+            c.queue_key == PROJECT_QUEUE
+                && c.automatic == automatic
+                && c.root_id != w.id
+                && matches!(c.state, ClaimState::Transferred | ClaimState::Yielding)
+        })
+    {
         return Err(conflict("project_execution_owned", &w.project_id.0));
     }
     if !automatic
