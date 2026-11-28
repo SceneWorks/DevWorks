@@ -16,6 +16,10 @@ pub struct ProviderContext {
     /// instruction block just before the repository suffix).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_stamp: Option<super::instructions::SkillStamp>,
+    /// The effective lesson rules bound before the skill catalog (its block is the instruction
+    /// block just before the skill catalog, or before repository guidance without one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lesson_stamp: Option<super::instructions::LessonStamp>,
     pub messages: Vec<Message>,
     pub parameters: GenerationParameters,
 }
@@ -81,6 +85,11 @@ pub enum ContentBlock {
 pub enum ResultBlock {
     Text {
         text: String,
+    },
+    /// Keep only an exact handle in the saved context. The encoder reopens the result
+    /// through current artifact and source scope on every provider request.
+    DocumentEvidence {
+        artifact: ArtifactRef,
     },
     Image {
         artifact: ArtifactRef,
@@ -381,6 +390,7 @@ impl ProviderContext {
             instructions,
             instruction_stamps: Vec::new(),
             skill_stamp: None,
+            lesson_stamp: None,
             messages,
             parameters,
         };
@@ -409,17 +419,24 @@ impl ProviderContext {
         {
             return Err(ProviderError::InvalidInput("instruction_stamps"));
         }
+        let repository: usize = self
+            .instruction_stamps
+            .iter()
+            .map(|s| s.sources.len())
+            .sum();
         if let Some(skills) = &self.skill_stamp {
-            let repository: usize = self
-                .instruction_stamps
-                .iter()
-                .map(|s| s.sources.len())
-                .sum();
             let at = self.instructions.len().checked_sub(repository + 1);
             if !skills.validate()
                 || at.is_none_or(|at| self.instructions[at].text != skills.text_block().text)
             {
                 return Err(ProviderError::InvalidInput("skill_stamp"));
+            }
+        }
+        if let Some(lessons) = &self.lesson_stamp {
+            let skills = usize::from(self.skill_stamp.is_some());
+            let at = self.instructions.len().checked_sub(repository + skills + 1);
+            if at.is_none_or(|at| !lessons.validate(&self.instructions[at])) {
+                return Err(ProviderError::InvalidInput("lesson_stamp"));
             }
         }
         let p = &self.parameters;

@@ -8844,6 +8844,8 @@ mod mcp_agent_tool;
 
 #[path = "runs/approval_wait.rs"]
 mod approval_wait;
+#[path = "runs/document_tools.rs"]
+mod document_tools;
 
 #[path = "runs/compaction.rs"]
 mod compaction;
@@ -8852,6 +8854,8 @@ mod compaction;
 mod epoch_request;
 #[path = "runs/failure_notifications.rs"]
 mod failure_notifications;
+#[path = "runs/lesson_delivery.rs"]
+mod lesson_delivery;
 #[path = "runs/turn_runtime.rs"]
 mod turn_runtime;
 
@@ -8862,6 +8866,8 @@ mod plan_review_tests;
 #[path = "runs/review_capacity.rs"]
 mod review_capacity_tests;
 
+#[path = "runs/dreaming.rs"]
+mod dreaming;
 #[cfg(unix)]
 #[path = "runs/feature_delivery.rs"]
 mod feature_delivery_tests;

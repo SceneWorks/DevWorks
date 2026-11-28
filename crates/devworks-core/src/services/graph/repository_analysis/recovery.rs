@@ -140,7 +140,7 @@ fn recover(
                 return Err(StorageError::Busy);
             }
             let gate = Authorization::direct().fenced_by(work.authority.fences.clone());
-            if !crate::authority::authorization_holds_in(tx, &ctx, &gate)?
+            if !crate::services::fences::authorization_holds_in(tx, &ctx, &gate)?
                 || tx.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
             {
                 return Err(StorageError::ScopeDenied);

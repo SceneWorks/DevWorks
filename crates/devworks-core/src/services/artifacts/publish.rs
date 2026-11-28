@@ -44,7 +44,7 @@ impl Gate {
     fn holds(&self, tx: &mut dyn WriteTransaction) -> Result<bool, StorageError> {
         match self {
             Self::Authorization(ctx, authorization) => {
-                crate::authority::authorization_holds_in(tx, ctx, authorization)
+                crate::services::fences::authorization_holds_in(tx, ctx, authorization)
             }
             Self::Producer(actor) => Ok(tx
                 .authority()

@@ -147,7 +147,7 @@ impl SchemaService {
                 if deadline.is_some_and(|d| now > d) {
                     return Err(StorageError::Cancelled);
                 }
-                if !crate::authority::authorization_holds_in(tx, &ctx, &auth)? {
+                if !crate::services::fences::authorization_holds_in(tx, &ctx, &auth)? {
                     return Err(StorageError::ScopeDenied);
                 }
                 let reach = crate::services::knowledge::reach(tx.authority(), &ctx)

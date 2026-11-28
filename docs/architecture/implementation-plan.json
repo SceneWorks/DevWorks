@@ -11,25 +11,25 @@
   ],
   "sourceSha256": {
     "implementation-slices.json": "25c016b75a9c713127c3b9aeec0971bff221aca5509a0d69320bc76d8c31dce2",
-    "devworks-capability-catalog.json": "c83885a6e3484c9dd0650774135eb01561bc6d50c482041528221241e8bb4fb4",
+    "devworks-capability-catalog.json": "2b6a03642a1ae4a5040f3f779a5cb7fea261736c3cb71a28c9e5d0e0697127cd",
     "devworks-requirements-traceability.json": "85ab62c6e3282f2ba9eaf813aa80a8cd81dc96d614a924c17fae9943e3db232d",
     "codegraph-capability-inventory.json": "285cab4d95f162b118fd965be7c068208dad5fc493604495fcdd8e83298f5d01",
     "capability-validation-contracts.json": "9722c1fe17c9aaed5c65fc43f1f4f412cca2813276e5108c7daf15585ae2ed81",
     "validation-workloads.json": "62c76bba3f262331403a5a38fa3d1aa1c7dc649737e36369ca4736780cfc3dcf",
-    "contracts/family-coverage.json": "42f52515b835c6419345c8512125de6750f61bfa1af06926418ea25fdbfe90d9",
-    "mcp-publication-candidates.json": "5dd67d23a97ea3c83b6c9ecbb786afccfcd0da5afa3656a679c4e13457084a20",
+    "contracts/family-coverage.json": "ecc389527a7247446a47340f83834b9a1f571f1945598e171842f285387f76af",
+    "mcp-publication-candidates.json": "39f3f3495d050deaf46d1a5e5be94d95a371b4b3ab15941f2b4c3e5c09456901",
     "codegraph-work-map.json": "b0c85f12da4d7a6210e7590424ade8466d2f3ef05ace36fc27c4418aa1f0e83e"
   },
   "counts": {
     "slices": 81,
     "operationFamilies": 50,
-    "operations": 387,
+    "operations": 391,
     "requirements": 392,
     "requirementsByStatus": {
       "Confirmed": 243,
       "Proposed": 149
     },
-    "inputSchemaCandidates": 387,
+    "inputSchemaCandidates": 391,
     "inputSchemasPending": 0,
     "sourceEntries": 558,
     "retainedSourceEntries": 494,
@@ -3064,7 +3064,11 @@
         "documents.index",
         "documents.retry",
         "documents.disable_retrieval",
-        "documents.remove_index"
+        "documents.remove_index",
+        "documents.resolve_citation",
+        "documents.transfer_propose",
+        "documents.transfer_respond",
+        "documents.transfer_status"
       ],
       "primaryRequirements": [
         "RAG-01",
@@ -14918,7 +14922,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<KnowledgeClaim>",
+      "resultValueType": "KnowledgeSearchResult",
       "requestModes": [
         "Query"
       ],
@@ -15340,7 +15344,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "KnowledgeWriteReceipt",
+      "resultValueType": "DreamRevertResult",
       "requestModes": [
         "Command"
       ],
@@ -15368,7 +15372,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "DocumentRecord",
+      "resultValueType": "DocumentResult",
       "requestModes": [
         "Command"
       ],
@@ -15382,7 +15386,7 @@
       "inputSchema": "domain-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "Page<DocumentRecord>",
+      "resultValueType": "DocumentListResult",
       "requestModes": [
         "Query"
       ],
@@ -15396,7 +15400,7 @@
       "inputSchema": "artifact-query-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "DocumentRecord",
+      "resultValueType": "DocumentResult",
       "requestModes": [
         "Query"
       ],
@@ -15424,7 +15428,7 @@
       "inputSchema": "artifact-command-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "DocumentRecord",
+      "resultValueType": "DocumentResult",
       "requestModes": [
         "Command"
       ],
@@ -15438,7 +15442,7 @@
       "inputSchema": "artifact-command-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "DocumentRecord",
+      "resultValueType": "DocumentResult",
       "requestModes": [
         "Command"
       ],
@@ -15480,7 +15484,7 @@
       "inputSchema": "artifact-command-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "DocumentRecord",
+      "resultValueType": "DocumentResult",
       "requestModes": [
         "Command"
       ],
@@ -15494,9 +15498,65 @@
       "inputSchema": "artifact-command-request.schema.json",
       "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
       "resultSchema": "operation-result.schema.json",
-      "resultValueType": "DocumentRecord",
+      "resultValueType": "DocumentResult",
       "requestModes": [
         "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "documents.resolve_citation",
+      "family": "documents",
+      "serviceOwner": "DocumentService",
+      "primarySlice": "documents",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "ResolvedDocumentCitation",
+      "requestModes": [
+        "Query"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "documents.transfer_propose",
+      "family": "documents",
+      "serviceOwner": "DocumentService",
+      "primarySlice": "documents",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DocumentTransferRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "documents.transfer_respond",
+      "family": "documents",
+      "serviceOwner": "DocumentService",
+      "primarySlice": "documents",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DocumentTransferRecord",
+      "requestModes": [
+        "Command"
+      ],
+      "acceptanceStatus": "Planned; no production operation acceptance claimed"
+    },
+    {
+      "operation": "documents.transfer_status",
+      "family": "documents",
+      "serviceOwner": "DocumentService",
+      "primarySlice": "documents",
+      "inputSchema": "domain-request.schema.json",
+      "schemaStatus": "Concrete input/result candidate; actual service/authority behavior not implemented",
+      "resultSchema": "operation-result.schema.json",
+      "resultValueType": "DocumentTransferRecord",
+      "requestModes": [
+        "Query"
       ],
       "acceptanceStatus": "Planned; no production operation acceptance claimed"
     },
@@ -36694,11 +36754,11 @@
   ],
   "mcpPublication": {
     "counts": {
-      "catalogOperations": 387,
-      "modeDispositions": 392,
-      "tools": 161,
-      "readTools": 102,
-      "commandTools": 59
+      "catalogOperations": 391,
+      "modeDispositions": 396,
+      "tools": 165,
+      "readTools": 104,
+      "commandTools": 61
     },
     "queryAdapterSlice": "mcp_server",
     "commandAndAccessSlice": "mcp_server_access",

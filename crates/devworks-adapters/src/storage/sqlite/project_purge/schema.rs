@@ -69,8 +69,34 @@ type Definitions = Vec<(String, String, String, Option<String>)>;
 /// and session owners. The source is an observation selector and adds no ownership reference.
 /// Migration 70 gives watchers external process and direct child identities. The owning
 /// project and session are retained unchanged.
+/// Migration 71 adds retrieval preferences and three per-version document index tables. The
+/// document lineage propagates from the managed artifact version to its extraction and text.
+/// Explicit version tombstones remove derived rows, and project purge classifies each row.
+/// Migration 72 adds a published lexical row per extracted block. It is classified through
+/// that block's retained version. FTS5 segments follow the projection and are maintained
+/// by the virtual table when a canonical lexical row changes.
+/// Migrations 73 and 74 add derivative embedding runs, vectors, and vision units and keys.
+/// Each follows its exact extraction or version and has a separate ownership entry.
+/// Migration 75 indexes existing embedding preparation rows and keeps the publication time on
+/// the exact document index version. Both tables retain their existing purge policies, so a
+/// retained document keeps its publication time after its previous owner's events are purged.
+/// Migration 76 adds scoped Dreaming settings, immutable instruction revisions and run and
+/// action records, plus scoped source observations. A project's settings and runs belong to
+/// that project; action evidence follows
+/// its parent run. Workspace/base records remain independent.
+/// Migration 77 adds document transfer proposals. Their custody follows both participating
+/// projects and the retained artifact, as recorded in the document-transfers policy. It uses
+/// plain foreign keys so the guarded purge deletes every reviewed row explicitly.
+/// Migration 78 adds knowledge_claim_vectors (schema78 extension): the rebuildable vector of a
+/// claim's text follows its claim (claim_id in ownedClaims), so a project's purge removes the
+/// vectors of its claims and keeps every other. It adds one foreign key to knowledge_claims
+/// and one to the shared embedding_spaces row, which it does not own; a row without a vector
+/// records an unusable provider vector. It also adds the partial expression index
+/// artifacts_knowledge_embedding_input on artifacts (no table, column or ownership edge); the
+/// Host KnowledgeEmbeddingInput artifacts it finds are deleted with the project's claims
+/// (ownedKnowledgeInferenceArtifacts).
 pub(super) const REVIEWED_SCHEMA_SHA256: &str =
-    "4abb22743c4140692045d267233a953f3e717a91f6507d5044bf1c554b7addd0";
+    "6b3c8bc81195b1370860c456645b85de8716def92489d39894501270c7ef0635";
 
 fn definitions(conn: &Connection) -> Result<Definitions, StorageError> {
     let mut statement = db(conn.prepare(

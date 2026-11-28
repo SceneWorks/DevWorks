@@ -11,7 +11,8 @@ BASE={'Id':'id-a','Revision':'1','Counter':'0','ProjectId':'project-a','RootId':
  'Label':'fixture','Text':'fixture','DefaultValueText':'fixture','GraphUnitKey':'src/main.rs','GraphText':'fixture source','Content':'Fixture content','Cursor':'cursor-a','RelativePath':'src/main.rs','Url':'https://fixture.invalid/path','Money':'0','SignedCounter':'-1','PositiveCounter':'1','Finite':0.5,'Probability':0.5,'bool':False,'i32':1,'Limit':20,'Depth':2,'Port':8765,'ByteLimit':4096,'TokenBudget':1500,'ArtifactTags':['evidence'],'PathSet':['src/lib.rs'],'DynamicJson':{'input':'fixture'},'SavedCommandInput':{'input':'fixture'},
  'DataScope':{'kind':'Workspace'},'ViewSelection':{'kind':'Published','repositoryIds':['repo-a']},'Coverage':{'state':'Complete','gaps':[],'moreGaps':False},'Digest':'a'*64,'ArtifactRef':ART,'SchemaRef':{'schemaId':'fixture/object','revision':'1','sha256':'a'*64},'Attribution':{'kind':'Workspace','sessionId':'session-a'},'GitOid':{'format':'Sha1','hex':'a'*40},'ReadStamp':STAMP,'OperationState':'ObservedComplete',
  'RootControl':{'rootId':'root-a','revision':'1','desiredState':'Enabled'},'Blockers':{'items':[],'hasMore':False},'EligibilityTarget':{'kind':'root','id':'root-a'},'Purpose':'Planning',
- 'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event')}
+ 'DeliveryBarrier':valid('delivery-barrier'),'DeliverySnapshot':valid('delivery-snapshot'),'GraphPage':valid('graph-page'),'RetrievalPage':valid('retrieval-page'),'TranscriptPage':valid('transcript-page'),'Event':valid('event'),
+ 'Citation':{'source':{'kind':'Managed','version':ART,'extractionRevision':'1'},'blockId':'block-a','contentDigest':'b'*64,'locator':{'kind':'Text','firstLine':1,'lastLine':1}}}
 def camel(s):return re.sub(r'_([a-z])',lambda m:m[1].upper(),s)
 def sample(t):
  if t.startswith('?'):return None
@@ -1556,6 +1557,63 @@ claim_skills={**claim_r2,'lesson':{**lesson_record,'skills':[{'instructionId':'s
 for name in ['knowledge.search','knowledge.tagged_lessons']:
  case('r8-result-'+name+'-skills','operation-result.r8',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}})
  case('reject-r2-result-'+name+'-skills','operation-result.r2',{'kind':name,'value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Revision 30 (DW-249): a search page reports its retrieval mode and whether a candidate cap limited it.
+case('r30-input-knowledge.search','domain-request.r30',{**request('knowledge.search','Query'),'schemaRevision':30})
+search_r30={'kind':'knowledge.search','value':{'items':[claim_skills],'hasMore':False,'mode':'Hybrid','workLimited':True}}
+case('r30-result-knowledge.search-mode','operation-result.r30',search_r30)
+case('r30-result-knowledge.search-lexical-empty','operation-result.r30',{'kind':'knowledge.search','value':{'items':[],'hasMore':False,'mode':'LexicalOnly','workLimited':False}})
+case('reject-r29-result-knowledge.search-mode','operation-result.r29',search_r30,False,False)
+case('reject-r30-result-knowledge.search-without-mode','operation-result.r30',{'kind':'knowledge.search','value':{'items':[claim_skills],'hasMore':False}},False,False)
+# Revision 31 (DW-250): a caller may bound a search page by approximate tokens; the page reports its tokens and the budget that applied.
+case('r31-input-knowledge.search-budget','domain-request.r31',domain('knowledge.search',31,budgetTokens=8000))
+case('r31-input-knowledge.search-plain','domain-request.r31',domain('knowledge.search',31))
+case('reject-r30-input-knowledge.search-budget','domain-request.r30',domain('knowledge.search',30,budgetTokens=8000),False,False)
+case('reject-r31-input-knowledge.search-zero-budget','domain-request.r31',domain('knowledge.search',31,budgetTokens=0),False,False)
+case('reject-r31-input-knowledge.search-budget-above-bound','domain-request.r31',domain('knowledge.search',31,budgetTokens=1000001),False,False)
+search_r31={'kind':'knowledge.search','value':{'items':[claim_skills],'nextCursor':'v1.6865.abc','hasMore':True,'mode':'Hybrid','workLimited':False,'approximateTokens':'42','budgetTokens':8000}}
+case('r31-result-knowledge.search-budget','operation-result.r31',search_r31)
+case('r31-result-knowledge.search-unbounded','operation-result.r31',{'kind':'knowledge.search','value':{'items':[],'hasMore':False,'mode':'LexicalOnly','workLimited':False,'approximateTokens':'0'}})
+case('r31-result-knowledge.search-r30-shape','operation-result.r31',search_r30)
+case('reject-r30-result-knowledge.search-tokens','operation-result.r30',search_r31,False,False)
+# Revisions 25 and 28 change document results and retain the existing request envelopes.
+for revision in (25,28):
+ for name,mode in [('documents.import','Command'),('documents.list','Query')]:
+  case(f'r{revision}-input-{name}',f'domain-request.r{revision}',{**request(name,mode),'schemaRevision':revision})
+ case(f'r{revision}-input-documents.read','artifact-query-request',{**recorded('artifact-query-Read'),'schemaRevision':revision})
+ for variant,name in [('Share','share'),('Move','move'),('DisableRetrieval','disable_retrieval'),('RemoveIndex','remove_index')]:
+  case(f'r{revision}-input-documents.{name}','artifact-command-request',{**recorded('artifact-'+variant),'schemaRevision':revision})
+reextract=request('documents.index','Command')
+reextract['schemaRevision']=27
+reextract['body']['reextract']=True
+case('r27-input-documents.index','domain-request.r27',reextract)
+for name in ('run','runs','report','settings','instructions','propose','revert','review'):
+ operation='dreaming.'+name
+ modes=['Query','Command'] if OPS[operation]['mode']=='Hybrid' else [OPS[operation]['mode']]
+ for mode in modes:
+  frame={**request(operation,mode),'schemaRevision':24}
+  if name=='run':frame['body']['cancelRunId']='run-a'
+  if name=='settings' and mode=='Command':
+   frame['body']['config'].update(modelId='model-a',effort='High',minimumIntervalMs='3600000',
+    maxTurns='12',maxTokens='128000',maxElapsedMs='1200000',maxMicroUsd='1000')
+  if name=='instructions' and mode=='Query':frame['body']['page']={'limit':20}
+  if name=='propose':
+   frame['body'].update(change={'kind':'Retract'},rationale='conflicting evidence',prevalence='scope only',
+    evidence=[sample('DreamEvidenceReference')])
+  if name=='revert':
+   del frame['body']['proposalId']
+   frame['body']['allChanges']=True
+  case(f'r24-input-dreaming.{name}-{mode}','domain-request.r24',frame)
+ payload=result(operation,OPS[operation]['result'])
+ if name in ('run','report'):payload['value']['detail']=sample('DreamRunDetail')
+ if name=='runs':
+  payload['value']['items']=[{**sample('DreamRun'),'detail':sample('DreamRunDetail')}]
+ if name=='settings':payload['value']['config']['modelId']='model-a'
+ if name=='revert':payload['value']=sample('DreamRevertOutcome')
+ case(f'r24-result-dreaming.{name}','operation-result.r24',payload)
+mutate('reject-dream-run-resume-and-cancel','r24-input-dreaming.run-Command',['body','resumeRunId'],'run-b',schema=True)
+mutate('reject-dream-revert-both-targets','r24-input-dreaming.revert-Command',['body','proposalId'],'proposal-a')
+mutate('reject-dream-settings-too-many-turns','r24-input-dreaming.settings-Command',['body','config','maxTurns'],'101',schema=True)
+mutate('reject-dream-proposal-without-evidence','r24-input-dreaming.propose-Command',['body','evidence'],DELETE,schema=True)
 # Schema revision 3 (GitHub sync, DW-40): verified issue links, account diagnostics and resumable poll status.
 for name in ['issues.publish','issues.link']:
  case('r3-input-'+name,'domain-request.r3',{**request(name,'Command'),'schemaRevision':3})

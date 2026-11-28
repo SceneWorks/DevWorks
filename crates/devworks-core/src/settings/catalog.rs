@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 /// Revision of every value schema in this catalog build.
 pub const SCHEMA_REVISION: i64 = 1;
 /// Revision of the catalog (keys, defaults, Help IDs) recorded with every saved revision.
-pub const CATALOG_REVISION: i64 = 11;
+pub const CATALOG_REVISION: i64 = 12;
 
 /// Settings categories, in navigation order. Labels follow the approved UI reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -233,10 +233,7 @@ impl AgentRole {
 /// Settings that Settings shows but no behaviour reads yet. Each description starts with
 /// [`NOT_YET_ACTIVE_PREFIX`] and says what is missing; Settings marks the row not yet active.
 /// Remove a key here, and the prefix from its description, in the change that makes it work.
-pub const NOT_YET_ACTIVE: &[&str] = &[
-    // Vision extraction of scanned documents: DW-288.
-    "knowledge.visionExtraction",
-];
+pub const NOT_YET_ACTIVE: &[&str] = &[];
 /// How the description of every [`NOT_YET_ACTIVE`] setting begins.
 pub const NOT_YET_ACTIVE_PREFIX: &str = "Not yet active:";
 
@@ -930,15 +927,25 @@ fn build() -> Vec<SettingDescriptor> {
             NextAdmission
         ),
         setting!(
-            "knowledge.visionExtraction",
+            DOCUMENT_VISION_KEY,
             "Vision extraction fallback",
-            "Not yet active: document extraction does not use a vision model yet, so \
-                this switch changes nothing. Once it does, existing text is extracted \
-                first and a vision-capable routed model reads scanned pages.",
+            "Extracts existing text directly. An image-capable model can transcribe scanned PDF \
+                pages and eligible Word images. Turning this off keeps direct text available.",
             Knowledge,
             WORKSPACE,
             ValueKind::Bool,
             true,
+            NextAdmission
+        ),
+        setting!(
+            DOCUMENT_VISION_MODELS_KEY,
+            "Vision extraction models",
+            "Choose model IDs in preference order for scanned documents. An empty list uses \
+                the session's eligible pinned model, then the configured Low pool.",
+            Knowledge,
+            WORKSPACE,
+            ValueKind::ModelList,
+            Vec::<String>::new(),
             NextAdmission
         ),
         setting!(
@@ -951,6 +958,38 @@ fn build() -> Vec<SettingDescriptor> {
             INHERITED,
             ValueKind::Integer { min: 2, max: 20 },
             3,
+            NextAdmission
+        ),
+        setting!(
+            "knowledge.searchTokenBudget",
+            "Knowledge search token budget",
+            "Approximate tokens of claim text (characters divided by 4) one Knowledge \
+                search page holds for an agent that names no budget. The best-ranked claims \
+                that fit are returned, always at least one, and the agent pages for more. \
+                Searching in the app has no token limit. Above the largest search token \
+                budget, that maximum applies. Engineering default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer {
+                min: 1000,
+                max: 1000000
+            },
+            8000,
+            NextAdmission
+        ),
+        setting!(
+            "knowledge.searchTokenBudgetMax",
+            "Largest search token budget",
+            "The largest token budget any caller, a person or an agent, may name on one \
+                Knowledge search. A budget above it, or below 1000, is refused. Engineering \
+                default.",
+            Knowledge,
+            INHERITED,
+            ValueKind::Integer {
+                min: 1000,
+                max: 1000000
+            },
+            32000,
             NextAdmission
         ),
         setting!(
@@ -1095,6 +1134,10 @@ fn build() -> Vec<SettingDescriptor> {
     all
 }
 
+/// Whether indexing may use a configured vision model for an image-only source.
+pub const DOCUMENT_VISION_KEY: &str = "knowledge.visionExtraction";
+/// Preferred image-capable models for the document indexer.
+pub const DOCUMENT_VISION_MODELS_KEY: &str = "knowledge.visionModels";
 /// Where artifact contents live (a harness policy shown for transparency).
 pub const ARTIFACT_LOCATION_KEY: &str = "storage.artifactLocation";
 /// Artifact retention: until explicit deletion (a harness policy; no automatic expiry).

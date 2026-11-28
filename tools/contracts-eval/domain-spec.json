@@ -1727,7 +1727,42 @@
         "state": "OperationState",
         "checkpoint": "?ArtifactRef",
         "report": "?ArtifactRef",
-        "proposal_ids": "Items<Id>"
+        "proposal_ids": "Items<Id>",
+        "detail": "?DreamRunDetail"
+      },
+      "since": {"detail": 24}
+    },
+    "DreamRunStatus": {
+      "kind": "enum",
+      "values": ["Queued", "Running", "Disabled", "Busy", "TooSoon", "NoSignal", "Blocked",
+        "BudgetExhausted", "Partial", "Failed", "Cancelled", "OutcomeUnknown", "ScheduledFanout", "Completed"]
+    },
+    "DreamRunTrigger": {
+      "kind": "enum",
+      "values": ["Manual", "Scheduled", "Resume"]
+    },
+    "DreamRunDetail": {
+      "kind": "record",
+      "fields": {
+        "status": "DreamRunStatus",
+        "trigger": "DreamRunTrigger",
+        "initiator": "ActorId",
+        "started_at_ms": "Counter",
+        "ended_at_ms": "?Counter",
+        "settings_revision": "Revision",
+        "base_instruction_revision": "?Revision",
+        "project_instruction_revision": "?Revision",
+        "model_id": "?Id",
+        "connection_id": "?Id",
+        "input_tokens": "Counter",
+        "output_tokens": "Counter",
+        "cost_micro_usd": "Counter",
+        "usage_uncertain": "bool",
+        "continued_from": "?Id",
+        "can_continue": "bool",
+        "reason": "?Label",
+        "journal_digest": "?Digest",
+        "evidence": "?ArtifactRef"
       }
     },
     "DreamConfig": {
@@ -1736,7 +1771,77 @@
         "enabled": "bool",
         "instructions": "ArtifactRef",
         "schedule_id": "?Id",
-        "batch_limit": "Limit"
+        "batch_limit": "Limit",
+        "model_id": "?Id",
+        "effort": "?EffortName",
+        "minimum_interval_ms": "?Counter",
+        "max_turns": "?PositiveCounter",
+        "max_tokens": "?PositiveCounter",
+        "max_elapsed_ms": "?PositiveCounter",
+        "max_micro_usd": "?Counter"
+      },
+      "since": {"model_id": 24, "effort": 24, "minimum_interval_ms": 24, "max_turns": 24,
+        "max_tokens": 24, "max_elapsed_ms": 24, "max_micro_usd": 24}
+    },
+    "DreamEvidenceKind": {
+      "kind": "enum",
+      "values": ["Knowledge", "Lesson", "Review", "RepositorySource", "Graph", "Work", "PriorAction"]
+    },
+    "DreamEvidenceReference": {
+      "kind": "record",
+      "fields": {
+        "kind": "DreamEvidenceKind",
+        "reference": "Text",
+        "fingerprint": "Digest",
+        "summary": "Content"
+      }
+    },
+    "DreamProposalChange": {
+      "kind": "union",
+      "variants": {
+        "Retract": {},
+        "Supersede": {"replacement": "ClaimDraft"},
+        "Merge": {"other": "RevisionedRef"},
+        "SkillDraft": {},
+        "HookDraft": {},
+        "TestDraft": {}
+      }
+    },
+    "DreamRevertOutcome": {
+      "kind": "record",
+      "fields": {
+        "run_id": "Id",
+        "applied": "Rows<Id>",
+        "conflicts": "Rows<DreamRevertConflict>",
+        "remaining": "Counter"
+      }
+    },
+    "DreamRevertConflict": {
+      "kind": "record",
+      "fields": {
+        "action_id": "Id",
+        "target_id": "Id",
+        "expected_revision": "Revision",
+        "current_revision": "?Revision"
+      }
+    },
+    "DreamRevertResult": {
+      "kind": "versioned",
+      "legacy": "KnowledgeWriteReceipt",
+      "current": "DreamRevertOutcome",
+      "revision": 24,
+      "projection": "none"
+    },
+    "DocumentTransferState": {
+      "kind": "enum",
+      "values": ["Pending", "Shared", "Moved", "Declined"]
+    },
+    "DocumentTransferRecord": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "state": "DocumentTransferState"
       }
     },
     "DocumentRecord": {
@@ -1751,6 +1856,111 @@
         "retrieval_enabled": "bool",
         "extraction_state": "ItemState",
         "coverage": "Coverage"
+      }
+    },
+    "DocumentIndexAttempt": {
+      "kind": "record",
+      "fields": {
+        "attempt_id": "Id",
+        "project_id": "?ProjectId",
+        "purpose": "Id",
+        "model_id": "Id",
+        "connection_id": "Id",
+        "endpoint_profile": "Id",
+        "provider_model": "?Label",
+        "input_tokens": "?Counter",
+        "output_tokens": "?Counter",
+        "priced_micro_usd": "?Counter",
+        "pricing_classification": "Id",
+        "monetary_complete": "bool",
+        "state": "Id"
+      }
+    },
+    "DocumentIndexActivity": {
+      "kind": "record",
+      "fields": {
+        "run_id": "Id",
+        "stage": "Id",
+        "indexed_at_ms": "?Counter",
+        "chunk_count": "?Counter",
+        "attempts": "Items<DocumentIndexAttempt>",
+        "more_attempts": "bool"
+      }
+    },
+    "DocumentVisionOccurrence": {
+      "kind": "record",
+      "fields": {"location": "Label", "status": "Id"}
+    },
+    "DocumentInspection": {
+      "kind": "record",
+      "fields": {
+        "original_name": "?Label",
+        "original_source": "?Label",
+        "tags": "ArtifactTags",
+        "shares": "Items<ProjectId>",
+        "more_shares": "bool",
+        "vision_status": "Id",
+        "vision_model": "?Id",
+        "vision_connection": "?Id",
+        "vision_occurrences": "Items<DocumentVisionOccurrence>",
+        "more_vision_occurrences": "bool"
+      }
+    },
+    "DocumentDetail": {
+      "kind": "record",
+      "fields": {
+        "id": "Id",
+        "revision": "Revision",
+        "scope_revision": "Revision",
+        "reference_revision": "Revision",
+        "scope": "DataScope",
+        "title": "Label",
+        "current_version": "?ArtifactRef",
+        "selected_version": "?ArtifactRef",
+        "deleted_selected_version_id": "?Id",
+        "deleted_selected_at_ms": "?Counter",
+        "deleted_current_version_id": "?Id",
+        "deleted_current_at_ms": "?Counter",
+        "retained_versions": "Rows<ArtifactRef>",
+        "retained_version_count": "Counter",
+        "next_version_cursor": "?Cursor",
+        "retrieval_enabled": "bool",
+        "extraction_state": "ItemState",
+        "coverage": "Coverage",
+        "index_activity": "?DocumentIndexActivity",
+        "inspection": "?DocumentInspection"
+      },
+      "since": {"index_activity": 28, "inspection": 28}
+    },
+    "DocumentLibraryPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<DocumentDetail>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "snapshot_revision": "Revision"
+      }
+    },
+    "DocumentResult": {
+      "kind": "versioned",
+      "legacy": "DocumentRecord",
+      "current": "DocumentDetail",
+      "revision": 25,
+      "projection": "none"
+    },
+    "DocumentListResult": {
+      "kind": "versioned",
+      "legacy": "Page<DocumentRecord>",
+      "current": "DocumentLibraryPage",
+      "revision": 25,
+      "projection": "none",
+      "earlierName": "Page"
+    },
+    "ResolvedDocumentCitation": {
+      "kind": "record",
+      "fields": {
+        "citation": "Citation",
+        "text": "Text"
       }
     },
     "InstructionRecord": {
@@ -5167,6 +5377,37 @@
         "next_cursor": "?Cursor",
         "has_more": "bool"
       }
+    },
+    "KnowledgeRetrievalMode": {
+      "kind": "enum",
+      "values": [
+        "Hybrid",
+        "LexicalOnly"
+      ]
+    },
+    "KnowledgeSearchPage": {
+      "kind": "record",
+      "fields": {
+        "items": "Rows<KnowledgeClaim>",
+        "next_cursor": "?Cursor",
+        "has_more": "bool",
+        "mode": "KnowledgeRetrievalMode",
+        "work_limited": "bool",
+        "approximate_tokens": "?Counter",
+        "budget_tokens": "?TokenBudget"
+      },
+      "since": {
+        "approximate_tokens": 31,
+        "budget_tokens": 31
+      }
+    },
+    "KnowledgeSearchResult": {
+      "kind": "versioned",
+      "legacy": "Page<KnowledgeClaim>",
+      "current": "KnowledgeSearchPage",
+      "revision": 30,
+      "projection": "page_members",
+      "earlierName": "Page"
     },
     "NotificationLink": {
       "kind": "record",
@@ -9085,17 +9326,19 @@
         "states": "?Items<KnowledgeLifecycle>",
         "entry_kinds": "?Items<KnowledgeEntryKind>",
         "source": "?Label",
-        "stale": "?bool"
+        "stale": "?bool",
+        "budget_tokens": "?TokenBudget"
       },
-      "result": "Page<KnowledgeClaim>",
+      "result": "KnowledgeSearchResult",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Scoped lexical search, newest first: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies before any candidate is materialized. Every word of text must appear (Unicode case-folded) in the claim or its subject entity. Lifecycle Active by default (revision 1: Active only). Cursors bind the query and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state.",
+      "rules": "Scoped search: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies to every candidate source before any candidate is materialized. Without words, newest first. With words, three sources are fused by reciprocal rank into a head (k 400, each source at most 200 candidates), ordered by how many of the word and meaning sources list a claim, then the fused score: word matches (every word of text appears, Unicode case-folded, in the claim or its subject entity), meaning matches (the nearest claim vectors in the selected embedding space, when the read scopes have vectors in it) and graph matches (claims whose subject or object is one of the entityLimit entities whose text best matches a word). After the head, every other match follows in its source's own order (word, then graph, then meaning matches), so each matching claim is listed once. Lifecycle Active by default (revision 1: Active only). Cursors bind the query, the retrieval inputs and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state. Schema revision 30: the page reports its listing's retrieval mode (Hybrid with meaning matches, otherwise LexicalOnly; a listing keeps its first page's mode) and workLimited, true when fusion ranked only the head (a source had more candidates than its cap, or more entities matched than entityLimit). Schema revision 31: budgetTokens bounds a page by the approximate tokens of its claims' text (predicate, value and normalized text; characters divided by 4, rounded up): the page holds the best-ranked claims that fit, always at least one, and its cursor continues with the next claim, so the budget changes only where a page ends. Without budgetTokens (and at earlier revisions, which cannot pass it) an agent, package, MCP client or schedule gets the scope's knowledge.searchTokenBudget setting (at most the maximum) and a person or the host acting for them gets no token bound. A budget below 1000 or above the scope's knowledge.searchTokenBudgetMax setting is refused: InvalidArgument, targetKind budgetTokens, targetId the allowed range as <min>-<max>. page.limit and claimLimit still bound the page. The page reports approximateTokens and the budgetTokens that applied.",
       "since": {
         "states": 2,
         "entry_kinds": 2,
         "source": 2,
-        "stale": 2
+        "stale": 2,
+        "budget_tokens": 31
       }
     },
     "knowledge.read": {
@@ -9121,7 +9364,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Atomic entity/claim/evidence validation; client IDs resolve within batch; claims need object or value, not neither. Preserve provenance and contradictory claims."
+      "rules": "Atomic entity/claim/evidence validation; client IDs resolve within batch; claims need object or value, not neither. Preserve provenance and contradictory claims. Evidence citing a file of a registered repository uses sourceRef repo:<repository-id>/<path> (repository-relative, / separators); it is stored normalized (empty and . segments dropped, .. refused) and its source revision is the file's content digest in the repository's published index baseline, replacing any stated sourceRevision. A file that published baseline does not hold, or a repository outside the write scope, is recorded without a source revision (noted evidence_not_indexed). An index publication that changes or deletes a cited file marks the claims citing it stale."
     },
     "knowledge.revise": {
       "operation": "knowledge.revise",
@@ -9180,7 +9423,7 @@
       "result": "KnowledgeWriteReceipt",
       "effect": "Local",
       "authority": "Scoped",
-      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again.",
+      "rules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again. A repository file citation (repo:<repository-id>/<path>) is verified at its observed published index digest, never at a stated sourceRevision.",
       "since": {
         "source_revision": 2
       }
@@ -9452,8 +9695,10 @@
       "fields": {
         "scope": "DataScope",
         "expected_settings_revision": "Revision",
-        "resume_run_id": "?Id"
+        "resume_run_id": "?Id",
+        "cancel_run_id": "?Id"
       },
+      "since": {"cancel_run_id": 24},
       "result": "DreamRun",
       "effect": "Inference",
       "authority": "Scoped",
@@ -9506,13 +9751,15 @@
       "authority": "Scoped",
       "rules": "",
       "queryFields": {
-        "scope": "DataScope"
+        "scope": "DataScope",
+        "page": "?PageRequest"
       },
       "commandFields": {
         "scope": "DataScope",
         "expected_revision": "Revision",
         "content": "ArtifactRef"
-      }
+      },
+      "since": {"page": 24}
     },
     "dreaming.propose": {
       "operation": "dreaming.propose",
@@ -9521,8 +9768,13 @@
         "run_id": "Id",
         "expected_revision": "Revision",
         "claim_ids": "NonEmpty<RevisionedRef>",
-        "content": "ArtifactRef"
+        "content": "ArtifactRef",
+        "change": "?DreamProposalChange",
+        "evidence": "?NonEmpty<DreamEvidenceReference>",
+        "rationale": "?Content",
+        "prevalence": "?Content"
       },
+      "since": {"change": 24, "evidence": 24, "rationale": 24, "prevalence": 24},
       "result": "ProposalRecord",
       "effect": "Local",
       "authority": "Scoped",
@@ -9534,10 +9786,18 @@
       "fields": {
         "run_id": "Id",
         "expected_revision": "Revision",
-        "proposal_id": "Id",
-        "expected_change_digest": "Digest"
+        "proposal_id": "?Id",
+        "expected_change_digest": "Digest",
+        "all_changes": "?bool"
       },
-      "result": "KnowledgeWriteReceipt",
+      "since": {"all_changes": 24},
+      "fieldSchema": {"all_changes": {"const": true}},
+      "inputAlternatives": [
+        {"members": ["proposal_id"], "until": 24},
+        {"members": ["proposal_id"], "since": 24, "forbid": ["all_changes"]},
+        {"members": ["all_changes"], "since": 24, "forbid": ["proposal_id"]}
+      ],
+      "result": "DreamRevertResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": "Revert only attributable unchanged effects; intervening user edits require conflict handling, never destructive restore."
@@ -9556,6 +9816,49 @@
       "authority": "HumanDecision",
       "rules": "Host mints decision from explicit human interaction; an agent may propose or read, never self-approve."
     },
+    "documents.transfer_propose": {
+      "operation": "documents.transfer_propose",
+      "mode": "Command",
+      "fields": {
+        "document_id": "Id",
+        "expected_document_revision": "Revision",
+        "expected_scope_revision": "Revision",
+        "destination_root_id": "RootId",
+        "source_needs_document": "bool",
+        "summary": "Label"
+      },
+      "result": "DocumentTransferRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "introducedRevision": 29,
+      "rules": "The current source coordinator records its project need. Pin current document, owner, both primary assignments and authority generations, and notify the exact current destination coordinator atomically."
+    },
+    "documents.transfer_respond": {
+      "operation": "documents.transfer_respond",
+      "mode": "Command",
+      "fields": {
+        "transfer_id": "Id",
+        "expected_revision": "Revision",
+        "destination_needs_document": "bool"
+      },
+      "result": "DocumentTransferRecord",
+      "effect": "Local",
+      "authority": "Scoped",
+      "introducedRevision": 29,
+      "rules": "Only the pinned current destination coordinator decides. Revalidate both parties and the document, then share for joint need, move for exclusive destination need, or decline. Consume the proposal and record the receipt with the document mutation."
+    },
+    "documents.transfer_status": {
+      "operation": "documents.transfer_status",
+      "mode": "Query",
+      "fields": {
+        "transfer_id": "Id"
+      },
+      "result": "DocumentTransferRecord",
+      "effect": "ReadOnly",
+      "authority": "Scoped",
+      "introducedRevision": 29,
+      "rules": "Return the exact transfer outcome only to one of its authorized coordinator participants. A transfer receipt does not grant document content access."
+    },
     "documents.import": {
       "operation": "documents.import",
       "mode": "Command",
@@ -9566,7 +9869,7 @@
         "replace_document_id": "?Id",
         "expected_revision": "?Revision"
       },
-      "result": "DocumentRecord",
+      "result": "DocumentResult",
       "effect": "Journaled",
       "authority": "Scoped",
       "rules": "Replacement names target/revision and creates immutable retained version; native PDF/MD/text/DOCX only. Exact source pin, extraction diagnostics and bounded outputs."
@@ -9579,10 +9882,22 @@
         "page": "PageRequest",
         "retrieval_enabled": "?bool"
       },
-      "result": "Page<DocumentRecord>",
+      "result": "DocumentListResult",
       "effect": "Local",
       "authority": "Scoped",
       "rules": ""
+    },
+    "documents.resolve_citation": {
+      "operation": "documents.resolve_citation",
+      "mode": "Query",
+      "fields": {
+        "citation": "Citation"
+      },
+      "result": "ResolvedDocumentCitation",
+      "effect": "ReadOnly",
+      "authority": "Scoped",
+      "rules": "Resolve a managed citation only under current artifact authority. Require the exact retained version, source digest and length, extraction revision, block identity, locator and passage digest.",
+      "introducedRevision": 26
     },
     "documents.index": {
       "operation": "documents.index",
@@ -9590,12 +9905,14 @@
       "fields": {
         "document_id": "Id",
         "version_id": "Id",
-        "expected_revision": "Revision"
+        "expected_revision": "Revision",
+        "reextract": "?bool"
       },
       "result": "IndexRunRecord",
       "effect": "Inference",
       "authority": "Scoped",
-      "rules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Failed/canceled old version cannot publish current results."
+      "rules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Matching extraction is reused unless reextract is explicitly true. Unsettled previous attempts keep their original custody. Failed/canceled old version cannot publish current results.",
+      "since": {"reextract": 27}
     },
     "documents.retry": {
       "operation": "documents.retry",
@@ -12497,13 +12814,13 @@
     "code.set_trust": "MutationSummary",
     "indexing.refresh_overlay": "IndexRunRecord",
     "indexing.cancel": "IndexRunRecord",
-    "documents.share": "DocumentRecord",
-    "documents.move": "DocumentRecord",
-    "documents.disable_retrieval": "DocumentRecord",
-    "documents.remove_index": "DocumentRecord",
+    "documents.share": "DocumentResult",
+    "documents.move": "DocumentResult",
+    "documents.disable_retrieval": "DocumentResult",
+    "documents.remove_index": "DocumentResult",
     "artifacts.save": "ArtifactRecord",
     "artifacts.reference": "MutationSummary",
-    "documents.read": "DocumentRecord",
+    "documents.read": "DocumentResult",
     "artifacts.list": "Page<ArtifactRecord>",
     "artifacts.read": "ArtifactReadContent",
     "artifacts.preview": "ArtifactPreview",
@@ -12538,6 +12855,18 @@
     "code.repository_dependencies": "GraphPage"
   },
   "schemaRevisions": {
+    "documents.transfer_propose": [29],
+    "documents.transfer_respond": [29],
+    "documents.transfer_status": [29],
+    "documents.import": [1, 25, 28],
+    "documents.list": [1, 25, 28],
+    "documents.read": [1, 25, 28],
+    "documents.share": [1, 25, 28],
+    "documents.move": [1, 25, 28],
+    "documents.disable_retrieval": [1, 25, 28],
+    "documents.remove_index": [1, 25, 28],
+    "documents.resolve_citation": [26],
+    "documents.index": [1, 27],
     "agents.list": [
       21
     ],
@@ -12589,7 +12918,6 @@
     "analysis.process_batch": [1, 3],
     "analysis.reanalyze": [1, 3],
     "analysis.synthesize": [1, 3],
-
     "artifacts.save": [
       1,
       2,
@@ -12793,10 +13121,7 @@
     "skills.set_enabled": [
       8
     ],
-    "dreaming.instructions": [
-      1,
-      8
-    ],
+    "dreaming.instructions": [1, 8, 24],
     "skills.discover": [
       1,
       8
@@ -12911,7 +13236,9 @@
       1,
       2,
       3,
-      8
+      8,
+      30,
+      31
     ],
     "knowledge.read": [
       1,
@@ -13010,10 +13337,13 @@
       1,
       2
     ],
-    "dreaming.revert": [
-      1,
-      2
-    ],
+    "dreaming.run": [1, 24],
+    "dreaming.runs": [1, 24],
+    "dreaming.report": [1, 24],
+    "dreaming.settings": [1, 24],
+    "dreaming.propose": [1, 24],
+    "dreaming.revert": [1, 2, 24],
+    "dreaming.review": [1, 24],
     "features.get": [
       1,
       2,
@@ -13837,9 +14167,13 @@
     "dreaming.propose": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "dreaming.revert": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "dreaming.review": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.transfer_propose": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.transfer_respond": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.transfer_status": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.import": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.list": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.read": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
+    "documents.resolve_citation": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.search": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.share": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},
     "documents.move": {"assignmentScope": "project", "nativeExecution": false, "approvalRequired": false, "humanOnly": false},

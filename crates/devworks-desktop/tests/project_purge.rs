@@ -696,3 +696,315 @@ fn native_confirmation_ui_removes_owned_session_drafts_and_paste_keeps_home_and_
         "restoration never creates new Human consent"
     );
 }
+
+/// The surviving project still opens exact citations and the original managed files after the
+/// first project is physically purged. This drives both shared and moved documents end to end.
+#[test]
+fn native_purge_preserves_exact_shared_and_moved_document_evidence() {
+    use devworks_core::protocol::{
+        data::{DataScope, DocumentVersions, RetrievalMode},
+        records::{ArtifactReadContent, DocumentResult},
+    };
+    use devworks_desktop::{
+        attachments,
+        backend::TaskOutput,
+        documents_ops::{self, Search},
+        documents_screen::{Change, ImportPlan},
+    };
+
+    let _case = native_runtime_case();
+    let root = Root::new("purge-retained-documents");
+    let engine = start(&root);
+    let b = engine.backend();
+    let project = |name| {
+        ops::project_changed(b.command("projects.create", &ops::project_create(&*b, name, "", &[])))
+            .unwrap()
+    };
+    let former = project("Document custody before purge");
+    let survivor = project("Surviving document custody");
+    let sources = [
+        (
+            "shared.md",
+            "The shared juniper register remains readable.",
+            Change::Share,
+        ),
+        (
+            "moved.md",
+            "The moved juniper register retains its exact source.",
+            Change::Move,
+        ),
+    ];
+    let read = |project, exact| {
+        let result = ops::query_result(b.query_in_project(
+            project,
+            "documents.read",
+            &documents_ops::read(&*b, exact, None),
+        ))
+        .unwrap()
+        .0;
+        let OperationResult::DocumentsRead {
+            value: DocumentResult::Current(value),
+        } = result
+        else {
+            panic!("document status: {result:?}");
+        };
+        value
+    };
+    let mut retained = Vec::new();
+    for (name, text, transfer) in sources {
+        let path = root.file(name, text.as_bytes());
+        let TaskOutput::Prepared { frame: upload } =
+            attachments::prepare_project_file(&*b, &former.id, &path, name, "text/markdown")
+                .unwrap()
+        else {
+            panic!("exact project upload");
+        };
+        let TaskOutput::Stored { outcome, .. } =
+            attachments::save(&*b, upload.clone(), None).unwrap()
+        else {
+            panic!("the source artifact was not saved");
+        };
+        let source = ops::saved_artifact(outcome).unwrap().artifact;
+        let request = documents_ops::import(
+            &*b,
+            ImportPlan {
+                title: name.to_owned(),
+                scope: DataScope::Project {
+                    project_id: former.id.clone(),
+                },
+                replacement: None,
+            },
+            source,
+            &upload,
+        );
+        let result =
+            ops::command_result(b.command_in_project(&former.id, "documents.import", &request))
+                .unwrap();
+        let OperationResult::DocumentsImport {
+            value: DocumentResult::Current(document),
+        } = result
+        else {
+            panic!("document import: {result:?}");
+        };
+        std::fs::remove_file(path).unwrap();
+        let exact = document.current_version.clone().unwrap();
+        ops::command_result(b.command_in_project(
+            &former.id,
+            "documents.index",
+            &documents_ops::change(&*b, Change::Index, document, exact.clone(), None),
+        ))
+        .unwrap();
+        let deadline = Instant::now() + SETTLE_BOUND;
+        let indexed = loop {
+            let detail = read(&former.id, exact.clone());
+            if detail
+                .index_activity
+                .as_ref()
+                .is_some_and(|activity| activity.indexed_at_ms.is_some())
+            {
+                break detail;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "document did not index: {detail:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let published_at = indexed
+            .index_activity
+            .as_ref()
+            .unwrap()
+            .indexed_at_ms
+            .clone()
+            .unwrap();
+        let operation = documents_ops::operation(transfer);
+        ops::command_result(b.command(
+            operation,
+            &documents_ops::change(
+                &*b,
+                transfer,
+                indexed,
+                exact.clone(),
+                Some(survivor.id.clone()),
+            ),
+        ))
+        .unwrap();
+        retained.push((exact, text, published_at));
+    }
+
+    let search = || {
+        let request = Search {
+            scope: DataScope::Project {
+                project_id: survivor.id.clone(),
+            },
+            versions: DocumentVersions::Current,
+            text: "juniper".into(),
+            mode: RetrievalMode::Lexical,
+            fallback: false,
+        }
+        .frame(&*b);
+        let (OperationResult::DocumentsSearch { value }, _) =
+            ops::query_result(b.query_in_project(&survivor.id, "documents.search", &request))
+                .unwrap()
+        else {
+            panic!("native lexical retrieval");
+        };
+        value.passages
+    };
+    let evidence = search();
+    assert_eq!(evidence.len(), 2);
+    let archived = ops::project_changed(b.command(
+        "projects.archive",
+        &ops::project_lifecycle(&*b, ops::LifecycleChange::Archive, &former),
+    ))
+    .unwrap();
+    let deadline = Instant::now() + SETTLE_BOUND;
+    while !read_snapshot(
+        &**engine.host().runtime().store(),
+        &Default::default(),
+        |r| r.projects().pending_archive_stops(100),
+    )
+    .unwrap()
+    .is_empty()
+    {
+        assert!(Instant::now() < deadline, "project archive did not settle");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        read(&former.id, retained[0].0.clone()).id,
+        retained[0].0.artifact_id,
+        "archiving preserves an authorized read of the shared document"
+    );
+    let deleted = ops::project_changed(b.command(
+        "projects.delete",
+        &ops::project_lifecycle(&*b, ops::LifecycleChange::Delete, &archived),
+    ))
+    .unwrap();
+    b.purge_client_publish(Memory::default(), Live::default(), true)
+        .unwrap();
+    wait_quiescent(&engine, &former.id);
+    b.purge_client_freeze(former.id.0.as_str(), true).unwrap();
+    let prepared = manifest(
+        ops::command_result(b.command(
+            "projects.prepare_purge",
+            &frame(
+                &*b,
+                "projects.prepare_purge",
+                json!({"projectId":former.id, "expectedRevision":deleted.revision}),
+                false,
+            ),
+        ))
+        .unwrap(),
+    );
+    let confirm = frame(
+        &*b,
+        "projects.purge",
+        json!({"projectId":former.id,"manifestId":prepared.id,"expectedRevision":prepared.revision,
+            "expectedDigest":prepared.digest,"expectedProjectRevision":deleted.revision,"confirm":true}),
+        false,
+    );
+    let initial = manifest(
+        ops::command_result(b.confirm_project_purge(&confirm, b.control_epoch())).unwrap(),
+    );
+    assert!(matches!(
+        initial.phase,
+        PurgePhase::RemovingBytes | PurgePhase::Complete
+    ));
+    let deadline = Instant::now() + SETTLE_BOUND;
+    loop {
+        for scope in b
+            .purge_client_publish(Memory::default(), Live::default(), true)
+            .unwrap()
+            .unwrap()
+        {
+            b.purge_client_acknowledge(&scope);
+        }
+        let status = manifest(
+            ops::query_result(b.query(
+                "projects.purge_status",
+                &frame(
+                    &*b,
+                    "projects.purge_status",
+                    json!({"projectId":former.id,"manifestId":prepared.id}),
+                    true,
+                ),
+            ))
+            .unwrap()
+            .0,
+        );
+        if matches!(status.phase, PurgePhase::Complete) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "purge held: {status:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let retired_list = documents_ops::list(
+        &*b,
+        DataScope::Project {
+            project_id: former.id.clone(),
+        },
+        None,
+    );
+    assert!(
+        ops::query_result(b.query_in_project(&former.id, "documents.list", &retired_list)).is_err()
+    );
+    let after = search();
+    assert_eq!(after.len(), 2);
+    for passage in evidence {
+        let result = ops::query_result(b.query_in_project(
+            &survivor.id,
+            "documents.resolve_citation",
+            &documents_ops::follow(&*b, passage.citation.clone()),
+        ))
+        .unwrap()
+        .0;
+        let OperationResult::DocumentsResolveCitation { value } = result else {
+            panic!("exact retained citation: {result:?}");
+        };
+        assert_eq!(value.text.0, passage.text);
+        assert_eq!(json!(value.citation), json!(passage.citation));
+        assert!(
+            ops::query_result(b.query_in_project(
+                &former.id,
+                "documents.resolve_citation",
+                &documents_ops::follow(&*b, passage.citation)
+            ))
+            .is_err()
+        );
+    }
+    for (exact, text, published_at) in retained {
+        let detail = read(&survivor.id, exact.clone());
+        assert_eq!(
+            detail.index_activity.unwrap().indexed_at_ms,
+            Some(published_at)
+        );
+        let original = ops::artifact_read(&*b, &exact);
+        let ArtifactReadContent::Text {
+            content,
+            truncated: false,
+            ..
+        } = ops::read_content(b.query_in_project(&survivor.id, "artifacts.read", &original))
+            .unwrap()
+        else {
+            panic!("the surviving project can read the exact managed Markdown");
+        };
+        assert_eq!(content.0, text);
+        assert!(
+            ops::read_content(b.query_in_project(
+                &former.id,
+                "artifacts.read",
+                &ops::artifact_read(&*b, &exact)
+            ))
+            .is_err()
+        );
+        assert!(
+            ops::query_result(b.query_in_project(
+                &former.id,
+                "documents.read",
+                &documents_ops::read(&*b, exact, None)
+            ))
+            .is_err()
+        );
+    }
+}

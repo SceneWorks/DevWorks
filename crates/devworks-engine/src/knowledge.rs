@@ -8,11 +8,17 @@
 //! [`crate::Dispatcher::recover`] at the next boot, so an interrupted job resumes there.
 use std::sync::Arc;
 
-use devworks_core::ports::storage::{StorageError, WriteTransaction};
+use devworks_core::ports::storage::{Cancellation, StorageError, WriteTransaction};
 use devworks_core::protocol::Id;
-use devworks_core::services::knowledge::{KnowledgeService, SOURCE_DELETION_CONSUMER};
+use devworks_core::services::knowledge::{
+    KnowledgeService, SOURCE_DELETION_CONSUMER, VECTOR_CONSUMER,
+};
 
-use crate::dispatch::{Consumer, Delivery, DeliveryHandler, Outcome, RetryPolicy};
+use crate::dispatch::{
+    AsyncDelivery, AsyncDeliveryHandler, AsyncFuture, AsyncOutcome, Consumer, Delivery,
+    DeliveryHandler, Outcome, RetryPolicy,
+};
+use crate::effect_consumer::STANDARD_RETRY;
 
 struct SourceDeletion(Arc<KnowledgeService>);
 
@@ -36,6 +42,73 @@ impl DeliveryHandler for SourceDeletion {
             Err(StorageError::InvalidRecord(reason)) => Ok(Outcome::Poison(reason)),
             Err(e) => Err(e),
         }
+    }
+}
+
+/// Embeds the claims of a written scope off the dispatcher runtime (provider calls never run on
+/// it or inside a write) while the dispatcher renews the claim's lease.
+struct ClaimVectors(Arc<KnowledgeService>);
+
+impl AsyncDeliveryHandler for ClaimVectors {
+    fn start(&self, job: AsyncDelivery) -> AsyncFuture {
+        let service = self.0.clone();
+        Box::pin(async move {
+            let mut cancelled = job.cancelled;
+            let cancellation = Cancellation::new();
+            if *cancelled.borrow() {
+                cancellation.cancel();
+            }
+            let token = cancellation.clone();
+            let mut work = tokio::task::spawn_blocking(move || {
+                service.embed_claims(&job.delivery.entry, &token)
+            });
+            let result = loop {
+                tokio::select! {
+                    result = &mut work => break result,
+                    changed = cancelled.changed() => {
+                        if changed.is_err() || *cancelled.borrow() {
+                            cancellation.cancel();
+                            break work.await;
+                        }
+                    }
+                }
+            };
+            match result {
+                Ok(Ok(())) => AsyncOutcome::Committed,
+                Ok(Err(StorageError::InvalidRecord(reason))) => AsyncOutcome::Poison(reason),
+                Ok(Err(_)) | Err(_) => {
+                    AsyncOutcome::Retry("Embedding claims was interrupted".into())
+                }
+            }
+        })
+    }
+}
+
+impl DeliveryHandler for ClaimVectors {
+    fn apply(&self, _: &mut dyn WriteTransaction, _: &Delivery) -> Result<Outcome, StorageError> {
+        Ok(Outcome::Hold(
+            "Embedding claims requires the asynchronous worker".into(),
+        ))
+    }
+}
+
+/// The consumer that embeds claims ([`VECTOR_CONSUMER`]), for a composition whose Knowledge
+/// service has the shared embedding runtime.
+pub fn claim_vector_consumer(service: Arc<KnowledgeService>) -> Consumer {
+    let handler = Arc::new(ClaimVectors(service));
+    Consumer {
+        name: VECTOR_CONSUMER.into(),
+        handler: handler.clone(),
+        async_handler: Some(handler),
+        effect: None,
+        eligibility: None,
+        stop_grace_ms: 5_000,
+        // A route-down period or an unestablished outcome retries with backoff (bounded: a
+        // delivery that exhausts it fails without blocking any other, and the scope's next
+        // write or selection change queues its pending claims again).
+        retry: STANDARD_RETRY,
+        // One delivery at a time: two writes of a scope never embed the same claim twice.
+        max_in_flight: Some(1),
     }
 }
 

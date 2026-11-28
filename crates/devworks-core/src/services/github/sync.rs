@@ -1,7 +1,6 @@
 //! An explicit issue sync is a journaled observation using the same source and cursor owner.
 use super::issue_poll::{self, IssuePageResult, PollTarget};
 use super::{GitHubService, reads};
-use crate::authority::authorization_holds;
 use crate::context::InvocationContext;
 use crate::gateway::AdmittedCommand;
 use crate::operations::github::IssueSyncInput;
@@ -14,6 +13,7 @@ use crate::protocol::records::OperationRef;
 use crate::protocol::results::{DomainDecision, OperationResult};
 use crate::protocol::{DomainErrorCode, EventId, Id, OperationId, OperationState, ProjectId};
 use crate::services::effect::EffectOutcome;
+use crate::services::fences::authorization_holds;
 use crate::services::kernel::{Failure, Refusal, not_found};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

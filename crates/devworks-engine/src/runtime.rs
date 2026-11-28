@@ -314,6 +314,8 @@ pub struct RuntimeConfig {
     /// Optional selected container backend. Without a qualified host binding the family is absent.
     pub containers: Option<ContainerComposition>,
     pub schemas: Option<crate::schemas::SchemaComposition>,
+    /// The qualified native document extractor. An absent port leaves the feature unregistered.
+    pub documents: Option<crate::documents::indexing::DocumentComposition>,
     pub database: Option<crate::schemas::DatabaseComposition>,
     /// Native bounded credential-free price source and cadence; absent sources refuse refresh.
     pub price_refresh: Option<crate::prices::PriceComposition>,
@@ -395,6 +397,7 @@ impl RuntimeConfig {
             containers: None,
             price_refresh: None,
             schemas: None,
+            documents: None,
             database: None,
             collect_interval: Duration::from_secs(15 * 60),
             reply_max_in_flight: None,
@@ -994,6 +997,15 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         conventions.indexing(),
     ));
     consumers.push(crate::conventions_import::consumer(conventions.imports()));
+    // Knowledge embeds claims and searches their vectors through the same qualified runtime.
+    knowledge.set_embeddings(Some(conventions.indexing()));
+    conventions
+        .indexing()
+        .add_selection_listener(Arc::downgrade(&knowledge)
+            as std::sync::Weak<
+                dyn devworks_core::services::conventions::indexing::SelectionListener,
+            >);
+    consumers.push(crate::knowledge::claim_vector_consumer(knowledge.clone()));
     let use_cases = use_cases.with_conventions(conventions.clone());
     let schemas = config.schemas.as_ref().map(|ports| {
         Arc::new(
@@ -1005,6 +1017,22 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let use_cases = if let Some(service) = &schemas {
         consumers.push(crate::schemas::consumer(store.clone(), service.clone()));
         use_cases.with_schemas(service.clone())
+    } else {
+        use_cases
+    };
+    use devworks_core::services::documents::{DocumentLibrary, indexing::DocumentIndexer};
+    let document_indexer = config.documents.as_ref().map(|ports| {
+        Arc::new(
+            DocumentIndexer::new(store.clone(), artifacts.clone(), ports.processor.clone())
+                .with_embeddings(conventions.indexing()),
+        )
+    });
+    let use_cases = if let Some(indexer) = &document_indexer {
+        consumers.push(crate::documents::indexing::consumer(indexer.clone()));
+        use_cases.with_document_library(Arc::new(
+            DocumentLibrary::new(artifacts.clone(), ids.clone(), clock.clone())
+                .with_indexer(indexer.clone()),
+        ))
     } else {
         use_cases
     };
@@ -1083,7 +1111,7 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         config.providers.as_ref(),
     ) {
         (Some(router), Some(connections), Some(provider)) => {
-            provider.systemone_validator.clone().map(|validator| {
+            provider.schema_validator.clone().map(|validator| {
                 Arc::new(crate::providers::systemone::SystemOne {
                     store: store.clone(),
                     artifacts: artifacts.clone(),
@@ -1109,6 +1137,25 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
     let use_cases = if let Some(systemone) = &systemone {
         consumers.push(systemone.consumer());
         use_cases.with_systemone(systemone.decisions.clone())
+    } else {
+        use_cases
+    };
+    let dreaming = config
+        .providers
+        .as_ref()
+        .and_then(|provider| provider.schema_validator.clone())
+        .zip(use_cases.inference_router());
+    let dreaming_worker = Arc::new(crate::dreaming::DeferredSweep::default());
+    let use_cases = if dreaming.is_some() {
+        devworks_core::services::dreaming::DreamingService::ensure_base(
+            store.as_ref(),
+            artifacts.clone(),
+        )
+        .map_err(BootError::Composition)?;
+        consumers.push(dreaming_worker.consumer());
+        use_cases.with_dreaming(Arc::new(
+            devworks_core::services::dreaming::DreamingService::new(ids.clone()),
+        ))
     } else {
         use_cases
     };
@@ -1254,6 +1301,8 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         JobService::new(NativeCatalog::qualified(&use_cases), config.jobs)
             .with_approval_control(control.clone()),
     );
+    jobs.install_nightly_dreaming(store.as_ref())
+        .map_err(BootError::Composition)?;
     let use_cases = use_cases.with_jobs(jobs.clone());
     let instructions = config.instructions.clone().map(|c| {
         Arc::new(
@@ -1405,6 +1454,17 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
         }
         service.enable_native_qualification();
     }
+    if let (Some(indexer), Some(provider), Some(router)) =
+        (&document_indexer, &providers, use_cases.inference_router())
+    {
+        indexer.set_vision(Arc::new(crate::documents::vision::NativeVision::new(
+            store.clone(),
+            artifacts.clone(),
+            router,
+            provider,
+            tokio::runtime::Handle::current(),
+        )));
+    }
     let hooks: Arc<dyn LifecycleHooks> = Arc::new(ChainedHooks(vec![
         Arc::new(JobLifecycle(jobs.clone())),
         runs.hooks.clone(),
@@ -1486,6 +1546,17 @@ async fn build(composition: Composition, core: CoreServices) -> Result<Engine, B
             (None, Some(native)) => native.clone(),
             (None, None) => unreachable!("the native pipeline is built when none is supplied"),
         };
+    if let Some(((validator, router), providers)) = dreaming.zip(providers.as_ref()) {
+        dreaming_worker.install(crate::dreaming::NativeDreaming::new(
+            store.clone(),
+            artifacts.clone(),
+            router,
+            providers,
+            validator,
+            &admitter,
+            index_supervisor.as_ref().map(|ix| ix.env().source.clone()),
+        ));
+    }
     let scheduler = Scheduler::with_stop(
         store.clone(),
         jobs.clone(),

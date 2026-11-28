@@ -84,7 +84,7 @@ impl AdmittedQuery {
     }
     /// What current authority established for this query (its fences and grants). A use case
     /// that writes during preparation re-checks it inside that write
-    /// ([`crate::authority::authorization_holds_in`]), as a command's unit of work does.
+    /// ([`crate::authority::authorization_holds_in_with`]), as a command's unit of work does.
     pub fn authorization(&self) -> &Authorization {
         &self.authorization
     }
@@ -501,24 +501,54 @@ impl Gateway<'_> {
         });
         // Publication point: authority that was revoked or narrowed while the answer was being
         // prepared denies the output. Checked on a fresh snapshot, after the answer exists.
+        let recheck = handler.publication_check(&admitted);
         let scoped_worktree = ctx.worktree().is_some()
             && checkout::applies(ctx)
             && (graph_request::is_graph_read(&admitted.input) || operation == "indexing.status");
-        if matches!(answered, Ok(Some((Ok(_), _))))
-            && (scoped_worktree
+        if let Ok(Some((Ok(answer), _))) = &answered
+            && (recheck.is_some()
+                || scoped_worktree
                 || !authorization.fences().is_empty()
                 || !authorization.authority_grants().is_empty())
         {
-            let holds = read_snapshot(self.store, &options, |s| {
-                Ok(crate::authority::authorization_holds(s, &authorization)?
-                    && (!scoped_worktree || checkout::live_custody(s, ctx)?))
+            let fresh = if recheck.is_some() {
+                read_options.clone()
+            } else {
+                options.clone()
+            };
+            let holds = read_snapshot(self.store, &fresh, |s| {
+                if !(crate::authority::authorization_holds_with(
+                    s,
+                    &authorization,
+                    &crate::authority::AuthorityFencesOnly,
+                )? && (!scoped_worktree || checkout::live_custody(s, ctx)?))
+                {
+                    return Ok((false, None));
+                }
+                recheck
+                    .map_or(Ok(None), |check| check(ctx, &admitted, answer, s))
+                    .map(|refusal| (true, refusal))
             });
-            if !matches!(holds, Ok(true)) {
-                return Ok(self.query_fault(
-                    admitted.query_id,
-                    DomainErrorCode::PermissionDenied,
-                    RetryAdvice::Never,
-                ));
+            match holds {
+                Ok((true, None)) => {}
+                Ok((true, Some(refusal))) => {
+                    return Ok(DomainQueryReply::Rejected {
+                        protocol: Protocol::Draft1,
+                        query_id: admitted.query_id,
+                        fault: refusal.fault(self.correlation()),
+                    });
+                }
+                Err(error) if recheck.is_some() => {
+                    let (code, retry) = storage_fault(&error);
+                    return Ok(self.query_fault(admitted.query_id, code, retry));
+                }
+                _ => {
+                    return Ok(self.query_fault(
+                        admitted.query_id,
+                        DomainErrorCode::PermissionDenied,
+                        RetryAdvice::Never,
+                    ));
+                }
             }
         }
         let reply = match answered {
@@ -1151,7 +1181,12 @@ fn unit_of_work(
         // Receipts and history are attributed to a host-registered principal.
         return Ok(Unit::Denied);
     }
-    if !crate::authority::fences_hold(tx, authorization.fences())? {
+    if !crate::authority::fences_hold_with(
+        tx,
+        None,
+        authorization.fences(),
+        &crate::authority::AuthorityFencesOnly,
+    )? {
         // Authority changed after it was resolved (revoked or re-bound principal, narrowed
         // policy). Checked before the receipt lookup, so a revoked caller is denied rather
         // than handed an old receipt.
@@ -1588,8 +1623,8 @@ impl HistoryLog for HandlerTx<'_> {
 // on its own transaction) are refused, so a use case can neither block collection, remove a
 // file, nor create, replace or retire a receipt's reply.
 use crate::ports::storage::{
-    ArtifactLink, ArtifactRead, ArtifactRetention, BlobRecord, BlobState, ListPosition,
-    StoredArtifact, StoredVersion, SubjectKey,
+    ArtifactLink, ArtifactRead, ArtifactRetention, ArtifactScope, BlobRecord, BlobState,
+    ListPosition, StoredArtifact, StoredVersion, SubjectKey,
 };
 use crate::protocol::{OperationId, ProjectId};
 fn artifact_owned() -> StorageError {
@@ -1623,6 +1658,12 @@ impl ArtifactRead for HandlerTx<'_> {
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError> {
         self.inner.borrow_mut().artifacts().project_exists(project)
     }
+    fn live_claim_text_digest(&self, claim: &Id) -> Result<Option<String>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .live_claim_text_digest(claim)
+    }
     fn subject_exists(
         &self,
         project: &ProjectId,
@@ -1641,6 +1682,24 @@ impl ArtifactRead for HandlerTx<'_> {
     }
     fn versions(&self, artifact: &Id) -> Result<Vec<StoredVersion>, StorageError> {
         self.inner.borrow_mut().artifacts().versions(artifact)
+    }
+    fn version_history(
+        &self,
+        artifact: &Id,
+        before: Option<i64>,
+        live_only: bool,
+        limit: u16,
+    ) -> Result<Vec<StoredVersion>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .version_history(artifact, before, live_only, limit)
+    }
+    fn retained_version_count(&self, artifact: &Id) -> Result<i64, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .retained_version_count(artifact)
     }
     fn version_by_operation(
         &self,
@@ -1675,6 +1734,19 @@ impl ArtifactRead for HandlerTx<'_> {
             .borrow_mut()
             .artifacts()
             .list_workspace(owner, tags, after, limit)
+    }
+    fn document_artifacts(
+        &self,
+        scope: &ArtifactScope,
+        actor: Option<&ActorId>,
+        filter: crate::ports::storage::DocumentListFilter,
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError> {
+        self.inner
+            .borrow_mut()
+            .artifacts()
+            .document_artifacts(scope, actor, filter, after, limit)
     }
     fn tags(&self, artifact: &Id) -> Result<Vec<String>, StorageError> {
         self.inner.borrow_mut().artifacts().tags(artifact)
@@ -2128,6 +2200,14 @@ impl WriteTransaction for HandlerTx<'_> {
     }
     fn schemas(&mut self) -> &mut dyn crate::ports::storage::SchemaRepository {
         self.inner.get_mut().schemas()
+    }
+    fn documents(&mut self) -> &mut dyn crate::ports::storage::DocumentRepository {
+        self.inner.get_mut().documents()
+    }
+    fn dreaming(
+        &mut self,
+    ) -> Result<&mut dyn crate::ports::storage::DreamingRepository, StorageError> {
+        self.inner.get_mut().dreaming()
     }
     fn help(&mut self) -> &mut dyn crate::ports::storage::HelpRepository {
         self.inner.get_mut().help()

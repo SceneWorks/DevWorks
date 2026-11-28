@@ -56,21 +56,29 @@
 //! test data to `knowledge.delete_by_source` and `.delete_selected`, and `import_knowledge` to
 //! `knowledge.import_user_data`. CodeGraph's `acknowledge` is superseded by KNOW-03 (autonomous
 //! decisions never ask to be acknowledged).
+pub(crate) mod dream_actions;
+mod fusion;
 mod graph;
 pub mod import;
 pub mod model;
+mod vectors;
 mod writes;
+pub(crate) use writes::{reverse_dream_changes, review_dream_change};
 
+pub use fusion::{CANDIDATES, FUSION_K};
 pub use graph::NO_MEMORIES;
+pub use vectors::VECTOR_CONSUMER;
 
 use crate::context::InvocationContext;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::locks::RwLockExt;
 use crate::operations::{OperationInput, knowledge as ops};
 use crate::ports::files::ArtifactFiles;
+use crate::ports::storage::ClaimVectorQuery;
 use crate::ports::storage::{
-    ArtifactRead, AuthorityRead, ClaimQuery, ConfigScope, ConfigurationRead, KNOWLEDGE_PAGE_MAX,
-    KnowledgeRead, KnowledgeScope, LessonFilter, ReadSnapshot, StorageError, StoredClaim,
-    StoredEntity, StoredEvidence, StoredHistory, WriteTransaction,
+    ArtifactRead, AuthorityRead, ClaimQuery, ClaimRank, ConfigScope, ConfigurationRead,
+    KNOWLEDGE_PAGE_MAX, KnowledgeRead, KnowledgeScope, LessonFilter, RankedClaim, ReadSnapshot,
+    StorageError, StoredClaim, StoredEntity, StoredEvidence, StoredHistory, WriteTransaction,
 };
 use crate::ports::{
     Clock, CommandHandler, Decided, HandlerFailure, IdKind, IdSource, Preparation, Prepared,
@@ -81,16 +89,19 @@ use crate::protocol::provider::ArtifactRef;
 use crate::protocol::records::{
     Applicability, ChallengeState, Diagnostic, EvidenceKind, EvidenceLocator, KnowledgeBundle,
     KnowledgeClaim, KnowledgeConflict, KnowledgeEntity, KnowledgeEntryKind, KnowledgeKind,
-    KnowledgeLifecycle, KnowledgeOrigin, KnowledgeRelation, KnowledgeRevisionEntry, KnowledgeState,
+    KnowledgeLifecycle, KnowledgeOrigin, KnowledgeRelation, KnowledgeRetrievalMode,
+    KnowledgeRevisionEntry, KnowledgeSearchPage, KnowledgeSearchResult, KnowledgeState,
     KnowledgeWriteReceipt, LessonAddress, LessonAddressKind, LessonChallenge, LessonRecord,
     LessonSource, RuleEffect, RuleState, SchemaValue, Severity, SourceEvidence,
 };
 use crate::protocol::results::OperationResult;
 use crate::protocol::support::{
     BoundedList, BoundedText, DynamicJson, Label, Limit, Page, Probability, RelativePath,
+    TokenBudget,
 };
 use crate::protocol::{CorrelationId, DomainErrorCode, DomainFault, Id, OperationState, ProjectId};
 use crate::registry::SchemaRevision;
+use crate::services::conventions::indexing::IndexService;
 use crate::services::cursor::{self, CursorBinding};
 use crate::services::kernel::{
     Failure, Refusal, content, counter, decided, label, not_found, query_fault, require_project,
@@ -100,7 +111,7 @@ use crate::settings::catalog::descriptor;
 use crate::settings::model::{chain, current_chain};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 pub use model::{TAG_KNOWLEDGE, TAG_LESSON, TAG_MEMORY};
 
@@ -149,6 +160,13 @@ pub const SUMMARY_OPERATION: &str = "knowledge.render_summary";
 
 /// The setting that configures how many distinct source events make an inferred lesson a rule.
 pub const THRESHOLD_KEY: &str = "knowledge.lessonRecurrenceThreshold";
+/// Setting: the approximate tokens of claim text a `knowledge.search` page holds for an agent
+/// caller that passes no `budgetTokens` (inherited; a project may override).
+pub const SEARCH_BUDGET_KEY: &str = "knowledge.searchTokenBudget";
+/// Setting: the largest `budgetTokens` a `knowledge.search` caller may pass (inherited).
+pub const SEARCH_BUDGET_MAX_KEY: &str = "knowledge.searchTokenBudgetMax";
+/// The smallest `budgetTokens` a `knowledge.search` caller may pass.
+pub const MIN_SEARCH_BUDGET: u32 = 1_000;
 /// History aggregate of a committed Knowledge write (its ID is the write ID).
 pub const WRITE_AGGREGATE: &str = "knowledge_write";
 /// History event of a committed Knowledge write.
@@ -205,6 +223,9 @@ pub struct KnowledgeService {
         Arc<dyn crate::ports::storage::ApplicationStore>,
         Arc<crate::services::artifacts::ArtifactService>,
     )>,
+    /// The shared qualified embedding runtime: claim vectors and their search ([`vectors`]).
+    /// `None`: retrieval is lexical only.
+    embeddings: RwLock<Option<Arc<IndexService>>>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -315,21 +336,91 @@ pub(crate) fn thresholds(
     config: &dyn ConfigurationRead,
     scopes: &[KnowledgeScope],
 ) -> Result<BTreeMap<String, i64>, StorageError> {
-    let d = descriptor(THRESHOLD_KEY).expect("catalog setting");
     let mut out = BTreeMap::new();
     for s in scopes {
-        let config_scope = ConfigScope::from(s);
-        let layers = current_chain(config, &config_scope)?;
-        let entries = chain(d, &layers).map_err(|m| {
-            StorageError::InvalidRecord(format!("{} stored under another schema", m.key))
-        })?;
-        let value = entries
-            .first()
-            .map(|e| e.value.value.0.clone())
-            .unwrap_or_else(|| d.default_value());
+        let value = scope_setting(config, THRESHOLD_KEY, s)?;
         out.insert(s.key(), value.as_i64().unwrap_or(3).max(1));
     }
     Ok(out)
+}
+
+/// The effective value of the inherited Knowledge setting `key` for `scope`: the project's own
+/// value, else the workspace's, else the catalog default.
+fn scope_setting(
+    config: &dyn ConfigurationRead,
+    key: &str,
+    scope: &KnowledgeScope,
+) -> Result<Value, StorageError> {
+    let d = descriptor(key).expect("catalog setting");
+    let layers = current_chain(config, &ConfigScope::from(scope))?;
+    let entries = chain(d, &layers).map_err(|m| {
+        StorageError::InvalidRecord(format!("{} stored under another schema", m.key))
+    })?;
+    Ok(entries
+        .first()
+        .map(|e| e.value.value.0.clone())
+        .unwrap_or_else(|| d.default_value()))
+}
+
+/// The token budget of a `knowledge.search` page of `scope`: the caller's `budgetTokens`, which
+/// must lie between [`MIN_SEARCH_BUDGET`] and the scope's [`SEARCH_BUDGET_MAX_KEY`] (otherwise
+/// `InvalidArgument` on `budgetTokens`, its target id the allowed range `<min>-<max>`), else
+/// the scope's [`SEARCH_BUDGET_KEY`] for an agent caller (at most the maximum), else none: a
+/// person, or the host acting for them, pages by count.
+fn search_budget(
+    config: &dyn ConfigurationRead,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+    requested: Option<u32>,
+) -> Result<Option<u32>, Failure> {
+    let setting = |key| -> Result<u32, StorageError> {
+        let value = scope_setting(config, key, scope)?;
+        value
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| StorageError::InvalidRecord(format!("{key} is not a token count")))
+    };
+    let max = setting(SEARCH_BUDGET_MAX_KEY)?;
+    match requested {
+        Some(b) if (MIN_SEARCH_BUDGET..=max).contains(&b) => Ok(Some(b)),
+        Some(_) => Err(Refusal::new(
+            DomainErrorCode::InvalidArgument,
+            "budgetTokens",
+            Id::new(format!("{MIN_SEARCH_BUDGET}-{max}")).ok(),
+        )
+        .into()),
+        None if writes::is_user(ctx) => Ok(None),
+        // Two settings saved apart can disagree; the maximum bounds the default too.
+        None => Ok(Some(setting(SEARCH_BUDGET_KEY)?.min(max))),
+    }
+}
+
+/// A claim's approximate tokens: the characters of its text ([`StoredClaim::text`]) divided by
+/// four, rounded up. No tokenizer: the count is an estimate, and the reply says so.
+/// Characters on purpose (owner-approved), unlike the bytes of `sessions::token_estimate`.
+fn approximate_tokens(c: &StoredClaim) -> u64 {
+    (c.text().chars().count() as u64).div_ceil(4)
+}
+
+/// `rows` cut to `budget` approximate tokens of their claims' text, always keeping the first
+/// ([`cursor::Paged::clip_to_budget`]); no budget keeps the page as the pager read it. Every
+/// `knowledge.search` page, with words or without, is cut here.
+fn budgeted<T>(
+    rows: cursor::Paged<T>,
+    binding: &CursorBinding,
+    budget: Option<u32>,
+    claim: impl Fn(&T) -> &StoredClaim,
+    position_of: impl Fn(&T) -> String,
+) -> cursor::Paged<T> {
+    match budget {
+        Some(b) => rows.clip_to_budget(
+            binding,
+            u64::from(b),
+            |r| approximate_tokens(claim(r)),
+            position_of,
+        ),
+        None => rows,
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -621,34 +712,66 @@ fn claims(
     query: &ClaimQuery,
     after: Option<&str>,
     n: u16,
-) -> Result<Vec<StoredClaim>, StorageError> {
-    let after = after.map(parse_position).transpose()?;
-    read.knowledge_claims(query, after.as_ref().map(|(t, id)| (*t, id.as_str())), n)
+) -> Result<Vec<RankedClaim>, StorageError> {
+    let after = after.map(|at| parse_position(query, at)).transpose()?;
+    read.knowledge_claims(query, after.as_ref().map(|(r, id)| (*r, id.as_str())), n)
 }
 
-/// A claim's position in `query`'s order.
-fn claim_position(query: &ClaimQuery, c: &StoredClaim) -> String {
-    format!("{}|{}", sort_key(query, c), c.id.as_str())
-}
-
-/// The sort time of a claim in `query`'s order.
-fn sort_key(query: &ClaimQuery, c: &StoredClaim) -> i64 {
-    match query.lesson.as_ref().and_then(|l| l.view.as_deref()) {
-        Some("RecentlyLearned") => c
-            .lesson
-            .as_ref()
-            .and_then(|l| l.effective_at_ms)
-            .unwrap_or(c.updated_at_ms),
-        _ => c.updated_at_ms,
+/// A claim's position in `query`'s order: its sort key as the store ranked it, and its id. A
+/// relevance key is `r` and the exact score (Rust's shortest round-tripping decimal), so the
+/// next page resumes strictly after the last row as it was read; the prefix keeps a time
+/// position issued before relevance ranking from resuming a relevance listing.
+fn claim_position(query: &ClaimQuery, c: &RankedClaim) -> String {
+    debug_assert_eq!(
+        query.words.is_empty(),
+        matches!(c.rank, ClaimRank::Time(_)),
+        "the store ranks by relevance exactly when the query has words"
+    );
+    match c.rank {
+        ClaimRank::Time(t) => format!("{t}|{}", c.id.as_str()),
+        ClaimRank::Relevance(s) => format!("r{s}|{}", c.id.as_str()),
     }
 }
 
-fn parse_position(at: &str) -> Result<(i64, String), StorageError> {
-    let (t, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
-    Ok((
-        t.parse().map_err(|_| StorageError::CursorExpired)?,
-        id.to_owned(),
-    ))
+/// Parses a position of `query`'s order.
+fn parse_position(query: &ClaimQuery, at: &str) -> Result<(ClaimRank, String), StorageError> {
+    let (key, id) = at.split_once('|').ok_or(StorageError::CursorExpired)?;
+    let rank = if query.words.is_empty() {
+        ClaimRank::Time(key.parse().map_err(|_| StorageError::CursorExpired)?)
+    } else {
+        ClaimRank::Relevance(
+            key.strip_prefix('r')
+                .and_then(|s| s.parse().ok())
+                .filter(|s: &f64| s.is_finite())
+                .ok_or(StorageError::CursorExpired)?,
+        )
+    };
+    Ok((rank, id.to_owned()))
+}
+
+/// The `knowledge.search` reply: one page with its retrieval mode, whether a candidate cap
+/// limited it ([`fusion`]), the approximate tokens of its claims' text and the token budget
+/// that bounded it.
+fn search_result(
+    claims: cursor::Paged<StoredClaim>,
+    wire: impl Fn(&StoredClaim) -> Result<KnowledgeClaim, StorageError>,
+    mode: KnowledgeRetrievalMode,
+    work_limited: bool,
+    budget: Option<u32>,
+) -> Result<OperationResult, Failure> {
+    let tokens: u64 = claims.items.iter().map(approximate_tokens).sum();
+    let page: Page<KnowledgeClaim> = claims.try_into_page(|c| wire(&c))?;
+    Ok(OperationResult::KnowledgeSearch {
+        value: KnowledgeSearchResult::Current(KnowledgeSearchPage {
+            items: page.items,
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
+            mode,
+            work_limited,
+            approximate_tokens: Some(counter(i64::try_from(tokens).unwrap_or(i64::MAX))),
+            budget_tokens: budget.and_then(TokenBudget::new),
+        }),
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -665,6 +788,28 @@ impl KnowledgeService {
             clock,
             files,
             summaries: None,
+            embeddings: RwLock::new(None),
+        }
+    }
+    /// Embeds claims and adds vector matches to `knowledge.search` through the shared
+    /// qualified embedding runtime. The composition that sets it also registers
+    /// [`VECTOR_CONSUMER`], which runs [`KnowledgeService::embed_claims`].
+    pub fn set_embeddings(&self, runtime: Option<Arc<IndexService>>) {
+        *self.embeddings.write_locked() = runtime;
+    }
+    fn embeddings(&self) -> Option<Arc<IndexService>> {
+        self.embeddings.read_locked().clone()
+    }
+    /// Runs one [`VECTOR_CONSUMER`] delivery: embeds its scope's claims that have no vector
+    /// in the selected space. Without an embedding runtime there is nothing to do.
+    pub fn embed_claims(
+        &self,
+        entry: &crate::ports::storage::QueueEntry,
+        cancellation: &crate::ports::storage::Cancellation,
+    ) -> Result<(), StorageError> {
+        match self.embeddings() {
+            Some(runtime) => vectors::run(&runtime, entry, cancellation),
+            None => Ok(()),
         }
     }
     /// Offers `knowledge.render_summary`: summaries are published as artifacts of the
@@ -704,6 +849,7 @@ impl KnowledgeService {
         snapshot: &dyn ReadSnapshot,
         ctx: &InvocationContext,
         i: &ops::SearchInput,
+        prepared: Option<&vectors::QueryVector>,
     ) -> Result<(OperationResult, i64), Failure> {
         let scoped = resolve_scope(
             snapshot.artifacts(),
@@ -716,6 +862,14 @@ impl KnowledgeService {
         if words.len() > model::MAX_WORDS {
             return Err(Refusal::new(DomainErrorCode::InvalidArgument, "text", None).into());
         }
+        // The budget ends a page early; it never changes the order, so the cursor does not
+        // bind it.
+        let budget = search_budget(
+            snapshot.configuration(),
+            ctx,
+            &scoped.exact,
+            i.budget_tokens.as_ref().map(TokenBudget::get),
+        )?;
         let lifecycles: Vec<String> = match &i.states {
             Some(s) if !s.0.is_empty() => s.0.iter().map(model::wire).collect(),
             _ => vec!["Active".into()],
@@ -739,24 +893,85 @@ impl KnowledgeService {
         };
         let limit = i.page.limit.get().min(i.claim_limit.get()) as usize;
         let k = knowledge_read(snapshot);
+        let mut request = i.page.clone();
+        request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
         let (mut parts, exact_revision) = Self::revision_parts(k, &scoped)?;
         parts.push(format!("{query:?}"));
         parts.push(limit.to_string());
-        let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
-        let mut request = i.page.clone();
-        request.limit = Limit::new(u32::try_from(limit).expect("page size")).expect("page size");
-        let rows = cursor::page(
-            &binding,
-            &request,
-            |after, n| claims(k, &query, after, n),
-            |c| claim_position(&query, c),
-        )?;
         let th = thresholds(snapshot.configuration(), &scoped.readable)?;
+        let wire = |c: &StoredClaim| with_skills(snapshot, ctx, claim_wire(k, c, &th)?);
+        if words.is_empty() {
+            // Without words: newest first, one store order.
+            parts.push("lexical".into());
+            let binding =
+                CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
+            let rows = cursor::page(
+                &binding,
+                &request,
+                |after, n| claims(k, &query, after, n),
+                |c| claim_position(&query, c),
+            )?;
+            let rows = budgeted(
+                rows,
+                &binding,
+                budget,
+                |c| &c.claim,
+                |c| claim_position(&query, c),
+            )
+            .try_map(|c| Ok::<_, StorageError>(c.claim))?;
+            return Ok((
+                search_result(
+                    rows,
+                    wire,
+                    KnowledgeRetrievalMode::LexicalOnly,
+                    false,
+                    budget,
+                )?,
+                exact_revision,
+            ));
+        }
+        // A continued listing keeps its first page's mode ([`fusion`]). A first page fuses
+        // meaning matches when its query vector was embedded under the current selection.
+        let continued = fusion::continued_mode(&request)?;
+        let vector = match (self.embeddings(), prepared) {
+            (Some(runtime), Some(v))
+                if continued != Some(fusion::Mode::Lexical)
+                    && runtime
+                        .configuration_read(snapshot, ctx)?
+                        .space
+                        .is_some_and(|space| space.id == v.space.as_str())
+                    && v.current(&runtime, snapshot, ctx)? =>
+            {
+                Some(v)
+            }
+            _ => None,
+        };
+        if continued == Some(fusion::Mode::Hybrid) && vector.is_none() {
+            // Without a query vector the order is another one: the client starts again.
+            return Err(StorageError::CursorExpired.into());
+        }
+        let near = vector.map(|v| ClaimVectorQuery {
+            space: &v.space,
+            vector: &v.vector,
+        });
+        let fused = fusion::rank(k, &query, near)?;
+        let mode = if near.is_some() {
+            fusion::Mode::Hybrid
+        } else {
+            fusion::Mode::Lexical
+        };
+        parts.extend(fusion::binding_parts(
+            mode,
+            vector.map(|v| (&v.space, v.embedded, v.vector.as_slice())),
+        ));
+        let binding = CursorBinding::new(ctx, "knowledge.search", &refs(&parts), exact_revision);
+        let rows = fusion::page(k, &query, near, &binding, &request, &fused, budget)?;
+        let mode = match mode {
+            fusion::Mode::Hybrid => KnowledgeRetrievalMode::Hybrid,
+            fusion::Mode::Lexical => KnowledgeRetrievalMode::LexicalOnly,
+        };
         Ok((
-            OperationResult::KnowledgeSearch {
-                value: rows
-                    .try_into_page(|c| with_skills(snapshot, ctx, claim_wire(k, &c, &th)?))?,
-            },
+            search_result(rows, wire, mode, fused.work_limited, budget)?,
             exact_revision,
         ))
     }
@@ -915,15 +1130,16 @@ impl KnowledgeService {
         let k = knowledge_read(snapshot);
         let exact_revision = k.knowledge_scope_revision(&scoped.exact)?;
         let mut items = Vec::new();
-        // Knowledge retrieval is lexical (SQLite FTS5): no embedding route or vector index
-        // exists, so vector search is never run and this says so.
+        // Text matches are lexical (SQLite FTS5); vector matches are added exactly when a
+        // qualified embedding space is selected (Hybrid), and this says which.
+        let (mode, message) =
+            vectors::retrieval_mode(self.embeddings().as_deref(), snapshot, ctx, &scoped)?;
         items.push(diagnostic(
             "knowledge-retrieval",
             Severity::Info,
             RETRIEVAL_COMPONENT,
-            "LexicalOnly",
-            "Retrieval is lexical only (NoEmbeddingRoute): no embedding route exists, so vector \
-             search is not run.",
+            mode,
+            &message,
         ));
         let counts = k.knowledge_counts(&scoped.keys())?;
         for (lifecycle, n) in &counts.claims {
@@ -1148,53 +1364,15 @@ impl KnowledgeService {
     }
 
     /// Records that `session` was supplied `rules` (claim and revision) in the same unit of
-    /// work as the context that carried them (KNOW-06). Unknown sessions or claims are refused.
+    /// work as the context that carried them (KNOW-06). Unknown sessions and unknown or deleted
+    /// claims are refused.
     pub fn record_delivery(
         &self,
         tx: &mut dyn WriteTransaction,
         session: &Id,
         rules: &[(Id, i64)],
     ) -> Result<(), StorageError> {
-        let Some(s) = tx.sessions().session(session)? else {
-            return Err(StorageError::NotFound {
-                kind: "session",
-                id: session.as_str().to_owned(),
-            });
-        };
-        let now = tx.now_ms();
-        let mut touched: Vec<KnowledgeScope> = Vec::new();
-        for (claim, revision) in rules {
-            // Only a rule the session may be given: general, or of the session's own project.
-            let scope = match tx.knowledge().knowledge_claim(claim)? {
-                Some(c)
-                    if c.revision >= *revision
-                        && *revision >= 1
-                        && c.scope
-                            .project()
-                            .is_none_or(|p| Some(p) == s.project_id.as_ref()) =>
-                {
-                    c.scope
-                }
-                _ => {
-                    return Err(StorageError::NotFound {
-                        kind: CLAIM,
-                        id: claim.as_str().to_owned(),
-                    });
-                }
-            };
-            if tx
-                .knowledge()
-                .record_knowledge_delivery(session, claim, *revision, now)?
-                && !touched.contains(&scope)
-            {
-                touched.push(scope);
-            }
-        }
-        // A delivery changes the Undelivered view's membership: its listings' cursors expire.
-        for scope in &touched {
-            tx.knowledge().bump_scope(scope)?;
-        }
-        Ok(())
+        record_delivery(tx, session, rules)
     }
 
     /// Records the current revision of a source (a repository path, a document version); claims
@@ -1206,27 +1384,7 @@ impl KnowledgeService {
         source_ref: &str,
         revision: &str,
     ) -> Result<Vec<Id>, StorageError> {
-        if source_ref.is_empty() || revision.is_empty() {
-            return Err(StorageError::InvalidRecord(
-                "source and revision are required".into(),
-            ));
-        }
-        let now = tx.now_ms();
-        let changed = tx
-            .knowledge()
-            .observe_knowledge_source(source_ref, revision, now)?;
-        // A changed stale status changes what a stale-filtered listing returns: every scope it
-        // touched advances, so a cursor read before it expires instead of skipping a claim.
-        let mut scopes: Vec<KnowledgeScope> = Vec::new();
-        for (_, scope) in &changed {
-            if !scopes.contains(scope) {
-                scopes.push(scope.clone());
-            }
-        }
-        for scope in &scopes {
-            tx.knowledge().bump_scope(scope)?;
-        }
-        Ok(changed.into_iter().map(|(id, _)| id).collect())
+        observe_source(tx, source_ref, revision)
     }
 
     /// Every effective rule a session of `project` (`None`: a workspace session) may be given:
@@ -1242,12 +1400,91 @@ impl KnowledgeService {
     }
 }
 
-/// Every effective rule a session of `project` may be given (see [`KnowledgeService::rules_for`]).
-pub fn rules_for(
+/// See [`KnowledgeService::record_delivery`].
+pub fn record_delivery(
+    tx: &mut dyn WriteTransaction,
+    session: &Id,
+    rules: &[(Id, i64)],
+) -> Result<(), StorageError> {
+    let Some(s) = tx.sessions().session(session)? else {
+        return Err(StorageError::NotFound {
+            kind: "session",
+            id: session.as_str().to_owned(),
+        });
+    };
+    let now = tx.now_ms();
+    let mut touched: Vec<KnowledgeScope> = Vec::new();
+    for (claim, revision) in rules {
+        // Only a live rule the session may be given: general, or of the session's own project.
+        let scope = match tx.knowledge().knowledge_claim(claim)? {
+            Some(c)
+                if c.revision >= *revision
+                    && *revision >= 1
+                    && c.deleted_at_ms.is_none()
+                    && c.scope
+                        .project()
+                        .is_none_or(|p| Some(p) == s.project_id.as_ref()) =>
+            {
+                c.scope
+            }
+            _ => {
+                return Err(StorageError::NotFound {
+                    kind: CLAIM,
+                    id: claim.as_str().to_owned(),
+                });
+            }
+        };
+        if tx
+            .knowledge()
+            .record_knowledge_delivery(session, claim, *revision, now)?
+            && !touched.contains(&scope)
+        {
+            touched.push(scope);
+        }
+    }
+    // A delivery changes the Undelivered view's membership: its listings' cursors expire.
+    for scope in &touched {
+        tx.knowledge().bump_scope(scope)?;
+    }
+    Ok(())
+}
+
+/// See [`KnowledgeService::observe_source`].
+pub fn observe_source(
+    tx: &mut dyn WriteTransaction,
+    source_ref: &str,
+    revision: &str,
+) -> Result<Vec<Id>, StorageError> {
+    if source_ref.is_empty() || revision.is_empty() {
+        return Err(StorageError::InvalidRecord(
+            "source and revision are required".into(),
+        ));
+    }
+    let now = tx.now_ms();
+    let changed = tx
+        .knowledge()
+        .observe_knowledge_source(source_ref, revision, now)?;
+    // A changed stale status changes what a stale-filtered listing returns: every scope it
+    // touched advances, so a cursor read before it expires instead of skipping a claim.
+    let mut scopes: Vec<KnowledgeScope> = Vec::new();
+    for (_, scope) in &changed {
+        if !scopes.contains(scope) {
+            scopes.push(scope.clone());
+        }
+    }
+    for scope in &scopes {
+        tx.knowledge().bump_scope(scope)?;
+    }
+    Ok(changed.into_iter().map(|(id, _)| id).collect())
+}
+
+/// The query of every effective rule of `project` and general knowledge (newest first), with
+/// the recurrence thresholds it applies.
+fn effective_rules_query(
     snapshot: &dyn ReadSnapshot,
     project: Option<&ProjectId>,
     activity: Option<&str>,
-) -> Result<Vec<KnowledgeClaim>, StorageError> {
+) -> Result<(ClaimQuery, BTreeMap<String, i64>), StorageError> {
     let mut scopes = vec![KnowledgeScope::Workspace];
     if let Some(p) = project {
         scopes.insert(0, KnowledgeScope::Project(p.clone()));
@@ -1265,6 +1502,16 @@ pub fn rules_for(
         }),
         ..ClaimQuery::default()
     };
+    Ok((query, th))
+}
+
+/// Every effective rule a session of `project` may be given (see [`KnowledgeService::rules_for`]).
+pub fn rules_for(
+    snapshot: &dyn ReadSnapshot,
+    project: Option<&ProjectId>,
+    activity: Option<&str>,
+) -> Result<Vec<KnowledgeClaim>, StorageError> {
+    let (query, th) = effective_rules_query(snapshot, project, activity)?;
     let k = knowledge_read(snapshot);
     let mut out = Vec::new();
     let mut after: Option<String> = None;
@@ -1272,6 +1519,153 @@ pub fn rules_for(
         let rows = claims(k, &query, after.as_deref(), KNOWLEDGE_PAGE_MAX)?;
         for c in &rows {
             out.push(claim_wire(k, c, &th)?);
+        }
+        match rows.last() {
+            Some(last) if rows.len() == usize::from(KNOWLEDGE_PAGE_MAX) => {
+                after = Some(claim_position(&query, last))
+            }
+            _ => return Ok(out),
+        }
+    }
+}
+
+/// The knowledge source a repository file is cited as: `repo:<repository-id>/<path>`, the
+/// path repository-relative with `/` separators. Its revision is the content digest of the
+/// file's unit in the repository's published index baseline (KNOW-03).
+pub fn repository_source_ref(repository: &Id, path: &str) -> String {
+    format!("{}{path}", repository_source_prefix(repository))
+}
+
+/// The prefix every [`repository_source_ref`] of `repository` starts with.
+pub fn repository_source_prefix(repository: &Id) -> String {
+    format!("repo:{}/", repository.as_str())
+}
+
+/// The prefix of every repository file citation.
+pub const REPOSITORY_SOURCE_SCHEME: &str = "repo:";
+
+/// The repository a `repo:<repository-id>/<path>` citation names, with its path normalized
+/// (empty and `.` segments and a leading `/` dropped), or `None` for a path that cannot be
+/// normalized (empty, a `..` segment, a backslash or a control character). `None` overall
+/// when `source_ref` has no such shape.
+pub fn repository_source(source_ref: &str) -> Option<(Id, Option<String>)> {
+    let rest = source_ref.strip_prefix(REPOSITORY_SOURCE_SCHEME)?;
+    let (repository, path) = rest.split_once('/')?;
+    let repository = Id::new(repository).ok()?;
+    let normalized = (|| {
+        if path.contains('\\') || path.chars().any(char::is_control) {
+            return None;
+        }
+        let mut parts = Vec::new();
+        for part in path.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => return None,
+                part => parts.push(part),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join("/"))
+    })();
+    Some((repository, normalized))
+}
+
+/// The content digest of `path` in the published index baseline of `repository`; `None` when
+/// the repository has no publication or its baseline holds no such file.
+pub fn published_source_revision(
+    indexing: &dyn crate::ports::storage::IndexRead,
+    repository: &Id,
+    path: &str,
+) -> Result<Option<String>, StorageError> {
+    let Some(published) = indexing.published(repository)? else {
+        return Ok(None);
+    };
+    let Some(view) = indexing.view(&published.view_id)? else {
+        return Ok(None);
+    };
+    Ok(indexing
+        .unit(&view.baseline_id, path)?
+        .map(|unit| unit.content_digest))
+}
+
+/// Whether a rule restricted to repositories applies to a session whose captured repository
+/// scope is `repositories` (an unrestricted rule always does).
+pub(crate) fn applies_to_repositories(applicability: &Applicability, repositories: &[Id]) -> bool {
+    applicability.repository_ids.0.is_empty()
+        || applicability
+            .repository_ids
+            .0
+            .iter()
+            .any(|r| repositories.contains(r))
+}
+
+/// The harness a native DevWorks session runs in: a rule whose applicability names another
+/// harness is never bound into its context.
+pub const NATIVE_HARNESS: &str = "devworks";
+
+/// The lesson rules a session's provider context carries, and whether more applied.
+#[derive(Debug, Default)]
+pub struct LessonSelection {
+    pub rules: Vec<crate::providers::instructions::LessonRule>,
+    /// More relevant rules exist than [`MAX_STAMPED_LESSONS`] or [`MAX_LESSON_TEXT_BYTES`]
+    /// allow; the context says so.
+    ///
+    /// [`MAX_STAMPED_LESSONS`]: crate::providers::instructions::MAX_STAMPED_LESSONS
+    /// [`MAX_LESSON_TEXT_BYTES`]: crate::providers::instructions::MAX_LESSON_TEXT_BYTES
+    pub truncated: bool,
+}
+
+/// The effective lesson rules a session's provider context carries (KNOW-06): its project's
+/// and general rules in newest-first order, without those restricted to repositories outside
+/// the session's captured scope, to another harness than [`NATIVE_HARNESS`], or to tools none
+/// of `offered_tools` (wire names or capability ids) names. Activity and path conditions are
+/// rendered with the rule. The read stops once the bounds are filled and reads only the stored
+/// claims (no tallies or challenges).
+pub fn session_lesson_rules(
+    snapshot: &dyn ReadSnapshot,
+    session: &Id,
+    offered_tools: &[String],
+) -> Result<LessonSelection, StorageError> {
+    use crate::providers::instructions::{LessonRule, MAX_LESSON_TEXT_BYTES, MAX_STAMPED_LESSONS};
+    let Some(stored) = snapshot.sessions().session(session)? else {
+        return Ok(LessonSelection::default());
+    };
+    let repositories = snapshot.sessions().session_repository_scope(session)?;
+    let tools: std::collections::BTreeSet<String> =
+        offered_tools.iter().map(|t| model::fold(t)).collect();
+    let (query, _) = effective_rules_query(snapshot, stored.project_id.as_ref(), None)?;
+    let k = knowledge_read(snapshot);
+    let mut out = LessonSelection::default();
+    let mut bytes = 0usize;
+    let mut after: Option<String> = None;
+    loop {
+        let rows = claims(k, &query, after.as_deref(), KNOWLEDGE_PAGE_MAX)?;
+        for c in &rows {
+            let (Some(lesson), Some(text)) = (&c.lesson, &c.body.value) else {
+                continue;
+            };
+            let a: Applicability = serde_json::from_value(lesson.applicability.clone())
+                .map_err(|_| StorageError::InvalidRecord("stored applicability".into()))?;
+            let a = model::fold_applicability(&a);
+            if !applies_to_repositories(&a, &repositories)
+                || a.harness.as_ref().is_some_and(|h| h.0 != NATIVE_HARNESS)
+                || (!a.tools.0.is_empty() && !a.tools.0.iter().any(|t| tools.contains(&t.0)))
+            {
+                continue;
+            }
+            let rule = LessonRule {
+                claim_id: c.id.clone(),
+                revision: c.revision,
+                text: text.clone(),
+                activities: a.activities.0.iter().map(|v| v.0.clone()).collect(),
+                paths: a.paths.0.iter().map(|v| v.0.clone()).collect(),
+            };
+            let line = rule.line().len();
+            if out.rules.len() == MAX_STAMPED_LESSONS || bytes + line > MAX_LESSON_TEXT_BYTES {
+                out.truncated = true;
+                return Ok(out);
+            }
+            bytes += line;
+            out.rules.push(rule);
         }
         match rows.last() {
             Some(last) if rows.len() == usize::from(KNOWLEDGE_PAGE_MAX) => {
@@ -1738,6 +2132,32 @@ pub(crate) fn no_applicability() -> Applicability {
     }
 }
 
+impl crate::services::conventions::indexing::SelectionListener for KnowledgeService {
+    /// A newly selected space queues the embedding of every scope with claims it has no
+    /// vector for, so claims written before it was selected need no other write.
+    fn selection_changed(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        fences: &[crate::ports::AuthorityFence],
+    ) -> Result<(), StorageError> {
+        if self.embeddings().is_none() {
+            return Ok(());
+        }
+        vectors::queue_selection(tx, ctx, fences)
+    }
+}
+
+/// Queues the embedding of `scope`'s pending claims as `ctx` after a Knowledge change made
+/// outside the Knowledge commands (Dreaming), in its unit of work.
+pub(crate) fn queue_claim_vectors(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+) -> Result<(), StorageError> {
+    vectors::queue_scope(tx, ctx, &[], scope, None)
+}
+
 impl QueryHandler for KnowledgeService {
     /// `knowledge.render_summary` renders from one snapshot and publishes the text as an
     /// artifact of the invocation's scope before the answer (bounded, recoverable publication).
@@ -1747,6 +2167,15 @@ impl QueryHandler for KnowledgeService {
         query: &AdmittedQuery,
         env: &Preparation<'_>,
     ) -> Result<Option<Prepared>, DomainFault> {
+        // `knowledge.search` embeds its text before the snapshot, through the shared route.
+        if let OperationInput::Knowledge(ops::Input::Search(i)) = query.input() {
+            let Some(runtime) = self.embeddings() else {
+                return Ok(None);
+            };
+            return vectors::prepare_search(&runtime, ctx, query, i, env)
+                .map(|v| v.map(Prepared::new))
+                .map_err(|f| query_fault(f, CLAIM, self.correlation()));
+        }
         let OperationInput::Knowledge(ops::Input::RenderSummary(i)) = query.input() else {
             return Ok(None);
         };
@@ -1826,7 +2255,9 @@ impl QueryHandler for KnowledgeService {
             );
         };
         let answered = match input {
-            ops::Input::Search(i) => self.search(snapshot, ctx, i),
+            ops::Input::Search(i) => {
+                self.search(snapshot, ctx, i, query.prepared::<vectors::QueryVector>())
+            }
             ops::Input::Read(i) => self.read(snapshot, ctx, i),
             ops::Input::Diagnostics(i) => self.diagnostics(snapshot, ctx, i),
             ops::Input::WriteStatus(i) => self.write_status(snapshot, ctx, i),
@@ -1943,7 +2374,13 @@ impl CommandHandler for KnowledgeService {
                 Err(Refusal::new(DomainErrorCode::UnsupportedCapability, "operation", None).into());
             return decided(tx, refused);
         };
-        let outcome = writes::decide(ctx, command, input, tx);
+        let mut outcome = writes::decide(ctx, command, input, tx);
+        if let (Some(_), Ok(crate::protocol::results::DomainDecision::Applied { result })) =
+            (self.embeddings(), &outcome)
+            && let Err(error) = vectors::queue_after_write(tx, ctx, command, result)
+        {
+            outcome = Err(error.into());
+        }
         decided(tx, outcome)
     }
 }
@@ -2059,6 +2496,72 @@ mod tests {
         assert!(!writable(
             &Reach::Project(ProjectId(Id::new("project-b").unwrap())),
             &KnowledgeScope::Workspace
+        ));
+    }
+
+    #[test]
+    fn a_time_position_never_resumes_a_relevance_listing() {
+        let words = ClaimQuery {
+            words: vec!["cache".into()],
+            ..ClaimQuery::default()
+        };
+        // A cursor issued for a search with words before relevance ranking carried a time.
+        assert!(matches!(
+            parse_position(&words, "1700000000000|knowledgeclaim-1"),
+            Err(StorageError::CursorExpired)
+        ));
+        for bad in [
+            "rNaN|knowledgeclaim-1",
+            "rinf|knowledgeclaim-1",
+            "r|knowledgeclaim-1",
+        ] {
+            assert!(matches!(
+                parse_position(&words, bad),
+                Err(StorageError::CursorExpired)
+            ));
+        }
+        let claim = RankedClaim {
+            rank: ClaimRank::Relevance(1.234_567_890_123_456_7),
+            claim: StoredClaim {
+                id: Id::new("knowledgeclaim-7").unwrap(),
+                scope: KnowledgeScope::Workspace,
+                revision: 1,
+                kind: "Fact".into(),
+                entry_kind: "Fact".into(),
+                lifecycle: "Active".into(),
+                subject_id: Id::new("knowledgeentity-1").unwrap(),
+                predicate: "fact".into(),
+                object_id: None,
+                source: None,
+                author: ActorId(Id::new("user-a").unwrap()),
+                session_id: None,
+                tags: vec![],
+                basis: vec![],
+                lesson: None,
+                body: crate::ports::storage::ClaimBody::default(),
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                deleted_at_ms: None,
+            },
+        };
+        let at = claim_position(&words, &claim);
+        assert_eq!(
+            parse_position(&words, &at).unwrap(),
+            (claim.rank, claim.id.as_str().to_owned())
+        );
+        // A search without words keeps the time position.
+        let none = ClaimQuery::default();
+        assert_eq!(
+            parse_position(&none, "1700000000000|knowledgeclaim-1").unwrap(),
+            (
+                ClaimRank::Time(1_700_000_000_000),
+                "knowledgeclaim-1".to_owned()
+            )
+        );
+        // A vector position (DW-247) never resumes a relevance listing.
+        assert!(matches!(
+            parse_position(&words, "v0.9876543210123456|knowledgeclaim-7"),
+            Err(StorageError::CursorExpired)
         ));
     }
 }

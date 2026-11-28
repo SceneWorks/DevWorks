@@ -1718,12 +1718,23 @@ fn measure(
         .map_err(|error| StorageError::InvalidRecord(format!("agent context: {error}")))?;
     let blocks = || context.messages.iter().flat_map(|message| &message.content);
     let referenced = blocks()
-        .filter_map(|block| match block {
-            ContentBlock::ToolCall { arguments, .. } => Some(arguments.byte_length.get()),
-            ContentBlock::Native { artifact, .. } => Some(artifact.byte_length.get()),
-            _ => None,
+        .try_fold(0i64, |total, block| match block {
+            ContentBlock::ToolCall { arguments, .. } => {
+                total.checked_add(arguments.byte_length.get())
+            }
+            ContentBlock::Native { artifact, .. } => total.checked_add(artifact.byte_length.get()),
+            ContentBlock::ToolResult { content, .. } => {
+                content
+                    .iter()
+                    .try_fold(total, |bytes, result| match result {
+                        ResultBlock::DocumentEvidence { artifact } => {
+                            bytes.checked_add(artifact.byte_length.get())
+                        }
+                        _ => Some(bytes),
+                    })
+            }
+            _ => Some(total),
         })
-        .try_fold(0i64, i64::checked_add)
         .ok_or(StorageError::ScopeDenied)?;
     let natives = blocks()
         .filter(|block| matches!(block, ContentBlock::Native { .. }))
@@ -2287,6 +2298,7 @@ fn initial_assignment_context(
         },
         instruction_stamps: Vec::new(),
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![
@@ -2561,8 +2573,10 @@ pub fn ensure_membership_context(
     };
     context.instructions = fresh.instructions;
     context.instruction_stamps.clear();
-    // The replaced instructions carried the bound skills block too; binding adds it afresh.
+    // The replaced instructions carried the bound skills and lesson blocks too; binding adds
+    // them afresh.
     context.skill_stamp = None;
+    context.lesson_stamp = None;
     context.messages.push(Message {
         role: MessageRole::User,
         content: vec![ContentBlock::Text {
@@ -2595,6 +2609,7 @@ pub fn ensure_membership_context(
     let ctx = ctx.clone();
     let assignment_id = agent.assignment_id.clone();
     let root_id = agent.root_id.clone();
+    let lessons = context.lesson_stamp.clone();
     let committed = run_write(
         engine.store().as_ref(),
         WriteOptions::observed(),
@@ -2648,6 +2663,7 @@ pub fn ensure_membership_context(
                 sequence,
                 created_at_ms,
             })?;
+            crate::context_epoch::record_lesson_delivery(tx, &session_id, lessons.as_ref())?;
             Ok(())
         },
     );

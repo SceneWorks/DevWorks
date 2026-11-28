@@ -94,6 +94,25 @@ const POLICY_DOCUMENTS: &[PolicyDocument] = &[
         Tables,
         "schema68-extension.json"
     ),
+    policy_document!("documentIndexExtension", Tables, "schema71-extension.json"),
+    policy_document!(
+        "documentLexicalExtension",
+        Tables,
+        "schema72-extension.json"
+    ),
+    policy_document!("documentVectorExtension", Tables, "schema73-extension.json"),
+    policy_document!("documentVisionExtension", Tables, "schema74-extension.json"),
+    policy_document!("dreamingExtension", Tables, "schema76-extension.json"),
+    policy_document!(
+        "documentTransferExtension",
+        Tables,
+        "schema77-document-transfers-extension.json"
+    ),
+    policy_document!(
+        "knowledgeClaimVectorExtension",
+        Tables,
+        "schema78-extension.json"
+    ),
 ];
 /// The SHA-256 of each policy document, by its digest key.
 fn document_digests() -> BTreeMap<&'static str, String> {
@@ -349,6 +368,20 @@ fn content_lineage(reference: &ColumnReference) -> bool {
     let column = match (edge.from_table.as_str(), edge.to_table.as_str()) {
         ("artifact_versions" | "artifact_tags", "artifacts") => "artifact_id",
         ("artifact_links", "artifact_versions") => "artifact_version_id",
+        ("document_retrieval_preferences", "artifacts") => "artifact_id",
+        ("document_transfers", "artifacts") => "artifact_id",
+        (
+            "document_extractions" | "document_index_versions" | "document_extraction_keys",
+            "artifact_versions",
+        ) => "version_id",
+        (
+            "document_extracted_blocks"
+            | "document_embedding_runs"
+            | "document_vectors"
+            | "document_vision_units",
+            "document_extractions",
+        ) => "extraction_id",
+        ("document_lexical_rows", "document_extracted_blocks") => "block_id",
         _ => return false,
     };
     reference.from_columns.len() == 1 && reference.from_columns[0] == column
@@ -384,6 +417,24 @@ fn content_partitions(
             Reason::IndependentPublication,
         ),
         (
+            "artifacts",
+            "id IN(SELECT id FROM ownedDocumentInferenceArtifacts)",
+            Action::Delete,
+            Reason::OwnedLineage,
+        ),
+        (
+            "artifacts",
+            "id IN(SELECT id FROM ownedKnowledgeInferenceArtifacts)",
+            Action::Delete,
+            Reason::OwnedLineage,
+        ),
+        (
+            "artifacts",
+            "id IN(SELECT id FROM retainedVisionEvidence) AND id NOT IN(SELECT id FROM ownedDocumentInferenceArtifacts)",
+            Action::Keep,
+            Reason::SharedContent,
+        ),
+        (
             "artifact_shares",
             "project_id=?1",
             Action::Delete,
@@ -394,6 +445,12 @@ fn content_partitions(
             "project_id<>?1",
             Action::Keep,
             Reason::SharedContent,
+        ),
+        (
+            "document_transfers",
+            "source_project_id=?1 OR destination_project_id=?1",
+            Action::Delete,
+            Reason::ProjectMembership,
         ),
         (
             "work_dependencies",
@@ -451,6 +508,13 @@ fn propagate_content(
             else {
                 continue;
             };
+            if child.table.as_str() == "document_transfers"
+                && rows
+                    .get(&(child.table, child.key_digest.clone()))
+                    .is_some_and(|row| row.reason == Reason::ProjectMembership)
+            {
+                continue;
+            }
             changed |= assign(child, parent.action, reason, rows, unresolved);
         }
         if !changed {

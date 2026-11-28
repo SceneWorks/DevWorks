@@ -1,9 +1,14 @@
 //! Knowledge requests and replies: the same `knowledge.*` operations an agent tool submits,
 //! with the import file stored as the user's artifact first. A write keeps what it took from
 //! the forms until its outcome is recorded; an unknown outcome is settled by Confirm outcomes.
+mod documents;
+
 use crate::attachments;
 use crate::backend::{Reply, Unresolved};
+use crate::documents_ops::DocumentSlot;
+use crate::documents_screen::{self, StagedImport, Upload};
 use crate::knowledge_ops::KnowledgeSlot;
+use crate::knowledge_screen::graph::GraphAction;
 use crate::knowledge_screen::{self, KnowledgeAction, KnowledgeScreen};
 use crate::memory::{RouteMemory, UnconfirmedImport};
 use crate::project_purge::Live;
@@ -13,11 +18,15 @@ use crate::screen::{Cx, Screen, ScreenContext, ScreenId, controller};
 use crate::widgets;
 use devworks_core::ports::storage::ProjectPurgeClientScope;
 use devworks_core::protocol::Id;
+use devworks_core::protocol::provider::ArtifactRef;
 use eframe::egui::Ui;
 use serde_json::json;
 use std::path::PathBuf;
 
 controller!(KnowledgeCtl, knowledge: KnowledgeScreen);
+
+/// Why a graph read or summary was not sent.
+const OFFLINE: &str = "Not sent: DevWorks is offline or closing.";
 
 impl Screen for KnowledgeScreen {
     type Slot = KnowledgeSlot;
@@ -31,6 +40,16 @@ impl Screen for KnowledgeScreen {
         if !ctl.projects.list.loaded && !ctl.pending(&ProjectsSlot::ProjectsList) {
             ctl.load_projects();
         }
+        if ctl
+            .routes
+            .get(&Route::Knowledge)
+            .is_some_and(|r| r.tab == documents_screen::TAB)
+        {
+            if !ctl.knowledge.documents.list.loaded {
+                ctl.load_documents(false);
+            }
+            return;
+        }
         if ctl.routes.get(&Route::Knowledge).is_none_or(|r| r.tab != 2)
             && !ctl.knowledge.claims.loaded
             && !ctl.knowledge.claims.loading()
@@ -39,19 +58,45 @@ impl Screen for KnowledgeScreen {
         }
     }
     fn refresh(&mut self, cx: &mut Cx, _route: Route) {
+        if cx
+            .routes
+            .get(&Route::Knowledge)
+            .is_some_and(|r| r.tab == documents_screen::TAB)
+        {
+            let mut ctl = KnowledgeCtl {
+                knowledge: self,
+                cx,
+            };
+            ctl.refresh_documents();
+            return;
+        }
         // A re-read covers every page the user loaded.
         if cx.routes.get(&Route::Knowledge).is_none_or(|r| r.tab != 2)
             && self.claims.loaded
             && !self.claims.loading()
         {
+            let running = self.last_write.as_ref().is_some_and(|w| w.running);
+            let mut ctl = KnowledgeCtl {
+                knowledge: self,
+                cx,
+            };
+            ctl.refresh_knowledge();
+            // A write still running (a delete by source continuing as a job) is read again
+            // until its receipt says it is done.
+            if running {
+                ctl.read_write_status();
+            }
+        }
+    }
+    fn apply(&mut self, cx: &mut Cx, slot: KnowledgeSlot, reply: Reply) {
+        if let KnowledgeSlot::Documents(slot) = slot {
             KnowledgeCtl {
                 knowledge: self,
                 cx,
             }
-            .refresh_knowledge();
+            .apply_documents(slot, reply);
+            return;
         }
-    }
-    fn apply(&mut self, cx: &mut Cx, slot: KnowledgeSlot, reply: Reply) {
         if let Some((slot, reply)) = (KnowledgeCtl {
             knowledge: self,
             cx,
@@ -64,33 +109,60 @@ impl Screen for KnowledgeScreen {
     fn ui(&mut self, cx: &mut Cx, _route: Route, ui: &mut Ui) {
         let online = cx.online().map_err(str::to_owned);
         let mut actions = Vec::new();
-        KnowledgeCtl {
+        let mut document_actions = Vec::new();
+        let mut ctl = KnowledgeCtl {
             knowledge: self,
             cx,
-        }
-        .sync_knowledge_scope(&mut actions);
-        // The selected subview is route memory, kept across navigation and restarts.
-        self.tab = cx.routes.entry(Route::Knowledge).or_default().tab;
+        };
+        ctl.sync_knowledge_scope(&mut actions);
+        let project = ctl.knowledge.project.clone();
+        ctl.knowledge.documents.scope(project.as_deref());
+        let previous_tab = ctl.routes.entry(Route::Knowledge).or_default().tab;
+        ctl.knowledge.tab = previous_tab;
         KnowledgeScreen::ui(
-            self,
+            ctl.knowledge,
             ui,
             online.as_ref().map(|_| ()).map_err(String::as_str),
             &mut actions,
+            &mut document_actions,
         );
-        cx.routes.entry(Route::Knowledge).or_default().tab = self.tab;
-        KnowledgeCtl {
-            knowledge: self,
-            cx,
+        let tab = ctl.knowledge.tab;
+        ctl.routes.entry(Route::Knowledge).or_default().tab = tab;
+        if tab == documents_screen::TAB {
+            if !ctl.knowledge.documents.list.loaded && ctl.knowledge.documents.list.error.is_none()
+            {
+                ctl.load_documents(false);
+            }
+            ctl.document_actions(document_actions);
+        } else {
+            if tab == 0
+                && previous_tab == documents_screen::TAB
+                && !actions
+                    .iter()
+                    .any(|action| matches!(action, KnowledgeAction::Search))
+            {
+                actions.push(KnowledgeAction::Search);
+            }
+            ctl.knowledge_actions(actions);
         }
-        .knowledge_actions(actions);
     }
-    /// An import file whose save outcome is not confirmed, by its exact frame.
+    /// Source uploads persist their identical staged frames through shutdown and recovery.
     fn pending_memory(&self, _unresolved: &[&Unresolved]) -> Option<serde_json::Value> {
-        self.import_frame(false)
-            .and_then(|(name, frame)| serde_json::to_value(UnconfirmedImport { name, frame }).ok())
+        let entry = self
+            .import_frame(false)
+            .map(|(name, frame)| UnconfirmedImport { name, frame });
+        let document = self.documents.staged_import();
+        match document {
+            Some(document) => Some(json!({"entry":entry,"document":document})),
+            None => entry.and_then(|entry| serde_json::to_value(entry).ok()),
+        }
     }
     fn restore_pending(&mut self, saved: &serde_json::Value) {
-        if let Ok(i) = serde_json::from_value::<UnconfirmedImport>(saved.clone()) {
+        if let Ok(upload) = serde_json::from_value::<StagedImport>(saved["document"].clone()) {
+            self.documents.upload = Some(Upload::Unconfirmed(upload));
+        }
+        let entry = saved.get("entry").unwrap_or(saved);
+        if let Ok(i) = serde_json::from_value::<UnconfirmedImport>(entry.clone()) {
             self.import = Some(knowledge_screen::ImportStage::Unconfirmed {
                 name: i.name,
                 frame: i.frame,
@@ -102,18 +174,26 @@ impl Screen for KnowledgeScreen {
         if matches!(slot, KnowledgeSlot::KnowledgeWrite) {
             self.writing = Some(u.label.clone());
         }
+        if matches!(slot, KnowledgeSlot::Documents(DocumentSlot::Write)) {
+            self.documents.writing = true;
+        }
     }
     fn unconfirmed_count(&self) -> usize {
         usize::from(self.import_frame(true).is_some())
+            + usize::from(matches!(
+                self.documents.upload,
+                Some(Upload::Unconfirmed(_))
+            ))
     }
     fn scope(&self) -> Option<String> {
         Some(self.project.clone().unwrap_or_default())
     }
     fn purge_live(&self, out: &mut Live) {
-        out.busy |= self
-            .import
-            .as_ref()
-            .is_some_and(knowledge_screen::ImportStage::busy);
+        out.busy |= self.documents.busy()
+            || self
+                .import
+                .as_ref()
+                .is_some_and(knowledge_screen::ImportStage::busy);
         let Some(p) = self.purge_owner() else {
             return;
         };
@@ -128,11 +208,22 @@ impl Screen for KnowledgeScreen {
         }
         put(
             "knowledgeSearch",
-            json!({"text":self.text,"reason":self.reason,"source":self.cleanup_source}),
+            json!({"text":self.text,"reason":self.reason,"source":self.cleanup_source,
+                "graphQuery":self.graph.query,"lessonActivity":self.lesson_activity}),
         );
     }
     fn remove_purged(&mut self, scope: &ProjectPurgeClientScope) {
         let p = scope.project_id.0.as_str();
+        if self.documents.project.as_deref() == Some(p) {
+            self.documents.scope(None);
+        } else {
+            // Workspace views may contain results from a source whose previous ownership
+            // was just retired. Re-read visible document and citation data on demand.
+            self.documents.list.reset();
+            self.documents.select(None);
+            self.documents.results = None;
+            self.documents.search_generation += 1;
+        }
         if self.purge_owner() == Some(p) {
             *self = KnowledgeScreen::new();
         }
@@ -141,7 +232,14 @@ impl Screen for KnowledgeScreen {
     fn context(&self, _route: Route, mem: &RouteMemory) -> ScreenContext {
         ScreenContext {
             tab: mem.tab,
-            selection: self.selected.as_ref().map(|id| id.as_str().to_owned()),
+            selection: if mem.tab == documents_screen::TAB {
+                self.documents
+                    .selected
+                    .as_ref()
+                    .map(|source| source.artifact_id.as_str().to_owned())
+            } else {
+                self.selected.as_ref().map(|id| id.as_str().to_owned())
+            },
         }
     }
 }
@@ -164,9 +262,26 @@ impl KnowledgeScreen {
         }
         .knowledge_actions(vec![KnowledgeAction::ImportFiles(paths)]);
     }
+    pub(super) fn import_documents(&mut self, cx: &mut Cx, paths: Vec<PathBuf>) {
+        let mut ctl = KnowledgeCtl {
+            knowledge: self,
+            cx,
+        };
+        let mut actions = Vec::new();
+        ctl.sync_knowledge_scope(&mut actions);
+        let project = ctl.knowledge.project.clone();
+        ctl.knowledge.documents.scope(project.as_deref());
+        ctl.document_actions(vec![documents_screen::Action::Drop(paths)]);
+    }
+
     /// Confirm outcomes: the import file's save is submitted again with its identical frame
     /// (not while closing: it stays unconfirmed, its frame kept).
     pub(super) fn confirm_import(&mut self, cx: &mut Cx) {
+        KnowledgeCtl {
+            knowledge: self,
+            cx,
+        }
+        .confirm_document_source();
         let Some((name, frame)) = self.import_frame(true) else {
             return;
         };
@@ -425,8 +540,99 @@ impl KnowledgeCtl<'_, '_> {
                     }
                     Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
                 },
+                KnowledgeAction::Relate => match self.knowledge.relate_input() {
+                    Ok(body) => {
+                        let submitted = knowledge_screen::Submitted::Relation {
+                            object: self.knowledge.relate_object.clone(),
+                            predicate: self.knowledge.relate_predicate_wire(),
+                        };
+                        self.knowledge_write("Relate", "knowledge.relate", body, submitted)
+                    }
+                    Err(m) => self.knowledge.message = Some((widgets::Tone::Attention, m)),
+                },
+                KnowledgeAction::Graph(action) => self.graph_action(action),
             }
         }
+    }
+
+    /// A graph view request, in the listed scope.
+    fn graph_action(&mut self, action: GraphAction) {
+        let scope = self.knowledge.graph_scope();
+        let request = match action {
+            GraphAction::Open(read) => Ok(self.knowledge.graph.begin(scope, read)),
+            GraphAction::Expand => self.knowledge.graph.begin_expand(scope),
+            GraphAction::Summary => {
+                match self.knowledge.graph.begin_summary(scope) {
+                    Ok((generation, body)) => {
+                        if !self.query(
+                            KnowledgeSlot::KnowledgeSummary(generation),
+                            "Rendering a Knowledge summary",
+                            "knowledge.render_summary",
+                            move |b| knowledge_screen::query(b, body),
+                        ) {
+                            self.knowledge.graph.abandon_summary(generation, OFFLINE);
+                        }
+                    }
+                    Err(m) => self.knowledge.graph.error = Some(m),
+                }
+                return;
+            }
+            GraphAction::Select(id) => {
+                self.knowledge_actions(vec![KnowledgeAction::Select(id)]);
+                return;
+            }
+            GraphAction::Close => {
+                self.knowledge.graph.close();
+                return;
+            }
+        };
+        match request {
+            Ok((generation, op, body)) => self.send_graph(generation, op, body),
+            Err(m) => self.knowledge.graph.error = Some(m),
+        }
+    }
+    /// Submits a graph read just started; one nothing took is not left in flight.
+    fn send_graph(
+        &mut self,
+        generation: u64,
+        op: &'static str,
+        body: Option<devworks_core::operations::OperationInput>,
+    ) {
+        if !self.query(
+            KnowledgeSlot::KnowledgeGraph(generation),
+            "Reading the Knowledge graph",
+            op,
+            move |b| knowledge_screen::query(b, body),
+        ) {
+            self.knowledge.graph.abandon(generation, OFFLINE);
+        }
+    }
+    /// Reads one page of a published summary's text.
+    fn read_summary(&mut self, generation: u64, artifact: ArtifactRef, cursor: Option<String>) {
+        if !self.query(
+            KnowledgeSlot::KnowledgeSummaryText(generation),
+            "Reading a Knowledge summary",
+            "artifacts.read",
+            move |b| crate::ops::artifact_read_after(b, &artifact, cursor.as_deref()),
+        ) {
+            self.knowledge.graph.abandon_summary(generation, OFFLINE);
+        }
+    }
+    /// Reads back the last recorded write's receipt.
+    fn read_write_status(&mut self) {
+        let Some((write_id, body)) = self.knowledge.write_status_input() else {
+            return;
+        };
+        let slot = KnowledgeSlot::KnowledgeWriteStatus(write_id);
+        if self.pending(&slot) {
+            return;
+        }
+        self.query(
+            slot,
+            "Checking a Knowledge write",
+            "knowledge.write_status",
+            move |b| knowledge_screen::query(b, body),
+        );
     }
 
     /// Admits a Knowledge import file's exact save frame (prepared, or unconfirmed).
@@ -504,7 +710,30 @@ impl KnowledgeCtl<'_, '_> {
                     if let Some(id) = self.knowledge.selected.clone() {
                         self.read_knowledge(id);
                     }
+                    // The graph shown is read again; it stays on screen until the reply.
+                    let scope = self.knowledge.graph_scope();
+                    if let Some((generation, op, body)) = self.knowledge.graph.begin_refresh(scope)
+                    {
+                        self.send_graph(generation, op, body);
+                    }
+                    self.read_write_status();
                 }
+            }
+            (KnowledgeSlot::KnowledgeGraph(generation), Reply::Query(q)) => {
+                self.knowledge.graph.reply(generation, q)
+            }
+            (KnowledgeSlot::KnowledgeSummary(generation), Reply::Query(q)) => {
+                if let Some(artifact) = self.knowledge.graph.summary_published(generation, q) {
+                    self.read_summary(generation, artifact, None);
+                }
+            }
+            (KnowledgeSlot::KnowledgeSummaryText(generation), Reply::Query(q)) => {
+                if let Some((artifact, cursor)) = self.knowledge.graph.summary_text(generation, q) {
+                    self.read_summary(generation, artifact, Some(cursor));
+                }
+            }
+            (KnowledgeSlot::KnowledgeWriteStatus(write_id), Reply::Query(q)) => {
+                self.knowledge.write_status_reply(&write_id, q)
             }
             other => return Some(other),
         }

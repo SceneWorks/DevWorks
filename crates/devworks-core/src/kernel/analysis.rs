@@ -103,7 +103,11 @@ impl Work {
         let gate = Authorization::direct().fenced_by(self.authority.fences.clone());
         if read.stamp().restore_epoch != ctx.restore_epoch().get()
             || read.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-            || !crate::authority::authorization_holds(read, &gate)?
+            || !crate::authority::authorization_holds_with(
+                read,
+                &gate,
+                &crate::authority::AuthorityFencesOnly,
+            )?
         {
             return Err(StorageError::ScopeDenied.into());
         }

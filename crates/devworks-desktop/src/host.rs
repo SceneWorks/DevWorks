@@ -41,6 +41,7 @@ use devworks_core::ports::storage::{
     ApplicationStore, ReadOptions, StorageError, WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::ports::{Clock, IdKind, IdSource};
+use devworks_core::protocol::ProjectId;
 use devworks_core::protocol::{ActorId, Counter, Id, Revision};
 use devworks_core::services::UseCases;
 use devworks_core::services::desktop::ControlEpoch;
@@ -276,6 +277,7 @@ pub struct Host {
     web: Arc<WebService>,
     /// The native outgoing MCP client the runtime installed at boot.
     mcp_clients: Arc<std::sync::OnceLock<Arc<NativeMcpClients>>>,
+    pdf_worker: Option<Arc<devworks_engine::documents::pdf::PdfWorker>>,
 }
 impl Host {
     pub fn runtime(&self) -> &Arc<Runtime> {
@@ -284,6 +286,10 @@ impl Host {
     /// The native outgoing MCP client, once the runtime installed it.
     pub fn mcp_clients(&self) -> Option<Arc<NativeMcpClients>> {
         self.mcp_clients.get().cloned()
+    }
+    /// The document worker belongs to the installed desktop app and shares its launch budget.
+    pub fn pdf_worker(&self) -> Option<&Arc<devworks_engine::documents::pdf::PdfWorker>> {
+        self.pdf_worker.as_ref()
     }
     pub fn report(&self) -> &BootReport {
         self.runtime.report()
@@ -608,6 +614,19 @@ async fn compose(
                 github_http: Some(http),
             })
         });
+    let pdf_worker = std::env::current_exe().ok().and_then(|application| {
+        devworks_engine::documents::pdf::PdfWorker::beside_desktop(
+            &application,
+            Arc::new(NativeProcessHost),
+        )
+        .ok()
+        .map(Arc::new)
+    });
+    runtime_config.documents = Some(devworks_engine::documents::indexing::DocumentComposition {
+        processor: Arc::new(crate::document_extraction::NativeDocumentProcessor::new(
+            pdf_worker.clone(),
+        )),
+    });
     let composition = Composition {
         store: store.clone(),
         clock: clock.clone(),
@@ -747,6 +766,7 @@ async fn compose(
         switchable,
         web,
         mcp_clients,
+        pdf_worker,
     })
 }
 
@@ -978,6 +998,31 @@ impl crate::shell::HostControl for Engine {
 pub struct DesktopBackend {
     host: Arc<Host>,
 }
+impl DesktopBackend {
+    fn read_bound_stream(
+        &self,
+        ctx: &InvocationContext,
+        stream: &Id,
+        max: u64,
+    ) -> Result<Vec<u8>, String> {
+        use std::io::Read;
+        let runtime = &self.host.runtime;
+        let opened = runtime
+            .artifacts()
+            .open_stream(&*self.host.authority, &**runtime.store(), ctx, stream)
+            .map_err(|e| format!("the stored file could not be opened: {e:?}"))?;
+        let mut bytes = Vec::new();
+        opened
+            .take(max.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > max {
+            return Err("too large to preview".into());
+        }
+        Ok(bytes)
+    }
+}
+
 impl Backend for DesktopBackend {
     fn publish_current_screen(
         &self,
@@ -1060,6 +1105,40 @@ impl Backend for DesktopBackend {
 
     fn query(&self, operation: &str, frame: &[u8]) -> QueryOutcome {
         self.host.runtime.query(&self.host.ctx, operation, frame)
+    }
+    fn query_in_project(&self, project: &ProjectId, operation: &str, frame: &[u8]) -> QueryOutcome {
+        let ctx = self
+            .host
+            .ctx
+            .clone()
+            .with_lineage(Some(project.clone()), None, None);
+        self.host.runtime.query(&ctx, operation, frame)
+    }
+    fn command_in_project(
+        &self,
+        project: &ProjectId,
+        operation: &str,
+        frame: &[u8],
+    ) -> CommandOutcome {
+        let ctx = self
+            .host
+            .ctx
+            .clone()
+            .with_lineage(Some(project.clone()), None, None);
+        self.host.runtime.command(&ctx, operation, frame)
+    }
+    fn read_stream_in_project(
+        &self,
+        project: &ProjectId,
+        stream: &Id,
+        max: u64,
+    ) -> Result<Vec<u8>, String> {
+        let ctx = self
+            .host
+            .ctx
+            .clone()
+            .with_lineage(Some(project.clone()), None, None);
+        self.read_bound_stream(&ctx, stream, max)
     }
     fn supports_query_cancellation(&self) -> bool {
         true
@@ -1384,26 +1463,7 @@ impl Backend for DesktopBackend {
             })
     }
     fn read_stream(&self, stream: &Id, max: u64) -> Result<Vec<u8>, String> {
-        use std::io::Read;
-        let runtime = &self.host.runtime;
-        let opened = runtime
-            .artifacts()
-            .open_stream(
-                &*self.host.authority,
-                &**runtime.store(),
-                &self.host.ctx,
-                stream,
-            )
-            .map_err(|e| format!("the stored file could not be opened: {e:?}"))?;
-        let mut bytes = Vec::new();
-        opened
-            .take(max.saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > max {
-            return Err("too large to preview".into());
-        }
-        Ok(bytes)
+        self.read_bound_stream(&self.host.ctx, stream, max)
     }
     fn stage_api_key(&self, key: Secret) -> Result<Id, String> {
         self.host

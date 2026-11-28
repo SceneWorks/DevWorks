@@ -113,6 +113,9 @@ pub(crate) struct EpochChange {
     pub omitted: Vec<ArtifactRef>,
     /// A `SkillRevisionsAdopted` session event recorded atomically with the new epoch.
     pub adoption: Option<serde_json::Value>,
+    /// The lesson stamp of the source context. Only a different stamp (rules bound afresh)
+    /// records a delivery; a reused stamp was recorded when it was first published.
+    pub previous_lessons: Option<devworks_core::providers::instructions::LessonStamp>,
 }
 
 pub(crate) struct EpochSource {
@@ -222,6 +225,7 @@ pub(crate) fn provider_change(
         previous_context,
         previous_binding,
     )?;
+    let previous_lessons = source.context.lesson_stamp.clone();
     let mut context = source.context;
     if ctx.assignment_id().is_some()
         || ctx.workspace_reply().is_some()
@@ -248,8 +252,28 @@ pub(crate) fn provider_change(
             context: converted,
             omitted,
             adoption: None,
+            previous_lessons,
         },
     )
+}
+
+/// Records that `session` was supplied the lesson rules `lessons` names, in the transaction
+/// that publishes the provider context carrying them (KNOW-06). A rule already recorded for the
+/// session at that revision is not recorded again.
+pub(crate) fn record_lesson_delivery(
+    tx: &mut dyn devworks_core::ports::storage::WriteTransaction,
+    session: &Id,
+    lessons: Option<&devworks_core::providers::instructions::LessonStamp>,
+) -> Result<(), StorageError> {
+    let Some(stamp) = lessons else {
+        return Ok(());
+    };
+    let rules: Vec<(Id, i64)> = stamp
+        .rules
+        .iter()
+        .map(|rule| (rule.claim_id.clone(), rule.revision))
+        .collect();
+    devworks_core::services::knowledge::record_delivery(tx, session, &rules)
 }
 
 pub(crate) fn publish(
@@ -268,6 +292,7 @@ pub(crate) fn publish(
         context: converted,
         omitted,
         adoption,
+        previous_lessons,
     } = change;
     if ctx.session_id() != Some(session_id) || previous_epoch < 0 {
         return Err(StorageError::ScopeDenied);
@@ -311,6 +336,10 @@ pub(crate) fn publish(
     let omitted_for_write = omitted.clone();
     let source_for_write = source.clone();
     let binding_for_write = binding.clone();
+    let lessons = converted
+        .lesson_stamp
+        .clone()
+        .filter(|stamp| previous_lessons.as_ref() != Some(stamp));
     let committed = run_write(store, WriteOptions::observed(), move |tx| {
         let session = tx
             .sessions()
@@ -432,6 +461,7 @@ pub(crate) fn publish(
         .collect();
         match SessionWriter::append_in(tx, &ctx_for_write, &record)? {
             BatchOutcome::Accepted(_) => {
+                record_lesson_delivery(tx, &session_for_write, lessons.as_ref())?;
                 if let Some(payload) = adoption {
                     let session = tx
                         .sessions()

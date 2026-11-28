@@ -71,7 +71,10 @@ impl Entropy for EntropyFixture {
 struct Script {
     status: u16,
     statuses: VecDeque<u16>,
+    /// The read chunks of the next response: the next request takes all of them.
     body: VecDeque<Vec<u8>>,
+    /// Whole responses, one per request in request order, served before `body`.
+    replies: VecDeque<Vec<u8>>,
     repeat_body: Option<Vec<u8>>,
     content_type: &'static str,
     requests: Arc<Mutex<Vec<HttpRequest>>>,
@@ -90,6 +93,7 @@ impl Script {
             status: 200,
             statuses: VecDeque::new(),
             body: VecDeque::from([body.as_bytes().to_vec()]),
+            replies: VecDeque::new(),
             repeat_body: None,
             content_type: "text/event-stream",
             requests: Default::default(),
@@ -136,7 +140,10 @@ impl StreamingHttp for ScriptHttp {
         }
         let body = match &script.repeat_body {
             Some(body) => VecDeque::from([body.clone()]),
-            None => std::mem::take(&mut script.body),
+            None => match script.replies.pop_front() {
+                Some(reply) => VecDeque::from([reply]),
+                None => std::mem::take(&mut script.body),
+            },
         };
         let status = script.statuses.pop_front().unwrap_or(script.status);
         Ok(Box::new(Stream {
@@ -495,6 +502,7 @@ impl Fx {
             }],
             instruction_stamps: vec![],
             skill_stamp: None,
+            lesson_stamp: None,
             messages: vec![Message {
                 role: MessageRole::User,
                 content: vec![ContentBlock::Text {
@@ -2764,7 +2772,7 @@ fn actual_connection_endpoint_aba_and_public_replacement_cannot_relabel_native_c
 use devworks_core::providers::materialize::{OwnedMaterials,Materials};
 let f=Fx::new("CompatibleChat",Script::sse("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"retained actual native reasoning\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"),false);
 assert_eq!(f.produce(f.generation(vec![])).await.unwrap().result.outcome,Some(AttemptEnd::Completed));let rows=f.transcript();let actual=rows.iter().find(|r|r.kind=="NativeItem").expect("actual response must produce a bound native artifact");let binding:NativeBinding=serde_json::from_value(actual.body["binding"].clone()).unwrap();let native:ArtifactRef=serde_json::from_value(actual.body["artifact"].clone()).unwrap();
-let request_for=|request_id:&str,binding:NativeBinding,artifact:ArtifactRef|{let c=ProviderContext{version:1,instructions:vec![],instruction_stamps:vec![],skill_stamp:None,messages:vec![Message{role:MessageRole::Assistant,content:vec![ContentBlock::Native{binding,artifact}]}],parameters:Default::default()};let mut request=f.request(InferenceInput::Generation{session_id:id("session"),context:f.bytes(&serde_json::to_vec(&c).unwrap()),context_epoch:Counter::new(0).unwrap(),tools:vec![],response_headroom_tokens:Revision::new(10).unwrap(),requires_images:false,requires_parallel_tools:false});request.request_id=id(request_id);request};
+let request_for=|request_id:&str,binding:NativeBinding,artifact:ArtifactRef|{let c=ProviderContext{version:1,instructions:vec![],instruction_stamps:vec![],skill_stamp:None,lesson_stamp:None,messages:vec![Message{role:MessageRole::Assistant,content:vec![ContentBlock::Native{binding,artifact}]}],parameters:Default::default()};let mut request=f.request(InferenceInput::Generation{session_id:id("session"),context:f.bytes(&serde_json::to_vec(&c).unwrap()),context_epoch:Counter::new(0).unwrap(),tools:vec![],response_headroom_tokens:Revision::new(10).unwrap(),requires_images:false,requires_parallel_tools:false});request.request_id=id(request_id);request};
 f.http.lock().unwrap().body=VecDeque::from([b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"accepted\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()]);assert_eq!(f.produce(request_for("good-native",binding.clone(),native.clone())).await.unwrap().result.outcome,Some(AttemptEnd::Completed));assert_eq!(f.http.lock().unwrap().requests.lock().unwrap().len(),2);
 // Public version publication preserves artifact creation provenance but attributes these new
 // bytes to the Human; checking only artifact-level provenance would wrongly qualify them.
@@ -2979,3 +2987,10 @@ mod package_inference;
 
 #[path = "providers/mcp_end_to_end.rs"]
 mod mcp_end_to_end;
+
+#[path = "providers/document_embeddings.rs"]
+mod document_embeddings;
+#[path = "providers/document_vision.rs"]
+mod document_vision;
+#[path = "providers/knowledge_vectors.rs"]
+mod knowledge_vectors;

@@ -1,3 +1,4 @@
+#![cfg(test)]
 use super::capabilities::Support;
 use super::{capabilities::*, context::*, encode::*, materialize::Materials, *};
 use crate::protocol::provider::*;
@@ -183,6 +184,7 @@ fn context() -> ProviderContext {
         }],
         instruction_stamps: vec![],
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {
@@ -1790,4 +1792,73 @@ fn registered_tool_schemas_and_descriptions_stop_materializing_at_the_request_bu
             assert!(accepted.body.len() <= limits.request_bytes);
         }
     }
+}
+
+#[test]
+fn compaction_keeps_document_bytes_out_of_the_summary_request() {
+    let mut materials = Material::new();
+    let evidence = materials.put(
+        b"Original scoped document passage.",
+        crate::services::documents::evidence::MEDIA_TYPE,
+    );
+    let arguments = materials.put(b"{}", "application/json");
+    let mut context = context();
+    context.messages.extend([
+        Message {
+            role: MessageRole::Assistant,
+            content: vec![ContentBlock::ToolCall {
+                call_id: "document-call".into(),
+                wire_name: "documents_search_query".into(),
+                arguments,
+            }],
+        },
+        Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::ToolResult {
+                call_id: "document-call".into(),
+                operation_id: None,
+                content: vec![ResultBlock::DocumentEvidence {
+                    artifact: evidence.clone(),
+                }],
+                is_error: false,
+                cache: None,
+            }],
+        },
+    ]);
+    let mut request = request(&mut materials, &context);
+    let binding = binding(EndpointProfile::CompatibleChat);
+    let prepare_context = |request: &InferenceRequest| {
+        prepare(
+            identity(binding.clone()),
+            request,
+            &caps(binding.clone()),
+            &materials,
+            None,
+            &limits(),
+        )
+        .unwrap()
+    };
+    let normal = prepare_context(&request);
+    assert!(
+        body(&normal)
+            .to_string()
+            .contains("Original scoped document passage.")
+    );
+    assert!(
+        normal
+            .artifact_refs
+            .iter()
+            .any(|reference| reference.sha256 == evidence.sha256)
+    );
+    request.purpose = crate::protocol::provider::InferencePurpose::Compaction;
+    let compact = prepare_context(&request);
+    let body = body(&compact).to_string();
+    assert!(body.contains("Exact document evidence is stored in session history."));
+    assert!(!body.contains("Original scoped document passage."));
+    assert!(
+        !compact
+            .artifact_refs
+            .iter()
+            .any(|reference| reference.sha256 == evidence.sha256)
+    );
 }

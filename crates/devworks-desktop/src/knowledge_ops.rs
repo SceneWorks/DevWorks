@@ -5,6 +5,7 @@ use crate::backend::screen_slot;
 /// The Knowledge requests. The names are persisted (see [`crate::backend::Slot`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum KnowledgeSlot {
+    Documents(crate::documents_ops::DocumentSlot),
     KnowledgeList(u64),
     /// One Knowledge entry with its evidence and history (claim ID).
     KnowledgeRead(String),
@@ -18,7 +19,16 @@ pub enum KnowledgeSlot {
     KnowledgeImportPreview,
     /// The confirmed import.
     KnowledgeImport,
-    /// A Knowledge write (record, revise, tag, lifecycle change, deletion).
+    /// A Knowledge write (record, revise, relate, tag, lifecycle change, deletion).
     KnowledgeWrite,
+    /// A graph read (bundle, entity edges, subgraph, graph query, frontier step) of this
+    /// generation; a reply of an older one is ignored.
+    KnowledgeGraph(u64),
+    /// Publishing a summary of the graph shown (`knowledge.render_summary`), by generation.
+    KnowledgeSummary(u64),
+    /// Reading a published summary's text, by generation.
+    KnowledgeSummaryText(u64),
+    /// The receipt of the last recorded write (write ID).
+    KnowledgeWriteStatus(String),
 }
 screen_slot!(KnowledgeSlot, Knowledge);

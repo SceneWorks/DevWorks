@@ -84,10 +84,6 @@ pub struct Pending {
     pub owner: &'static str,
 }
 
-const fn pending(what: &'static str, owner: &'static str) -> Option<Pending> {
-    Some(Pending { what, owner })
-}
-
 pub static SCREENS: [Screen; 21] = [
     Screen {
         route: Route::Chat,
@@ -238,12 +234,12 @@ pub static SCREENS: [Screen; 21] = [
         summary: "Knowledge consolidation runs and their proposals.",
         group: NavGroup::Intelligence,
         help_topic: "dreaming",
-        subviews: &["Proposals", "Coordinator"],
+        subviews: &[],
         inner_sidebar: Some("Run history"),
         summary_strip: &[],
-        pending: pending("dreaming runs, proposals and revert", "DW-32"),
+        pending: None,
         link: None,
-        owner: ScreenId::Placeholder,
+        owner: ScreenId::Dreaming,
     },
     Screen {
         route: Route::Databases,

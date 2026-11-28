@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Where a Knowledge record lives: general (every project sees it) or one project.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KnowledgeScope {
     Workspace,
     Project(ProjectId),
@@ -104,7 +104,7 @@ pub struct StoredEntity {
 }
 
 /// A lesson's stored rule fields (indexed for lesson filters).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredLesson {
     /// `RuleState` wire name as stored (a recurrence-derived transition is applied on read).
     pub rule_state: String,
@@ -182,7 +182,7 @@ pub struct PriorRule {
 }
 
 /// A claim at its current revision.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StoredClaim {
     pub id: Id,
     pub scope: KnowledgeScope,
@@ -209,6 +209,16 @@ pub struct StoredClaim {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub deleted_at_ms: Option<i64>,
+}
+impl StoredClaim {
+    /// The claim's text: its predicate, value and normalized text, space-separated. The store
+    /// indexes and embeds this text, and `knowledge.search` counts it against a token budget.
+    pub fn text(&self) -> String {
+        let mut parts = vec![self.predicate.as_str()];
+        parts.extend(self.body.value.as_deref());
+        parts.extend(self.body.normalized_text.as_deref());
+        parts.join(" ")
+    }
 }
 
 /// One evidence record.
@@ -431,7 +441,8 @@ pub struct ClaimQuery {
     pub entry_kinds: Vec<String>,
     /// Folded tags the claim must all carry.
     pub tags: Vec<String>,
-    /// Folded words that must all appear in the claim's text or its subject entity's.
+    /// Folded words that must all appear in the claim's text or its subject entity's. With
+    /// words, claims are listed by relevance ([`ClaimRank::Relevance`]) instead of time.
     pub words: Vec<String>,
     /// At most this many matching subject entities contribute (with `words`).
     pub entity_limit: Option<u16>,
@@ -439,6 +450,84 @@ pub struct ClaimQuery {
     pub stale: Option<bool>,
     pub subject_id: Option<Id>,
     pub lesson: Option<LessonFilter>,
+}
+
+/// A claim's sort key in a [`KnowledgeRead::knowledge_claims`] listing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ClaimRank {
+    /// The sort time (a query without words), listed descending.
+    Time(i64),
+    /// The BM25 score (k1 1.2, b 0.75) of the query words over the claim's text plus its
+    /// subject entity's (a query with words), listed descending: higher is a better match.
+    /// Every statistic comes from the query's own scopes.
+    Relevance(f64),
+}
+
+/// A query vector in one qualified embedding space.
+#[derive(Clone, Copy, Debug)]
+pub struct ClaimVectorQuery<'a> {
+    pub space: &'a Id,
+    pub vector: &'a [f32],
+}
+
+/// A candidate source of a query with words ([`KnowledgeRead::knowledge_candidates`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimSource {
+    /// Text matches: every query word in the claim's text or its subject entity's text. Key:
+    /// the BM25 score ([`ClaimRank::Relevance`]), 0.
+    Words,
+    /// Graph matches: claims naming a matched entity as subject or object. A matched entity is
+    /// a live entity of the query's scopes whose text has any query word; the best
+    /// `query.entity_limit` by BM25 over their text (then id descending) are matched. Key: the
+    /// best BM25 score of the claim's matched entities, then its update time.
+    Graph,
+    /// Vector matches: claims with a vector in `near.space` and a positive cosine similarity to
+    /// `near.vector`. Key: the similarity, 0.
+    Vector,
+}
+
+/// One read of a candidate source.
+#[derive(Clone, Copy, Debug)]
+pub struct ClaimCandidateRead<'a> {
+    pub source: ClaimSource,
+    /// The query vector ([`ClaimSource::Vector`] only).
+    pub near: Option<ClaimVectorQuery<'a>>,
+    /// Lists only claims no earlier source lists: graph matches that are not text matches, and
+    /// vector matches that are neither text nor graph matches.
+    pub tail: bool,
+    /// Ids left out (applied before `limit`).
+    pub exclude: &'a [Id],
+    /// The last row's key and id as read.
+    pub after: Option<((f64, i64), &'a str)>,
+    pub limit: u16,
+}
+
+/// A listed candidate: its key in its source's order and its id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimCandidate {
+    pub key: (f64, i64),
+    pub id: Id,
+}
+
+/// One read of a candidate source.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClaimCandidates {
+    pub items: Vec<ClaimCandidate>,
+    /// More entities matched the query's words than `query.entity_limit`.
+    pub entities_limited: bool,
+}
+
+/// A listed claim and its sort key. It reads as the claim it carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RankedClaim {
+    pub rank: ClaimRank,
+    pub claim: StoredClaim,
+}
+impl std::ops::Deref for RankedClaim {
+    type Target = StoredClaim;
+    fn deref(&self) -> &StoredClaim {
+        &self.claim
+    }
 }
 
 /// Counts of one scope set (diagnostics).
@@ -486,15 +575,53 @@ pub trait KnowledgeRead {
         canonical_key: &str,
     ) -> Result<Option<StoredEntity>, StorageError>;
     fn knowledge_claim(&self, id: &Id) -> Result<Option<StoredClaim>, StorageError>;
-    /// Claims matching `query`, ordered by `(sort time, id)` descending, strictly after `after`,
-    /// at most `limit` (1..=[`KNOWLEDGE_PAGE_MAX`]). The sort time is the update time, or for the
-    /// `RecentlyLearned` view the time a rule took effect.
+    /// Claims matching `query`, strictly after `after`, at most `limit`
+    /// (1..=[`KNOWLEDGE_PAGE_MAX`]). A query without words is ordered by `(sort time, id)`
+    /// descending; the sort time is the update time, or for the `RecentlyLearned` view the time
+    /// a rule took effect. A query with words is ordered by relevance descending (best match
+    /// first), then id descending. Scores are computed only for claims that pass the query's
+    /// filters, and their statistics (record count, mean length, document frequency) only from
+    /// the query's scopes, so a write elsewhere never changes a score; a write in a read scope
+    /// advances its revision. `after` is the last row's key as it was read.
     fn knowledge_claims(
         &self,
         query: &ClaimQuery,
-        after: Option<(i64, &str)>,
+        after: Option<(ClaimRank, &str)>,
         limit: u16,
-    ) -> Result<Vec<StoredClaim>, StorageError>;
+    ) -> Result<Vec<RankedClaim>, StorageError>;
+    /// One source's candidates for a query with words ([`ClaimCandidateRead`]), in that source's
+    /// order (key descending, then id descending), strictly after `read.after`, without the
+    /// ids `read.exclude` names, at most `read.limit` (1..=[`KNOWLEDGE_PAGE_MAX`]). The read
+    /// scopes and every other filter of `query` apply in the store before any similarity or
+    /// score is computed; only ids and keys are read, no claim is materialized.
+    fn knowledge_candidates(
+        &self,
+        query: &ClaimQuery,
+        read: &ClaimCandidateRead<'_>,
+    ) -> Result<ClaimCandidates, StorageError>;
+    /// The claims `ids` names that exist, in the order of `ids` (at most
+    /// [`KNOWLEDGE_PAGE_MAX`]), read in one statement.
+    fn knowledge_claims_by_id(&self, ids: &[Id]) -> Result<Vec<StoredClaim>, StorageError>;
+    /// Of the claims of `scopes` that are not deleted: how many have a vector of their current
+    /// text in `space`, and how many there are.
+    fn knowledge_vector_coverage(
+        &self,
+        scopes: &[String],
+        space: &Id,
+    ) -> Result<(i64, i64), StorageError>;
+    /// The scopes with a claim that is not deleted and has no vector in `space`.
+    fn pending_knowledge_vector_scopes(
+        &self,
+        space: &Id,
+    ) -> Result<Vec<KnowledgeScope>, StorageError>;
+    /// Up to `limit` (1..=32) claims of `scope` that are not deleted and have no vector in
+    /// `space`, oldest first, each with the text its vector embeds.
+    fn pending_knowledge_claim_vectors(
+        &self,
+        scope: &KnowledgeScope,
+        space: &Id,
+        limit: u16,
+    ) -> Result<Vec<(Id, String)>, StorageError>;
     /// Live claims of `scopes` about `subject` with `predicate`, at most `limit`.
     fn knowledge_claims_about(
         &self,
@@ -617,6 +744,14 @@ pub trait KnowledgeRead {
     /// Staleness, open challenges, lesson events and deliveries of a claim in one read.
     fn knowledge_claim_tally(&self, claim: &Id) -> Result<ClaimTally, StorageError>;
     fn knowledge_source_head(&self, source_ref: &str) -> Result<Option<String>, StorageError>;
+    /// Distinct sources a claim's verification basis cites that start with `prefix`, in
+    /// order, strictly after `after`, at most `limit` (an index range, never a claim scan).
+    fn knowledge_basis_sources(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<String>, StorageError>;
     /// Non-deleted claims of exactly `scope` whose source is `source`, by id, strictly after
     /// `after`, at most `limit`.
     fn knowledge_source_claims(
@@ -675,8 +810,20 @@ pub trait KnowledgeRepository: KnowledgeRead {
         entity: &StoredEntity,
         expected: Option<i64>,
     ) -> Result<StoredEntity, StorageError>;
+    /// Stores the vectors (1..=32) in the cosine Float32 `space`, each of the claim text it
+    /// embeds, as unit vectors. A claim that is deleted, or whose current text is no longer
+    /// that text, is skipped (its next pending read offers the current text). A vector the
+    /// space cannot hold (wrong length, not finite, zero) is recorded without a vector, so that
+    /// text is no longer pending and is never matched. Returns how many usable vectors were
+    /// stored.
+    fn insert_knowledge_claim_vectors(
+        &mut self,
+        space: &Id,
+        vectors: &[(Id, String, Vec<f32>)],
+    ) -> Result<usize, StorageError>;
     /// Inserts `claim` at revision 1 or replaces it at `expected`, storing `expected + 1`, with
-    /// its tags, basis, evidence links and lexical row (none once deleted).
+    /// its tags, basis, evidence links and lexical row (none once deleted). Its vectors are
+    /// removed when it is deleted or its text changes.
     fn put_knowledge_claim(
         &mut self,
         claim: &StoredClaim,

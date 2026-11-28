@@ -116,6 +116,23 @@ pub fn with(
     build(backend, negotiate, input())
 }
 
+/// [`with`] for a command under the stable request key `key` instead of a fresh one, so a
+/// request replayed after recovery keeps its receipt. No bytes when the frame does not form.
+pub fn with_request_key(
+    backend: &dyn Backend,
+    negotiate: Negotiate,
+    key: &str,
+    input: impl FnOnce() -> Option<OperationInput>,
+) -> Vec<u8> {
+    let Ok(mut frame) =
+        serde_json::from_slice::<serde_json::Value>(&with(backend, negotiate, input))
+    else {
+        return Vec::new();
+    };
+    frame["requestKey"] = json!(key);
+    frame.to_string().into_bytes()
+}
+
 /// The protocol every specialized request names.
 pub const fn protocol() -> Protocol {
     Protocol::Draft1

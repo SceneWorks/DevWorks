@@ -58,6 +58,13 @@ pub struct SearchInput {
     )]
     #[schemars(with = "bool", extend("x-since" = 2))]
     pub stale: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "TokenBudget", extend("x-since" = 31))]
+    pub budget_tokens: Option<TokenBudget>,
 }
 impl Check for SearchInput {
     fn check(&self) -> Result<(), String> {
@@ -72,6 +79,7 @@ impl Check for SearchInput {
         self.entry_kinds.check()?;
         self.source.check()?;
         self.stale.check()?;
+        self.budget_tokens.check()?;
         Ok(())
     }
 }
@@ -88,6 +96,9 @@ impl Revisioned for SearchInput {
         }
         if revision < 2 {
             self.stale = None;
+        }
+        if revision < 31 {
+            self.budget_tokens = None;
         }
     }
 }

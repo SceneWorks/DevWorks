@@ -262,21 +262,22 @@ fn negotiated_revision(
     object: &mut Map<String, Value>,
     descriptor: &'static OperationDescriptor,
 ) -> Result<SchemaRevision, AdmissionError> {
-    let Some(member) = object.remove("schemaRevision") else {
-        return Ok(SchemaRevision::INITIAL);
+    let revision = match object.remove("schemaRevision") {
+        None => SchemaRevision::INITIAL,
+        // Only an integer spelling within the member's range names a revision.
+        Some(member) => {
+            let revision = member
+                .as_u64()
+                .filter(|r| (1..=u64::from(SchemaRevision::MAX.0)).contains(r))
+                .ok_or_else(|| {
+                    AdmissionError::InvalidEnvelope(format!(
+                        "schemaRevision must be an integer from 1 to {}",
+                        SchemaRevision::MAX.0
+                    ))
+                })?;
+            SchemaRevision(revision as u32)
+        }
     };
-    // Only an integer spelling within the member's range names a revision: `1.0`, `2e0`, strings,
-    // 0 and values above the range are a malformed envelope, never a revision to look up.
-    let revision = member
-        .as_u64()
-        .filter(|r| (1..=u64::from(SchemaRevision::MAX.0)).contains(r))
-        .ok_or_else(|| {
-            AdmissionError::InvalidEnvelope(format!(
-                "schemaRevision must be an integer from 1 to {}",
-                SchemaRevision::MAX.0
-            ))
-        })?;
-    let revision = SchemaRevision(revision as u32);
     if !descriptor.supports(revision) {
         return Err(AdmissionError::UnsupportedSchemaRevision {
             operation: descriptor.name,

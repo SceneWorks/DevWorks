@@ -4,9 +4,17 @@
 //! permissioned deletion and source evidence. Every request is the same `knowledge.*`
 //! operation an agent tool submits; this module holds view state and drafts only.
 //!
+//! The graph view ([`graph`]) reads claim and entity bundles, an entity's edges, subgraphs, a
+//! graph query, one frontier step at a time and a rendered summary; the entry detail relates
+//! the selected entry to another (`knowledge.relate`). The Lessons filter can list a lesson
+//! view (`knowledge.tagged_lessons`), and the last write's receipt is read back
+//! (`knowledge.write_status`) so a write still running says so.
+//!
 //! Markers move only on confirmed outcomes: a draft stays in its form until the write is
 //! recorded; a search reply from an older request generation is ignored; a page continuation
 //! whose cursor expired (the scope changed) restarts the listing instead of mixing revisions.
+pub mod graph;
+
 use crate::backend::Backend;
 use crate::frame::{self, Negotiate};
 use crate::ops::{self, Failure};
@@ -15,11 +23,13 @@ use crate::theme;
 use crate::widgets::{self, Tone, ViewState, chip};
 use devworks_core::gateway::{CommandOutcome, QueryOutcome};
 use devworks_core::operations::{OperationInput as In, knowledge};
+use devworks_core::protocol::OperationState;
 use devworks_core::protocol::data::DataScope;
 use devworks_core::protocol::provider::{ArtifactRef, SchemaRef};
 use devworks_core::protocol::records::{
     Applicability, ChallengeOutcome, ClaimDraft, KnowledgeBatch, KnowledgeBundle, KnowledgeClaim,
-    KnowledgeEntityDraft, KnowledgeKind, LessonDraft, LessonSource, PromoteAction, RevisionedRef,
+    KnowledgeEntityDraft, KnowledgeKind, KnowledgeRetrievalMode, KnowledgeSearchResult,
+    KnowledgeWriteReceipt, LessonDraft, LessonSource, PromoteAction, RevisionedRef,
 };
 use devworks_core::protocol::results::OperationResult;
 use devworks_core::protocol::support::{BoundedList, Limit, Probability};
@@ -46,6 +56,28 @@ pub const LIFECYCLES: [&str; 4] = ["Active", "Superseded", "Retracted", "Deleted
 pub const PAGE: u32 = 100;
 /// The scope choice for general (workspace) Knowledge.
 pub const GENERAL: &str = "General (all projects)";
+/// How a person relates two entries (`knowledge.relate` predicates): the label shown and the
+/// predicate sent. `same_as` merges two lessons and `unmerge` undoes that merge.
+pub const RELATIONS: [(&str, &str); 6] = [
+    ("Related to", "related_to"),
+    ("Supports", "supports"),
+    ("Depends on", "depends_on"),
+    ("Contradicts", "contradicts"),
+    ("Same lesson as", "same_as"),
+    ("Unmerge from", "unmerge"),
+];
+/// The lesson views of `knowledge.tagged_lessons` (label, wire name).
+pub const LESSON_VIEWS: [(&str, &str); 5] = [
+    ("All lessons", "All"),
+    ("Recently learned", "RecentlyLearned"),
+    ("Recurring", "Recurring"),
+    ("Unaddressed", "Unaddressed"),
+    ("Undelivered", "Undelivered"),
+];
+/// The rule states a lesson view can narrow to.
+pub const RULE_STATES: [&str; 5] = ["Candidate", "Proposed", "Effective", "Rejected", "Retired"];
+/// The tag every lesson carries (a lesson view lists by tag).
+const LESSON_TAG: &str = "lesson";
 
 /// A Knowledge request at the operation's newest schema revision (so revision-2 members are
 /// kept). A request that did not convert (`None`) is sent as no bytes, which the gateway rejects
@@ -238,6 +270,102 @@ pub enum Submitted {
     Reason(String),
     /// Nothing typed is consumed (tags are re-read from the entry, a cleanup keeps its source).
     Nothing,
+    /// A relation (its predicate) to the entry picked (cleared once recorded, if still picked).
+    Relation {
+        object: Option<Id>,
+        predicate: &'static str,
+    },
+}
+
+/// The last recorded write and its receipt as `knowledge.write_status` reads it back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastWrite {
+    pub label: String,
+    pub write_id: Id,
+    /// The receipt in words (`None` until it is read).
+    pub status: Option<String>,
+    /// Whether the write is still running (a delete by source continuing as a job).
+    pub running: bool,
+}
+
+/// The write ID of a recorded Knowledge write's result.
+fn write_id_of(result: &OperationResult) -> Option<Id> {
+    match result {
+        OperationResult::KnowledgeRecord { value }
+        | OperationResult::KnowledgeRevise { value }
+        | OperationResult::KnowledgeRelate { value }
+        | OperationResult::KnowledgeTag { value }
+        | OperationResult::KnowledgeVerify { value }
+        | OperationResult::KnowledgeRetract { value }
+        | OperationResult::KnowledgeScope { value }
+        | OperationResult::KnowledgePromote { value }
+        | OperationResult::KnowledgeChallenge { value } => Some(value.write_id.clone()),
+        OperationResult::KnowledgeDeleteBySource { value }
+        | OperationResult::KnowledgeDeleteSelected { value } => Some(value.id.clone()),
+        _ => None,
+    }
+}
+
+/// A write receipt in words, and whether the write is still running.
+fn receipt_words(r: &KnowledgeWriteReceipt) -> (String, bool) {
+    let running = matches!(r.state, OperationState::Dispatching);
+    let state = match r.state {
+        OperationState::ObservedComplete => "complete".to_owned(),
+        OperationState::Dispatching => "still running".to_owned(),
+        OperationState::Failed => "failed".to_owned(),
+        OperationState::OutcomeUnknown => "outcome not known yet".to_owned(),
+        ref other => wire_name(other),
+    };
+    let claims = r
+        .claim_count
+        .as_ref()
+        .map_or(r.claim_ids.0.len() as i64, |n| n.get());
+    let entities = r
+        .entity_count
+        .as_ref()
+        .map_or(r.entity_ids.0.len() as i64, |n| n.get());
+    (
+        format!(
+            "{state} · {claims} entries, {entities} entities at revision {}",
+            r.revision.get()
+        ),
+        running,
+    )
+}
+
+/// A relation's refusal in plain words.
+fn relate_refusal(e: &Failure, predicate: &str) -> String {
+    let Failure::Refused(f) = e else {
+        return e.describe();
+    };
+    match (&f.code, f.target_kind.as_ref().map(|k| k.0.as_str())) {
+        (DomainErrorCode::InvalidArgument, Some("object_id")) => {
+            "An entry cannot be related to itself.".into()
+        }
+        (DomainErrorCode::InvalidArgument, Some("contradicts")) => {
+            "Only two entries can contradict each other.".into()
+        }
+        (DomainErrorCode::InvalidArgument, Some("knowledge_lesson")) => {
+            "Same lesson as and Unmerge from relate two lessons: choose two lessons.".into()
+        }
+        (DomainErrorCode::Conflict, Some("knowledge_lifecycle")) => {
+            "One of the lessons is not active, or is not merged into the other. Read them again."
+                .into()
+        }
+        // Only a merge or unmerge of two lessons needs both in the exact scope shown.
+        (DomainErrorCode::PermissionDenied, Some("knowledge_scope"))
+            if matches!(predicate, "same_as" | "unmerge") =>
+        {
+            "Both lessons must belong to the scope shown to merge them.".into()
+        }
+        (DomainErrorCode::PermissionDenied, _) => {
+            "You cannot change Knowledge in this scope.".into()
+        }
+        (DomainErrorCode::NotFound, _) => {
+            "One of the entries is no longer in this scope. Search again.".into()
+        }
+        _ => e.describe(),
+    }
 }
 
 /// One previewed candidate of an import: its outcome code and description.
@@ -375,6 +503,10 @@ pub enum KnowledgeAction {
     /// Confirms the previewed import exactly.
     ConfirmImport,
     CancelImport,
+    /// A graph view request (bundle, edges, subgraph, query, frontier step, summary).
+    Graph(graph::GraphAction),
+    /// Relates the selected entry to the one picked (`knowledge.relate`).
+    Relate,
 }
 
 /// The exact preview of a delete by source.
@@ -399,6 +531,7 @@ pub enum Listed {
 
 #[derive(Default)]
 pub struct KnowledgeScreen {
+    pub documents: crate::documents_screen::DocumentsScreen,
     /// `None`: general (workspace) Knowledge; otherwise one of [`Self::projects`].
     pub project: Option<String>,
     /// The projects the user can see (ID, name), from the projects listing; the only scope
@@ -416,7 +549,11 @@ pub struct KnowledgeScreen {
     pub selected: Option<Id>,
     pub detail: Option<KnowledgeBundle>,
     pub detail_error: Option<String>,
-    pub retrieval: Option<String>,
+    /// The retrieval diagnostic's code and message (`knowledge.diagnostics`).
+    pub retrieval: Option<(String, String)>,
+    /// How the shown search was ranked: its retrieval mode and whether fusion ranked only its
+    /// head (`None` for a lesson listing or a reply without them).
+    pub search_ranking: Option<(KnowledgeRetrievalMode, bool)>,
     pub draft: Option<Draft>,
     /// The write in flight (its label); further writes wait for its outcome.
     pub writing: Option<String>,
@@ -447,6 +584,19 @@ pub struct KnowledgeScreen {
     pub source_preview: Option<SourcePreview>,
     /// A user data import in progress or just finished.
     pub import: Option<ImportStage>,
+    /// The graph view (bundles, edges, subgraphs, query, frontier steps, summary).
+    pub graph: graph::Graph,
+    /// The relation the entry detail sends ([`RELATIONS`] index) and the entry it names.
+    pub relate_predicate: usize,
+    pub relate_object: Option<Id>,
+    /// With Lessons on: a lesson view ([`LESSON_VIEWS`] wire name) lists through
+    /// `knowledge.tagged_lessons`; `None` narrows the search instead.
+    pub lesson_view: Option<&'static str>,
+    /// A lesson view's activity and rule-state filters.
+    pub lesson_activity: String,
+    pub rule_state: Option<&'static str>,
+    /// The last recorded write and its read-back receipt.
+    pub last_write: Option<LastWrite>,
 }
 
 impl KnowledgeScreen {
@@ -528,6 +678,8 @@ impl KnowledgeScreen {
                 }
                 self.claims.reset();
                 self.source_preview = None;
+                self.graph.close();
+                self.relate_object = None;
             }
             self.listed_scope = Some(scope);
         }
@@ -561,12 +713,16 @@ impl KnowledgeScreen {
         let input = match cursor {
             None => first.clone(),
             Some(cursor) => first.clone().and_then(|mut input| {
-                if let In::Knowledge(knowledge::Input::Search(search)) = &mut input {
-                    search.page = frame::page(PAGE, Some(&cursor))?;
-                    Some(input)
-                } else {
-                    None
+                match &mut input {
+                    In::Knowledge(knowledge::Input::Search(search)) => {
+                        search.page = frame::page(PAGE, Some(&cursor))?;
+                    }
+                    In::Knowledge(knowledge::Input::TaggedLessons(lessons)) => {
+                        lessons.page = frame::page(PAGE, Some(&cursor))?;
+                    }
+                    _ => return None,
                 }
+                Some(input)
             }),
         };
         (op, input)
@@ -608,10 +764,130 @@ impl KnowledgeScreen {
                     )?,
                     source: None,
                     stale: None,
+                    // A person searching here pages by count: no token budget.
+                    budget_tokens: None,
                 },
             )))
         };
+        if self.lessons_only
+            && let Some(view) = self.lesson_view
+        {
+            return ("knowledge.tagged_lessons", self.lessons_input(view, cursor));
+        }
         ("knowledge.search", search())
+    }
+    /// A lesson view of the listed scope: the lessons carrying the tags typed (every lesson
+    /// carries `lesson`), narrowed to an activity and rule state when chosen.
+    fn lessons_input(&self, view: &str, cursor: Option<String>) -> Option<In> {
+        let mut tags = split(&self.tags);
+        if tags.is_empty() {
+            tags.push(LESSON_TAG.to_owned());
+        }
+        let activity = self.lesson_activity.trim();
+        let rule_states: Vec<String> = self.rule_state.map(str::to_owned).into_iter().collect();
+        Some(In::Knowledge(knowledge::Input::TaggedLessons(
+            knowledge::TaggedLessonsInput {
+                scope: self.scope()?,
+                tags: BoundedList(frame::texts::<_, 128>(&tags)?.0),
+                page: frame::page(PAGE, cursor.as_deref())?,
+                rule_states: Some(frame::texts(&rule_states)?),
+                activity: frame::lift((!activity.is_empty()).then(|| frame::text(activity)))?,
+                view: Some(frame::text(view)?),
+            },
+        )))
+    }
+    /// The scope graph reads and relations use: the listing's (never one typed and not
+    /// searched).
+    pub fn graph_scope(&self) -> Option<DataScope> {
+        self.scope()
+    }
+    /// The relation the entry detail describes: the selected entry, the relation chosen and
+    /// the entry picked, in the listed scope. `knowledge.relate` names no entry revision: it
+    /// adds a relation record (a merge of two lessons checks that both are active).
+    pub fn relate_input(&self) -> Result<Option<In>, String> {
+        let c = self.selected_claim().ok_or("Select an entry first.")?;
+        let object = self
+            .relate_object
+            .as_ref()
+            .ok_or("Choose the entry to relate it to.")?;
+        if *object == c.id {
+            return Err("An entry cannot be related to itself.".into());
+        }
+        let (_, predicate) = RELATIONS
+            .get(self.relate_predicate)
+            .ok_or("Choose how the entries relate.")?;
+        Ok((|| {
+            Some(In::Knowledge(knowledge::Input::Relate(
+                knowledge::RelateInput {
+                    scope: self.scope()?,
+                    subject_id: c.id.clone(),
+                    predicate: frame::text(predicate)?,
+                    object_id: object.clone(),
+                    evidence_ids: BoundedList(Vec::new()),
+                },
+            )))
+        })())
+    }
+    /// The predicate the relation form sends.
+    pub fn relate_predicate_wire(&self) -> &'static str {
+        RELATIONS
+            .get(self.relate_predicate)
+            .map_or("related_to", |(_, p)| *p)
+    }
+    /// The entries the selected one can be related to: the listing's and the graph view's,
+    /// without the selected entry.
+    pub fn relate_candidates(&self) -> Vec<(Id, String)> {
+        let mut out: Vec<(Id, String)> = Vec::new();
+        let graph = self
+            .graph
+            .view
+            .iter()
+            .flat_map(|v| v.bundle.claims.0.iter());
+        for c in self.claims.items.iter().chain(graph) {
+            if Some(&c.id) == self.selected.as_ref() || out.iter().any(|(id, _)| *id == c.id) {
+                continue;
+            }
+            out.push((c.id.clone(), graph::text_of(c)));
+        }
+        out
+    }
+    /// The `knowledge.write_status` read of the last recorded write: its ID and request.
+    pub fn write_status_input(&self) -> Option<(String, Option<In>)> {
+        let w = self.last_write.as_ref()?;
+        Some((
+            w.write_id.as_str().to_owned(),
+            Some(In::Knowledge(knowledge::Input::WriteStatus(
+                knowledge::WriteStatusInput {
+                    write_id: w.write_id.clone(),
+                    cursor: None,
+                },
+            ))),
+        ))
+    }
+    /// Applies the last write's receipt (ignored when another write is the last now).
+    pub fn write_status_reply(&mut self, write_id: &str, outcome: QueryOutcome) {
+        let Some(w) = self
+            .last_write
+            .as_mut()
+            .filter(|w| w.write_id.as_str() == write_id)
+        else {
+            return;
+        };
+        match ops::query_result(outcome) {
+            Ok((OperationResult::KnowledgeWriteStatus { value }, _)) => {
+                let (words, running) = receipt_words(&value);
+                w.status = Some(words);
+                w.running = running;
+            }
+            Ok((other, _)) => {
+                w.status = Some(format!("unexpected reply {}", other.operation()));
+                w.running = false;
+            }
+            Err(e) => {
+                w.status = Some(format!("its receipt could not be read. {}", e.describe()));
+                w.running = false;
+            }
+        }
     }
     pub fn read_input(&self, claim: &Id) -> Option<In> {
         Some(In::Knowledge(knowledge::Input::Read(
@@ -863,19 +1139,42 @@ impl KnowledgeScreen {
     /// continuation expired because the scope changed) or a gathering re-read needs its next
     /// page.
     pub fn listed(&mut self, generation: u64, outcome: QueryOutcome) -> Listed {
-        match ops::query_result(outcome) {
-            Ok((
-                OperationResult::KnowledgeSearch { value }
-                | OperationResult::KnowledgeTaggedLessons { value },
-                _,
-            )) => {
-                let page = Page::new(value.items.0, value.next_cursor.map(|c| c.0));
-                match self.claims.apply(generation, Ok(page)) {
+        // A search page carries its retrieval mode beside the claims; the listing shows claims.
+        let mut ranking = None;
+        let outcome = ops::query_result(outcome).map(|(result, revision)| {
+            let page = match result {
+                OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Current(value),
+                } => {
+                    ranking = Some((value.mode, value.work_limited));
+                    Ok((value.items.0, value.next_cursor))
+                }
+                OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Legacy(value),
+                }
+                | OperationResult::KnowledgeTaggedLessons { value } => {
+                    Ok((value.items.0, value.next_cursor))
+                }
+                other => Err(other),
+            };
+            (page, revision)
+        });
+        match outcome {
+            Ok((Ok((items, cursor)), _)) => {
+                let page = Page::new(items, cursor.map(|c| c.0));
+                let applied = self.claims.apply(generation, Ok(page));
+                if matches!(
+                    applied,
+                    Applied::Replaced | Applied::Appended | Applied::Continue(_)
+                ) {
+                    self.search_ranking = ranking;
+                }
+                match applied {
                     Applied::Continue(fetch) => Listed::Continue(fetch),
                     _ => Listed::Done,
                 }
             }
-            Ok((other, _)) => {
+            Ok((Err(other), _)) => {
                 let error = format!("Unexpected reply {}", other.operation());
                 self.claims.apply(generation, Err(error));
                 Listed::Done
@@ -1404,7 +1703,7 @@ impl KnowledgeScreen {
                 .0
                 .iter()
                 .find(|d| d.component.0 == "knowledge.retrieval")
-                .map(|d| d.code.0.clone());
+                .map(|d| (d.code.0.clone(), d.message.0.clone()));
         }
     }
     /// Applies a write's outcome; `true` when it was recorded (the listing and selection are
@@ -1446,8 +1745,17 @@ impl KnowledgeScreen {
                         }
                     }
                     Some(Submitted::Reason(r)) if self.reason == r => self.reason.clear(),
+                    Some(Submitted::Relation { object, .. }) if self.relate_object == object => {
+                        self.relate_object = None;
+                    }
                     _ => {}
                 }
+                self.last_write = write_id_of(&result).map(|write_id| LastWrite {
+                    label: label.clone(),
+                    write_id,
+                    status: None,
+                    running: false,
+                });
                 self.source_preview = None;
                 self.message = Some((
                     Tone::Good,
@@ -1478,11 +1786,11 @@ impl KnowledgeScreen {
                 false
             }
             Err(e) => {
-                self.submitted = None;
-                self.message = Some((
-                    Tone::Bad,
-                    format!("{label} was not recorded. {}", e.describe()),
-                ));
+                let words = match self.submitted.take() {
+                    Some(Submitted::Relation { predicate, .. }) => relate_refusal(&e, predicate),
+                    _ => e.describe(),
+                };
+                self.message = Some((Tone::Bad, format!("{label} was not recorded. {words}")));
                 false
             }
         }
@@ -1496,15 +1804,16 @@ impl KnowledgeScreen {
         ui: &mut Ui,
         online: Result<(), &str>,
         actions: &mut Vec<KnowledgeAction>,
+        document_actions: &mut Vec<crate::documents_screen::Action>,
     ) {
         let screen = crate::route::Route::Knowledge.screen();
-        let mut st = (&mut *self, &mut *actions, online);
+        let mut st = (&mut *self, &mut *actions, &mut *document_actions, online);
         widgets::with_right_sidebar(
             ui,
             360.0,
             &mut st,
             |ui, st| {
-                let (s, a, online) = st;
+                let (s, a, documents, online) = st;
                 let tab = s.tab_memory();
                 let (_, tab) = widgets::pane(
                     ui,
@@ -1514,9 +1823,9 @@ impl KnowledgeScreen {
                         tabs: screen.subviews,
                         tab,
                     },
-                    &mut (&mut **s, &mut **a),
+                    &mut (&mut **s, &mut **a, &mut **documents),
                     |ui, st| {
-                        if widgets::secondary_button(ui, "New entry").clicked() {
+                        if tab == 0 && widgets::secondary_button(ui, "New entry").clicked() {
                             st.0.draft = Some(Draft::default());
                             st.0.draft_base = None;
                         }
@@ -1525,14 +1834,8 @@ impl KnowledgeScreen {
                         if tab == 2 {
                             return;
                         }
-                        if tab == 1 {
-                            widgets::state_block(
-                                ui,
-                                &ViewState::Unavailable {
-                                    what: "knowledge documents".into(),
-                                    owner: "DW-35".into(),
-                                },
-                            );
+                        if tab == crate::documents_screen::TAB {
+                            st.0.documents.main(ui, &st.0.projects, *online, st.2);
                             return;
                         }
                         st.0.entries(ui, *online, st.1);
@@ -1541,8 +1844,16 @@ impl KnowledgeScreen {
                 s.set_tab_memory(tab);
             },
             |ui, st| {
-                let (s, a, online) = st;
-                widgets::secondary_pane(ui, "Entry", |ui| s.detail_pane(ui, *online, a));
+                let (s, a, documents, online) = st;
+                if s.tab == crate::documents_screen::TAB {
+                    widgets::secondary_pane(ui, "Document", |ui| {
+                        if online.is_ok() {
+                            s.documents.detail(ui, &s.projects, documents);
+                        }
+                    });
+                } else {
+                    widgets::secondary_pane(ui, "Entry", |ui| s.detail_pane(ui, *online, a));
+                }
             },
         );
     }
@@ -1656,18 +1967,66 @@ impl KnowledgeScreen {
             if ui.checkbox(&mut self.lessons_only, "Lessons").changed() {
                 actions.push(KnowledgeAction::Search);
             }
-            match self.retrieval.as_deref() {
-                Some("LexicalOnly") => {
-                    chip(ui, "Word search only (no embedding route)", Tone::Neutral);
+            if self.lessons_only {
+                self.lesson_filters(ui, actions);
+            }
+            if let Some((code, message)) = &self.retrieval {
+                chip(ui, retrieval_label(code, message), Tone::Neutral);
+            }
+            if let Some((mode, limited)) = &self.search_ranking {
+                let (shown, notice) = ranking_label(mode, *limited);
+                // The diagnostic above names the mode searches run in; the shown search's own
+                // mode is named only where it differs (its query could not be embedded).
+                let diagnosed = self.retrieval.as_ref().map(|(code, _)| code.as_str());
+                if diagnosed != Some(mode_code(mode)) {
+                    chip(ui, shown, Tone::Neutral);
                 }
-                Some(other) => {
-                    chip(ui, other.to_owned(), Tone::Neutral);
+                if let Some(notice) = notice {
+                    chip(ui, notice, Tone::Attention);
                 }
-                None => {}
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut self.graph.query)
+                    .hint_text("Ask the Knowledge graph")
+                    .desired_width(260.0),
+            );
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Query the graph")
+            });
+            let asked = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let idle = !self.graph.loading();
+            let text = self.graph.query.trim().to_owned();
+            if ui
+                .add_enabled(idle && !text.is_empty(), egui::Button::new("Query graph"))
+                .clicked()
+                || (asked && idle && !text.is_empty())
+            {
+                actions.push(KnowledgeAction::Graph(graph::GraphAction::Open(
+                    graph::GraphRead::Query(text),
+                )));
+            }
+            if ui
+                .add_enabled(idle, egui::Button::new("Whole graph"))
+                .clicked()
+            {
+                actions.push(KnowledgeAction::Graph(graph::GraphAction::Open(
+                    graph::GraphRead::Whole { cursor: None },
+                )));
             }
         });
         if let Some((tone, text)) = &self.message {
             chip(ui, text.clone(), *tone);
+        }
+        if let Some(w) = &self.last_write {
+            let status = w.status.as_deref().unwrap_or("reading its receipt…");
+            let tone = if w.running {
+                Tone::Attention
+            } else {
+                Tone::Neutral
+            };
+            chip(ui, format!("Last change: {} · {status}", w.label), tone);
         }
         self.import_section(ui, actions);
         self.cleanup(ui, actions);
@@ -1675,6 +2034,10 @@ impl KnowledgeScreen {
             self.editor(ui, d, actions);
         }
         ui.add_space(6.0);
+        let mut graph_actions = Vec::new();
+        self.graph
+            .panel(ui, online.is_ok(), &self.claims.items, &mut graph_actions);
+        actions.extend(graph_actions.into_iter().map(KnowledgeAction::Graph));
         let (mut reload, mut more) = (false, false);
         let ready = paged::gate(
             ui,
@@ -1741,6 +2104,76 @@ impl KnowledgeScreen {
         }
     }
 
+    /// With Lessons on: the lesson view (a search, or one of `knowledge.tagged_lessons`'
+    /// views) and, for a view, its activity and rule state.
+    fn lesson_filters(&mut self, ui: &mut Ui, actions: &mut Vec<KnowledgeAction>) {
+        const SEARCHED: &str = "Matching the search";
+        let shown = self
+            .lesson_view
+            .and_then(|v| LESSON_VIEWS.iter().find(|(_, w)| *w == v))
+            .map_or(SEARCHED, |(l, _)| *l);
+        egui::ComboBox::from_id_salt("knowledge-lesson-view")
+            .selected_text(shown)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.lesson_view.is_none(), SEARCHED)
+                    .clicked()
+                {
+                    self.lesson_view = None;
+                    actions.push(KnowledgeAction::Search);
+                }
+                for (label, wire) in LESSON_VIEWS {
+                    if ui
+                        .selectable_label(self.lesson_view == Some(wire), label)
+                        .clicked()
+                    {
+                        self.lesson_view = Some(wire);
+                        actions.push(KnowledgeAction::Search);
+                    }
+                }
+            })
+            .response
+            .widget_info(|| {
+                let mut info = egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Lesson view");
+                info.current_text_value = Some(shown.to_owned());
+                info
+            });
+        if self.lesson_view.is_none() {
+            return;
+        }
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut self.lesson_activity)
+                .hint_text("Activity, such as reviewing")
+                .desired_width(160.0),
+        );
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Lesson activity"));
+        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            actions.push(KnowledgeAction::Search);
+        }
+        egui::ComboBox::from_id_salt("knowledge-rule-state")
+            .selected_text(self.rule_state.unwrap_or("Any rule state"))
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(self.rule_state.is_none(), "Any rule state")
+                    .clicked()
+                {
+                    self.rule_state = None;
+                    actions.push(KnowledgeAction::Search);
+                }
+                for state in RULE_STATES {
+                    if ui
+                        .selectable_label(self.rule_state == Some(state), state)
+                        .clicked()
+                    {
+                        self.rule_state = Some(state);
+                        actions.push(KnowledgeAction::Search);
+                    }
+                }
+            })
+            .response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Rule state"));
+    }
+
     fn editor(&mut self, ui: &mut Ui, mut d: Draft, actions: &mut Vec<KnowledgeAction>) {
         egui::Frame::new()
             .stroke(theme::soft_line())
@@ -1786,6 +2219,142 @@ impl KnowledgeScreen {
             });
         if self.draft.is_some() {
             self.draft = Some(d);
+        }
+    }
+
+    /// The selected entry's relations, its way into the graph, and the form that relates it to
+    /// another entry.
+    fn relations(
+        &mut self,
+        ui: &mut Ui,
+        bundle: &KnowledgeBundle,
+        c: &KnowledgeClaim,
+        online: bool,
+        actions: &mut Vec<KnowledgeAction>,
+    ) {
+        let name = |id: &Id| -> String {
+            let graph = self
+                .graph
+                .view
+                .iter()
+                .flat_map(|v| v.bundle.claims.0.iter());
+            bundle
+                .claims
+                .0
+                .iter()
+                .chain(self.claims.items.iter())
+                .chain(graph)
+                .find(|x| x.id == *id)
+                .map(graph::text_of)
+                .or_else(|| {
+                    bundle
+                        .entities
+                        .0
+                        .iter()
+                        .find(|e| e.id == *id)
+                        .map(|e| e.label.0.clone())
+                })
+                .unwrap_or_else(|| id.as_str().to_owned())
+        };
+        widgets::divider(ui);
+        ui.label(RichText::new("Relations").strong());
+        let relations = bundle
+            .relations
+            .as_ref()
+            .map_or(&[][..], |r| r.0.as_slice());
+        if relations.is_empty() {
+            widgets::caption(ui, "No relations recorded.");
+        }
+        for r in relations {
+            let predicate = r.predicate.0.replace('_', " ");
+            widgets::caption(
+                ui,
+                if r.subject_id == c.id {
+                    format!("This entry {predicate} {}", name(&r.object_id))
+                } else {
+                    format!("{} {predicate} this entry", name(&r.subject_id))
+                },
+            );
+        }
+        let idle = online && !self.graph.loading();
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(idle, egui::Button::new("Open claim bundle"))
+                .clicked()
+            {
+                actions.push(KnowledgeAction::Graph(graph::GraphAction::Open(
+                    graph::GraphRead::Claim(c.id.clone()),
+                )));
+            }
+            if ui
+                .add_enabled(idle, egui::Button::new("Open subject entity"))
+                .clicked()
+            {
+                actions.push(KnowledgeAction::Graph(graph::GraphAction::Open(
+                    graph::GraphRead::Entity(c.subject_id.clone()),
+                )));
+            }
+        });
+        let candidates = self.relate_candidates();
+        if self
+            .relate_object
+            .as_ref()
+            .is_some_and(|o| !candidates.iter().any(|(id, _)| id == o))
+        {
+            self.relate_object = None;
+        }
+        let relation = RELATIONS
+            .get(self.relate_predicate)
+            .map_or("Related to", |(l, _)| *l);
+        egui::ComboBox::from_id_salt("knowledge-relation")
+            .selected_text(relation)
+            .show_ui(ui, |ui| {
+                for (i, (label, _)) in RELATIONS.iter().enumerate() {
+                    ui.selectable_value(&mut self.relate_predicate, i, *label);
+                }
+            })
+            .response
+            .widget_info(|| {
+                let mut info = egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Relation");
+                info.current_text_value = Some(relation.to_owned());
+                info
+            });
+        let picked = self
+            .relate_object
+            .as_ref()
+            .and_then(|o| candidates.iter().find(|(id, _)| id == o))
+            .map_or_else(|| "Choose an entry".to_owned(), |(_, t)| t.clone());
+        egui::ComboBox::from_id_salt("knowledge-related-entry")
+            .selected_text(picked.clone())
+            .width(260.0)
+            .show_ui(ui, |ui| {
+                for (id, text) in &candidates {
+                    if ui
+                        .selectable_label(self.relate_object.as_ref() == Some(id), text)
+                        .clicked()
+                    {
+                        self.relate_object = Some(id.clone());
+                    }
+                }
+            })
+            .response
+            .widget_info(|| {
+                let mut info =
+                    egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Related entry");
+                info.current_text_value = Some(picked.clone());
+                info
+            });
+        if candidates.is_empty() {
+            widgets::caption(ui, "List or open another entry to relate this one to it.");
+        }
+        // One write at a time: the button stays disabled while any Knowledge write is in
+        // flight or unconfirmed, and the shell refuses a second submission besides.
+        let ready = online && self.writing.is_none() && self.relate_object.is_some();
+        if ui
+            .add_enabled(ready, egui::Button::new("Relate entries"))
+            .clicked()
+        {
+            actions.push(KnowledgeAction::Relate);
         }
     }
 
@@ -1906,6 +2475,7 @@ impl KnowledgeScreen {
                     widgets::caption(ui, format!("{} · {} by {}", r.revision.get(), r.change.0, r.author_id.0.as_str()));
                 }
             }
+            self.relations(ui, &bundle, &c, online.is_ok(), actions);
             widgets::divider(ui);
             let r = ui.add(egui::TextEdit::singleline(&mut self.tag_edit).hint_text("Tags"));
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Edit tags"));
@@ -2129,6 +2699,210 @@ mod tests {
         assert_eq!(body["destination"], json!({"kind": "Workspace"}));
     }
 
+    fn no_use_case(op: &str) -> QueryOutcome {
+        Err(devworks_core::gateway::GatewayFailure::NoUseCase(op.into()))
+    }
+
+    #[test]
+    fn a_graph_view_stays_until_a_reply_replaces_it_and_older_replies_are_ignored() {
+        let mut g = graph::Graph::default();
+        let scope = Some(DataScope::Workspace);
+        let (first, op, input) = g.begin(scope.clone(), graph::GraphRead::Whole { cursor: None });
+        assert_eq!(op, "knowledge.subgraph");
+        assert_eq!(body_of(input)["query"]["claimIds"], json!([]));
+        let (second, op, input) = g.begin(
+            scope.clone(),
+            graph::GraphRead::Claim(Id::new("claim-1").unwrap()),
+        );
+        assert_eq!(op, "knowledge.claim_bundle");
+        assert_eq!(body_of(input)["query"]["claimIds"], json!(["claim-1"]));
+        g.reply(first, no_use_case("knowledge.subgraph"));
+        assert!(g.loading(), "the newer read is still awaited");
+        assert!(g.error.is_none(), "an older reply never changes the view");
+        g.reply(second, no_use_case("knowledge.claim_bundle"));
+        assert!(!g.loading());
+        assert!(g.error.is_some());
+        // A shown view stays while it is read again, and after a failed re-read.
+        g.view = Some(graph::GraphView {
+            read: graph::GraphRead::Claim(Id::new("claim-1").unwrap()),
+            bundle: serde_json::from_value(json!({"entities": [], "claims": [],
+                "evidence": [], "frontier": [], "truncated": false, "conflicts": [],
+                "supersessionIds": []}))
+            .unwrap(),
+            steps: 0,
+            summary: None,
+        });
+        let (again, op, _) = g.begin_refresh(scope.clone()).expect("a view to re-read");
+        assert_eq!(op, "knowledge.claim_bundle");
+        assert!(g.view.is_some(), "kept until the reply");
+        g.reply(again, no_use_case("knowledge.claim_bundle"));
+        assert!(g.view.is_some(), "a failed re-read keeps what is shown");
+        assert_eq!(
+            g.begin_expand(scope).unwrap_err(),
+            "Nothing is shown to expand from."
+        );
+    }
+
+    #[test]
+    fn a_relation_names_the_selected_entry_the_relation_and_the_entry_picked() {
+        let mut s = showing(general_lesson());
+        assert_eq!(
+            s.relate_input().unwrap_err(),
+            "Choose the entry to relate it to."
+        );
+        s.relate_object = Some(Id::new("claim-g").unwrap());
+        assert_eq!(
+            s.relate_input().unwrap_err(),
+            "An entry cannot be related to itself."
+        );
+        s.relate_object = Some(Id::new("claim-h").unwrap());
+        s.relate_predicate = 3;
+        let body = body_of(s.relate_input().unwrap());
+        assert_eq!(body["subjectId"], json!("claim-g"));
+        assert_eq!(body["objectId"], json!("claim-h"));
+        assert_eq!(body["predicate"], json!("contradicts"));
+        assert_eq!(
+            body["scope"],
+            json!({"kind": "Project", "projectId": "project-x"}),
+            "the listed scope"
+        );
+    }
+
+    fn refused(code: &str, target_kind: &str) -> Failure {
+        Failure::Refused(
+            serde_json::from_value(json!({"code": code, "retry": "Never",
+                "correlationId": "c", "targetKind": target_kind, "blockerIds": []}))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_scope_refusal_reads_as_a_lesson_merge_only_for_a_merge() {
+        let scope = refused("PermissionDenied", "knowledge_scope");
+        for merge in ["same_as", "unmerge"] {
+            assert_eq!(
+                relate_refusal(&scope, merge),
+                "Both lessons must belong to the scope shown to merge them."
+            );
+        }
+        for other in ["related_to", "supports", "contradicts"] {
+            assert_eq!(
+                relate_refusal(&scope, other),
+                "You cannot change Knowledge in this scope."
+            );
+        }
+    }
+
+    fn receipt(state: &str) -> QueryOutcome {
+        Ok(
+            serde_json::from_value(json!({"kind": "Result", "protocol": "1.0-draft.1",
+            "queryId": "q", "stamp": {"storeId": "store", "restoreEpoch": "1", "sequence": "1",
+                "policyRevision": "1", "scopeRevision": "1"},
+            "result": {"kind": "knowledge.write_status", "value": {"writeId": "write-1",
+                "state": state, "entityIds": [], "claimIds": ["c1"], "revision": "3",
+                "diagnostics": []}}}))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_write_still_running_is_marked_until_its_receipt_says_it_is_done() {
+        let mut s = KnowledgeScreen::new();
+        s.last_write = Some(LastWrite {
+            label: "Delete by source".into(),
+            write_id: Id::new("write-1").unwrap(),
+            status: None,
+            running: false,
+        });
+        let (id, input) = s.write_status_input().unwrap();
+        assert_eq!(body_of(input)["writeId"], json!("write-1"));
+        s.write_status_reply(&id, receipt("Dispatching"));
+        let w = s.last_write.as_ref().unwrap();
+        assert!(w.running, "a refresh reads it again");
+        assert!(w.status.as_deref().unwrap().starts_with("still running"));
+        s.write_status_reply("write-other", receipt("ObservedComplete"));
+        assert!(
+            s.last_write.as_ref().unwrap().running,
+            "another write's receipt"
+        );
+        s.write_status_reply(&id, receipt("ObservedComplete"));
+        let w = s.last_write.as_ref().unwrap();
+        assert!(!w.running, "no more re-reads");
+        assert!(w.status.as_deref().unwrap().starts_with("complete"));
+    }
+
+    #[test]
+    fn a_lesson_view_lists_through_tagged_lessons_and_pages_the_same_query() {
+        let mut s = KnowledgeScreen::new();
+        s.lessons_only = true;
+        s.lesson_view = Some("Recurring");
+        s.rule_state = Some("Effective");
+        let (op, input) = s.begin_listing(false);
+        assert_eq!(op, "knowledge.tagged_lessons");
+        let body = body_of(input);
+        assert_eq!(body["tags"], json!(["lesson"]), "every lesson carries it");
+        assert_eq!(body["view"], json!("Recurring"));
+        assert_eq!(body["ruleStates"], json!(["Effective"]));
+        let generation = s.claims.generation();
+        s.claims
+            .apply(generation, Ok(Page::new(Vec::new(), Some("c1".into()))));
+        let (op, input) = s.begin_listing(true);
+        assert_eq!(op, "knowledge.tagged_lessons");
+        assert_eq!(body_of(input)["page"]["cursor"], json!("c1"));
+    }
+
+    #[test]
+    fn a_search_page_shows_its_mode_and_says_when_its_results_are_limited() {
+        use devworks_core::protocol::records::KnowledgeSearchPage;
+        use devworks_core::protocol::results::DomainQueryReply;
+        use devworks_core::protocol::{Counter, Protocol, QueryId, ReadStamp, Revision, StoreId};
+        let reply = |mode, work_limited| {
+            Ok(DomainQueryReply::Result {
+                protocol: Protocol::Draft1,
+                query_id: QueryId(Id::new("q").unwrap()),
+                stamp: ReadStamp {
+                    store_id: StoreId(Id::new("store-1").unwrap()),
+                    restore_epoch: Counter::new(0).unwrap(),
+                    sequence: Counter::new(1).unwrap(),
+                    policy_revision: Revision::new(1).unwrap(),
+                    scope_revision: Revision::new(1).unwrap(),
+                },
+                result: OperationResult::KnowledgeSearch {
+                    value: KnowledgeSearchResult::Current(KnowledgeSearchPage {
+                        items: BoundedList(Vec::new()),
+                        next_cursor: None,
+                        has_more: false,
+                        mode,
+                        work_limited,
+                        approximate_tokens: None,
+                        budget_tokens: None,
+                    }),
+                },
+            })
+        };
+        let mut s = KnowledgeScreen::new();
+        s.begin_listing(false);
+        let generation = s.claims.generation();
+        s.listed(generation, reply(KnowledgeRetrievalMode::Hybrid, true));
+        let Some((mode, limited)) = &s.search_ranking else {
+            panic!("the ranking is kept")
+        };
+        let (shown, notice) = ranking_label(mode, *limited);
+        assert!(shown.contains("meaning"), "{shown}");
+        assert!(notice.unwrap().starts_with("Results limited"));
+        s.begin_listing(false);
+        let generation = s.claims.generation();
+        s.listed(
+            generation,
+            reply(KnowledgeRetrievalMode::LexicalOnly, false),
+        );
+        let (mode, limited) = s.search_ranking.as_ref().unwrap();
+        let (shown, notice) = ranking_label(mode, *limited);
+        assert!(!shown.contains("meaning"), "{shown}");
+        assert!(notice.is_none());
+        assert_eq!(mode_code(mode), "LexicalOnly");
+    }
+
     #[test]
     fn a_reply_of_a_superseded_listing_is_ignored() {
         let mut s = KnowledgeScreen::new();
@@ -2147,5 +2921,57 @@ mod tests {
             s.claims.error.is_none(),
             "a stale reply never overwrites state"
         );
+    }
+}
+
+/// The retrieval diagnostic's code for a search's mode.
+fn mode_code(mode: &KnowledgeRetrievalMode) -> &'static str {
+    match mode {
+        KnowledgeRetrievalMode::Hybrid => "Hybrid",
+        KnowledgeRetrievalMode::LexicalOnly => "LexicalOnly",
+    }
+}
+
+/// What the shown search's ranking says: its mode, and a notice when fusion ranked only its
+/// first claims.
+fn ranking_label(mode: &KnowledgeRetrievalMode, limited: bool) -> (String, Option<String>) {
+    let shown = match mode {
+        KnowledgeRetrievalMode::Hybrid => "This search: words, meaning and related entities",
+        KnowledgeRetrievalMode::LexicalOnly => "This search: words and related entities",
+    };
+    let notice = limited.then(|| {
+        format!(
+            "Results limited: the best {} matches of each kind are ranked together; the rest \
+             follow in each kind's own order",
+            devworks_core::services::knowledge::CANDIDATES
+        )
+    });
+    (shown.into(), notice)
+}
+
+/// The retrieval mode as the user reads it: what kind of search runs, then the diagnostic's
+/// own words (the embedding space for hybrid search, the reason for word search only).
+fn retrieval_label(code: &str, message: &str) -> String {
+    match code {
+        "Hybrid" => format!("Word and meaning search. {message}"),
+        "LexicalOnly" => format!("Word search only. {message}"),
+        other => format!("{other}. {message}"),
+    }
+}
+
+#[cfg(test)]
+mod retrieval_label_tests {
+    #[test]
+    fn each_retrieval_mode_names_its_space_or_reason() {
+        let hybrid = super::retrieval_label(
+            "Hybrid",
+            "Retrieval is hybrid in embedding space space-1 (m, 2 dimensions).",
+        );
+        assert!(hybrid.starts_with("Word and meaning search.") && hybrid.contains("space-1"));
+        let lexical = super::retrieval_label(
+            "LexicalOnly",
+            "Retrieval is lexical only (NoClaimVectors): none has a vector.",
+        );
+        assert!(lexical.starts_with("Word search only.") && lexical.contains("NoClaimVectors"));
     }
 }

@@ -2,7 +2,7 @@
 
 2 November 2026 · Candidate schemas, not production service acceptance. This reference is generated from the same explicit source as the native DTOs and coverage register. Read [the normative contracts](domain-operation-contracts.html) for scope, admission, results, faults and recovery. Optional fields use `?T`; all ordinary records/actions reject unknown fields. `Items`, `NonEmpty`, `Rows`, `Page`, text, counters, money and descriptor-bound JSON are defined there.
 
-All 387 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
+All 391 qualified operations have typed input/result candidates. Existing input selectors retain their earlier schemas. The host must apply selected operation/mode, current authority and semantic rules; schema validity alone cannot authorize or complete work.
 
 ## Operation families
 
@@ -268,7 +268,7 @@ All 387 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit`<br>`states`: `?Items<KnowledgeLifecycle>`<br>`entryKinds`: `?Items<KnowledgeEntryKind>`<br>`source`: `?Label`<br>`stale`: `?bool`<br><br>**Schema revisions** 1, 2, 3, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<KnowledgeClaim>` |
+| `knowledge.search` | **Query**<br>`scope`: `DataScope`<br>`text`: `Text`<br>`tags`: `Items<Label>`<br>`kinds`: `Items<KnowledgeKind>`<br>`page`: `PageRequest`<br>`entityLimit`: `Limit`<br>`claimLimit`: `Limit`<br>`states`: `?Items<KnowledgeLifecycle>`<br>`entryKinds`: `?Items<KnowledgeEntryKind>`<br>`source`: `?Label`<br>`stale`: `?bool`<br>`budgetTokens`: `?TokenBudget`<br><br>**Schema revisions** 1, 2, 3, 8, 30, 31 ([revision 31 input](contracts/domain-request.r31.schema.json)) | `KnowledgeSearchResult` |
 | `knowledge.read` | **Query**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`revision`: `?Revision`<br><br>**Schema revisions** 1, 2, 3, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `KnowledgeBundle` |
 | `knowledge.record` | **Command**<br>`scope`: `DataScope`<br>`batch`: `KnowledgeBatch`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
 | `knowledge.revise` | **Command**<br>`scope`: `DataScope`<br>`claimId`: `Id`<br>`expectedRevision`: `Revision`<br>`replacement`: `ClaimDraft`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
@@ -299,14 +299,14 @@ All 387 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `dreaming.run` | **Command**<br>`scope`: `DataScope`<br>`expectedSettingsRevision`: `Revision`<br>`resumeRunId`: `?Id` | `DreamRun` |
-| `dreaming.runs` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest` | `Page<DreamRun>` |
-| `dreaming.report` | **Query**<br>`runId`: `Id` | `DreamRun` |
-| `dreaming.settings` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `DreamConfig` | `DreamSettingsRecord` |
-| `dreaming.instructions` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef`<br><br>**Schema revisions** 1, 8 ([revision 8 input](contracts/domain-request.r8.schema.json)) | `Page<InstructionRecord>` |
-| `dreaming.propose` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`content`: `ArtifactRef` | `ProposalRecord` |
-| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `Id`<br>`expectedChangeDigest`: `Digest`<br><br>**Schema revisions** 1, 2 ([revision 2 input](contracts/domain-request.r2.schema.json)) | `KnowledgeWriteReceipt` |
-| `dreaming.review` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content` | `ProposalRecord` |
+| `dreaming.run` | **Command**<br>`scope`: `DataScope`<br>`expectedSettingsRevision`: `Revision`<br>`resumeRunId`: `?Id`<br>`cancelRunId`: `?Id`<br><br>**Schema revisions** 1, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `DreamRun` |
+| `dreaming.runs` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br><br>**Schema revisions** 1, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `Page<DreamRun>` |
+| `dreaming.report` | **Query**<br>`runId`: `Id`<br><br>**Schema revisions** 1, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `DreamRun` |
+| `dreaming.settings` | **Query**<br>`scope`: `DataScope`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`config`: `DreamConfig`<br><br>**Schema revisions** 1, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `DreamSettingsRecord` |
+| `dreaming.instructions` | **Query**<br>`scope`: `DataScope`<br>`page`: `?PageRequest`<br><br>**Command**<br>`scope`: `DataScope`<br>`expectedRevision`: `Revision`<br>`content`: `ArtifactRef`<br><br>**Schema revisions** 1, 8, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `Page<InstructionRecord>` |
+| `dreaming.propose` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`claimIds`: `NonEmpty<RevisionedRef>`<br>`content`: `ArtifactRef`<br>`change`: `?DreamProposalChange`<br>`evidence`: `?NonEmpty<DreamEvidenceReference>`<br>`rationale`: `?Content`<br>`prevalence`: `?Content`<br><br>**Schema revisions** 1, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `ProposalRecord` |
+| `dreaming.revert` | **Command**<br>`runId`: `Id`<br>`expectedRevision`: `Revision`<br>`proposalId`: `?Id`<br>`expectedChangeDigest`: `Digest`<br>`allChanges`: `?bool`<br><br>**Schema revisions** 1, 2, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `DreamRevertResult` |
+| `dreaming.review` | **Command**<br>`proposalId`: `Id`<br>`expectedRevision`: `Revision`<br>`decision`: `ProposalDecision`<br>`rationale`: `Content`<br><br>**Schema revisions** 1, 24 ([revision 24 input](contracts/domain-request.r24.schema.json)) | `ProposalRecord` |
 
 ### Documents
 
@@ -314,16 +314,20 @@ All 387 qualified operations have typed input/result candidates. Existing input 
 
 | Operation | Mode and input fields | Typed result value |
 | --- | --- | --- |
-| `documents.import` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`title`: `Label`<br>`replaceDocumentId`: `?Id`<br>`expectedRevision`: `?Revision` | `DocumentRecord` |
-| `documents.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`retrievalEnabled`: `?bool` | `Page<DocumentRecord>` |
-| `documents.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'} | `DocumentRecord` |
+| `documents.import` | **Command**<br>`scope`: `DataScope`<br>`source`: `ArtifactRef`<br>`title`: `Label`<br>`replaceDocumentId`: `?Id`<br>`expectedRevision`: `?Revision`<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/domain-request.r27.schema.json)) | `DocumentResult` |
+| `documents.list` | **Query**<br>`scope`: `DataScope`<br>`page`: `PageRequest`<br>`retrievalEnabled`: `?bool`<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/domain-request.r27.schema.json)) | `DocumentListResult` |
+| `documents.read` | **Query**<br>[Existing input schema](contracts/artifact-query-request.schema.json)<br>{'pointer': '/query/kind', 'equals': 'Read'}<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/artifact-query-request.r3.schema.json)) | `DocumentResult` |
 | `documents.search` | **Query**<br>[Existing input schema](contracts/retrieval-request.schema.json)<br>None | `RetrievalPage` |
-| `documents.share` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Share'} | `DocumentRecord` |
-| `documents.move` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Move'} | `DocumentRecord` |
-| `documents.index` | **Command**<br>`documentId`: `Id`<br>`versionId`: `Id`<br>`expectedRevision`: `Revision` | `IndexRunRecord` |
+| `documents.share` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Share'}<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/artifact-command-request.r3.schema.json)) | `DocumentResult` |
+| `documents.move` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'Move'}<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/artifact-command-request.r3.schema.json)) | `DocumentResult` |
+| `documents.index` | **Command**<br>`documentId`: `Id`<br>`versionId`: `Id`<br>`expectedRevision`: `Revision`<br>`reextract`: `?bool`<br><br>**Schema revisions** 1, 27 ([revision 27 input](contracts/domain-request.r27.schema.json)) | `IndexRunRecord` |
 | `documents.retry` | **Command**<br>`documentId`: `Id`<br>`versionId`: `Id`<br>`expectedRevision`: `Revision` | `IndexRunRecord` |
-| `documents.disable_retrieval` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'DisableRetrieval'} | `DocumentRecord` |
-| `documents.remove_index` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RemoveIndex'} | `DocumentRecord` |
+| `documents.disable_retrieval` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'DisableRetrieval'}<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/artifact-command-request.r3.schema.json)) | `DocumentResult` |
+| `documents.remove_index` | **Command**<br>[Existing input schema](contracts/artifact-command-request.schema.json)<br>{'pointer': '/command/kind', 'equals': 'RemoveIndex'}<br><br>**Schema revisions** 1, 25, 28 ([revision 28 input](contracts/artifact-command-request.r3.schema.json)) | `DocumentResult` |
+| `documents.resolve_citation` | **Query**<br>`citation`: `Citation`<br><br>**Schema revisions** 26 ([revision 26 input](contracts/domain-request.r26.schema.json)) | `ResolvedDocumentCitation` |
+| `documents.transfer_propose` | **Command**<br>`documentId`: `Id`<br>`expectedDocumentRevision`: `Revision`<br>`expectedScopeRevision`: `Revision`<br>`destinationRootId`: `RootId`<br>`sourceNeedsDocument`: `bool`<br>`summary`: `Label`<br><br>**Schema revisions** 29 ([revision 29 input](contracts/domain-request.r29.schema.json)) | `DocumentTransferRecord` |
+| `documents.transfer_respond` | **Command**<br>`transferId`: `Id`<br>`expectedRevision`: `Revision`<br>`destinationNeedsDocument`: `bool`<br><br>**Schema revisions** 29 ([revision 29 input](contracts/domain-request.r29.schema.json)) | `DocumentTransferRecord` |
+| `documents.transfer_status` | **Query**<br>`transferId`: `Id`<br><br>**Schema revisions** 29 ([revision 29 input](contracts/domain-request.r29.schema.json)) | `DocumentTransferRecord` |
 
 ### Artifacts
 
@@ -2086,6 +2090,39 @@ Before revision 3: exact legacy `Page<ClusterRecord>`. Revision 3 and later: `An
 | `checkpoint` | `?ArtifactRef` |
 | `report` | `?ArtifactRef` |
 | `proposalIds` | `Items<Id>` |
+| `detail` | `?DreamRunDetail` · *revision 24+* |
+
+### DreamRunStatus
+
+`Queued`, `Running`, `Disabled`, `Busy`, `TooSoon`, `NoSignal`, `Blocked`, `BudgetExhausted`, `Partial`, `Failed`, `Cancelled`, `OutcomeUnknown`, `ScheduledFanout`, `Completed`.
+
+### DreamRunTrigger
+
+`Manual`, `Scheduled`, `Resume`.
+
+### DreamRunDetail
+
+| Field | Type |
+| --- | --- |
+| `status` | `DreamRunStatus` |
+| `trigger` | `DreamRunTrigger` |
+| `initiator` | `ActorId` |
+| `startedAtMs` | `Counter` |
+| `endedAtMs` | `?Counter` |
+| `settingsRevision` | `Revision` |
+| `baseInstructionRevision` | `?Revision` |
+| `projectInstructionRevision` | `?Revision` |
+| `modelId` | `?Id` |
+| `connectionId` | `?Id` |
+| `inputTokens` | `Counter` |
+| `outputTokens` | `Counter` |
+| `costMicroUsd` | `Counter` |
+| `usageUncertain` | `bool` |
+| `continuedFrom` | `?Id` |
+| `canContinue` | `bool` |
+| `reason` | `?Label` |
+| `journalDigest` | `?Digest` |
+| `evidence` | `?ArtifactRef` |
 
 ### DreamConfig
 
@@ -2095,6 +2132,71 @@ Before revision 3: exact legacy `Page<ClusterRecord>`. Revision 3 and later: `An
 | `instructions` | `ArtifactRef` |
 | `scheduleId` | `?Id` |
 | `batchLimit` | `Limit` |
+| `modelId` | `?Id` · *revision 24+* |
+| `effort` | `?EffortName` · *revision 24+* |
+| `minimumIntervalMs` | `?Counter` · *revision 24+* |
+| `maxTurns` | `?PositiveCounter` · *revision 24+* |
+| `maxTokens` | `?PositiveCounter` · *revision 24+* |
+| `maxElapsedMs` | `?PositiveCounter` · *revision 24+* |
+| `maxMicroUsd` | `?Counter` · *revision 24+* |
+
+### DreamEvidenceKind
+
+`Knowledge`, `Lesson`, `Review`, `RepositorySource`, `Graph`, `Work`, `PriorAction`.
+
+### DreamEvidenceReference
+
+| Field | Type |
+| --- | --- |
+| `kind` | `DreamEvidenceKind` |
+| `reference` | `Text` |
+| `fingerprint` | `Digest` |
+| `summary` | `Content` |
+
+### DreamProposalChange
+
+| Kind | Fields |
+| --- | --- |
+| `Retract` | No caller fields |
+| `Supersede` | `replacement`: `ClaimDraft` |
+| `Merge` | `other`: `RevisionedRef` |
+| `SkillDraft` | No caller fields |
+| `HookDraft` | No caller fields |
+| `TestDraft` | No caller fields |
+
+### DreamRevertOutcome
+
+| Field | Type |
+| --- | --- |
+| `runId` | `Id` |
+| `applied` | `Rows<Id>` |
+| `conflicts` | `Rows<DreamRevertConflict>` |
+| `remaining` | `Counter` |
+
+### DreamRevertConflict
+
+| Field | Type |
+| --- | --- |
+| `actionId` | `Id` |
+| `targetId` | `Id` |
+| `expectedRevision` | `Revision` |
+| `currentRevision` | `?Revision` |
+
+### DreamRevertResult
+
+Before revision 24: exact legacy `KnowledgeWriteReceipt`. Revision 24 and later: `DreamRevertOutcome`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### DocumentTransferState
+
+`Pending`, `Shared`, `Moved`, `Declined`.
+
+### DocumentTransferRecord
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `state` | `DocumentTransferState` |
 
 ### DocumentRecord
 
@@ -2109,6 +2211,106 @@ Before revision 3: exact legacy `Page<ClusterRecord>`. Revision 3 and later: `An
 | `retrievalEnabled` | `bool` |
 | `extractionState` | `ItemState` |
 | `coverage` | `Coverage` |
+
+### DocumentIndexAttempt
+
+| Field | Type |
+| --- | --- |
+| `attemptId` | `Id` |
+| `projectId` | `?ProjectId` |
+| `purpose` | `Id` |
+| `modelId` | `Id` |
+| `connectionId` | `Id` |
+| `endpointProfile` | `Id` |
+| `providerModel` | `?Label` |
+| `inputTokens` | `?Counter` |
+| `outputTokens` | `?Counter` |
+| `pricedMicroUsd` | `?Counter` |
+| `pricingClassification` | `Id` |
+| `monetaryComplete` | `bool` |
+| `state` | `Id` |
+
+### DocumentIndexActivity
+
+| Field | Type |
+| --- | --- |
+| `runId` | `Id` |
+| `stage` | `Id` |
+| `indexedAtMs` | `?Counter` |
+| `chunkCount` | `?Counter` |
+| `attempts` | `Items<DocumentIndexAttempt>` |
+| `moreAttempts` | `bool` |
+
+### DocumentVisionOccurrence
+
+| Field | Type |
+| --- | --- |
+| `location` | `Label` |
+| `status` | `Id` |
+
+### DocumentInspection
+
+| Field | Type |
+| --- | --- |
+| `originalName` | `?Label` |
+| `originalSource` | `?Label` |
+| `tags` | `ArtifactTags` |
+| `shares` | `Items<ProjectId>` |
+| `moreShares` | `bool` |
+| `visionStatus` | `Id` |
+| `visionModel` | `?Id` |
+| `visionConnection` | `?Id` |
+| `visionOccurrences` | `Items<DocumentVisionOccurrence>` |
+| `moreVisionOccurrences` | `bool` |
+
+### DocumentDetail
+
+| Field | Type |
+| --- | --- |
+| `id` | `Id` |
+| `revision` | `Revision` |
+| `scopeRevision` | `Revision` |
+| `referenceRevision` | `Revision` |
+| `scope` | `DataScope` |
+| `title` | `Label` |
+| `currentVersion` | `?ArtifactRef` |
+| `selectedVersion` | `?ArtifactRef` |
+| `deletedSelectedVersionId` | `?Id` |
+| `deletedSelectedAtMs` | `?Counter` |
+| `deletedCurrentVersionId` | `?Id` |
+| `deletedCurrentAtMs` | `?Counter` |
+| `retainedVersions` | `Rows<ArtifactRef>` |
+| `retainedVersionCount` | `Counter` |
+| `nextVersionCursor` | `?Cursor` |
+| `retrievalEnabled` | `bool` |
+| `extractionState` | `ItemState` |
+| `coverage` | `Coverage` |
+| `indexActivity` | `?DocumentIndexActivity` · *revision 28+* |
+| `inspection` | `?DocumentInspection` · *revision 28+* |
+
+### DocumentLibraryPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<DocumentDetail>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `snapshotRevision` | `Revision` |
+
+### DocumentResult
+
+Before revision 25: exact legacy `DocumentRecord`. Revision 25 and later: `DocumentDetail`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### DocumentListResult
+
+Before revision 25: exact legacy `Page<DocumentRecord>`. Revision 25 and later: `DocumentLibraryPage`. Successful selection outcomes project to the legacy claim; an outcome without a claim cannot be represented by a fabricated legacy record.
+
+### ResolvedDocumentCitation
+
+| Field | Type |
+| --- | --- |
+| `citation` | `Citation` |
+| `text` | `Text` |
 
 ### InstructionRecord
 
@@ -4596,6 +4798,26 @@ Before revision 3: exact legacy `ClaimRecord`. Revision 3 and later: `Allocation
 | `items` | `Rows<KnowledgeReviewItem>` |
 | `nextCursor` | `?Cursor` |
 | `hasMore` | `bool` |
+
+### KnowledgeRetrievalMode
+
+`Hybrid`, `LexicalOnly`.
+
+### KnowledgeSearchPage
+
+| Field | Type |
+| --- | --- |
+| `items` | `Rows<KnowledgeClaim>` |
+| `nextCursor` | `?Cursor` |
+| `hasMore` | `bool` |
+| `mode` | `KnowledgeRetrievalMode` |
+| `workLimited` | `bool` |
+| `approximateTokens` | `?Counter` · *revision 31+* |
+| `budgetTokens` | `?TokenBudget` · *revision 31+* |
+
+### KnowledgeSearchResult
+
+Before revision 30: exact legacy `Page<KnowledgeClaim>`. Revision 30 and later: `KnowledgeSearchPage`. The page projects to the legacy page with the same items, order and continuation, without the members revision 30 adds.
 
 ### NotificationLink
 

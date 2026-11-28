@@ -21,6 +21,7 @@ pub fn bound_spec(
         capture_output: true,
         merge_output: false,
         no_child_processes: false,
+        memory_limit_bytes: None,
         control_pipe: None,
         pipe_stdin: false,
         stdin: None,

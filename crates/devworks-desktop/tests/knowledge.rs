@@ -40,6 +40,15 @@ fn scope_label(h: &egui_kittest::Harness<'_, devworks_desktop::shell::Shell>) ->
         .unwrap_or_default()
 }
 
+/// How many claims a search page lists, at any schema revision.
+fn search_len(value: &devworks_core::protocol::records::KnowledgeSearchResult) -> usize {
+    use devworks_core::protocol::records::KnowledgeSearchResult;
+    match value {
+        KnowledgeSearchResult::Current(page) => page.items.0.len(),
+        KnowledgeSearchResult::Legacy(page) => page.items.0.len(),
+    }
+}
+
 #[test]
 fn the_scope_comes_from_visible_projects_and_follows_the_navigation() {
     let root = Root::new("knowledge-scope");
@@ -82,7 +91,7 @@ fn the_scope_comes_from_visible_projects_and_follows_the_navigation() {
     .0
     {
         devworks_core::protocol::results::OperationResult::KnowledgeSearch { value } => {
-            value.items.0.len()
+            search_len(&value)
         }
         other => panic!("{other:?}"),
     };
@@ -172,9 +181,9 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
         has_text(&h, "Word search only"),
         "retrieval reports lexical-only mode, never vector search"
     );
-    // Documents belong to their own item and say so.
+    // Documents is its own native Knowledge tab.
     click(&mut h, Role::Button, "Documents");
-    assert!(has_text(&h, "DW-35"));
+    assert!(has_text(&h, "No documents in this scope."));
     click(&mut h, Role::Button, "Entries");
 
     // Manual creation of a decision.
@@ -259,7 +268,7 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     match page.0 {
         devworks_core::protocol::results::OperationResult::KnowledgeSearch { value } => {
             assert_eq!(
-                value.items.0.len(),
+                search_len(&value),
                 1,
                 "the agent tool path sees the same change"
             );
@@ -297,6 +306,8 @@ fn entries_are_created_searched_inspected_and_changed_through_the_shared_operati
     ));
     assert!(recorded.is_ok(), "{recorded:?}");
     h.state_mut().knowledge.lessons_only = false;
+    // The lesson view controls leave with Lessons: render that before clicking below them.
+    settle(&mut h);
     h.get_by_label("Clean up by source").click();
     settle(&mut h);
     type_into(&mut h, "Cleanup source", "test-run-9");
@@ -408,7 +419,7 @@ fn an_unknown_write_blocks_new_saves_and_is_confirmed_once_at_the_next_launch() 
     .unwrap();
     match page.0 {
         devworks_core::protocol::results::OperationResult::KnowledgeSearch { value } => {
-            assert_eq!(value.items.0.len(), 1, "recorded exactly once");
+            assert_eq!(search_len(&value), 1, "recorded exactly once");
         }
         other => panic!("{other:?}"),
     }

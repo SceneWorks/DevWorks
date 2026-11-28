@@ -265,6 +265,9 @@ impl ApprovalService {
                             return Err(conflict(id));
                         }
                     }
+                    Some("DreamingProposal") => {
+                        crate::services::dreaming::proposals::decide_effect(tx, ctx, &p, true)?;
+                    }
                     None if p.operation_kind == "github.issue_update" => {
                         let mut work = tx
                             .work()
@@ -406,6 +409,11 @@ impl ApprovalService {
                             "rationale": i.rationale.0}),
                     )?;
                 }
+            }
+            if !approve
+                && p.operation_kind == crate::services::dreaming::proposals::PROPOSAL_OPERATION
+            {
+                crate::services::dreaming::proposals::decide_effect(tx, ctx, &p, false)?;
             }
             let mut changed = p.clone();
             changed.revision += 1;

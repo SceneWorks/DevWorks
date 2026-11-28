@@ -1,6 +1,5 @@
 use super::statement::{CheckedStatement, DataMode};
 use super::{native_storage, sensitive};
-use crate::authority;
 use crate::authority::destructive::{EntryKind, FilesystemResolver};
 use crate::context::InvocationContext;
 use crate::ports::database::data::{
@@ -274,7 +273,7 @@ pub(super) fn check_fences(
     let stamp = read.stamp();
     if &stamp.store_id != context.store_id()
         || stamp.restore_epoch != context.restore_epoch().get()
-        || !authority::authorization_holds(read, authorization)?
+        || !crate::services::fences::authorization_holds(read, authorization)?
     {
         return Err(StorageError::ScopeDenied);
     }

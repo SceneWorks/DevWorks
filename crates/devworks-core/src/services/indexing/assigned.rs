@@ -147,7 +147,7 @@ fn queue_current(
     write_options.cancellation = cancellation.cloned();
     let run = run_write(&*env.store, write_options, move |tx| {
         if worktree_for_write(tx, &ctx2)?.as_ref() != Some(&checkout)
-            || !crate::authority::authorization_holds_in(tx, &ctx2, &auth)?
+            || !crate::services::fences::authorization_holds_in(tx, &ctx2, &auth)?
         {
             return Err(StorageError::ScopeDenied);
         }
