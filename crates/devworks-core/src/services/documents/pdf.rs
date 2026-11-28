@@ -82,6 +82,10 @@ pub struct PdfPageText {
     pub page: u32,
     pub text: String,
     pub coverage: PdfTextCoverage,
+    /// The page draws images, such as a scanned body under a text header. Direct text never
+    /// reads them, so the page needs a raster whatever its text coverage.
+    #[serde(default)]
+    pub draws_images: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

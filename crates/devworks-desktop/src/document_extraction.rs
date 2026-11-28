@@ -67,15 +67,12 @@ impl NativeDocumentProcessor {
         let mut remaining = limits.normalized_bytes;
         for page in pages {
             control.check().map_err(|error| diagnostic("Pdf", error))?;
-            match page.coverage {
-                PdfTextCoverage::NeedsRaster => {
-                    gaps.insert("PdfPageNeedsRaster");
-                    vision_targets.push(VisionTarget::Pdf { page: page.page });
-                }
-                PdfTextCoverage::Partial => {
-                    gaps.insert("PdfLayoutPartial");
-                }
-                PdfTextCoverage::Text => {}
+            if page.coverage == PdfTextCoverage::Partial {
+                gaps.insert("PdfLayoutPartial");
+            }
+            if page.coverage == PdfTextCoverage::NeedsRaster || page.draws_images {
+                gaps.insert("PdfPageNeedsRaster");
+                vision_targets.push(VisionTarget::Pdf { page: page.page });
             }
             let body = normalize_text(&page.text, remaining, control)
                 .map_err(|error| diagnostic("Pdf", error))?;

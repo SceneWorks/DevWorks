@@ -28,6 +28,7 @@ use std::{
 };
 
 const MIXED: &[u8] = include_bytes!("fixtures/pdf/mixed.pdf");
+const SCANNED_WITH_TEXT: &[u8] = include_bytes!("fixtures/pdf/scanned-with-text.pdf");
 const ENCRYPTED: &[u8] = include_bytes!("fixtures/pdf/encrypted.pdf");
 const BROKEN: &[u8] = include_bytes!("fixtures/pdf/broken.pdf");
 const PDFIUM_SCAN: &[u8] = include_bytes!("fixtures/pdf/pdfium-7881-scan.png");
@@ -522,4 +523,29 @@ fn visible_page_with_render_omission_fails_the_complete_raster_contract() {
         run(&worker(), &authored(&objects), PdfOperation::RenderPage(1)).unwrap_err(),
         PdfFailure::RenderUnsupported
     );
+}
+
+#[test]
+fn a_scanned_body_under_direct_text_still_needs_a_raster() {
+    let PdfResult::Pages { pages } =
+        run(&worker(), SCANNED_WITH_TEXT, PdfOperation::ReadPages).unwrap()
+    else {
+        panic!("expected page evidence");
+    };
+    // Page 1 draws an image XObject below a header; page 2 an inline image above a footer.
+    let seen: Vec<_> = pages
+        .iter()
+        .map(|page| (page.text.as_str(), page.coverage, page.draws_images))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("Inspection report header", PdfTextCoverage::Text, true),
+            ("Page 2 footer", PdfTextCoverage::Text, true),
+        ]
+    );
+    let PdfResult::Pages { pages } = run(&worker(), MIXED, PdfOperation::ReadPages).unwrap() else {
+        panic!("expected page evidence");
+    };
+    assert!(!pages[0].draws_images, "a text-only page draws no image");
 }

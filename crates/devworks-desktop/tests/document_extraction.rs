@@ -21,6 +21,7 @@ use std::{
 
 const MIXED: &[u8] = include_bytes!("fixtures/pdf/mixed.pdf");
 const ENCRYPTED: &[u8] = include_bytes!("fixtures/pdf/encrypted.pdf");
+const SCANNED_WITH_TEXT: &[u8] = include_bytes!("fixtures/pdf/scanned-with-text.pdf");
 
 fn exact(bytes: &[u8]) -> ArtifactRef {
     ArtifactRef {
@@ -201,4 +202,39 @@ fn without_pdf_worker_word_still_renders_supported_image_only_placements() {
         )
         .unwrap();
     assert!(captured);
+}
+
+#[test]
+fn a_scanned_body_under_a_text_header_is_a_vision_target_not_complete_text() {
+    use devworks_core::protocol::data::CoverageState;
+    let desktop = std::env::var_os("DEVWORKS_PDF_PACKAGED_DESKTOP")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_devworks-desktop")));
+    let processor =
+        NativeDocumentProcessor::beside_desktop(&desktop, Arc::new(NativeProcessHost)).unwrap();
+    let revision = processor.revision();
+    let control = ExtractionControl {
+        deadline: Instant::now() + Duration::from_secs(10),
+        cancelled: &|| false,
+    };
+    let reference = exact(SCANNED_WITH_TEXT);
+    let pdf = processor
+        .extract(
+            ExtractionInput {
+                version: &reference,
+                revision: &revision,
+                bytes: SCANNED_WITH_TEXT,
+            },
+            &control,
+        )
+        .unwrap();
+    // The header and footer are indexed, and the scanned bodies wait for vision.
+    let text: Vec<_> = pdf.blocks.iter().map(|block| block.text.as_str()).collect();
+    assert_eq!(text, ["Inspection report header", "Page 2 footer"]);
+    assert!(matches!(pdf.coverage.state, CoverageState::Partial));
+    assert_eq!(pdf.coverage.gaps, [Id::new("PdfPageNeedsRaster").unwrap()]);
+    assert!(matches!(
+        pdf.vision_targets.as_slice(),
+        [VisionTarget::Pdf { page: 1 }, VisionTarget::Pdf { page: 2 }]
+    ));
 }

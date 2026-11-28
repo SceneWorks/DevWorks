@@ -110,8 +110,14 @@ fn read_pages(
         let content = text::page(doc, id, text_bytes, control);
         check(control)?;
         let mut coverage = PdfTextCoverage::Text;
+        let mut draws_images = false;
         let text = match content {
-            Ok((text, partial)) => {
+            Ok(text::Page {
+                text,
+                partial,
+                draws_images: images,
+            }) => {
+                draws_images = images;
                 let text = normalize_text(text.trim_end_matches('\n'), text_bytes, control)
                     .map_err(control_error)?;
                 if partial {
@@ -152,6 +158,7 @@ fn read_pages(
             page,
             text,
             coverage,
+            draws_images,
         });
     }
     check(control)?;

@@ -1,5 +1,6 @@
 //! Direct page text in content-stream order. Unavailable operands, forms and ambiguous
 //! positioning are reported as partial instead of claiming complete visual reading order.
+//! Images the page draws are reported apart from its text: direct text never reads them.
 use super::{STREAM_LIMIT, check, parse_error};
 use devworks_core::services::documents::{extraction::ExtractionControl, pdf::PdfFailure};
 use lopdf::{Dictionary, Document, Encoding, Object, ObjectId, content::Content};
@@ -10,7 +11,7 @@ pub(super) fn page(
     id: ObjectId,
     maximum: usize,
     control: &ExtractionControl<'_>,
-) -> Result<(String, bool), PdfFailure> {
+) -> Result<Page, PdfFailure> {
     let content = doc
         .get_page_content_with_limit(id, STREAM_LIMIT)
         .and_then(|bytes| Content::decode_strict(&bytes))
@@ -42,6 +43,7 @@ pub(super) fn page(
     let mut current = None;
     let mut saved = Vec::new();
     let mut baseline: Option<f32> = None;
+    let mut draws_images = false;
 
     for operation in &content.operations {
         check(control)?;
@@ -112,7 +114,10 @@ pub(super) fn page(
                     collector.partial = true;
                 }
             }
-            "Do" if !is_image(operands, pictures, doc) => collector.partial = true,
+            "Do" if is_image(operands, pictures, doc) => draws_images = true,
+            "Do" => collector.partial = true,
+            // A decoded inline image is a BI operation holding the image.
+            "BI" => draws_images = true,
             "BDC" | "DP"
                 if operands.first().and_then(|tag| tag.as_name().ok()) == Some(b"OC")
                     || operands
@@ -125,7 +130,18 @@ pub(super) fn page(
             _ => {}
         }
     }
-    Ok((collector.value, collector.partial))
+    Ok(Page {
+        text: collector.value,
+        partial: collector.partial,
+        draws_images,
+    })
+}
+
+/// One page's direct text, whether that text is partial, and whether the page draws images.
+pub(super) struct Page {
+    pub text: String,
+    pub partial: bool,
+    pub draws_images: bool,
 }
 
 fn is_image(operands: &[Object], pictures: Option<&Dictionary>, doc: &Document) -> bool {
