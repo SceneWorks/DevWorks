@@ -57,6 +57,20 @@ fn wait_for_index(h: &mut Harness<'_, Shell>) {
     });
 }
 
+/// Waits out a background access re-check: while it runs the detail pane shows only
+/// "Checking access to retained sources…" (DW-463), so its text and controls are absent.
+fn wait_for_access(h: &mut Harness<'_, Shell>) {
+    step_until(
+        h,
+        "the document detail is shown after its access check",
+        |shell| {
+            let docs = &shell.knowledge.documents;
+            !docs.validating_access && docs.detail.is_some()
+        },
+    );
+    h.step();
+}
+
 fn resolve(b: &dyn devworks_desktop::backend::Backend, citation: Citation) -> String {
     let request = frame::build(
         b,
@@ -218,9 +232,11 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
         .expect("dropped original");
     click(&mut h, Role::Button, "Index document");
     wait_for_index(&mut h);
+    wait_for_access(&mut h);
     assert!(has_text(&h, "Owner · Archive A"));
     // Pick while the popup is open: a settle here can run a refresh that re-checks access,
     // which hides the picker for a frame and closes its popup.
+    wait_for_access(&mut h);
     h.get_by_role_and_label(Role::ComboBox, "Destination project")
         .click();
     h.step();
