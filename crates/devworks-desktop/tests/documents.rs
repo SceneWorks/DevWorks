@@ -17,7 +17,10 @@ use devworks_desktop::{
     documents_ops, documents_screen::Change, frame, ops, route::Route, shell::Shell,
 };
 use eframe::egui::accesskit::Role;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use std::sync::Arc;
 
 fn open_tab(h: &mut Harness<'_, Shell>) {
@@ -216,10 +219,16 @@ fn dropped_source_is_shared_and_moved_by_the_real_scope_controls() {
     click(&mut h, Role::Button, "Index document");
     wait_for_index(&mut h);
     assert!(has_text(&h, "Owner · Archive A"));
+    // Pick while the popup is open: a settle here can run a refresh that re-checks access,
+    // which hides the picker for a frame and closes its popup.
     h.get_by_role_and_label(Role::ComboBox, "Destination project")
         .click();
-    settle(&mut h);
-    h.get_by_label("Archive B").click();
+    h.step();
+    h.step();
+    h.query_all_by_label("Archive B")
+        .find(|n| n.accesskit_node().role() != Role::ComboBox)
+        .expect("Archive B in the destination picker")
+        .click();
     settle(&mut h);
     click(&mut h, Role::Button, "Share document");
     assert!(has_text(&h, "Document shared."));
