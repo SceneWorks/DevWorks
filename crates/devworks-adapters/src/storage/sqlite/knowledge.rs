@@ -857,7 +857,11 @@ fn candidates(
         .map(|i| format!("?{i} IS NOT NULL"))
         .collect::<Vec<_>>()
         .join(" AND ");
-    let graph = format!("(c.subject_id IN ({subjects}) OR c.object_id IN ({subjects}))");
+    // Null-safe: a claim without an object is not a graph match, so `NOT {graph}` keeps it.
+    let graph = format!(
+        "(c.subject_id IN ({subjects}) OR (c.object_id IS NOT NULL AND c.object_id IN \
+         ({subjects})))"
+    );
     let text = format!("({})", lexical.join(" AND "));
     let excluded: HashSet<&str> = read.exclude.iter().map(Id::as_str).collect();
     let mut keyed: Vec<((f64, i64), String)> = match read.source {

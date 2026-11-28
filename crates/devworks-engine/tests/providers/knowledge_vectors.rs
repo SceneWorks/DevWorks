@@ -513,17 +513,27 @@ fn every_meaning_match_past_the_cap_is_listed_once_after_the_fused_head() {
             &values,
         ));
     }
+    // The query names this entity, so the graph source has a subject to match. The garage
+    // claims have no object: the tail must still list them as meaning matches.
+    all.extend(record_about(
+        &f,
+        &cases,
+        &a,
+        "zebra",
+        "Zebra",
+        &["striped animal"],
+    ));
     // The first delivery embeds every claim of the scope, batch by batch; the later ones find
     // none pending.
-    reply_batches(&f, n);
+    reply_batches(&f, n + 1);
     embed(&f, &service);
     assert_eq!(pending(&f, &index, &a), 0);
     let jobs = vector_jobs(&f);
     assert_eq!((jobs.ready, jobs.failed), (0, 0), "{jobs:?}");
-    // No claim shares the query's word: every one is a meaning match only.
+    // No garage claim shares the query's word: every one is a meaning match only.
     let (listed, limited) = every_page(&f, &cases, &a, "zebra", 50, [1.0, 0.0]);
     assert!(limited, "the meaning source is past its cap");
-    assert_eq!(listed.len(), n);
+    assert_eq!(listed.len(), n + 1);
     let mut sorted = listed.clone();
     sorted.sort_by(|x, y| x.as_str().cmp(y.as_str()));
     sorted.dedup();
