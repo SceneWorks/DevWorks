@@ -184,6 +184,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # The desktop partition's debug build outgrew the hosted runner's free disk (DW-427).
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          df -h /
+          # Toolchains this project never uses; Chrome (/opt/google) stays for the egress test.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
@@ -208,6 +216,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      # The engine partition builds as much as the desktop one, which outgrew the runner's disk.
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          df -h /
+          # Toolchains this project never uses; Chrome (/opt/google) stays for the egress test.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install toolchain from rust-toolchain.toml
         shell: bash
