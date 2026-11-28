@@ -521,6 +521,9 @@ impl KnowledgeCtl<'_, '_> {
                             && !matches!(detail.scope, DataScope::Workspace)
                         {
                             self.knowledge.documents.select(None);
+                            // Clearing the selection voids the access check in flight; check
+                            // the remaining results and citation again.
+                            self.verify_document_access();
                             self.document_message(
                                 Tone::Attention,
                                 "This version moved to another scope.",
@@ -725,6 +728,7 @@ impl KnowledgeCtl<'_, '_> {
                     .is_some_and(|source| source.artifact_id == detail.id)
                 {
                     self.knowledge.documents.select(None);
+                    self.verify_document_access();
                 }
                 self.document_message(Tone::Good, "Document moved.");
             }
