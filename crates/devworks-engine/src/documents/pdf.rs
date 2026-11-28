@@ -21,6 +21,8 @@ use std::{
 };
 
 const POLL: Duration = Duration::from_millis(10);
+/// How long a transport failure waits for the worker's exit before it is reported as is.
+const EXIT_GRACE: Duration = Duration::from_secs(2);
 
 /// Opens the worker shipped beside the native app. User document data never supplies a path or
 /// command. Invocation owns both the private pipe and the native tree until they are collected.
@@ -197,6 +199,10 @@ fn wait_for_reply(
     control: &ExtractionControl<'_>,
 ) -> Result<PdfReply, PdfFailure> {
     let mut reply = None;
+    // A worker that dies mid-reply closes its pipe before its exit is observed, so the
+    // transport reports a short read first. Hold that error until the exit shows whether the
+    // worker crashed, for at most EXIT_GRACE.
+    let mut failed: Option<(PdfFailure, Instant)> = None;
     loop {
         check(control)?;
         let tree = child.poll().map_err(|_| PdfFailure::Crashed)?;
@@ -210,10 +216,18 @@ fn wait_for_reply(
         {
             return Err(PdfFailure::MemoryLimit);
         }
-        if reply.is_none() {
+        if let Some((error, at)) = &failed
+            && (tree.empty || at.elapsed() >= EXIT_GRACE)
+        {
+            return Err(*error);
+        }
+        if reply.is_none() && failed.is_none() {
             match recv.try_recv() {
-                Ok(result) => reply = Some(result?),
-                Err(mpsc::TryRecvError::Disconnected) => return Err(PdfFailure::InvalidResponse),
+                Ok(Ok(result)) => reply = Some(result),
+                Ok(Err(error)) => failed = Some((error, Instant::now())),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    failed = Some((PdfFailure::InvalidResponse, Instant::now()))
+                }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -256,4 +270,91 @@ fn exchange(
         return Err(PdfFailure::OutputLimit);
     }
     serde_json::from_slice(&output).map_err(|_| PdfFailure::InvalidResponse)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use devworks_core::ports::process::{NativeIdentity, ProcessError, TreeStatus};
+
+    /// A tree that reports `running` polls as live, then exits with `exit_code`.
+    struct Exiting {
+        identity: NativeIdentity,
+        running: usize,
+        exit_code: Option<i32>,
+    }
+
+    impl ProcessTree for Exiting {
+        fn identity(&self) -> &NativeIdentity {
+            &self.identity
+        }
+        fn request_stop(&mut self) -> Result<bool, ProcessError> {
+            Ok(true)
+        }
+        fn kill(&mut self) -> Result<(), ProcessError> {
+            Ok(())
+        }
+        fn poll(&mut self) -> Result<TreeStatus, ProcessError> {
+            let empty = self.running == 0;
+            self.running = self.running.saturating_sub(1);
+            Ok(TreeStatus {
+                empty,
+                exit_code: if empty { self.exit_code } else { None },
+                signal: None,
+            })
+        }
+        fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)> {
+            None
+        }
+    }
+
+    fn outcome(transport: PdfFailure, running: usize, exit_code: Option<i32>) -> PdfFailure {
+        let mut tree = Exiting {
+            identity: NativeIdentity {
+                pid: 1,
+                birth: "test".into(),
+                group: None,
+            },
+            running,
+            exit_code,
+        };
+        let (send, recv) = mpsc::sync_channel(1);
+        // The transport fails before the first poll sees the tree end.
+        send.send(Err(transport)).unwrap();
+        let control = ExtractionControl {
+            deadline: Instant::now() + Duration::from_secs(10),
+            cancelled: &|| false,
+        };
+        wait_for_reply(&mut tree, &recv, &control).unwrap_err()
+    }
+
+    #[test]
+    fn a_short_read_before_an_abnormal_exit_is_a_crash() {
+        assert_eq!(
+            outcome(PdfFailure::InvalidResponse, 3, Some(101)),
+            PdfFailure::Crashed
+        );
+        assert_eq!(
+            outcome(PdfFailure::InvalidResponse, 3, None),
+            PdfFailure::Crashed
+        );
+    }
+
+    #[test]
+    fn a_malformed_reply_from_a_normal_exit_stays_invalid() {
+        assert_eq!(
+            outcome(PdfFailure::InvalidResponse, 3, Some(0)),
+            PdfFailure::InvalidResponse
+        );
+    }
+
+    #[test]
+    fn a_transport_failure_from_a_live_worker_is_reported_after_the_grace() {
+        let started = Instant::now();
+        assert_eq!(
+            outcome(PdfFailure::InvalidResponse, usize::MAX, Some(0)),
+            PdfFailure::InvalidResponse
+        );
+        assert!(started.elapsed() >= EXIT_GRACE);
+    }
 }
