@@ -1,5 +1,8 @@
 //! Native workspace chat consumes one saved message at a time, shared by Home and its sidebar.
-use crate::agent_turns::ToolWindowSweep;
+use crate::background_turn::{
+    TurnEnd, TurnSource, dispatching_attempt, invalid, prepared_turn, provider_fault,
+    recorded_turn, recover_interruption,
+};
 use crate::dispatch::{
     Consumer, Delivery, DeliveryHandler, EffectCapacity, EffectExecutor, EffectFuture,
     EffectResult, Outcome, RetryPolicy, ScopedEffectFuture,
@@ -8,18 +11,13 @@ use crate::providers::sink::ProviderResult;
 use crate::turn_engine::TurnEngine;
 use devworks_core::context::{HostIngress, InvocationContext, PrincipalKind, WorkspaceReply};
 use devworks_core::ports::storage::{
-    AttemptRecord, Cancellation, EventFilter, OperationRecord, QueueState, ReadOptions,
-    ReadSnapshot, StorageError, StoredSession, Wake, WatchEventState, WriteOptions,
-    WriteTransaction, read_snapshot,
+    Cancellation, EventFilter, OperationRecord, QueueState, ReadOptions, ReadSnapshot,
+    StorageError, StoredSession, WatchEventState, WriteOptions, WriteTransaction, read_snapshot,
 };
-use devworks_core::protocol::provider::{
-    ArtifactRef, EndpointProfile, InferenceInput, NativeBinding, TranscriptBody, UserContent,
-};
-use devworks_core::protocol::records::RouteChoice;
+use devworks_core::protocol::provider::TranscriptBody;
 use devworks_core::protocol::{Counter, Id, OperationId, OperationState, Revision};
-use devworks_core::providers::context::{GenerationParameters, ProviderContext, TextBlock};
 use devworks_core::services::sessions::workspace_reply::{CAPABILITY, CONSUMER, ReplyIntent};
-use devworks_core::services::usage::{accounting::AttemptEnd, host::DriveOutcome};
+use devworks_core::services::usage::accounting::AttemptEnd;
 use devworks_core::settings::catalog::AgentRole;
 use serde_json::{Value, json};
 use std::sync::{Arc, OnceLock, Weak};
@@ -210,161 +208,6 @@ impl EffectExecutor for ReplyEffects {
     }
 }
 
-#[derive(Clone)]
-struct PreparedReply {
-    request_id: Id,
-    head: ArtifactRef,
-    compaction_source: Option<ArtifactRef>,
-    sweep: ToolWindowSweep,
-}
-
-fn prepared_reply(attempt: &AttemptRecord) -> Result<Option<PreparedReply>, StorageError> {
-    attempt
-        .observations
-        .iter()
-        .rev()
-        .find(|value| value.get("requestId").is_some())
-        .map(|value| {
-            Ok(PreparedReply {
-                request_id: serde_json::from_value(value["requestId"].clone()).map_err(invalid)?,
-                head: serde_json::from_value(value["head"].clone()).map_err(invalid)?,
-                compaction_source: serde_json::from_value(value["compactionSource"].clone())
-                    .map_err(invalid)?,
-                sweep: value
-                    .get("toolWindowSweep")
-                    .cloned()
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .map_err(invalid)?
-                    .map(ToolWindowSweep::restore)
-                    .transpose()?
-                    .unwrap_or_default(),
-            })
-        })
-        .transpose()
-}
-
-fn invalid(error: impl ToString) -> StorageError {
-    StorageError::InvalidRecord(error.to_string())
-}
-
-struct RecordedReply {
-    provider: ProviderResult,
-    published: Option<ArtifactRef>,
-}
-
-async fn recorded_reply(
-    engine: &TurnEngine,
-    operation: &OperationId,
-    intent: &ReplyIntent,
-    prepared: &PreparedReply,
-) -> Result<Option<RecordedReply>, StorageError> {
-    let (engine_for_read, operation, intent, prepared) = (
-        engine.clone(),
-        operation.clone(),
-        intent.clone(),
-        prepared.clone(),
-    );
-    tokio::task::spawn_blocking(move || {
-        let engine = engine_for_read;
-        let admitted = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-            let session = session_for_reply(read, &intent)?;
-            let route = read.router().route_request(&prepared.request_id)?;
-            if route
-                .as_ref()
-                .is_some_and(|route| route.session_id.as_ref() != Some(&session.id))
-            {
-                return Err(StorageError::ScopeDenied);
-            }
-            let Some(route) = route else {
-                return Ok(false);
-            };
-            let journal = read
-                .operations()
-                .operation(&route.operation_id)?
-                .ok_or(StorageError::ScopeDenied)?;
-            Ok(!journal.attempts.is_empty())
-        })?;
-        if !admitted {
-            return Ok(None);
-        }
-        let provider = engine
-            .providers()
-            .ok_or(StorageError::ScopeDenied)?
-            .recorded_result(&prepared.request_id, &prepared.request_id)?;
-        let published = if let Some(attempt) = &provider.attempt_id {
-            if provider.source_context.as_ref() != Some(&prepared.head) {
-                return Err(StorageError::ScopeDenied);
-            }
-            read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-                let inference = read
-                    .usage()
-                    .inference_attempt(&attempt.0)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if inference.actor_id != intent.agent_id
-                    || inference.session_id.as_ref() != Some(&intent.session_id)
-                    || inference.request_id != prepared.request_id
-                {
-                    return Err(StorageError::ScopeDenied);
-                }
-                if let Some(source) = &prepared.compaction_source {
-                    let binding = provider.binding.as_ref().ok_or(StorageError::ScopeDenied)?;
-                    let next = binding
-                        .context_epoch
-                        .get()
-                        .checked_add(1)
-                        .ok_or(StorageError::ScopeDenied)?;
-                    let Some(epoch) = read.sessions().epoch(&intent.session_id, next)? else {
-                        return Ok(None);
-                    };
-                    let artifact: ArtifactRef =
-                        serde_json::from_value(epoch.context).map_err(invalid)?;
-                    let version = read
-                        .artifacts()
-                        .version(&artifact.version_id)?
-                        .ok_or(StorageError::ScopeDenied)?;
-                    let derived = &version.source["derived"];
-                    if derived["workspaceReply"] != json!(operation.0)
-                        || derived["sourceContext"] != json!(source)
-                        || derived["reason"] != "Compaction"
-                    {
-                        return Err(StorageError::ScopeDenied);
-                    }
-                    return Ok(Some(artifact));
-                }
-                let Some(head) = read
-                    .sessions()
-                    .provider_context_head(&intent.session_id)?
-                    .filter(|head| {
-                        head.kind == "ProviderTurnContinuation"
-                            && head.attempt_id.as_ref() == Some(&attempt.0)
-                    })
-                else {
-                    return Ok(None);
-                };
-                let artifact: ArtifactRef =
-                    serde_json::from_value(head.artifact).map_err(invalid)?;
-                let version = read
-                    .artifacts()
-                    .version(&artifact.version_id)?
-                    .ok_or(StorageError::ScopeDenied)?;
-                if version.source["derived"]["workspaceReply"] != json!(operation.0) {
-                    return Err(StorageError::ScopeDenied);
-                }
-                Ok(Some(artifact))
-            })?
-        } else {
-            None
-        };
-        Ok(Some(RecordedReply {
-            provider,
-            published,
-        }))
-    })
-    .await
-    .map_err(invalid)?
-}
-
 fn completed(intent: &ReplyIntent, result: &ProviderResult) -> Value {
     json!({
         "kind":"WorkspaceReplyCompleted", "sessionId":intent.session_id,
@@ -477,7 +320,7 @@ async fn settle_from_evidence(
             saved,
         ));
     }
-    let Some(prepared) = prepared_reply(attempt)? else {
+    let Some(prepared) = prepared_turn(attempt)? else {
         return Ok(EffectResult::NotApplied(
             "No provider request was prepared.".into(),
         ));
@@ -491,7 +334,8 @@ async fn settle_from_evidence(
         .is_some_and(|boot| boot != &attempt.boot_id);
     let unknown =
         || EffectResult::Unknown("The workspace reply still needs reconciliation.".into());
-    let Some(recorded) = recorded_reply(engine, &operation.id, &intent, &prepared).await? else {
+    let source = TurnSource::Workspace(intent.clone());
+    let Some(recorded) = recorded_turn(engine, &operation.id, &source, &prepared).await? else {
         return Ok(if previous_boot {
             EffectResult::NotApplied("The earlier boot did not admit this provider request.".into())
         } else {
@@ -560,7 +404,7 @@ async fn run(
     engine: &TurnEngine,
     operation: OperationRecord,
     stopping: &Cancellation,
-    mut capacity: Option<EffectCapacity<'_>>,
+    capacity: Option<EffectCapacity<'_>>,
 ) -> EffectResult {
     let (intent, attempt_no) = match (&operation.capability[..], operation.latest_attempt()) {
         (CAPABILITY, Some(attempt)) if operation.state == OperationState::Dispatching => {
@@ -602,466 +446,26 @@ async fn run(
             Err(error) => return EffectResult::Unknown(error.to_string()),
         }
     }
-    let mut sweep =
-        match resume_recorded_turn(engine, &ctx, &intent, &operation, attempt_no, stopping).await {
-            Ok(sweep) => sweep,
-            Err(outcome) => return outcome,
-        };
-    let mut generation = match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
-        Ok(value) => value,
-        Err(error) => {
-            if stopping.is_cancelled() {
-                return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
-            }
-            return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
-        }
-    };
-    for _ in 0..64 {
-        if stopping.is_cancelled() {
-            return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
-        }
-        match compact_workspace(
-            engine,
-            &ctx,
-            &generation,
-            (&operation.id, attempt_no),
-            sweep,
-            stopping,
-        )
-        .await
-        {
-            Ok(CompactionStep::Published) => {
-                match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
-                    Ok(next) => generation = next,
-                    Err(_) if stopping.is_cancelled() => {
-                        return EffectResult::Unknown(
-                            "Workspace reply paused for shutdown.".into(),
-                        );
-                    }
-                    Err(error) => {
-                        return settled(engine, &operation.id, attempt_no, unavailable(error))
-                            .await;
-                    }
-                }
-            }
-            Ok(CompactionStep::NotNeeded) => {}
-            Ok(CompactionStep::Unavailable(detail)) => {
-                return settled(engine, &operation.id, attempt_no, unavailable(detail)).await;
-            }
-            Err(error) => return EffectResult::Unknown(error.to_string()),
-        }
-        let window = sweep.window(generation.windows);
-        let request = match crate::agent_turns::plan_generation_window(
-            engine,
-            &ctx,
-            &generation.route,
-            &generation.binding,
-            &generation.head,
-            window,
-        ) {
-            Ok(request) => request,
-            Err(error) => {
-                return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
-            }
-        };
-        let prepared = PreparedReply {
-            request_id: request.logical.request_id.clone(),
-            head: generation.head.clone(),
-            compaction_source: None,
-            sweep,
-        };
-        if let Err(error) = save_prepared(engine, &operation.id, attempt_no, &prepared).await {
-            return EffectResult::Unknown(error.to_string());
-        }
-        let changes = engine.state_changes();
-        let progress = match engine
-            .produce_and_dispatch_native_turn(request, Some(stopping.clone()))
-            .await
-        {
-            Ok(progress) => progress,
-            Err(error) => return EffectResult::Unknown(error.to_string()),
-        };
-        match progress.provider.result.outcome {
-            Some(AttemptEnd::Completed) if progress.continuation.is_some() => {
-                if sweep.complete_window() {
-                    return settled(
-                        engine,
-                        &operation.id,
-                        attempt_no,
-                        completed(&intent, &progress.provider.result),
-                    )
-                    .await;
-                }
-            }
-            Some(AttemptEnd::ToolCallsReady) => {
-                if progress.continuation.is_none()
-                    && let Err(error) = finish_tools(
-                        engine,
-                        &ctx,
-                        &intent.session_id,
-                        &prepared,
-                        &progress.provider.result,
-                        changes,
-                        stopping,
-                    )
-                    .await
-                {
-                    return EffectResult::Unknown(error.to_string());
-                }
-                sweep.after_tools();
-            }
-            Some(AttemptEnd::UnknownTail) | Some(AttemptEnd::Completed) => {
-                return EffectResult::Unknown("Workspace provider outcome is unresolved.".into());
-            }
-            None if matches!(
-                progress.provider.accounting,
-                DriveOutcome::AlreadyDispatched
-            ) =>
-            {
-                return EffectResult::Unknown(
-                    "Workspace provider request is already dispatched.".into(),
-                );
-            }
-            _ => {
-                if let Err(error) =
-                    recover_interruption(engine, ctx.clone(), intent.session_id.clone()).await
-                {
-                    return EffectResult::Unknown(error.to_string());
-                }
-                return settled(
-                    engine,
-                    &operation.id,
-                    attempt_no,
-                    unavailable(provider_fault(&progress.provider.result)),
-                )
-                .await;
-            }
-        }
-        match prepare(engine, &ctx, &intent, stopping, capacity.as_mut()).await {
-            Ok(next) => generation = next,
-            Err(_) if stopping.is_cancelled() => {
-                return EffectResult::Unknown("Workspace reply paused for shutdown.".into());
-            }
-            Err(error) => {
-                return settled(engine, &operation.id, attempt_no, unavailable(error)).await;
-            }
-        }
-    }
-    settled(
-        engine,
-        &operation.id,
-        attempt_no,
-        unavailable("Workspace reply exceeded its tool-turn limit."),
+    let source = TurnSource::Workspace(intent.clone());
+    let end = crate::background_turn::drive(
+        engine, &ctx, &source, &operation, attempt_no, stopping, capacity, None,
     )
-    .await
-}
-
-async fn recover_interruption(
-    engine: &TurnEngine,
-    ctx: InvocationContext,
-    session: Id,
-) -> Result<(), StorageError> {
-    let engine = engine.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::agent_turns::recover_interrupted_workspace_turn(&engine, &ctx, &session)
-    })
-    .await
-    .map_err(invalid)?
-}
-
-fn provider_fault(result: &ProviderResult) -> &str {
-    result.faults.first().map_or(
-        "The selected route did not complete a reply.",
-        String::as_str,
-    )
-}
-
-/// Resume only the last exact request written by an earlier attempt. An admitted request
-/// with an unknown outcome stays fenced against a second inference call.
-async fn resume_recorded_turn(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    intent: &ReplyIntent,
-    operation: &OperationRecord,
-    attempt_no: i64,
-    stopping: &Cancellation,
-) -> Result<ToolWindowSweep, EffectResult> {
-    let unknown = |error: StorageError| EffectResult::Unknown(error.to_string());
-    let mut previous = None;
-    for attempt in operation.attempts.iter().rev().skip(1) {
-        let prepared = prepared_reply(attempt).map_err(unknown)?;
-        if intent.watcher_source.is_some()
-            && attempt.observations.iter().any(|observation| {
-                observation["replySettlement"]["kind"] == "WorkspaceReplyUnavailable"
-            })
-        {
-            // The exact failed request was reconciled and its carry released. Earlier
-            // provider contexts may have been superseded by interruption recovery.
-            return Ok(prepared.map_or_else(ToolWindowSweep::default, |reply| reply.sweep));
-        }
-        if prepared.is_some() {
-            previous = prepared;
-            break;
-        }
-    }
-    let Some(prepared) = previous else {
-        return Ok(ToolWindowSweep::default());
-    };
-    let mut sweep = prepared.sweep;
-    let Some(recorded) = recorded_reply(engine, &operation.id, intent, &prepared)
-        .await
-        .map_err(unknown)?
-    else {
-        return Ok(sweep);
-    };
-    if intent.watcher_source.is_some()
-        && matches!(
-            recorded.provider.outcome,
-            Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete)
-        )
-    {
-        // Its exact provider request has a recorded terminal failure. Start the next
-        // bounded queue attempt with a fresh request and the same durable watcher input.
-        return Ok(sweep);
-    }
-    save_prepared(engine, &operation.id, attempt_no, &prepared)
-        .await
-        .map_err(unknown)?;
-    match recorded.provider.outcome {
-        Some(AttemptEnd::Completed) if prepared.compaction_source.is_some() => {
-            if recorded.published.is_none() {
-                let source = prepared
-                    .compaction_source
-                    .ok_or_else(|| unknown(StorageError::ScopeDenied))?;
-                let engine = engine.clone();
-                let ctx = ctx.clone();
-                tokio::task::spawn_blocking(move || {
-                    finish_compaction(&engine, &ctx, &source, recorded.provider)
-                })
-                .await
-                .map_err(|error| EffectResult::Unknown(error.to_string()))?
-                .map_err(|error| EffectResult::Unknown(format!("{error:?}")))?;
-            }
-            Ok(sweep)
-        }
-        Some(AttemptEnd::ToolCallsReady) => {
-            if recorded.published.is_none() {
-                finish_tools(
-                    engine,
-                    ctx,
-                    &intent.session_id,
-                    &prepared,
-                    &recorded.provider,
-                    engine.state_changes(),
-                    stopping,
-                )
-                .await
-                .map_err(unknown)?;
-            }
-            sweep.after_tools();
-            Ok(sweep)
-        }
-        Some(AttemptEnd::Completed) => {
-            if recorded.published.is_none() {
-                let (_, continuation) = engine
-                    .continue_recorded_turn(
-                        ctx,
-                        &intent.session_id,
-                        &prepared.head,
-                        &recorded.provider,
-                        None,
-                        false,
-                    )
-                    .await
-                    .map_err(unknown)?;
-                if continuation.is_none() {
-                    return Err(EffectResult::Unknown(
-                        "The settled workspace reply lacks a continuation.".into(),
-                    ));
-                }
-            }
-            if !sweep.complete_window() {
-                return Ok(sweep);
-            }
-            Err(settled(
+    .await;
+    match end {
+        TurnEnd::Completed(result) => {
+            settled(
                 engine,
                 &operation.id,
                 attempt_no,
-                completed(intent, &recorded.provider),
+                completed(&intent, &result),
             )
-            .await)
+            .await
         }
-        _ => Err(EffectResult::Unknown(
-            "The prior provider outcome requires reconciliation.".into(),
-        )),
-    }
-}
-
-async fn save_prepared(
-    engine: &TurnEngine,
-    operation: &OperationId,
-    attempt_no: i64,
-    prepared: &PreparedReply,
-) -> Result<(), StorageError> {
-    observe(
-        engine,
-        operation,
-        attempt_no,
-        json!({"requestId": prepared.request_id, "head": prepared.head,
-            "compactionSource": prepared.compaction_source, "toolWindowSweep": prepared.sweep.checkpoint()}),
-    )
-    .await
-    .map(|_| ())
-}
-
-enum CompactionStep {
-    NotNeeded,
-    Published,
-    Unavailable(String),
-}
-
-/// Use the same routed threshold and compaction producer as a managed agent. Recording the
-/// exact immutable request before admission allows a restart to reuse its settled summary.
-async fn compact_workspace(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    generation: &WorkspaceGeneration,
-    operation: (&OperationId, i64),
-    mut sweep: ToolWindowSweep,
-    cancellation: &Cancellation,
-) -> Result<CompactionStep, StorageError> {
-    let window = sweep.window(generation.windows);
-    let (worker, context, route, binding, head) = (
-        engine.clone(),
-        ctx.clone(),
-        generation.route.clone(),
-        generation.binding.clone(),
-        generation.head.clone(),
-    );
-    let prepared = match tokio::task::spawn_blocking(move || {
-        if crate::agent_turns::compaction_due(&worker, &context, &route, &head, window)? {
-            crate::agent_turns::prepare_compaction(&worker, &context, &route, &binding, &head)
-                .map(Some)
-        } else {
-            Ok(None)
+        TurnEnd::Unavailable { detail, .. } => {
+            settled(engine, &operation.id, attempt_no, unavailable(detail)).await
         }
-    })
-    .await
-    .map_err(invalid)?
-    {
-        Ok(prepared) => prepared,
-        Err(error) => return Ok(CompactionStep::Unavailable(error.to_string())),
-    };
-    let Some((source, request)) = prepared else {
-        return Ok(CompactionStep::NotNeeded);
-    };
-    let InferenceInput::Generation { context: input, .. } = &request.request.input else {
-        return Err(StorageError::ScopeDenied);
-    };
-    let prepared = PreparedReply {
-        request_id: request.logical.request_id.clone(),
-        head: input.clone(),
-        compaction_source: Some(source.artifact.clone()),
-        sweep,
-    };
-    save_prepared(engine, operation.0, operation.1, &prepared).await?;
-    let providers = engine.providers().ok_or(StorageError::ScopeDenied)?;
-    let produced = providers
-        .produce_cancellable(request, Some(cancellation.clone()))
-        .await?;
-    match produced.accounting {
-        DriveOutcome::Refused(reason) => {
-            return Ok(CompactionStep::Unavailable(format!("{reason:?}")));
-        }
-        DriveOutcome::CancelledBeforeDispatch => {
-            return Ok(CompactionStep::Unavailable(
-                "Compaction cancelled before dispatch.".into(),
-            ));
-        }
-        _ => {}
-    }
-    let result = produced.result;
-    if matches!(
-        result.outcome,
-        Some(AttemptEnd::Cancelled | AttemptEnd::Failed | AttemptEnd::Incomplete)
-    ) {
-        return Ok(CompactionStep::Unavailable(provider_fault(&result).into()));
-    }
-    let (worker, context, source) = (engine.clone(), ctx.clone(), source.artifact);
-    tokio::task::spawn_blocking(move || finish_compaction(&worker, &context, &source, result))
-        .await
-        .map_err(invalid)?
-        .map_err(|error| invalid(format!("{error:?}")))?;
-    Ok(CompactionStep::Published)
-}
-
-fn finish_compaction(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    source: &ArtifactRef,
-    result: ProviderResult,
-) -> Result<ArtifactRef, crate::turn_error::TurnError> {
-    let binding = result.binding.clone().ok_or(StorageError::ScopeDenied)?;
-    let (bytes, provenance) = engine
-        .artifacts()
-        .read_exact(engine.store().as_ref(), ctx, source, 8 * 1024 * 1024)
-        .map_err(crate::turn_error::artifact_read_fault)?;
-    let derived = &provenance["derived"];
-    if derived["binding"] != json!(binding)
-        || derived["sessionId"].as_str() != ctx.session_id().map(Id::as_str)
-    {
-        return Err(StorageError::ScopeDenied.into());
-    }
-    let context = serde_json::from_slice(&bytes).map_err(invalid)?;
-    let observed = derived["observedSequence"]
-        .as_i64()
-        .ok_or(StorageError::ScopeDenied)?;
-    crate::agent_turns::publish_compaction_result(
-        engine,
-        ctx,
-        &binding,
-        crate::context_epoch::EpochSource {
-            context,
-            artifact: source.clone(),
-            observed_sequence: Some(observed),
-        },
-        result,
-        &mut None,
-        None,
-    )
-}
-
-async fn finish_tools(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    session: &Id,
-    prepared: &PreparedReply,
-    result: &ProviderResult,
-    mut changes: tokio::sync::watch::Receiver<u64>,
-    stopping: &Cancellation,
-) -> Result<(), StorageError> {
-    let stopped = Wake::new();
-    stopping.wake_on_cancel(&stopped);
-    let generation = stopped.generation();
-    loop {
-        if stopping.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-        changes.borrow_and_update();
-        let started = tokio::time::Instant::now();
-        let (_, continuation) = engine
-            .continue_recorded_turn(ctx, session, &prepared.head, result, Some(stopping), true)
-            .await?;
-        if continuation.is_some() {
-            return Ok(());
-        }
-        // Re-drive only the recorded tool identity after a possible approval or receipt change.
-        tokio::select! {
-            _ = changes.changed() => {}
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
-            _ = stopped.changed_after(generation) => return Err(StorageError::Cancelled),
-        }
-        tokio::time::sleep_until(started + std::time::Duration::from_millis(500)).await;
+        TurnEnd::Unknown(detail) => EffectResult::Unknown(detail),
+        TurnEnd::Stopped => EffectResult::Unknown("Workspace reply paused for shutdown.".into()),
     }
 }
 
@@ -1089,20 +493,7 @@ async fn observe(
 ) -> Result<bool, StorageError> {
     let operation = operation.clone();
     crate::store::write(engine.store(), WriteOptions::observed(), move |tx| {
-        let current = tx
-            .operations()
-            .operation(&operation)?
-            .ok_or(StorageError::ScopeDenied)?;
-        if current.state != OperationState::Dispatching
-            || current
-                .latest_attempt()
-                .is_none_or(|entry| entry.attempt_no != attempt)
-        {
-            return Err(StorageError::LeaseLost {
-                kind: "workspace_reply",
-                id: operation.0.as_str().to_owned(),
-            });
-        }
+        let current = dispatching_attempt(tx, &operation, attempt, "workspace_reply")?;
         if let Some(settlement) = value.get("replySettlement") {
             release_carry(
                 tx,
@@ -1116,237 +507,7 @@ async fn observe(
     .await
 }
 
-struct WorkspaceGeneration {
-    route: RouteChoice,
-    binding: NativeBinding,
-    head: ArtifactRef,
-    windows: usize,
-}
-
-async fn prepare(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    intent: &ReplyIntent,
-    cancel: &Cancellation,
-    mut capacity: Option<&mut EffectCapacity<'_>>,
-) -> Result<WorkspaceGeneration, String> {
-    if crate::auto_routing::needs_assignment(engine, ctx).map_err(|e| e.to_string())? {
-        let (origin, material) =
-            first_auto_input(engine, ctx, intent).map_err(|e| e.to_string())?;
-        crate::auto_routing::assign(
-            engine,
-            ctx,
-            origin,
-            material,
-            cancel,
-            capacity.as_deref_mut(),
-        )
-        .await
-        .map_err(|error| format!("{error:?}"))?;
-    }
-    crate::agent_turns::wait_for_running_tool_results(
-        engine,
-        ctx,
-        &intent.session_id,
-        cancel,
-        capacity,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    loop {
-        let (worker, ctx, intent) = (engine.clone(), ctx.clone(), intent.clone());
-        let result = tokio::task::spawn_blocking(move || prepare_prompt(&worker, &ctx, &intent))
-            .await
-            .map_err(|error| error.to_string())?;
-        match result {
-            Err(crate::turn_error::TurnError::Cooling { until_ms }) => {
-                crate::auto_routing::wait_until(engine, until_ms, cancel)
-                    .await
-                    .map_err(|error| format!("{error:?}"))?
-            }
-            other => return other.map_err(|error| format!("{error:?}")),
-        }
-    }
-}
-
-fn first_auto_input(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    intent: &ReplyIntent,
-) -> Result<(String, ProviderContext), StorageError> {
-    let (entry, role) = read_snapshot(engine.store().as_ref(), &ReadOptions::default(), |read| {
-        let session = session_for_reply(read, intent)?;
-        if intent.user_sequence > session.last_durable_sequence() {
-            return Err(StorageError::ScopeDenied);
-        }
-        let mut after = 0;
-        while after < intent.user_sequence && after < 10_000 {
-            let remaining = (intent.user_sequence - after).min(500) as u16;
-            let entries = read
-                .sessions()
-                .entries(&intent.session_id, after, remaining)?;
-            if entries.is_empty() {
-                break;
-            }
-            for entry in entries {
-                if entry.kind == "UserMessage" {
-                    let role = devworks_core::settings::service::role_instructions(
-                        read.configuration(),
-                        AgentRole::WorkspaceCoordinator,
-                        None,
-                    )
-                    .map_err(|_| StorageError::ScopeDenied)?;
-                    return Ok((entry, role));
-                }
-                after = entry.sequence;
-            }
-        }
-        Err(StorageError::ScopeDenied)
-    })?;
-    let source = serde_json::from_value(entry.body)
-        .map_err(|error| StorageError::InvalidRecord(format!("automatic route input: {error}")))?;
-    let mut context = ProviderContext {
-        version: 1,
-        instructions: (!role.text.is_empty())
-            .then_some(TextBlock {
-                text: role.text,
-                cache: None,
-            })
-            .into_iter()
-            .collect(),
-        instruction_stamps: Vec::new(),
-        skill_stamp: None,
-        lesson_stamp: None,
-        messages: Vec::new(),
-        parameters: GenerationParameters::default(),
-    };
-    crate::tool_turn::append_context_fact(
-        &mut context,
-        engine.store().as_ref(),
-        engine.artifacts(),
-        ctx,
-        &intent.session_id,
-        source,
-    )?;
-    Ok((entry.entry_id.as_str().to_owned(), context))
-}
-
-fn prepare_prompt(
-    engine: &TurnEngine,
-    ctx: &InvocationContext,
-    intent: &ReplyIntent,
-) -> Result<WorkspaceGeneration, crate::turn_error::TurnError> {
-    let session = &intent.session_id;
-    let recovered = engine.recover_native_context_head(ctx, session)?;
-    if let Some((head, binding, _)) = recovered {
-        read_snapshot(
-            engine.store().as_ref(),
-            &ReadOptions::default(),
-            |snapshot| input_prefix(snapshot, intent, intent.user_sequence - 1).map(|_| ()),
-        )?;
-        let (head, binding, route, windows) = crate::agent_turns::prepare_generation_context(
-            engine, ctx, session, head, binding, false,
-        )?;
-        return Ok(WorkspaceGeneration {
-            route,
-            binding,
-            head,
-            windows,
-        });
-    }
-    let (inputs, role) = read_snapshot(
-        engine.store().as_ref(),
-        &ReadOptions::default(),
-        |snapshot| {
-            let inputs = input_prefix(snapshot, intent, 0)?;
-            let role = devworks_core::settings::service::role_instructions(
-                snapshot.configuration(),
-                AgentRole::WorkspaceCoordinator,
-                None,
-            )
-            .map_err(|_| StorageError::ScopeDenied)?;
-            Ok((inputs, role))
-        },
-    )?;
-    let images = inputs.iter().any(|body| match body {
-        TranscriptBody::UserMessage { content } => content.iter().any(|item| {
-            matches!(item, UserContent::Attachment { artifact } if artifact.media_type.starts_with("image/"))
-        }),
-        _ => false,
-    });
-    let tool_count = engine
-        .providers()
-        .ok_or(StorageError::ScopeDenied)?
-        .schemas()
-        .selected_agent_tools(ctx)?
-        .len();
-    let windows = crate::agent_turns::tool_window_count(tool_count);
-    let route = crate::agent_turns::route_context_head(
-        engine,
-        ctx,
-        session,
-        intent.context_epoch,
-        None,
-        tool_count > 0,
-        images,
-    )?;
-    let (binding, headroom, _) =
-        crate::agent_turns::initial_route_binding(engine, session, &route)?;
-    let mut instructions: Vec<_> = (!role.text.is_empty())
-        .then_some(TextBlock {
-            text: role.text,
-            cache: None,
-        })
-        .into_iter()
-        .collect();
-    if windows > 1 {
-        instructions.push(TextBlock {
-            text: crate::agent_turns::TOOL_WINDOW_NOTICE.into(),
-            cache: None,
-        });
-    }
-    let mut context = ProviderContext {
-        version: 1,
-        instructions,
-        instruction_stamps: Vec::new(),
-        skill_stamp: None,
-        lesson_stamp: None,
-        messages: Vec::new(),
-        parameters: GenerationParameters {
-            max_output_tokens: (binding.endpoint_profile
-                != EndpointProfile::CodexSubscriptionResponses)
-                .then_some(headroom as u32),
-            ..GenerationParameters::default()
-        },
-    };
-    for body in inputs {
-        crate::tool_turn::append_context_fact(
-            &mut context,
-            engine.store().as_ref(),
-            engine.artifacts(),
-            ctx,
-            session,
-            body,
-        )?;
-    }
-    let context = engine.bind_provider_instructions(ctx, context, &[])?;
-    let initial = engine.publish_initial_native_context(ctx, session, &binding, &context)?;
-    let head = crate::tool_turn::append_operation_updates(
-        engine.store().as_ref(),
-        engine.artifacts(),
-        ctx,
-        session,
-        &initial,
-    )?;
-    Ok(WorkspaceGeneration {
-        route,
-        binding,
-        head,
-        windows,
-    })
-}
-
-fn session_for_reply(
+pub(crate) fn session_for_reply(
     snapshot: &dyn ReadSnapshot,
     intent: &ReplyIntent,
 ) -> Result<StoredSession, StorageError> {
@@ -1404,7 +565,7 @@ fn invocation(
 
 /// Only the ordered human/host inputs through this message can enter its first prompt.
 /// Later messages and notices remain available for their own turn.
-fn input_prefix(
+pub(crate) fn input_prefix(
     snapshot: &dyn ReadSnapshot,
     intent: &ReplyIntent,
     after: i64,

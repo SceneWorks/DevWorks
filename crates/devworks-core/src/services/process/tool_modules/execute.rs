@@ -636,7 +636,8 @@ impl ProcessToolService {
         if operation.capability == "process.cancel" {
             return self.observe_cancel(operation);
         }
-        if operation.capability != "process.execute" {
+        let install = operation.capability == "process.install_project_dependencies";
+        if operation.capability != "process.execute" && !install {
             return EffectOutcome::Failed("unsupported process effect".into());
         }
         let found = read_snapshot(&*self.store, &ReadOptions::default(), |snapshot| {
@@ -649,20 +650,21 @@ impl ProcessToolService {
         match found {
             Ok(ref records) if records.len() == 1 && records[0].phase == ProcessPhase::Reaped => {
                 let process = &records[0];
+                let value = ProcessRecord {
+                    id: process.id.clone(),
+                    revision: rev(process.revision),
+                    state: OperationState::ObservedComplete,
+                    owner_id: process.actor.0.clone(),
+                    exit_code: process.exit_code.and_then(|code| i32::try_from(code).ok()),
+                    output: None,
+                    truncated: true,
+                };
                 EffectOutcome::Completed(json!({
-                    "result": if operation.capability == "process.install_project_dependencies" {
-                        OperationResult::ProcessInstallProjectDependencies { value: ProcessRecord {
-                            id: process.id.clone(), revision: rev(process.revision),
-                            state: OperationState::ObservedComplete, owner_id: process.actor.0.clone(),
-                            exit_code: process.exit_code.and_then(|code| i32::try_from(code).ok()),
-                            output: None, truncated: true,
-                        } }
-                    } else { OperationResult::ProcessExecute { value: ProcessRecord {
-                        id: process.id.clone(), revision: rev(process.revision),
-                        state: OperationState::ObservedComplete, owner_id: process.actor.0.clone(),
-                        exit_code: process.exit_code.and_then(|code| i32::try_from(code).ok()),
-                        output: None, truncated: true,
-                    } } },
+                    "result": if install {
+                        OperationResult::ProcessInstallProjectDependencies { value }
+                    } else {
+                        OperationResult::ProcessExecute { value }
+                    },
                     "outputLost": true,
                     "truncated": true,
                 }))

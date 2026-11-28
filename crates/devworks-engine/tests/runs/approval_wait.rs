@@ -816,6 +816,110 @@ fn an_approval_whose_grant_expired_before_readmission_reaches_the_agent_as_faile
     });
 }
 
+/// A person takes desktop control back from the agent holding it: the Human's
+/// `desktop.release_control` ends the agent's lease (its fence still checked), another agent
+/// cannot release it, and the agent's next `desktop.input` is refused.
+#[test]
+fn a_person_takes_desktop_control_back_from_the_agent_holding_it() {
+    let _native_case = native_runtime_case();
+    let fx = Fx::new();
+    in_runtime(async || {
+        let t = takeover(&fx, 1).await;
+        run_turn(&t).await;
+        let (approval, _) = answered(&fx, &t.context, "call-held-0");
+        decide(&fx, &t.app, &approval, true);
+        t.app.approval_resumes().tick().await.unwrap();
+        // Agents may also send input and release control, so only the lease decides.
+        let schema = devworks_core::settings::catalog::descriptor("tools.overrides")
+            .unwrap()
+            .schema_ref();
+        fx.tx(move |_, tx| {
+            tx.configuration().append_revision(
+                &ConfigScope::Workspace,
+                "settings",
+                2,
+                1,
+                json!({"values": {"tools.overrides": {"schema": schema,
+                    "value": {"devworks/desktop.request_control": true,
+                        "devworks/desktop.input": true,
+                        "devworks/desktop.release_control": true}}}}),
+            )?;
+            Ok(())
+        });
+        let desktop = desktop_record(&t.app, &fx.user);
+        let lease_id = id(desktop["leaseId"].as_str().expect("held lease"));
+        let lease = read(&*fx.store, |s| s.resources().lease(&lease_id)).unwrap();
+        assert_eq!(lease.owner, *t.context.principal());
+        assert_eq!(lease.phase, LeasePhase::Held);
+        let command = |ctx: &InvocationContext, kind: &str, body: Value| {
+            let mut body = body;
+            body["kind"] = json!(kind);
+            let frame = json!({"mode": "Command", "protocol": PROTOCOL, "schemaRevision": 1,
+                "requestKey": fx.key(), "body": body});
+            t.app
+                .command(ctx, kind, frame.to_string().as_bytes())
+                .unwrap()
+        };
+        let input = |desktop: &Value| {
+            json!({"desktopId": desktop["desktopId"], "leaseId": lease_id,
+                "expectedFence": lease.fence.to_string(), "consentId": approval,
+                "expectedDesktopRevision": desktop["revision"],
+                "action": {"kind": "Text", "text": "hello"}})
+        };
+        // While it holds control, the agent's input is admitted.
+        let admitted = command(&t.context, "desktop.input", input(&desktop));
+        assert!(
+            matches!(decision(&admitted), DomainDecision::Accepted { .. }),
+            "{admitted:?}"
+        );
+        let release = |fence: i64| {
+            json!({"desktopId": desktop["desktopId"], "leaseId": lease_id,
+                "expectedFence": fence.to_string()})
+        };
+        // Another (bound) agent cannot release the lease.
+        assert_ne!(fx.agent.principal(), t.context.principal());
+        let denied = command(&fx.agent, "desktop.release_control", release(lease.fence));
+        assert_eq!(refused(&denied).0, "PermissionDenied", "{denied:?}");
+        // A person's release with a stale fence is refused.
+        let stale = command(
+            &fx.user,
+            "desktop.release_control",
+            release(lease.fence + 1),
+        );
+        assert!(
+            matches!(decision(&stale), DomainDecision::Refused { .. }),
+            "{stale:?}"
+        );
+        let still = read(&*fx.store, |s| s.resources().lease(&lease_id)).unwrap();
+        assert_eq!(still.phase, LeasePhase::Held);
+        // The person's release with the live fence ends the agent's lease.
+        let released = command(&fx.user, "desktop.release_control", release(lease.fence));
+        assert!(
+            matches!(
+                decision(&released),
+                DomainDecision::Applied {
+                    result:
+                        devworks_core::protocol::results::OperationResult::DesktopReleaseControl { .. }
+                }
+            ),
+            "{released:?}"
+        );
+        let ended = read(&*fx.store, |s| s.resources().lease(&lease_id)).unwrap();
+        assert_eq!(ended.phase, LeasePhase::Released);
+        let after = desktop_record(&t.app, &fx.user);
+        assert!(after["leaseId"].is_null(), "{after}");
+        // The agent can no longer send input under that lease.
+        let mut stale_input = input(&desktop);
+        stale_input["expectedDesktopRevision"] = after["revision"].clone();
+        let refused_input = command(&t.context, "desktop.input", stale_input);
+        assert!(
+            matches!(decision(&refused_input), DomainDecision::Refused { .. }),
+            "{refused_input:?}"
+        );
+        shut_down(t.app).await;
+    });
+}
+
 /// A query that a domain handler refuses `ApprovalRequired`. No catalog query refuses this way
 /// today, so the fixture handler stands in for one and counts what it is asked.
 struct QueryNeedsApproval(Arc<AtomicUsize>);

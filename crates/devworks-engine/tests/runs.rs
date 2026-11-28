@@ -8763,6 +8763,8 @@ mod keep_working;
 
 #[path = "runs/auto_routing.rs"]
 mod auto_routing;
+#[path = "runs/scheduled_inference.rs"]
+mod scheduled_inference;
 #[path = "runs/systemone_tools.rs"]
 mod systemone_tools;
 #[path = "runs/workspace_reply.rs"]

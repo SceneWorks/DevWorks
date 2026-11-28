@@ -320,7 +320,7 @@ fn boot_over(
         artifacts,
         process_host: host.clone(),
         runs: RunComposition {
-            inference,
+            inference: Some(inference),
             ..RunComposition::default()
         },
         knowledge: KnowledgeComposition::default(),

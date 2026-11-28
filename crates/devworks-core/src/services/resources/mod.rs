@@ -61,7 +61,7 @@
 //! `sessions.end`. Changed: holds are enforced at dispatch and fenced; waiting does not block
 //! the call (`wait_seconds` becomes the queued lease the caller polls); physical resources are
 //! transferred only after reconciliation.
-use crate::context::InvocationContext;
+use crate::context::{InvocationContext, PrincipalKind};
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
 use crate::locks::LockExt;
 use crate::operations::{OperationInput, resources as ops};
@@ -931,15 +931,16 @@ impl ResourceService {
     }
 
     /// The caller's own visible lease (`NotFound` / `PermissionDenied`), after settling its
-    /// resource.
+    /// resource. With `any_owner` the caller may act on another principal's lease.
     fn own_lease(
         &self,
         tx: &mut dyn WriteTransaction,
         ctx: &InvocationContext,
         id: &Id,
+        any_owner: bool,
     ) -> Result<(StoredLease, StoredResource), Failure> {
         let (l, res) = visible_lease(tx.resources(), ctx, id)?;
-        if l.owner != *ctx.principal() {
+        if !any_owner && l.owner != *ctx.principal() {
             return Err(Refusal::new(
                 DomainErrorCode::PermissionDenied,
                 "resource_lease",
@@ -969,7 +970,7 @@ impl ResourceService {
         i: &ops::RenewInput,
     ) -> Result<DomainDecision, Failure> {
         let lease_ms = lease_ms(&i.lease_ms.0)?;
-        let (mut l, res) = self.own_lease(tx, ctx, &i.lease_id)?;
+        let (mut l, res) = self.own_lease(tx, ctx, &i.lease_id, false)?;
         if res.name.eq_ignore_ascii_case(DESKTOP)
             || l.purpose
                 .as_deref()
@@ -1032,7 +1033,30 @@ impl ResourceService {
         ctx: &InvocationContext,
         i: &ops::ReleaseInput,
     ) -> Result<DomainDecision, Failure> {
-        let (mut l, res) = self.own_lease(tx, ctx, &i.lease_id)?;
+        self.release_lease(tx, ctx, i, false)
+    }
+
+    /// Ends a desktop-control lease. Its owner may release it, and a Human may take control
+    /// back from any other principal; the fence is checked either way.
+    pub(crate) fn release_desktop_control(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &ops::ReleaseInput,
+    ) -> Result<DomainDecision, Failure> {
+        let human = ctx.principal_kind() == PrincipalKind::Human
+            && tx.actors().actor_kind(ctx.principal())? == Some(PrincipalKind::Human);
+        self.release_lease(tx, ctx, i, human)
+    }
+
+    fn release_lease(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        i: &ops::ReleaseInput,
+        any_owner: bool,
+    ) -> Result<DomainDecision, Failure> {
+        let (mut l, res) = self.own_lease(tx, ctx, &i.lease_id, any_owner)?;
         if l.fence != i.expected_fence.get() {
             return Err(lease_lost(&l));
         }

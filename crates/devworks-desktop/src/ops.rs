@@ -6,8 +6,8 @@ use crate::frame::{self, Negotiate};
 use crate::paged::Page;
 use devworks_core::gateway::{CommandOutcome, GatewayFailure, QueryOutcome};
 use devworks_core::operations::{
-    OperationInput as In, artifacts, browser, containers, git, indexing, jobs, mcp, projects,
-    repositories, resources, router, sessions, settings, web, workspace,
+    OperationInput as In, artifacts, browser, containers, desktop, git, indexing, jobs, mcp,
+    projects, repositories, resources, router, sessions, settings, web, workspace,
 };
 use devworks_core::protocol::OperationId;
 use devworks_core::protocol::ProjectId;
@@ -22,11 +22,11 @@ use devworks_core::protocol::provider::{
     TranscriptPage, UserContent,
 };
 use devworks_core::protocol::records::{
-    AccessMode, ArtifactRecord, BrowserSession, ConnectionRecord, ContainerCapability,
-    DiagnosticEntry, EffortName, JobDefinition, JobInspection, JobRecord, JobRun, LeaseRecord,
-    MutationSummary, ProjectRecord, RepositoryRecord, RepositoryText, ResourceRecord,
-    RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent, Schedule, SessionRecord,
-    SettingEntry, ValidationReport, WebDocument, WebResult,
+    AccessMode, ArtifactRecord, BrowserObservation, BrowserSession, ConnectionRecord,
+    ContainerCapability, DesktopRecord, DiagnosticEntry, EffortName, JobDefinition, JobInspection,
+    JobRecord, JobRun, LeaseRecord, MutationSummary, ProjectRecord, RepositoryRecord,
+    RepositoryText, ResourceRecord, RouteAvailability, RouteCatalogModel, RouteChoice, RouteIntent,
+    Schedule, SessionRecord, SettingEntry, ValidationReport, WebDocument, WebResult,
 };
 use devworks_core::protocol::records::{
     BrowserSessionAction, IndexSourceConfig, ProjectPatch, ProjectPurgeManifest,
@@ -1163,6 +1163,91 @@ pub fn browser_closed(outcome: CommandOutcome) -> Result<bool, Failure> {
         CommandReply::Recorded { receipt, .. } => match receipt.decision {
             DomainDecision::Accepted { .. } => Ok(true),
             DomainDecision::Applied { .. } | DomainDecision::NoChange { .. } => Ok(false),
+            DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
+        },
+        CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),
+        CommandReply::ReceiptPurged { outcome, .. } => Err(Failure::Purged(outcome)),
+        CommandReply::CommandStatusUnknown { .. } => Err(Failure::Unknown),
+    }
+}
+/// One page of a browser session's console messages (`browser.console`) or its network
+/// requests (`browser.network`), each an evidence artifact, from its first observation.
+pub fn browser_notices_list(
+    backend: &dyn Backend,
+    network: bool,
+    session: &str,
+    cursor: Option<&str>,
+) -> Vec<u8> {
+    frame::with(backend, Negotiate::Latest, || {
+        let session_id = frame::id(session)?;
+        let after_sequence = frame::number(0)?;
+        let page = frame::page(PAGE_LIMIT.into(), cursor)?;
+        Some(In::Browser(if network {
+            browser::Input::Network(browser::NetworkInput {
+                session_id,
+                after_sequence,
+                page,
+            })
+        } else {
+            browser::Input::Console(browser::ConsoleInput {
+                session_id,
+                after_sequence,
+                page,
+            })
+        }))
+    })
+}
+pub fn browser_notices(outcome: QueryOutcome) -> Result<Page<BrowserObservation>, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::BrowserConsole { value }, _) => page_of(
+            "browser.console",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (OperationResult::BrowserNetwork { value }, _) => page_of(
+            "browser.network",
+            value.items.0,
+            value.has_more,
+            value.next_cursor,
+        ),
+        (other, _) => Err(unexpected("browser.console", &other)),
+    }
+}
+/// The desktop's control state (`desktop.inspect`) at revision 1: no accessibility tree.
+pub fn desktop_inspect(backend: &dyn Backend) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Desktop(desktop::Input::Inspect(
+            desktop::InspectInput {},
+        )))
+    })
+}
+pub fn desktop_inspected(outcome: QueryOutcome) -> Result<DesktopRecord, Failure> {
+    match query_result(outcome)? {
+        (OperationResult::DesktopInspect { value }, _) => Ok(value),
+        (other, _) => Err(unexpected("desktop.inspect", &other)),
+    }
+}
+/// Ends the desktop-control lease `lease` at `fence` (`desktop.release_control`).
+pub fn desktop_release(backend: &dyn Backend, desktop: &str, lease: &str, fence: &str) -> Vec<u8> {
+    frame::with(backend, Negotiate::Initial, || {
+        Some(In::Desktop(desktop::Input::ReleaseControl(
+            desktop::ReleaseControlInput {
+                desktop_id: frame::id(desktop)?,
+                lease_id: frame::id(lease)?,
+                expected_fence: frame::text(fence)?,
+            },
+        )))
+    })
+}
+/// `true` when the release ended (or began ending) the lease, `false` when it had already
+/// ended.
+pub fn desktop_released(outcome: CommandOutcome) -> Result<bool, Failure> {
+    match outcome.map_err(gateway)? {
+        CommandReply::Recorded { receipt, .. } => match receipt.decision {
+            DomainDecision::Applied { .. } => Ok(true),
+            DomainDecision::NoChange { .. } => Ok(false),
+            DomainDecision::Accepted { .. } => Ok(true),
             DomainDecision::Refused { fault } => Err(Failure::Refused(fault)),
         },
         CommandReply::Rejected { code, .. } => Err(Failure::Rejected(format!("{code:?}"))),

@@ -1278,8 +1278,8 @@ fn scheduled_inference_fails_truthfully_without_a_pipeline_and_acts_as_a_bound_a
         "definition": def, "enabled": true}),
     );
     let jid = s(&job, "id");
-    // This build has no inference pipeline: the run fails before dispatch with a visible
-    // reason, its operation never dispatched, and nothing reports success.
+    // A composition without an inference pipeline: the run fails before dispatch with a
+    // visible reason, its operation never dispatched, and nothing reports success.
     let r1 = value_of(&applied(fx.command(
         &user,
         "jobs.run_now",
@@ -1293,7 +1293,7 @@ fn scheduled_inference_fails_truthfully_without_a_pipeline_and_acts_as_a_bound_a
             .reason
             .as_deref()
             .unwrap()
-            .contains("not available in this build")
+            .contains("not available in this composition")
     );
     let op = failed.operation_id.clone().unwrap();
     let rec = fx.read(move |s| s.operations().operation(&op)).unwrap();

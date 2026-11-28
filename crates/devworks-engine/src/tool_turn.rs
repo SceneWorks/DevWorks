@@ -1523,6 +1523,16 @@ pub(crate) fn append_operation_updates(
                 }
                 position = entry.sequence;
                 let body: TranscriptBody = serde_json::from_value(entry.body).map_err(invalid)?;
+                // A scheduled run's initial context already holds its prompt notice, the
+                // session's first entry.
+                if derived["kind"] == "ProviderInitialContext"
+                    && position == 1
+                    && ctx.job_run_id().is_some_and(|run| {
+                        matches!(&body, TranscriptBody::HostNotice { source, .. } if source == run)
+                    })
+                {
+                    continue;
+                }
                 if let Some(reply) = ctx.workspace_reply() {
                     let watcher_notice = crate::watch::is_notice(&body);
                     let user_input = !watcher_notice
@@ -1564,7 +1574,9 @@ pub(crate) fn append_operation_updates(
         }
         Ok((updates, position))
     })?;
-    if updates.is_empty() && (ctx.workspace_reply().is_none() || observed == after) {
+    // Skipped inputs (a workspace reply's, a scheduled run's preloaded prompt) still move the
+    // cursor; an ordinary scan with nothing to add has not moved it.
+    if updates.is_empty() && observed == after {
         return Ok(source.clone());
     }
     let linked = linked_operations(store, ctx, session_id)?;
