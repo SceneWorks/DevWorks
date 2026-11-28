@@ -522,6 +522,11 @@ async fn signatures(
           REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME) AS CHAR)
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE BINARY TABLE_SCHEMA=BINARY ?
           ORDER BY BINARY TABLE_NAME,BINARY CONSTRAINT_NAME,ORDINAL_POSITION",
+        // A foreign key recreated with the same name and columns but another delete or update
+        // action must change the digest, so the native rules are part of it.
+        "SELECT TABLE_NAME, CAST(JSON_ARRAY('FOREIGN KEY',TABLE_NAME,CONSTRAINT_NAME,UPDATE_RULE,
+          DELETE_RULE,MATCH_OPTION) AS CHAR) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+          WHERE BINARY CONSTRAINT_SCHEMA=BINARY ? ORDER BY BINARY TABLE_NAME,BINARY CONSTRAINT_NAME",
     ];
     // Hash the full native clause bytes in the server so even a large expression contributes a
     // bounded row. A missing definition or enforcement value yields NULL and fails decoding.

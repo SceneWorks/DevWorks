@@ -176,10 +176,16 @@ def check_digest_fixture(endpoint, env):
     sql("""
         CREATE DATABASE dw37_check_fixture;
         CREATE USER 'check_writer'@'%' IDENTIFIED BY 'devworks_check_writer';
-        GRANT SELECT, ALTER, CREATE, INSERT, LOCK TABLES ON dw37_check_fixture.* TO 'check_writer'@'%';
+        GRANT SELECT, ALTER, CREATE, INSERT, LOCK TABLES, REFERENCES ON dw37_check_fixture.*
+            TO 'check_writer'@'%';
         USE dw37_check_fixture;
-        CREATE TABLE dw_checks(id INT NOT NULL PRIMARY KEY, CONSTRAINT ck_id CHECK (id > 0)) ENGINE=InnoDB;
-        INSERT INTO dw_checks VALUES (2);
+        CREATE TABLE dw_parent(id INT NOT NULL PRIMARY KEY) ENGINE=InnoDB;
+        INSERT INTO dw_parent VALUES (1);
+        CREATE TABLE dw_checks(id INT NOT NULL PRIMARY KEY, parent_id INT NULL,
+            CONSTRAINT ck_id CHECK (id > 0),
+            CONSTRAINT fk_parent FOREIGN KEY (parent_id) REFERENCES dw_parent(id)
+                ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB;
+        INSERT INTO dw_checks(id, parent_id) VALUES (2, 1);
     """)
     check_env = dict(env, DW37_CHECK_TARGET=f'{a.engine}://{endpoint}/dw37_check_fixture',
                      DW37_CHECK_USER='check_writer', DW37_CHECK_PASSWORD='devworks_check_writer')
