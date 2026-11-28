@@ -109,7 +109,8 @@ fn document_index_processor_preserves_pdf_and_word_source_locators() {
         .err();
     assert_eq!(encrypted, Some(Id::new("PdfEncrypted").unwrap()));
 
-    let word_bytes = include_bytes!("fixtures/docx/devworks-requirements.docx");
+    let word_bytes =
+        include_bytes!("../../devworks-adapters/tests/fixtures/docx/devworks-requirements.docx");
     let mut source = exact(word_bytes);
     source.media_type =
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into();

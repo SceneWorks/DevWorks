@@ -544,9 +544,7 @@ fn cancellation_interrupts_native_part_and_xml_work() {
 
 #[test]
 fn repository_requirements_document_uses_the_same_native_body_reader() {
-    let bytes = include_bytes!(
-        "../../../../devworks-desktop/tests/fixtures/docx/devworks-requirements.docx"
-    );
+    let bytes = include_bytes!("../../../tests/fixtures/docx/devworks-requirements.docx");
     let result = run(bytes).unwrap();
     assert_eq!(result.part, "word/document.xml");
     assert!(result.paragraphs.len() > 100);
