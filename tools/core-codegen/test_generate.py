@@ -47,6 +47,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'code.graph_schema', 'code.call_path', 'code.data_lineage', 'code.consumers',
             'code.publishers', 'code.snippet', 'code.repository_dependencies',
             'artifacts.save', 'artifacts.list', 'history.events', 'history.work_lineage',
+            'documents.import', 'documents.list', 'documents.read', 'documents.share', 'documents.move',
+            'documents.disable_retrieval', 'documents.remove_index',
+            'documents.resolve_citation', 'documents.index',
             'approvals.list', 'approvals.inspect', 'approvals.propose', 'approvals.record_human_decision',
             'approvals.review_queue', 'notifications.list', 'notifications.read',
             'notifications.acknowledge', 'notifications.mark_read',
@@ -64,7 +67,9 @@ class SchemaRevisionRules(unittest.TestCase):
             'knowledge.entity_bundle', 'knowledge.entity_graph', 'knowledge.claim_bundle', 'knowledge.expand_frontier',
             'knowledge.query', 'knowledge.promote', 'knowledge.tagged_lessons', 'knowledge.relate',
             'knowledge.tag', 'knowledge.retract', 'knowledge.scope', 'knowledge.write_status',
-            'knowledge.import_user_data', 'knowledge.delete_by_source', 'dreaming.revert',
+            'knowledge.import_user_data', 'knowledge.delete_by_source',
+            'dreaming.revert', 'dreaming.run', 'dreaming.runs', 'dreaming.report',
+            'dreaming.settings', 'dreaming.propose',
             'addons.catalog', 'addons.install', 'addons.configure', 'addons.enable',
             'addons.disable', 'addons.update', 'addons.rollback', 'addons.uninstall',
             'router.connections', 'router.configure', 'jobs.list', 'jobs.create', 'jobs.edit',
@@ -116,7 +121,9 @@ class SchemaRevisionRules(unittest.TestCase):
             # DW-183: a project's agent assignments, introduced at revision 21.
             'agents.list',
             # DW-175: the host's screen-context notice, introduced at revision 23.
-            'sessions.append_screen_context'})
+            'sessions.append_screen_context',
+            # DW-423: coordinator document transfers, introduced at revision 29.
+            'documents.transfer_propose', 'documents.transfer_respond', 'documents.transfer_status'})
         for name in MCP:
             self.assertEqual(carried[name], {8})
         for name in ('addons.read_content', 'addons.run_workflow'):
@@ -155,7 +162,7 @@ class SchemaRevisionRules(unittest.TestCase):
         # lesson at revision 8; full source labels are additive.
         self.assertEqual(carried['knowledge.subgraph'], {2, 3, 8})
         self.assertEqual(carried['knowledge.tag'], {2})
-        self.assertEqual(carried['dreaming.revert'], {2})
+        self.assertEqual(carried['dreaming.revert'], {2, 24})
         self.assertEqual(carried['knowledge.delete_by_source'], {3})
         self.assertEqual(carried['jobs.run_now'], {2})
         self.assertEqual(carried['web.search'], {2})
@@ -216,6 +223,37 @@ class SchemaRevisionRules(unittest.TestCase):
         self.assertEqual(generate.DOMAIN_OPS['features.edit_plan']['since']['budget'], 3)
         self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['budget'], 3)
         self.assertEqual(generate.TYPES['PendingFeaturePlan']['since']['plan_digest'], 3)
+
+    def test_a_legacy_result_keeps_only_its_revisions_members(self):
+        # The revert receipt gained its counts at revision 2, so a revision-1 legacy reply drops them.
+        rust = generate.gen_versioned('DreamRevertResult', generate.TYPES['DreamRevertResult'], generate.TYPES)
+        self.assertIn('if let Self::Legacy(value) = self { value.retain_revision(revision); }', rust)
+        self.assertNotIn('Self::Current(value) = self', rust)
+
+    def test_every_versioned_result_with_a_gated_legacy_type_trims_its_legacy_value(self):
+        # A legacy value whose type (or page item type) has revision-gated members must be trimmed
+        # to the caller's revision, whichever versioned result carries it.
+        def gated(name):
+            name = name.strip()
+            if name.startswith('Page<') and name.endswith('>'):
+                name = name[len('Page<'):-1]
+            spec = generate.TYPES.get(name)
+            return bool(spec and spec.get('since'))
+
+        checked = 0
+        for name, spec in generate.TYPES.items():
+            if spec.get('kind') != 'versioned' or not spec.get('legacy'):
+                continue
+            if not gated(spec['legacy']):
+                continue
+            rust = generate.gen_versioned(name, spec, generate.TYPES)
+            self.assertIn(
+                'if let Self::Legacy(value) = self { value.retain_revision(revision); }',
+                rust,
+                name,
+            )
+            checked += 1
+        self.assertGreaterEqual(checked, 2, 'dreaming.revert and analysis.clusters at least')
 
     def test_skill_resources_project_each_item_to_its_artifact_below_revision_three(self):
         result = generate.DOMAIN_OPS['skills.resources']['result']

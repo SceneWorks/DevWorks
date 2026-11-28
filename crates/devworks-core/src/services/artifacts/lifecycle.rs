@@ -456,13 +456,40 @@ impl ArtifactService {
         reference: &ArtifactRef,
         max: u64,
     ) -> Result<(Vec<u8>, Value), ExactReadRefusal> {
+        self.read_exact_with_options(store, ctx, reference, max, &ReadOptions::default())
+    }
+
+    /// Read a local exact artifact within the caller's snapshot and I/O deadline.
+    pub fn read_exact_with_options(
+        &self,
+        store: &dyn ApplicationStore,
+        ctx: &InvocationContext,
+        reference: &ArtifactRef,
+        max: u64,
+        options: &ReadOptions,
+    ) -> Result<(Vec<u8>, Value), ExactReadRefusal> {
+        let check = || {
+            if options
+                .cancellation
+                .as_ref()
+                .is_some_and(|token| token.is_cancelled())
+                || options
+                    .deadline_ms
+                    .is_some_and(|deadline| self.clock.now_ms().get() >= deadline)
+            {
+                Err(ExactReadRefusal::Storage(StorageError::Cancelled))
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
         let digest = String::from(reference.sha256.clone());
         let length = reference.byte_length.get() as u64;
         if length > max {
             return Err(ExactReadRefusal::TooLarge { bytes: length, max });
         }
         let hold = self.readers.acquire(&digest);
-        let found = read_snapshot(store, &ReadOptions::default(), |s| {
+        let found = read_snapshot(store, options, |s| {
             let read = s.artifacts();
             let viewer = Viewer::resolve(s.authority(), ctx)?;
             let Some(a) = read.artifact(&reference.artifact_id)? else {
@@ -486,16 +513,24 @@ impl ArtifactService {
         let Some((generation, provenance)) = found else {
             return Err(ExactReadRefusal::NotFound);
         };
-        let mut reader = self
+        check()?;
+        let reader = self
             .files
             .open(&digest, &generation, length)
             .map_err(|_| ExactReadRefusal::Unreadable)?;
+        let mut reader = reader.take(max.saturating_add(1));
         let mut bytes = Vec::with_capacity(length as usize);
-        reader
-            .by_ref()
-            .take(max + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ExactReadRefusal::Unreadable)?;
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            check()?;
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return Err(ExactReadRefusal::Unreadable),
+            }
+        }
+        check()?;
         drop(hold);
         if bytes.len() as u64 != length || sha256_hex(&bytes) != digest {
             return Err(ExactReadRefusal::Unreadable);
@@ -1257,8 +1292,30 @@ impl ArtifactService {
         expected_scope_revision: &Revision,
     ) -> Result<MutationSummary, Failure> {
         let viewer = Viewer::resolve(tx.authority(), ctx)?;
-        let mut artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+        let artifact = visible_artifact(tx.artifacts(), &viewer, artifact_id)?;
+        if authorized_scope(tx.authority(), ctx)? != AuthorizedScope::Workspace {
+            return Err(Refusal::new(
+                DomainErrorCode::PermissionDenied,
+                "project",
+                Some(target.0.clone()),
+            )
+            .into());
+        }
+        self.share_authorized(tx, ctx, artifact, target, expected_scope_revision, None)
+    }
+
+    /// Applies a share after the owning service has checked the caller's transfer authority.
+    pub(crate) fn share_authorized(
+        &self,
+        tx: &mut dyn WriteTransaction,
+        ctx: &InvocationContext,
+        mut artifact: StoredArtifact,
+        target: &ProjectId,
+        expected_scope_revision: &Revision,
+        transfer: Option<&Id>,
+    ) -> Result<MutationSummary, Failure> {
         require_explicit(&artifact, &tx.store().host_actor)?;
+        let artifact_id = &artifact.id;
         if expected_scope_revision.get() != artifact.scope_revision {
             return Err(conflict(
                 RevisionDimension::Scope,
@@ -1268,23 +1325,14 @@ impl ArtifactService {
                 artifact.scope_revision,
             ));
         }
-        let scope = authorized_scope(tx.authority(), ctx)?;
-        if scope != AuthorizedScope::Workspace {
-            return Err(Refusal::new(
-                DomainErrorCode::PermissionDenied,
-                "project",
-                Some(target.0.clone()),
-            )
-            .into());
-        }
         if !tx.artifacts().project_exists(target)? {
             return Err(
                 Refusal::new(DomainErrorCode::NotFound, "project", Some(target.0.clone())).into(),
             );
         }
-        if artifact.scope.project() == Some(target)
-            || !tx.artifacts().add_share(artifact_id, target)?
-        {
+        let added = artifact.scope.project() != Some(target)
+            && tx.artifacts().add_share(artifact_id, target)?;
+        if !added && transfer.is_none() {
             return Ok(MutationSummary {
                 id: artifact_id.clone(),
                 revision: rev(artifact.scope_revision),
@@ -1294,15 +1342,14 @@ impl ArtifactService {
         artifact.scope_revision += 1;
         artifact.reference_revision += 1;
         tx.artifacts().update_artifact(&artifact)?;
-        event(
-            tx,
-            ctx,
-            &artifact,
-            None,
-            None,
-            "ArtifactShared",
-            json!({"projectId": target.0.as_str(), "scopeRevision": artifact.scope_revision}),
-        )?;
+        let mut payload =
+            json!({"projectId": target.0.as_str(), "scopeRevision": artifact.scope_revision});
+        if let Some(transfer) = transfer {
+            payload["transferId"] = json!(transfer);
+            payload["existingShare"] = json!(!added);
+        }
+        // A fresh agreement to keep sharing also fences a pending contrary move.
+        event(tx, ctx, &artifact, None, None, "ArtifactShared", payload)?;
         Ok(MutationSummary {
             id: artifact_id.clone(),
             revision: rev(artifact.scope_revision),

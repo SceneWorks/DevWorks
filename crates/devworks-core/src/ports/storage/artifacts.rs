@@ -311,6 +311,9 @@ pub struct ListPosition {
 
 pub trait ArtifactRead {
     fn project_exists(&self, project: &ProjectId) -> Result<bool, StorageError>;
+    /// The SHA-256 of the text a Knowledge claim's vector embeds, while the claim exists and
+    /// is not deleted (it gates the claim's captured embedding inputs).
+    fn live_claim_text_digest(&self, claim: &Id) -> Result<Option<String>, StorageError>;
     /// Whether `subject` exists and belongs to `project` (roots, assignments, operations,
     /// resources and blockers through their owning work item where they have one).
     fn subject_exists(
@@ -322,6 +325,16 @@ pub trait ArtifactRead {
     fn version(&self, id: &Id) -> Result<Option<StoredVersion>, StorageError>;
     /// Every version of `artifact`, tombstoned ones included, in publication order.
     fn versions(&self, artifact: &Id) -> Result<Vec<StoredVersion>, StorageError>;
+    /// Newest-first immutable version history, starting strictly below `before`.
+    fn version_history(
+        &self,
+        artifact: &Id,
+        before: Option<i64>,
+        live_only: bool,
+        limit: u16,
+    ) -> Result<Vec<StoredVersion>, StorageError>;
+    /// Number of retained, non-tombstoned versions of the authorized artifact.
+    fn retained_version_count(&self, artifact: &Id) -> Result<i64, StorageError>;
     /// The version a staging operation published, if its metadata committed.
     fn version_by_operation(
         &self,
@@ -348,6 +361,16 @@ pub trait ArtifactRead {
         &self,
         owner: Option<&ActorId>,
         tags: &[String],
+        after: Option<&ListPosition>,
+        limit: u16,
+    ) -> Result<Vec<StoredArtifact>, StorageError>;
+    /// List live document-managed artifacts in an already authorized scope. A missing current
+    /// version can be shown for a document that still has retained versions.
+    fn document_artifacts(
+        &self,
+        scope: &ArtifactScope,
+        actor: Option<&ActorId>,
+        filter: super::DocumentListFilter,
         after: Option<&ListPosition>,
         limit: u16,
     ) -> Result<Vec<StoredArtifact>, StorageError>;

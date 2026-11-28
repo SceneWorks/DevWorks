@@ -36,6 +36,8 @@ pub struct ProcessSpec {
     /// (including exempt Unix credentials), fail before this program executes. This does not
     /// restrict files, network or in-place exec.
     pub no_child_processes: bool,
+    /// Platform-enforced process memory ceiling, when requested.
+    pub memory_limit_bytes: Option<usize>,
     /// Give the child a private control channel ([`ProcessTree::take_control`]) that no other
     /// process can reach: anonymous pipes, never a name or a port.
     pub control_pipe: Option<ControlPipe>,
@@ -73,6 +75,7 @@ impl ProcessSpec {
             capture_output: false,
             merge_output: false,
             no_child_processes: false,
+            memory_limit_bytes: None,
             control_pipe: None,
             pipe_stdin: false,
             stdin: None,
@@ -156,6 +159,10 @@ pub trait ProcessTree: Send {
     /// Observes the tree without blocking. Once it reports `empty`, the host never signals
     /// the recorded group again (its identifier may be reused).
     fn poll(&mut self) -> Result<TreeStatus, ProcessError>;
+    /// Resident memory of the owned root where the platform exposes it.
+    fn resident_memory_bytes(&self) -> Option<u64> {
+        None
+    }
     /// The captured stdout and stderr pipes, once.
     fn take_output(&mut self) -> Option<(Box<dyn Read + Send>, Box<dyn Read + Send>)>;
     /// The host's ends of the control channel of a tree launched with a control pipe, once.

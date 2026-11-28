@@ -140,7 +140,7 @@ impl EmbeddingSpaceService {
                 &probe.source_context,
             )?;
             if tx.actors().actor_kind(&probe.actor_id)? != Some(PrincipalKind::Human)
-                || !crate::authority::service::fences_hold(tx, &probe.authority_fences)?
+                || !crate::services::fences::fences_hold(tx, &probe.authority_fences)?
             {
                 return Err(StorageError::ScopeDenied);
             }

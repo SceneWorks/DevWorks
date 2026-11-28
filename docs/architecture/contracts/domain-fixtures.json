@@ -961,7 +961,7 @@
   {
     "id": "input-dreaming.revert-Command",
     "entry": "domain-request",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"proposalId\":\"id-a\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"id-a\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -969,6 +969,27 @@
     "id": "input-dreaming.review-Command",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.review\",\"proposalId\":\"id-a\",\"expectedRevision\":\"1\",\"decision\":\"Approve\",\"rationale\":\"Fixture content\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-documents.transfer_propose-Command",
+    "entry": "domain-request.r29",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.transfer_propose\",\"documentId\":\"id-a\",\"expectedDocumentRevision\":\"1\",\"expectedScopeRevision\":\"1\",\"destinationRootId\":\"root-a\",\"sourceNeedsDocument\":false,\"summary\":\"fixture\"},\"schemaRevision\":29}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-documents.transfer_respond-Command",
+    "entry": "domain-request.r29",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.transfer_respond\",\"transferId\":\"id-a\",\"expectedRevision\":\"1\",\"destinationNeedsDocument\":false},\"schemaRevision\":29}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-documents.transfer_status-Query",
+    "entry": "domain-request.r29",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.transfer_status\",\"transferId\":\"id-a\"},\"schemaRevision\":29}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -983,6 +1004,13 @@
     "id": "input-documents.list-Query",
     "entry": "domain-request",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "input-documents.resolve_citation-Query",
+    "entry": "domain-request.r26",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.resolve_citation\",\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":1}}},\"schemaRevision\":26}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -3297,6 +3325,27 @@
     "schemaValid": true
   },
   {
+    "id": "result-documents.transfer_propose",
+    "entry": "operation-result.r29",
+    "raw": "{\"kind\":\"documents.transfer_propose\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"state\":\"Pending\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-documents.transfer_respond",
+    "entry": "operation-result.r29",
+    "raw": "{\"kind\":\"documents.transfer_respond\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"state\":\"Pending\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-documents.transfer_status",
+    "entry": "operation-result.r29",
+    "raw": "{\"kind\":\"documents.transfer_status\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"state\":\"Pending\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
     "id": "result-documents.import",
     "entry": "operation-result",
     "raw": "{\"kind\":\"documents.import\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"title\":\"fixture\",\"currentVersion\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"retainedVersions\":[],\"retrievalEnabled\":false,\"extractionState\":\"Enabled\",\"coverage\":{\"state\":\"Complete\",\"gaps\":[],\"moreGaps\":false}}}",
@@ -3307,6 +3356,13 @@
     "id": "result-documents.list",
     "entry": "operation-result",
     "raw": "{\"kind\":\"documents.list\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "result-documents.resolve_citation",
+    "entry": "operation-result.r26",
+    "raw": "{\"kind\":\"documents.resolve_citation\",\"value\":{\"citation\":{\"source\":{\"kind\":\"Managed\",\"version\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"extractionRevision\":\"1\"},\"blockId\":\"block-a\",\"contentDigest\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"locator\":{\"kind\":\"Text\",\"firstLine\":1,\"lastLine\":1}},\"text\":\"fixture\"}}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -8612,7 +8668,7 @@
   {
     "id": "r2-input-dreaming.revert",
     "entry": "domain-request.r2",
-    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"proposalId\":\"id-a\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"schemaRevision\":2}",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"proposalId\":\"id-a\"},\"schemaRevision\":2}",
     "typedValid": true,
     "schemaValid": true
   },
@@ -10038,42 +10094,42 @@
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-13-1434",
+    "id": "r3-preview-source-13-1442",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-13-1434",
+    "id": "r3-delete-source-13-1442",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"test-run.json\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-15-1436",
+    "id": "r3-preview-source-15-1444",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-15-1436",
+    "id": "r3-delete-source-15-1444",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\" r\\u00e9sum\\u00e9 source \"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-preview-source-256-1438",
+    "id": "r3-preview-source-256-1446",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.diagnostics\",\"scope\":{\"kind\":\"Workspace\"},\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
     "schemaValid": true
   },
   {
-    "id": "r3-delete-source-256-1438",
+    "id": "r3-delete-source-256-1446",
     "entry": "domain-request.r3",
     "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"knowledge.delete_by_source\",\"scope\":{\"kind\":\"Workspace\"},\"expectedScopeRevision\":\"1\",\"previewDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"sourceLabel\":\"\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\\u9577\"},\"schemaRevision\":3}",
     "typedValid": true,
@@ -15692,6 +15748,363 @@
     "raw": "{\"kind\":\"knowledge.tagged_lessons\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
     "typedValid": false,
     "schemaValid": false
+  },
+  {
+    "id": "r30-input-knowledge.search",
+    "entry": "domain-request.r30",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20},\"schemaRevision\":30}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r30-result-knowledge.search-mode",
+    "entry": "operation-result.r30",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false,\"mode\":\"Hybrid\",\"workLimited\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r30-result-knowledge.search-lexical-empty",
+    "entry": "operation-result.r30",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[],\"hasMore\":false,\"mode\":\"LexicalOnly\",\"workLimited\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r29-result-knowledge.search-mode",
+    "entry": "operation-result.r29",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false,\"mode\":\"Hybrid\",\"workLimited\":true}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r30-result-knowledge.search-without-mode",
+    "entry": "operation-result.r30",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r31-input-knowledge.search-budget",
+    "entry": "domain-request.r31",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"budgetTokens\":8000},\"schemaRevision\":31}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r31-input-knowledge.search-plain",
+    "entry": "domain-request.r31",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20},\"schemaRevision\":31}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r30-input-knowledge.search-budget",
+    "entry": "domain-request.r30",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"budgetTokens\":8000},\"schemaRevision\":30}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r31-input-knowledge.search-zero-budget",
+    "entry": "domain-request.r31",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"budgetTokens\":0},\"schemaRevision\":31}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-r31-input-knowledge.search-budget-above-bound",
+    "entry": "domain-request.r31",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"knowledge.search\",\"scope\":{\"kind\":\"Workspace\"},\"text\":\"fixture\",\"tags\":[],\"kinds\":[],\"page\":{\"limit\":20},\"entityLimit\":20,\"claimLimit\":20,\"budgetTokens\":1000001},\"schemaRevision\":31}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r31-result-knowledge.search-budget",
+    "entry": "operation-result.r31",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"nextCursor\":\"v1.6865.abc\",\"hasMore\":true,\"mode\":\"Hybrid\",\"workLimited\":false,\"approximateTokens\":\"42\",\"budgetTokens\":8000}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r31-result-knowledge.search-unbounded",
+    "entry": "operation-result.r31",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[],\"hasMore\":false,\"mode\":\"LexicalOnly\",\"workLimited\":false,\"approximateTokens\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r31-result-knowledge.search-r30-shape",
+    "entry": "operation-result.r31",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"hasMore\":false,\"mode\":\"Hybrid\",\"workLimited\":true}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-r30-result-knowledge.search-tokens",
+    "entry": "operation-result.r30",
+    "raw": "{\"kind\":\"knowledge.search\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"kind\":\"Lesson\",\"subjectId\":\"id-a\",\"predicate\":\"fixture\",\"confidence\":0.5,\"state\":\"Active\",\"evidenceIds\":[],\"tags\":[],\"scope\":{\"kind\":\"Workspace\"},\"value\":\"A retained fact\",\"entryKind\":\"Lesson\",\"lifecycle\":\"Active\",\"origin\":\"User\",\"autonomous\":false,\"authorId\":\"actor-a\",\"createdAtMs\":\"1\",\"updatedAtMs\":\"2\",\"stale\":false,\"lesson\":{\"ruleState\":\"Effective\",\"effect\":\"UserInstruction\",\"effectiveAtMs\":\"5\",\"source\":\"RelayedReview\",\"sourceRef\":\"review-1\",\"quotedWords\":\"Always run fmt\",\"applicability\":{\"activities\":[\"implementing\"],\"paths\":[\"src/lib.rs\"],\"tools\":[],\"repositoryIds\":[]},\"recurrence\":\"1\",\"recurrenceThreshold\":\"3\",\"challenges\":[{\"id\":\"challenge-a\",\"state\":\"Open\",\"reason\":\"Breaks CI\",\"evidenceIds\":[],\"authorId\":\"actor-a\",\"openedAtMs\":\"6\"}],\"addressedBy\":[{\"kind\":\"Test\",\"name\":\"fmt_check\"}],\"deliveredSessions\":\"2\",\"lastDeliveredAtMs\":\"7\",\"skills\":[{\"instructionId\":\"skill-a\",\"name\":\"deploy\",\"revision\":\"2\"}]}}],\"nextCursor\":\"v1.6865.abc\",\"hasMore\":true,\"mode\":\"Hybrid\",\"workLimited\":false,\"approximateTokens\":\"42\",\"budgetTokens\":8000}}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "r25-input-documents.import",
+    "entry": "domain-request.r25",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.import\",\"scope\":{\"kind\":\"Workspace\"},\"source\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"title\":\"fixture\"},\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r25-input-documents.list",
+    "entry": "domain-request.r25",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r25-input-documents.read",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Read\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100,\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r25-input-documents.share",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Share\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r25-input-documents.move",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Move\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r25-input-documents.disable_retrieval",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DisableRetrieval\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r25-input-documents.remove_index",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"RemoveIndex\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":25}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.import",
+    "entry": "domain-request.r28",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.import\",\"scope\":{\"kind\":\"Workspace\"},\"source\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"title\":\"fixture\"},\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.list",
+    "entry": "domain-request.r28",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"documents.list\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.read",
+    "entry": "artifact-query-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"queryId\":\"query-artifact\",\"query\":{\"kind\":\"Read\",\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\"},\"limit\":100,\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.share",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Share\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.move",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"Move\",\"artifactId\":\"artifact-a\",\"targetProjectId\":\"project-b\",\"expectedScopeRevision\":\"1\"},\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.disable_retrieval",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"DisableRetrieval\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r28-input-documents.remove_index",
+    "entry": "artifact-command-request",
+    "raw": "{\"protocol\":\"1.0-draft.1\",\"requestKey\":\"artifact-command\",\"command\":{\"kind\":\"RemoveIndex\",\"artifactId\":\"artifact-a\",\"expectedRevision\":\"1\"},\"schemaRevision\":28}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r27-input-documents.index",
+    "entry": "domain-request.r27",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"documents.index\",\"documentId\":\"id-a\",\"versionId\":\"id-a\",\"expectedRevision\":\"1\",\"reextract\":true},\"schemaRevision\":27}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.run-Command",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.run\",\"scope\":{\"kind\":\"Workspace\"},\"expectedSettingsRevision\":\"1\",\"cancelRunId\":\"run-a\"},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.run",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.run\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"state\":\"ObservedComplete\",\"proposalIds\":[],\"detail\":{\"status\":\"Queued\",\"trigger\":\"Manual\",\"initiator\":\"actor-a\",\"startedAtMs\":\"0\",\"settingsRevision\":\"1\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"costMicroUsd\":\"0\",\"usageUncertain\":false,\"canContinue\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.runs-Query",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.runs\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.runs",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.runs\",\"value\":{\"items\":[{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"state\":\"ObservedComplete\",\"proposalIds\":[],\"detail\":{\"status\":\"Queued\",\"trigger\":\"Manual\",\"initiator\":\"actor-a\",\"startedAtMs\":\"0\",\"settingsRevision\":\"1\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"costMicroUsd\":\"0\",\"usageUncertain\":false,\"canContinue\":false}}],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.report-Query",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.report\",\"runId\":\"id-a\"},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.report",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.report\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"scope\":{\"kind\":\"Workspace\"},\"state\":\"ObservedComplete\",\"proposalIds\":[],\"detail\":{\"status\":\"Queued\",\"trigger\":\"Manual\",\"initiator\":\"actor-a\",\"startedAtMs\":\"0\",\"settingsRevision\":\"1\",\"inputTokens\":\"0\",\"outputTokens\":\"0\",\"costMicroUsd\":\"0\",\"usageUncertain\":false,\"canContinue\":false}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.settings-Query",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.settings\",\"scope\":{\"kind\":\"Workspace\"}},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.settings-Command",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.settings\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"config\":{\"enabled\":false,\"instructions\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"batchLimit\":20,\"modelId\":\"model-a\",\"effort\":\"High\",\"minimumIntervalMs\":\"3600000\",\"maxTurns\":\"12\",\"maxTokens\":\"128000\",\"maxElapsedMs\":\"1200000\",\"maxMicroUsd\":\"1000\"}},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.settings",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.settings\",\"value\":{\"scope\":{\"kind\":\"Workspace\"},\"revision\":\"1\",\"config\":{\"enabled\":false,\"instructions\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"batchLimit\":20,\"modelId\":\"model-a\"}}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.instructions-Query",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Query\",\"protocol\":\"1.0-draft.1\",\"queryId\":\"request-a\",\"body\":{\"kind\":\"dreaming.instructions\",\"scope\":{\"kind\":\"Workspace\"},\"page\":{\"limit\":20}},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.instructions-Command",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.instructions\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"}},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.instructions",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.instructions\",\"value\":{\"items\":[],\"hasMore\":false}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.propose-Command",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.propose\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"claimIds\":[{\"id\":\"id-a\",\"revision\":\"1\"}],\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"change\":{\"kind\":\"Retract\"},\"rationale\":\"conflicting evidence\",\"prevalence\":\"scope only\",\"evidence\":[{\"kind\":\"Knowledge\",\"reference\":\"fixture\",\"fingerprint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"summary\":\"Fixture content\"}]},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.propose",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.propose\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.revert-Command",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"allChanges\":true},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.revert",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.revert\",\"value\":{\"runId\":\"id-a\",\"applied\":[],\"conflicts\":[],\"remaining\":\"0\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-input-dreaming.review-Command",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.review\",\"proposalId\":\"id-a\",\"expectedRevision\":\"1\",\"decision\":\"Approve\",\"rationale\":\"Fixture content\"},\"schemaRevision\":24}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "r24-result-dreaming.review",
+    "entry": "operation-result.r24",
+    "raw": "{\"kind\":\"dreaming.review\",\"value\":{\"id\":\"id-a\",\"revision\":\"1\",\"contentDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"state\":\"Pending\",\"operationKind\":\"fixture\",\"targetId\":\"id-a\",\"targetRevision\":\"1\",\"summary\":\"Fixture content\"}}",
+    "typedValid": true,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dream-run-resume-and-cancel",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.run\",\"scope\":{\"kind\":\"Workspace\"},\"expectedSettingsRevision\":\"1\",\"cancelRunId\":\"run-a\",\"resumeRunId\":\"run-b\"},\"schemaRevision\":24}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dream-revert-both-targets",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.revert\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"expectedChangeDigest\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"allChanges\":true,\"proposalId\":\"proposal-a\"},\"schemaRevision\":24}",
+    "typedValid": false,
+    "schemaValid": false
+  },
+  {
+    "id": "reject-dream-settings-too-many-turns",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.settings\",\"scope\":{\"kind\":\"Workspace\"},\"expectedRevision\":\"1\",\"config\":{\"enabled\":false,\"instructions\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"batchLimit\":20,\"modelId\":\"model-a\",\"effort\":\"High\",\"minimumIntervalMs\":\"3600000\",\"maxTurns\":\"101\",\"maxTokens\":\"128000\",\"maxElapsedMs\":\"1200000\",\"maxMicroUsd\":\"1000\"}},\"schemaRevision\":24}",
+    "typedValid": false,
+    "schemaValid": true
+  },
+  {
+    "id": "reject-dream-proposal-without-evidence",
+    "entry": "domain-request.r24",
+    "raw": "{\"mode\":\"Command\",\"protocol\":\"1.0-draft.1\",\"requestKey\":\"request-a\",\"body\":{\"kind\":\"dreaming.propose\",\"runId\":\"id-a\",\"expectedRevision\":\"1\",\"claimIds\":[{\"id\":\"id-a\",\"revision\":\"1\"}],\"content\":{\"artifactId\":\"artifact-a\",\"versionId\":\"version-a\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"byteLength\":\"8\",\"mediaType\":\"text/plain\"},\"change\":{\"kind\":\"Retract\"},\"rationale\":\"conflicting evidence\",\"prevalence\":\"scope only\"},\"schemaRevision\":24}",
+    "typedValid": false,
+    "schemaValid": true
   },
   {
     "id": "r3-input-issues.publish",

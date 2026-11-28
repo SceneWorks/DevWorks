@@ -96,6 +96,7 @@ mod connections;
 mod conventions;
 mod decisions;
 mod diagnostics;
+mod dreaming;
 mod embedding;
 mod evals;
 mod git;
@@ -1325,6 +1326,410 @@ fn version_and_ledger(h: &Harness, table: &str) -> (i64, i64, i64) {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap()
+}
+
+/// The DW-F8 feature migrations, canonically 71–77, as a published DW-F8 ledger numbered them:
+/// the five document migrations after 63 (base 63), or all seven after main's 66 (base 66).
+fn feature_document_migrations(base: i64, count: usize) -> Vec<Migration> {
+    let mut migrations = through(base);
+    migrations.extend(
+        MIGRATIONS[70..70 + count]
+            .iter()
+            .map(|migration| Migration {
+                version: migration.version - 70 + base,
+                minimum_reader: if base == 63 { 57 } else { 66 },
+                minimum_writer: migration.version - 70 + base,
+                ..*migration
+            }),
+    );
+    migrations
+}
+
+/// The store schema, so a reconciled ledger can be compared with a store built in order.
+fn schema_definitions(conn: &Connection) -> Vec<(String, String, Option<String>)> {
+    let mut statement = conn
+        .prepare("SELECT type,name,sql FROM sqlite_schema ORDER BY type,name")
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+#[test]
+fn published_feature_document_prefixes_converge_without_rewriting_evidence() {
+    let canonical_schema = {
+        let fresh = Harness::new();
+        drop(fresh.store());
+        schema_definitions(&fresh.raw())
+    };
+    for (base, published) in [(63, 5), (66, 7)] {
+        for count in 1..=published {
+            feature_document_prefix_converges(base, count, &canonical_schema);
+        }
+    }
+}
+
+fn feature_document_prefix_converges(
+    base: i64,
+    count: usize,
+    canonical_schema: &[(String, String, Option<String>)],
+) {
+    {
+        let h = Harness::new();
+        let mut config = h.config();
+        config.app_build = "document-feature".into();
+        let legacy =
+            SqliteStore::open_with(config, &feature_document_migrations(base, count)).unwrap();
+        let id = |name| Id::new(name).unwrap();
+        write(&legacy, move |tx| {
+            let digest = "a".repeat(64);
+            let generation = "branch-blob".to_owned();
+            let owner = tx.store().host_actor.clone();
+            tx.artifacts()
+                .put_blob(&digest, 4, &generation, "blobs/fixture")?;
+            tx.artifacts().insert_artifact(&StoredArtifact {
+                id: id("branch-document"),
+                origin_project_id: None,
+                origin_work_id: None,
+                title: "Saved document".into(),
+                revision: 1,
+                scope: ArtifactScope::Workspace,
+                owner: Some(owner),
+                retention: ArtifactRetention::Explicit,
+                scope_revision: 1,
+                reference_revision: 1,
+                current_version_id: None,
+                state: ArtifactState::Live,
+                created_at_ms: T0,
+                provenance: json!({}),
+            })?;
+            tx.artifacts().insert_version(&StoredVersion {
+                id: id("branch-version"),
+                artifact_id: id("branch-document"),
+                version_no: 1,
+                blob_digest: digest,
+                byte_count: 4,
+                blob_generation: generation,
+                media_type: "text/plain".into(),
+                created_at_ms: T0,
+                deleted_at_ms: None,
+                source: json!({}),
+            })
+        })
+        .unwrap();
+        drop(legacy);
+        let conn = h.raw();
+        conn.execute_batch(
+            "INSERT INTO document_retrieval_preferences VALUES('branch-document',0);
+             INSERT INTO document_extractions VALUES('branch-extraction','branch-version',1,
+                replace(hex(zeroblob(32)),'0','a'),'{}',1);
+             INSERT INTO document_extracted_blocks VALUES('branch-block','branch-extraction',0,
+                'retained migration marker','{}','[]');
+             INSERT INTO document_index_versions(version_id,latest_operation,stage,published_generation,published_revision)
+                VALUES('branch-version','branch-index','Ready','branch-generation',1);",
+        ).unwrap();
+        if count >= 3 {
+            conn.execute(
+                "INSERT INTO document_embedding_runs(run_id,extraction_id,configuration_digest)
+                 VALUES('branch-embedding','branch-extraction',replace(hex(zeroblob(32)),'0','b'))",
+                [],
+            )
+            .unwrap();
+        }
+        if count >= 4 {
+            conn.execute(
+                "INSERT INTO document_extraction_keys VALUES('branch-version','branch-key','branch-extraction','[]')",
+                [],
+            ).unwrap();
+        }
+        if count >= 5 {
+            conn.execute(
+                "UPDATE document_index_versions SET published_at=123 WHERE version_id='branch-version'",
+                [],
+            ).unwrap();
+        }
+        let before = migrations::ledger(&conn).unwrap();
+        drop(conn);
+        let upgraded = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+        let after = upgraded.compatibility().unwrap().migrations;
+        assert_eq!(after.len(), MIGRATIONS.len());
+        let base = base as usize;
+        assert_eq!(&after[..base], &before[..base]);
+        for old in &before[base..] {
+            let moved = old.version - base as i64 + 70;
+            let canonical = &after[(moved - 1) as usize];
+            assert_eq!(canonical.version, moved);
+            assert_eq!(canonical.checksum, old.checksum);
+            assert_eq!(canonical.app_build, "document-feature");
+            assert_eq!(canonical.applied_at_ms, old.applied_at_ms);
+        }
+        for main in &MIGRATIONS[base..70] {
+            assert_eq!(after[(main.version - 1) as usize].checksum, main.checksum());
+        }
+        for remaining in &MIGRATIONS[70 + count..] {
+            assert_eq!(
+                after[(remaining.version - 1) as usize].checksum,
+                remaining.checksum()
+            );
+        }
+        let conn = h.raw();
+        assert_eq!(schema_definitions(&conn), canonical_schema);
+        let text: String = conn
+            .query_row(
+                "SELECT text FROM document_extracted_blocks WHERE id='branch-block'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(text, "retained migration marker");
+        let lexical: i64 = conn.query_row(
+            "SELECT count(*) FROM document_lexical_fts WHERE document_lexical_fts MATCH 'marker'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(lexical, 1);
+        if count >= 3 {
+            let retained: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM document_embedding_runs WHERE run_id='branch-embedding')",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert!(retained);
+        }
+        if count >= 4 {
+            let key: String = conn.query_row(
+                "SELECT identity_key FROM document_extraction_keys WHERE extraction_id='branch-extraction'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(key, "branch-key");
+        }
+        if count >= 5 {
+            let published: i64 = conn.query_row(
+                "SELECT published_at FROM document_index_versions WHERE version_id='branch-version'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(published, 123);
+        }
+        drop(conn);
+        drop(upgraded);
+        let reopened = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+        assert_eq!(reopened.compatibility().unwrap().migrations, after);
+    }
+}
+
+/// F8 builds recorded F8 operations at revisions 9–14, which main now owns. Reconciliation moves
+/// only the F8 operations' stored revisions; main's operations at the same numbers keep theirs.
+/// Published reply schema references are covered with a real reply in
+/// `artifacts::renumbered_f8_receipt_replies_stay_purgeable`.
+#[test]
+fn feature_ledger_reconciliation_renumbers_only_f8_operation_revisions() {
+    for base in [63, 66] {
+        let h = Harness::new();
+        drop(SqliteStore::open_with(h.config(), &feature_document_migrations(base, 2)).unwrap());
+        let conn = h.raw();
+        let actor: String = conn
+            .query_row("SELECT id FROM actors ORDER BY id LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        for (id, operation, revision) in [
+            ("op-dream", "dreaming.run", 9),
+            ("op-document", "documents.read", 13),
+            ("op-database", "database.read", 9),
+        ] {
+            conn.execute(
+                "INSERT INTO operations(id,capability,schema_version,args_digest,payload_json,\
+                    state,revision,created_at) VALUES(?1,?2,?3,'digest','{}','Completed',1,0)",
+                params![id, operation, revision],
+            )
+            .unwrap();
+            let result = json!({"contract": "fixture", "schemaRevision": revision}).to_string();
+            conn.execute(
+                "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,\
+                    payload_digest,operation_id,result_json,created_at) \
+                    VALUES(?1,'scope',?2,?3,'digest',?2,?4,0)",
+                params![actor, id, operation, result],
+            )
+            .unwrap();
+            let payload = json!({"operation": operation, "schemaRevision": revision}).to_string();
+            conn.execute(
+                "INSERT INTO events(id,actor_id,aggregate_kind,aggregate_id,aggregate_revision,\
+                    kind,created_at,payload_json) VALUES(?1,?2,'command',?4,1,'CommandDecided',0,?3)",
+                params![format!("event-{id}"), actor, payload, id],
+            )
+            .unwrap();
+        }
+        // A purged receipt keeps only its contract, revision and purge outcome.
+        conn.execute(
+            "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,\
+                payload_digest,result_json,created_at) VALUES(?1,'scope','purged-dream',\
+                'dreaming.run','digest',?2,0)",
+            params![
+                actor,
+                json!({"contract": "fixture", "schemaRevision": 9, "purged": {}}).to_string()
+            ],
+        )
+        .unwrap();
+        // The nightly Dreaming job an F8 build installed names its old argument schema revision.
+        let current = devworks_core::services::jobs::argument_schema(
+            "dreaming.run",
+            devworks_core::registry::SchemaRevision(24),
+        )
+        .unwrap();
+        let mut schema = serde_json::to_value(&current).unwrap();
+        schema["revision"] = json!("9");
+        let saved = json!({"kind": "Native", "capabilityId": "dreaming-run",
+            "arguments": {"schema": schema, "value": {"scope": {"kind": "Workspace"}}}});
+        conn.execute(
+            "INSERT INTO schedules(id,revision,title,kind,schedule_json,timezone,definition_json,\
+                enabled,authorized,activated_epoch,anchor_at,created_at,updated_at,project_epoch) \
+                VALUES('nightly',1,'Nightly Dreaming','Native','{}','UTC',?1,1,1,0,0,0,0,0)",
+            [devworks_core::jcs::canonicalize(&saved).unwrap()],
+        )
+        .unwrap();
+        drop(conn);
+        drop(SqliteStore::open_with(h.config(), MIGRATIONS).unwrap());
+        let conn = h.raw();
+        let purged: i64 = conn
+            .query_row(
+                "SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                    WHERE idempotency_key='purged-dream'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(purged, 24, "{base}");
+        let job: String = conn
+            .query_row(
+                "SELECT definition_json FROM schedules WHERE id='nightly'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let job: serde_json::Value = serde_json::from_str(&job).unwrap();
+        assert_eq!(
+            job["arguments"]["schema"],
+            serde_json::to_value(&current).unwrap()
+        );
+        for (id, expected) in [("op-dream", 24), ("op-document", 28), ("op-database", 9)] {
+            let stored: (Option<i64>, Option<i64>, Option<i64>) = conn
+                .query_row(
+                    "SELECT (SELECT schema_version FROM operations WHERE id=?1),\
+                        (SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                            WHERE idempotency_key=?1),\
+                        (SELECT json_extract(payload_json,'$.schemaRevision') FROM events \
+                            WHERE aggregate_id=?1)",
+                    [id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                (Some(expected), Some(expected), Some(expected)),
+                "{base} {id}"
+            );
+        }
+    }
+}
+
+#[test]
+fn feature_document_reconciliation_rejects_a_mixed_ledger() {
+    for base in [63, 66] {
+        let h = Harness::new();
+        drop(SqliteStore::open_with(h.config(), &feature_document_migrations(base, 2)).unwrap());
+        let conn = h.raw();
+        conn.execute(
+            "UPDATE schema_migrations SET checksum=?1 WHERE version=?2",
+            params![MIGRATIONS[64].checksum(), base + 2],
+        )
+        .unwrap();
+        let before = migrations::ledger(&conn).unwrap();
+        drop(conn);
+        assert!(matches!(
+            SqliteStore::open_with(h.config(), MIGRATIONS),
+            Err(StorageError::IncompatibleSchema(_))
+        ));
+        assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+    }
+}
+
+#[test]
+fn feature_document_migrations_refuse_entries_above_the_deployed_schema() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &through(66)).unwrap());
+    let conn = h.raw();
+    conn.execute(
+        "INSERT INTO schema_migrations (version,checksum,applied_at,app_build) VALUES
+            (?1,'unknown',0,'other-branch')",
+        [MIGRATIONS.last().unwrap().version + 1],
+    )
+    .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+
+    assert!(matches!(
+        SqliteStore::open_with(h.config(), MIGRATIONS),
+        Err(StorageError::IncompatibleSchema(_))
+    ));
+    assert_eq!(version_and_ledger(&h, "document_extractions"), (0, 66, 67));
+    assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+}
+
+#[test]
+fn feature_document_reconciliation_rolls_back_all_ledger_and_schema_changes() {
+    let h = Harness::new();
+    drop(SqliteStore::open_with(h.config(), &feature_document_migrations(63, 5)).unwrap());
+    let conn = h.raw();
+    conn.execute("DROP INDEX allocation_claims_project_slot", [])
+        .unwrap();
+    let before = migrations::ledger(&conn).unwrap();
+    drop(conn);
+    assert!(SqliteStore::open_with(h.config(), MIGRATIONS).is_err());
+    assert_eq!(version_and_ledger(&h, "router_decision_pool"), (0, 68, 68));
+    assert_eq!(migrations::ledger(&h.raw()).unwrap(), before);
+}
+
+#[test]
+fn feature_document_reconciliation_rolls_back_if_the_missing_suffix_fails() {
+    for base in [63, 66] {
+        let h = Harness::new();
+        drop(SqliteStore::open_with(h.config(), &feature_document_migrations(base, 1)).unwrap());
+        let conn = h.raw();
+        conn.execute(
+            "CREATE TABLE document_lexical_rows (fixture_fault INTEGER)",
+            [],
+        )
+        .unwrap();
+        let before = migrations::ledger(&conn).unwrap();
+        drop(conn);
+
+        let Err(error) = SqliteStore::open_with(h.config(), MIGRATIONS) else {
+            panic!("the conflicting table should fail the lexical migration");
+        };
+        assert!(
+            error.to_string().contains("document_lexical_rows"),
+            "{error}"
+        );
+        assert_eq!(
+            version_and_ledger(&h, "analysis_runs"),
+            (0, base + 1, base + 1)
+        );
+        let conn = h.raw();
+        assert_eq!(migrations::ledger(&conn).unwrap(), before);
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            base + 1,
+        );
+        conn.execute("DROP TABLE document_lexical_rows", [])
+            .unwrap();
+        drop(conn);
+        let upgraded = SqliteStore::open_with(h.config(), MIGRATIONS).unwrap();
+        assert_eq!(
+            upgraded.compatibility().unwrap().store_schema_version,
+            MIGRATIONS.last().unwrap().version,
+        );
+    }
 }
 
 #[test]

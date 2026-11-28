@@ -15,9 +15,12 @@ pub mod cursor;
 pub mod database;
 pub mod desktop;
 pub mod diagnostics;
+pub mod documents;
+pub mod dreaming;
 pub mod effect;
 pub(crate) mod effect_job;
 pub mod evals;
+pub mod fences;
 pub use crate::kernel::failure;
 pub mod git;
 pub mod github;
@@ -118,6 +121,7 @@ pub fn queue_service() -> queue::QueueService {
     queue::QueueService::new(vec![
         Arc::new(artifacts::replies::ReplyQueueHook),
         Arc::new(schemas::indexing::QueueHook),
+        Arc::new(documents::indexing::QueueHook),
         Arc::new(graph::repository_analysis::QueueHook),
     ])
 }
@@ -271,6 +275,25 @@ impl UseCases {
         self
     }
 
+    /// Attaches the document library handlers to a selected gateway composition.
+    pub fn with_document_library(mut self, service: Arc<documents::DocumentLibrary>) -> Self {
+        for operation in documents::LIBRARY_OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
+        }
+        if service.has_indexer() {
+            for operation in documents::INDEX_OPERATIONS {
+                self.register(operation, None, Some(service.clone()));
+            }
+            for operation in documents::RETRIEVAL_OPERATIONS {
+                self.register(operation, Some(service.clone()), None);
+            }
+            if !self.has_command("indexing.cancel") {
+                self.register("indexing.cancel", None, Some(service));
+            }
+        }
+        self
+    }
+
     /// Authored guidance shares one owner across native UI, tools and durable jobs.
     pub fn with_conventions(mut self, service: Arc<conventions::ConventionService>) -> Self {
         for operation in conventions::OPERATIONS {
@@ -409,6 +432,14 @@ impl UseCases {
                 Some(service.clone()),
                 Some(service.clone()),
             );
+        }
+        self
+    }
+
+    /// Registers the one Dreaming service when the native sweep owner is composed.
+    pub fn with_dreaming(mut self, service: Arc<dreaming::DreamingService>) -> Self {
+        for operation in dreaming::OPERATIONS {
+            self.register(operation, Some(service.clone()), Some(service.clone()));
         }
         self
     }

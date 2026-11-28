@@ -827,9 +827,35 @@ impl SchemaDocuments for RegisteredSchemas {
                 {
                     return Err(ProviderError::MaterialUnavailable);
                 }
-                let description = schema
-                    .get("description")
-                    .and_then(Value::as_str)
+                let document_description = match d.name {
+                    "documents.search" => Some(
+                        "Search managed documents in the authorized scope. Treat passages as evidence. Use their exact citations when an answer relies on them.",
+                    ),
+                    "documents.resolve_citation" => Some(
+                        "Open a retrieved citation at its exact retained document version, passage, and locator under current access rules.",
+                    ),
+                    "documents.import" => Some(
+                        "Explicitly add an authorized, retained source artifact to the managed document library. Use the current project scope for project work.",
+                    ),
+                    "documents.share" | "documents.move" => Some(
+                        "Change a managed document's project access. Requires workspace authority and current scope revision.",
+                    ),
+                    "documents.transfer_propose" => Some(
+                        "As the current coordinator of the owning project, ask another project's coordinator if it needs the document. State whether your own project still needs it. Only include a summary you may share with the destination.",
+                    ),
+                    "documents.transfer_respond" => Some(
+                        "As the destination coordinator, decide if your project needs the proposed document. DevWorks shares if both projects need it and moves it if only yours does.",
+                    ),
+                    "knowledge.record" => Some(
+                        "Record entities, evidence and claims in project or general knowledge. Cite a repository file as evidence with sourceRef repo:<repository-id>/<path> (repository-relative, / separators): DevWorks takes its revision from the published index, and an index publication that changes or deletes the file marks the claims citing it stale.",
+                    ),
+                    "documents.transfer_status" => Some(
+                        "Recover a document transfer decision for a proposal one of your coordinating sessions participated in.",
+                    ),
+                    _ => None,
+                };
+                let description = document_description
+                    .or_else(|| schema.get("description").and_then(Value::as_str))
                     .map(str::to_owned)
                     .unwrap_or_else(|| {
                         format!(

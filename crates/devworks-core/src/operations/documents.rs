@@ -8,13 +8,13 @@
 //! Domain-envelope inputs are the `/body` members other than the `kind` discriminator; the
 //! registry decodes a body only into the input of the operation and mode the host selected.
 //! Specialized envelopes keep their recorded candidate shape and selector.
-use crate::protocol::data::DataScope;
+use crate::protocol::data::{Citation, DataScope};
 use crate::protocol::provider::ArtifactRef;
 #[allow(unused_imports)]
 use crate::protocol::records::*;
 #[allow(unused_imports)]
 use crate::protocol::support::*;
-use crate::protocol::{Id, Revision};
+use crate::protocol::{Id, Revision, RootId};
 use crate::registry::Mode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -73,17 +73,29 @@ pub struct IndexInput {
     pub document_id: Id,
     pub version_id: Id,
     pub expected_revision: Revision,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "gated_member"
+    )]
+    #[schemars(with = "bool", extend("x-since" = 27))]
+    pub reextract: Option<bool>,
 }
 impl Check for IndexInput {
     fn check(&self) -> Result<(), String> {
         self.document_id.check()?;
         self.version_id.check()?;
         self.expected_revision.check()?;
+        self.reextract.check()?;
         Ok(())
     }
 }
 impl Revisioned for IndexInput {
-    fn retain_revision(&mut self, _: u32) {}
+    fn retain_revision(&mut self, revision: u32) {
+        if revision < 27 {
+            self.reextract = None;
+        }
+    }
 }
 
 /// `documents.retry` Command input.
@@ -103,6 +115,84 @@ impl Check for RetryInput {
     }
 }
 impl Revisioned for RetryInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `documents.resolve_citation` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolveCitationInput {
+    pub citation: Citation,
+}
+impl Check for ResolveCitationInput {
+    fn check(&self) -> Result<(), String> {
+        self.citation.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for ResolveCitationInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `documents.transfer_propose` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransferProposeInput {
+    pub document_id: Id,
+    pub expected_document_revision: Revision,
+    pub expected_scope_revision: Revision,
+    pub destination_root_id: RootId,
+    pub source_needs_document: bool,
+    pub summary: Label,
+}
+impl Check for TransferProposeInput {
+    fn check(&self) -> Result<(), String> {
+        self.document_id.check()?;
+        self.expected_document_revision.check()?;
+        self.expected_scope_revision.check()?;
+        self.destination_root_id.check()?;
+        self.source_needs_document.check()?;
+        self.summary.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for TransferProposeInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `documents.transfer_respond` Command input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransferRespondInput {
+    pub transfer_id: Id,
+    pub expected_revision: Revision,
+    pub destination_needs_document: bool,
+}
+impl Check for TransferRespondInput {
+    fn check(&self) -> Result<(), String> {
+        self.transfer_id.check()?;
+        self.expected_revision.check()?;
+        self.destination_needs_document.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for TransferRespondInput {
+    fn retain_revision(&mut self, _: u32) {}
+}
+
+/// `documents.transfer_status` Query input.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransferStatusInput {
+    pub transfer_id: Id,
+}
+impl Check for TransferStatusInput {
+    fn check(&self) -> Result<(), String> {
+        self.transfer_id.check()?;
+        Ok(())
+    }
+}
+impl Revisioned for TransferStatusInput {
     fn retain_revision(&mut self, _: u32) {}
 }
 
@@ -129,6 +219,14 @@ pub enum Input {
     DisableRetrieval(crate::protocol::data::ArtifactCommandRequest),
     /// `documents.remove_index` (Command).
     RemoveIndex(crate::protocol::data::ArtifactCommandRequest),
+    /// `documents.resolve_citation` (Query).
+    ResolveCitation(ResolveCitationInput),
+    /// `documents.transfer_propose` (Command).
+    TransferPropose(TransferProposeInput),
+    /// `documents.transfer_respond` (Command).
+    TransferRespond(TransferRespondInput),
+    /// `documents.transfer_status` (Query).
+    TransferStatus(TransferStatusInput),
 }
 impl Input {
     pub fn operation(&self) -> &'static str {
@@ -143,6 +241,10 @@ impl Input {
             Self::Retry(_) => "documents.retry",
             Self::DisableRetrieval(_) => "documents.disable_retrieval",
             Self::RemoveIndex(_) => "documents.remove_index",
+            Self::ResolveCitation(_) => "documents.resolve_citation",
+            Self::TransferPropose(_) => "documents.transfer_propose",
+            Self::TransferRespond(_) => "documents.transfer_respond",
+            Self::TransferStatus(_) => "documents.transfer_status",
         }
     }
     pub fn mode(&self) -> Mode {
@@ -157,6 +259,10 @@ impl Input {
             Self::Retry(_) => Mode::Command,
             Self::DisableRetrieval(_) => Mode::Command,
             Self::RemoveIndex(_) => Mode::Command,
+            Self::ResolveCitation(_) => Mode::Query,
+            Self::TransferPropose(_) => Mode::Command,
+            Self::TransferRespond(_) => Mode::Command,
+            Self::TransferStatus(_) => Mode::Query,
         }
     }
     /// The `/body` members of this input, without the `kind` discriminator.
@@ -172,6 +278,10 @@ impl Input {
             Self::Retry(i) => serde_json::to_value(i),
             Self::DisableRetrieval(i) => serde_json::to_value(i),
             Self::RemoveIndex(i) => serde_json::to_value(i),
+            Self::ResolveCitation(i) => serde_json::to_value(i),
+            Self::TransferPropose(i) => serde_json::to_value(i),
+            Self::TransferRespond(i) => serde_json::to_value(i),
+            Self::TransferStatus(i) => serde_json::to_value(i),
         }
     }
 }

@@ -1,10 +1,10 @@
 {
   "status": "All retained operation inputs and result tags have concrete candidates; not a public API freeze or production runtime coverage",
   "date": "2026-11-24",
-  "catalogSha256": "c83885a6e3484c9dd0650774135eb01561bc6d50c482041528221241e8bb4fb4",
+  "catalogSha256": "2b6a03642a1ae4a5040f3f779a5cb7fea261736c3cb71a28c9e5d0e0697127cd",
   "familyCount": 50,
-  "operationCount": 387,
-  "concreteInputCandidates": 387,
+  "operationCount": 391,
+  "concreteInputCandidates": 391,
   "domainInputsPending": 0,
   "families": [
     {
@@ -7797,7 +7797,7 @@
             "pointer": "/kind",
             "equals": "knowledge.search"
           },
-          "resultValueType": "Page<KnowledgeClaim>",
+          "resultValueType": "KnowledgeSearchResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -7833,11 +7833,27 @@
               "queryReplySchema": "domain-query-reply.r8.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 30,
+              "inputSchema": "domain-request.r29.schema.json",
+              "resultSchema": "operation-result.r30.schema.json",
+              "queryReplySchema": "domain-query-reply.r30.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 31,
+              "inputSchema": "domain-request.r31.schema.json",
+              "resultSchema": "operation-result.r31.schema.json",
+              "queryReplySchema": "domain-query-reply.r31.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Scoped lexical search, newest first: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies before any candidate is materialized. Every word of text must appear (Unicode case-folded) in the claim or its subject entity. Lifecycle Active by default (revision 1: Active only). Cursors bind the query and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state.",
+          "semanticRules": "Scoped search: a project scope reads that project and general (workspace) Knowledge, a workspace scope only general Knowledge; scope applies to every candidate source before any candidate is materialized. Without words, newest first. With words, three sources are fused by reciprocal rank into a head (k 400, each source at most 200 candidates), ordered by how many of the word and meaning sources list a claim, then the fused score: word matches (every word of text appears, Unicode case-folded, in the claim or its subject entity), meaning matches (the nearest claim vectors in the selected embedding space, when the read scopes have vectors in it) and graph matches (claims whose subject or object is one of the entityLimit entities whose text best matches a word). After the head, every other match follows in its source's own order (word, then graph, then meaning matches), so each matching claim is listed once. Lifecycle Active by default (revision 1: Active only). Cursors bind the query, the retrieval inputs and the revisions of every scope read. Schema revision 2: lifecycle states, entry kinds, source and stale filters; claims carry provenance, lifecycle, verification and lesson state. Schema revision 30: the page reports its listing's retrieval mode (Hybrid with meaning matches, otherwise LexicalOnly; a listing keeps its first page's mode) and workLimited, true when fusion ranked only the head (a source had more candidates than its cap, or more entities matched than entityLimit). Schema revision 31: budgetTokens bounds a page by the approximate tokens of its claims' text (predicate, value and normalized text; characters divided by 4, rounded up): the page holds the best-ranked claims that fit, always at least one, and its cursor continues with the next claim, so the budget changes only where a page ends. Without budgetTokens (and at earlier revisions, which cannot pass it) an agent, package, MCP client or schedule gets the scope's knowledge.searchTokenBudget setting (at most the maximum) and a person or the host acting for them gets no token bound. A budget below 1000 or above the scope's knowledge.searchTokenBudgetMax setting is refused: InvalidArgument, targetKind budgetTokens, targetId the allowed range as <min>-<max>. page.limit and claimLimit still bound the page. The page reports approximateTokens and the budgetTokens that applied.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -7961,7 +7977,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Atomic entity/claim/evidence validation; client IDs resolve within batch; claims need object or value, not neither. Preserve provenance and contradictory claims.",
+          "semanticRules": "Atomic entity/claim/evidence validation; client IDs resolve within batch; claims need object or value, not neither. Preserve provenance and contradictory claims. Evidence citing a file of a registered repository uses sourceRef repo:<repository-id>/<path> (repository-relative, / separators); it is stored normalized (empty and . segments dropped, .. refused) and its source revision is the file's content digest in the repository's published index baseline, replacing any stated sourceRevision. A file that published baseline does not hold, or a repository outside the write scope, is recorded without a source revision (noted evidence_not_indexed). An index publication that changes or deletes a cited file marks the claims citing it stale.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -8177,7 +8193,7 @@
           ],
           "authority": "Scoped",
           "effect": "Local",
-          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again.",
+          "semanticRules": "Append attributed state/evidence; never erase contradiction or overwrite a newer authored revision. Schema revision 2: the source revision verified against; a later observed source revision marks the claim stale until verified again. A repository file citation (repo:<repository-id>/<path>) is verified at its observed published index digest, never at a stated sourceRevision.",
           "familyRules": "Typed authored claims/entities/evidence with scope before traversal/ranking. Revisioned contradiction/retraction preserved; no raw internal SQL.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -9248,6 +9264,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r24.schema.json",
+              "completionSchema": "operation-completion.r24.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9294,6 +9318,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": "domain-query-reply.r24.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
             }
           ],
           "authority": "Scoped",
@@ -9338,6 +9370,14 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": "domain-query-reply.r24.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9392,6 +9432,14 @@
               "queryReplySchema": "domain-query-reply.schema.json",
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": "domain-query-reply.r24.schema.json",
+              "commandReplySchema": "domain-command-reply.r24.schema.json",
+              "completionSchema": "operation-completion.r24.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9452,6 +9500,14 @@
               "queryReplySchema": "domain-query-reply.r8.schema.json",
               "commandReplySchema": "domain-command-reply.r8.schema.json",
               "completionSchema": "operation-completion.r8.schema.json"
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": "domain-query-reply.r24.schema.json",
+              "commandReplySchema": "domain-command-reply.r24.schema.json",
+              "completionSchema": "operation-completion.r24.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9498,6 +9554,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r24.schema.json",
+              "completionSchema": "operation-completion.r24.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9532,7 +9596,7 @@
             "pointer": "/kind",
             "equals": "dreaming.revert"
           },
-          "resultValueType": "KnowledgeWriteReceipt",
+          "resultValueType": "DreamRevertResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9552,6 +9616,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.r2.schema.json",
               "completionSchema": "operation-completion.r2.schema.json"
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r24.schema.json",
+              "completionSchema": "operation-completion.r24.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9598,6 +9670,14 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 24,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r24.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r24.schema.json",
+              "completionSchema": "operation-completion.r24.schema.json"
             }
           ],
           "authority": "HumanDecision",
@@ -9639,7 +9719,7 @@
             "pointer": "/kind",
             "equals": "documents.import"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9651,6 +9731,22 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 25,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r25.schema.json",
+              "completionSchema": "operation-completion.r25.schema.json"
+            },
+            {
+              "revision": 28,
+              "inputSchema": "domain-request.r27.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r28.schema.json",
+              "completionSchema": "operation-completion.r28.schema.json"
             }
           ],
           "authority": "Scoped",
@@ -9685,7 +9781,7 @@
             "pointer": "/kind",
             "equals": "documents.list"
           },
-          "resultValueType": "Page<DocumentRecord>",
+          "resultValueType": "DocumentListResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -9695,6 +9791,22 @@
               "inputSchema": "domain-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 25,
+              "inputSchema": "domain-request.r24.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": "domain-query-reply.r25.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 28,
+              "inputSchema": "domain-request.r27.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": "domain-query-reply.r28.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9731,7 +9843,7 @@
             "pointer": "/kind",
             "equals": "documents.read"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": "domain-query-reply.schema.json",
           "commandReplySchema": null,
           "completionSchema": null,
@@ -9741,6 +9853,22 @@
               "inputSchema": "artifact-query-request.schema.json",
               "resultSchema": "operation-result.schema.json",
               "queryReplySchema": "domain-query-reply.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 25,
+              "inputSchema": "artifact-query-request.r3.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": "domain-query-reply.r25.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            },
+            {
+              "revision": 28,
+              "inputSchema": "artifact-query-request.r3.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": "domain-query-reply.r28.schema.json",
               "commandReplySchema": null,
               "completionSchema": null
             }
@@ -9820,7 +9948,7 @@
             "pointer": "/kind",
             "equals": "documents.share"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9832,6 +9960,22 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 25,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r25.schema.json",
+              "completionSchema": "operation-completion.r25.schema.json"
+            },
+            {
+              "revision": 28,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r28.schema.json",
+              "completionSchema": "operation-completion.r28.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9866,7 +10010,7 @@
             "pointer": "/kind",
             "equals": "documents.move"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -9878,6 +10022,22 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 25,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r25.schema.json",
+              "completionSchema": "operation-completion.r25.schema.json"
+            },
+            {
+              "revision": 28,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r28.schema.json",
+              "completionSchema": "operation-completion.r28.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -9924,11 +10084,19 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 27,
+              "inputSchema": "domain-request.r27.schema.json",
+              "resultSchema": "operation-result.r26.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r26.schema.json",
+              "completionSchema": "operation-completion.r26.schema.json"
             }
           ],
           "authority": "Scoped",
           "effect": "Inference",
-          "semanticRules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Failed/canceled old version cannot publish current results.",
+          "semanticRules": "Native extraction first; scan vision/embedding uses router and ordinary usage/feature budget attribution. Matching extraction is reused unless reextract is explicitly true. Unsettled previous attempts keep their original custody. Failed/canceled old version cannot publish current results.",
           "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
@@ -10004,7 +10172,7 @@
             "pointer": "/kind",
             "equals": "documents.disable_retrieval"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -10016,6 +10184,22 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 25,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r25.schema.json",
+              "completionSchema": "operation-completion.r25.schema.json"
+            },
+            {
+              "revision": 28,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r28.schema.json",
+              "completionSchema": "operation-completion.r28.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
@@ -10050,7 +10234,7 @@
             "pointer": "/kind",
             "equals": "documents.remove_index"
           },
-          "resultValueType": "DocumentRecord",
+          "resultValueType": "DocumentResult",
           "queryReplySchema": null,
           "commandReplySchema": "domain-command-reply.schema.json",
           "completionSchema": "operation-completion.schema.json",
@@ -10062,11 +10246,215 @@
               "queryReplySchema": null,
               "commandReplySchema": "domain-command-reply.schema.json",
               "completionSchema": "operation-completion.schema.json"
+            },
+            {
+              "revision": 25,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r25.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r25.schema.json",
+              "completionSchema": "operation-completion.r25.schema.json"
+            },
+            {
+              "revision": 28,
+              "inputSchema": "artifact-command-request.r3.schema.json",
+              "resultSchema": "operation-result.r28.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r28.schema.json",
+              "completionSchema": "operation-completion.r28.schema.json"
             }
           ],
           "authority": "Existing host authority contract",
           "effect": "Existing journaled command contract",
           "semanticRules": "Preserve existing concrete input/authority/receipt/recovery contract; selected result kind must match operation.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 26,
+          "operation": "documents.resolve_citation",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.resolve_citation",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.resolve_citation"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.resolve_citation"
+          },
+          "resultValueType": "ResolvedDocumentCitation",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 26,
+              "inputSchema": "domain-request.r26.schema.json",
+              "resultSchema": "operation-result.r26.schema.json",
+              "queryReplySchema": "domain-query-reply.r26.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "ReadOnly",
+          "semanticRules": "Resolve a managed citation only under current artifact authority. Require the exact retained version, source digest and length, extraction revision, block identity, locator and passage digest.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 29,
+          "operation": "documents.transfer_propose",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.transfer_propose",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.transfer_propose"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.transfer_propose"
+          },
+          "resultValueType": "DocumentTransferRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 29,
+              "inputSchema": "domain-request.r29.schema.json",
+              "resultSchema": "operation-result.r29.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r29.schema.json",
+              "completionSchema": "operation-completion.r29.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "The current source coordinator records its project need. Pin current document, owner, both primary assignments and authority generations, and notify the exact current destination coordinator atomically.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 29,
+          "operation": "documents.transfer_respond",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.transfer_respond",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.transfer_respond"
+          },
+          "requestModes": [
+            "Command"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Command",
+              "authority": "Scoped",
+              "effect": "Local"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.transfer_respond"
+          },
+          "resultValueType": "DocumentTransferRecord",
+          "queryReplySchema": null,
+          "commandReplySchema": "domain-command-reply.schema.json",
+          "completionSchema": "operation-completion.schema.json",
+          "schemaRevisions": [
+            {
+              "revision": 29,
+              "inputSchema": "domain-request.r29.schema.json",
+              "resultSchema": "operation-result.r29.schema.json",
+              "queryReplySchema": null,
+              "commandReplySchema": "domain-command-reply.r29.schema.json",
+              "completionSchema": "operation-completion.r29.schema.json"
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "Local",
+          "semanticRules": "Only the pinned current destination coordinator decides. Revalidate both parties and the document, then share for joint need, move for exclusive destination need, or decline. Consume the proposal and record the receipt with the document mutation.",
+          "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
+          "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
+          "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",
+          "recovery": "Read uses snapshot/cursor revalidation; local mutations replay receipt. Journaled/external/inference commands reconcile uncertain outcomes before retry. A retry hint never clears Pause/Continue/approval/budget holds.",
+          "status": "Concrete input/result candidate; actual service/authority behavior not implemented"
+        },
+        {
+          "introducedRevision": 29,
+          "operation": "documents.transfer_status",
+          "inputSchema": "domain-request.schema.json",
+          "variant": "documents.transfer_status",
+          "selectionConstraint": {
+            "pointer": "/body/kind",
+            "equals": "documents.transfer_status"
+          },
+          "requestModes": [
+            "Query"
+          ],
+          "modePolicies": [
+            {
+              "mode": "Query",
+              "authority": "ScopedRead",
+              "effect": "ReadOnly or declared external read"
+            }
+          ],
+          "resultSchema": "operation-result.schema.json",
+          "resultSelectionConstraint": {
+            "pointer": "/kind",
+            "equals": "documents.transfer_status"
+          },
+          "resultValueType": "DocumentTransferRecord",
+          "queryReplySchema": "domain-query-reply.schema.json",
+          "commandReplySchema": null,
+          "completionSchema": null,
+          "schemaRevisions": [
+            {
+              "revision": 29,
+              "inputSchema": "domain-request.r29.schema.json",
+              "resultSchema": "operation-result.r29.schema.json",
+              "queryReplySchema": "domain-query-reply.r29.schema.json",
+              "commandReplySchema": null,
+              "completionSchema": null
+            }
+          ],
+          "authority": "Scoped",
+          "effect": "ReadOnly",
+          "semanticRules": "Return the exact transfer outcome only to one of its authorized coordinator participants. A transfer receipt does not grant document content access.",
           "familyRules": "All imported versions retained until explicit deletion. Exact version/page/locator citations; missing current source never selects an older version.",
           "admission": "Validate protocol, strict fields and selected operation/mode first; derive host principal, current scope/role/grants, then apply command receipt and dispatch policy. Payload IDs are references, not authority.",
           "errorSchema": "DomainFault in domain-query-reply or domain-command-reply; shared pre-admission rejections and legacy specialized control replies remain available",

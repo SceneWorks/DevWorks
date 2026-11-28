@@ -790,6 +790,72 @@ pub const MIGRATIONS: &[Migration] = &[
         expected_sha256: "7e3c3df3cf96d962469169ba453d7437afb505b060ecb89cb00d6021fd0d0db3",
         rebuilds_tables: true,
     },
+    // DW-F8 document and Dreaming tables. Earlier readers ignore them, so each keeps the
+    // reader floor of migration 70 and raises only the writer floor.
+    Migration {
+        version: 71,
+        minimum_reader: 70,
+        minimum_writer: 71,
+        sql: include_str!("migrations/0071_document_index.sql"),
+        expected_sha256: "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 72,
+        minimum_reader: 70,
+        minimum_writer: 72,
+        sql: include_str!("migrations/0072_document_lexical.sql"),
+        expected_sha256: "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 73,
+        minimum_reader: 70,
+        minimum_writer: 73,
+        sql: include_str!("migrations/0073_document_vectors.sql"),
+        expected_sha256: "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 74,
+        minimum_reader: 70,
+        minimum_writer: 74,
+        sql: include_str!("migrations/0074_document_vision.sql"),
+        expected_sha256: "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 75,
+        minimum_reader: 70,
+        minimum_writer: 75,
+        sql: include_str!("migrations/0075_document_activity.sql"),
+        expected_sha256: "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 76,
+        minimum_reader: 70,
+        minimum_writer: 76,
+        sql: include_str!("migrations/0076_dreaming.sql"),
+        expected_sha256: "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 77,
+        minimum_reader: 70,
+        minimum_writer: 77,
+        sql: include_str!("migrations/0077_document_transfers.sql"),
+        expected_sha256: "7e4772630d9f1125814cb53ffa641fcf371afea8c7801d2c6065c590b61b95d4",
+        rebuilds_tables: false,
+    },
+    Migration {
+        version: 78,
+        minimum_reader: 70,
+        minimum_writer: 78,
+        sql: include_str!("migrations/0078_knowledge_claim_vectors.sql"),
+        expected_sha256: "74ed5afacd1d0e2ad09016af8c9621b0b164d68c42cf458c3506f324693c33c6",
+        rebuilds_tables: false,
+    },
 ];
 /// Recorded checksum of migration 17; a test fails if the shipped text changes.
 pub const MIGRATION_0017_SHA256: &str =
@@ -1304,6 +1370,289 @@ fn reconcile_legacy_watchers(
     outcome
 }
 
+const AUTO_ROUTING_0066_SHA256: &str =
+    "ff33a5f40322cc4f8524b653d2e2418531fabcbaba261311a6bcfd25829da83f";
+const COMMON_DOCUMENT_BASE: usize = 63;
+const DEPLOYED_ROUTER_VERSION: usize = 66;
+const MAIN_WATCHER_VERSION: usize = 70;
+/// DW-F8's document, Dreaming and document transfer migrations, in their canonical order.
+const FEATURE_DOCUMENT_DIGESTS: [&str; 7] = [
+    "86858d73dcabddcf74b3962cd4640748ff124cdbd878c82c6d5e08bd27e6515f",
+    "468f2f78d01262bff6935776e3cfd34f0e04a6d94c360219c048aa40eaaf38f6",
+    "62eb7aba9b1a09afb4e34d4a29051da30a82d88f0d8139bad07be6aff763e269",
+    "e8f23f6b6cd58789dbbc05676dbb8ea9f22d0de36145101a5960094997941c1c",
+    "0c06990075b6703f1be0dd23e6720a3dedd6f2ea84e90a77307b70bce42781c3",
+    "8e2fe487746aaa58fc4c80bd692a181fd17934f934ccee4c808fb9e921d7e72c",
+    "7e4772630d9f1125814cb53ffa641fcf371afea8c7801d2c6065c590b61b95d4",
+];
+const RECONCILED_DOCUMENT_VERSION: usize = MAIN_WATCHER_VERSION + FEATURE_DOCUMENT_DIGESTS.len();
+
+/// DW-F8 published its feature SQL under two earlier ledgers: the five document migrations at
+/// 64–68 on top of 63, and all seven at 67–73 on top of main's 66. Main's migrations 67–70 now
+/// own those numbers. Recognize only a complete, exact prefix of either published ledger, and
+/// return its base version and its number of feature migrations.
+fn document_lineage(
+    migrations: &[Migration],
+    meta: &Meta,
+    applied: &[AppliedMigration],
+) -> Option<(usize, usize)> {
+    let (base, published) = match meta.minimum_reader {
+        57 => (COMMON_DOCUMENT_BASE, 5),
+        66 => (DEPLOYED_ROUTER_VERSION, FEATURE_DOCUMENT_DIGESTS.len()),
+        _ => return None,
+    };
+    let version = usize::try_from(meta.schema_version).ok()?;
+    let count = version.checked_sub(base)?;
+    if !(1..=published).contains(&count)
+        || meta.minimum_writer != meta.schema_version
+        || applied.len() != version
+    {
+        return None;
+    }
+    let common = migrations.get(..base)?;
+    if !applied[..base].iter().zip(common).all(|(saved, expected)| {
+        saved.version == expected.version && saved.checksum == expected.checksum()
+    }) {
+        return None;
+    }
+    let deployed = migrations.get(COMMON_DOCUMENT_BASE..DEPLOYED_ROUTER_VERSION)?;
+    let digests = [
+        SYSTEMONE_0064_SHA256,
+        KEEP_WORKING_SHA256,
+        AUTO_ROUTING_0066_SHA256,
+    ];
+    let main = migrations.get(DEPLOYED_ROUTER_VERSION..MAIN_WATCHER_VERSION)?;
+    let documents = migrations.get(MAIN_WATCHER_VERSION..RECONCILED_DOCUMENT_VERSION)?;
+    if !deployed
+        .iter()
+        .zip(digests)
+        .enumerate()
+        .all(|(index, (migration, digest))| {
+            migration.version == (COMMON_DOCUMENT_BASE + index + 1) as i64
+                && !migration.rebuilds_tables
+                && migration.checksum() == digest
+        })
+        || !main.iter().enumerate().all(|(index, migration)| {
+            migration.version == (DEPLOYED_ROUTER_VERSION + index + 1) as i64
+        })
+        || !documents
+            .iter()
+            .zip(FEATURE_DOCUMENT_DIGESTS)
+            .enumerate()
+            .all(|(index, (migration, digest))| {
+                migration.version == (MAIN_WATCHER_VERSION + index + 1) as i64
+                    && !migration.rebuilds_tables
+                    && migration.checksum() == digest
+            })
+        || !applied[base..]
+            .iter()
+            .zip(FEATURE_DOCUMENT_DIGESTS)
+            .enumerate()
+            .all(|(index, (saved, digest))| {
+                saved.version == (base + index + 1) as i64 && saved.checksum == digest
+            })
+    {
+        return None;
+    }
+    Some((base, count))
+}
+
+/// Move only the feature ledger keys, retaining their original checksums and provenance. The
+/// missing router, watcher and feature migrations commit with the ledger move. Main's watcher
+/// migrations rebuild tables, so foreign keys are off for the whole reconciliation.
+fn reconcile_documents(
+    conn: &Connection,
+    migrations: &[Migration],
+    (base, count): (usize, usize),
+    now_ms: i64,
+    app_build: &str,
+) -> Result<i64, StorageError> {
+    db(conn.pragma_update(None, "foreign_keys", false))?;
+    let outcome = (|| {
+        let tx = db(rusqlite::Transaction::new_unchecked(
+            conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ))?;
+        let current = read_meta(&tx)?.ok_or_else(document_lineage_changed)?;
+        if document_lineage(migrations, &current, &ledger(&tx)?) != Some((base, count)) {
+            return Err(document_lineage_changed());
+        }
+        // Move high keys first because the old and new feature ranges can overlap.
+        for index in (0..count).rev() {
+            let updated = db(tx.execute(
+                "UPDATE schema_migrations SET version=?1 WHERE version=?2 AND checksum=?3",
+                params![
+                    (MAIN_WATCHER_VERSION + index + 1) as i64,
+                    (base + index + 1) as i64,
+                    FEATURE_DOCUMENT_DIGESTS[index]
+                ],
+            ))?;
+            if updated != 1 {
+                return Err(document_lineage_changed());
+            }
+        }
+        let missing_main = &migrations[base..MAIN_WATCHER_VERSION];
+        let missing_feature =
+            &migrations[MAIN_WATCHER_VERSION + count..RECONCILED_DOCUMENT_VERSION];
+        for migration in missing_main.iter().chain(missing_feature) {
+            db(tx.execute_batch(migration.sql))?;
+            db(tx.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at,app_build) VALUES(?1,?2,?3,?4)",
+                params![migration.version, migration.checksum(), now_ms, app_build],
+            ))?;
+        }
+        remap_feature_revisions(&tx)?;
+        let latest = &migrations[RECONCILED_DOCUMENT_VERSION - 1];
+        db(tx.execute(
+            "UPDATE store_meta SET schema_version=?1,minimum_reader=?2,minimum_writer=?3 WHERE singleton=1",
+            params![latest.version, latest.minimum_reader, latest.minimum_writer],
+        ))?;
+        db(tx.pragma_update(None, "user_version", latest.version))?;
+        verify_after(&tx)?;
+        db(tx.commit())?;
+        Ok(latest.version)
+    })();
+    db(conn.pragma_update(None, "foreign_keys", true))?;
+    outcome
+}
+
+/// F8 operations and the schema revisions their published builds recorded. Those numbers now
+/// belong to main, so each F8 revision moved above main's: old revision N is N + 15.
+const FEATURE_OPERATION_REVISIONS: &[(&str, &[i64])] = &[
+    ("dreaming.instructions", &[9]),
+    ("dreaming.run", &[9]),
+    ("dreaming.runs", &[9]),
+    ("dreaming.report", &[9]),
+    ("dreaming.settings", &[9]),
+    ("dreaming.propose", &[9]),
+    ("dreaming.revert", &[9]),
+    ("dreaming.review", &[9]),
+    ("documents.import", &[10, 13]),
+    ("documents.list", &[10, 13]),
+    ("documents.read", &[10, 13]),
+    ("documents.share", &[10, 13]),
+    ("documents.move", &[10, 13]),
+    ("documents.disable_retrieval", &[10, 13]),
+    ("documents.remove_index", &[10, 13]),
+    ("documents.resolve_citation", &[11]),
+    ("documents.index", &[12]),
+    ("documents.transfer_propose", &[14]),
+    ("documents.transfer_respond", &[14]),
+    ("documents.transfer_status", &[14]),
+];
+const FEATURE_REVISION_SHIFT: i64 = 15;
+
+/// Renumbers the schema revision an F8 build stored with an F8 operation: the operation journal,
+/// command receipts (purged receipts included), their published reply schema references and
+/// decision events, and saved native job definitions. Rows are selected by operation name, so
+/// main's operations at the same numbers keep theirs.
+///
+/// Published reply bytes stay as written: a reply carries no revision, and the F8 members' gates
+/// moved by the same 15, so the reply projected at the new revision is the same bytes. Only the
+/// reply's schema reference, whose revision and digest name the revision, is rewritten.
+///
+/// Known limits. A receipt's request digest was computed under the old revision and is not
+/// recomputed, so a client that retries across the upgrade with the old request key receives
+/// `IdempotencyConflict`. A queued or running job run keeps the definition snapshot it started
+/// with, is refused once at the old revision, and later runs use the remapped schedule. No F8
+/// operation has a saved-operation owner, so none is approvable and no approval resume can name
+/// one; an F8 operation that becomes approvable must also renumber `approval_resumes`, whose
+/// resume preparation checks the request fingerprint.
+pub(super) fn remap_feature_revisions(conn: &Connection) -> Result<(), StorageError> {
+    use devworks_core::registry::SchemaRevision;
+    let invalid = || StorageError::InvalidRecord("F8 reply schema does not form".into());
+    for (operation, revisions) in FEATURE_OPERATION_REVISIONS {
+        let descriptor = devworks_core::registry::find(operation).ok_or_else(invalid)?;
+        for &old in *revisions {
+            let new = old + FEATURE_REVISION_SHIFT;
+            let schema = devworks_core::services::artifacts::replies::reply_schema(
+                descriptor,
+                SchemaRevision(u32::try_from(new).map_err(|_| invalid())?),
+            )
+            .ok_or_else(invalid)?;
+            let schema = serde_json::to_string(&schema).map_err(|_| invalid())?;
+            db(conn.execute(
+                "UPDATE operations SET schema_version=?1 WHERE capability=?2 AND schema_version=?3",
+                params![new, operation, old],
+            ))?;
+            // Rewrite the published reply's schema reference while its receipt still names `old`.
+            db(conn.execute(
+                "UPDATE receipt_replies SET schema_json=?1 WHERE EXISTS(SELECT 1 FROM command_receipts r \
+                 WHERE r.actor_id=receipt_replies.actor_id AND r.scope_key=receipt_replies.scope_key \
+                 AND r.idempotency_key=receipt_replies.idempotency_key AND r.command_kind=?2 \
+                 AND json_extract(r.result_json,'$.schemaRevision')=?3)",
+                params![schema, operation, old],
+            ))?;
+            db(conn.execute(
+                "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',?1) \
+                 WHERE command_kind=?2 AND json_extract(result_json,'$.schemaRevision')=?3",
+                params![new, operation, old],
+            ))?;
+            db(conn.execute(
+                "UPDATE events SET payload_json=json_set(payload_json,'$.schemaRevision',?1) \
+                 WHERE kind='CommandDecided' AND json_extract(payload_json,'$.operation')=?2 \
+                 AND json_extract(payload_json,'$.schemaRevision')=?3",
+                params![new, operation, old],
+            ))?;
+        }
+    }
+    remap_feature_job_definitions(conn)
+}
+
+/// Rebinds a saved native job of an F8 operation from its old argument schema revision to the
+/// renumbered one, with that revision's argument schema digest.
+fn remap_feature_job_definitions(conn: &Connection) -> Result<(), StorageError> {
+    use devworks_core::protocol::records::JobDefinition;
+    use devworks_core::registry::SchemaRevision;
+    let mut statement = db(conn.prepare("SELECT id,definition_json FROM schedules"))?;
+    let rows = db(statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }))?
+    .collect::<Result<Vec<_>, _>>();
+    let invalid = || StorageError::InvalidRecord("saved job definition does not decode".into());
+    for (id, definition) in db(rows)? {
+        let Ok(JobDefinition::Native {
+            capability_id,
+            mut arguments,
+        }) = serde_json::from_str::<JobDefinition>(&definition)
+        else {
+            continue;
+        };
+        let old = arguments.schema.revision.get();
+        let Some((operation, _)) =
+            FEATURE_OPERATION_REVISIONS
+                .iter()
+                .find(|(operation, revisions)| {
+                    devworks_core::services::jobs::capability_id(operation) == capability_id
+                        && revisions.contains(&old)
+                })
+        else {
+            continue;
+        };
+        let new = u32::try_from(old + FEATURE_REVISION_SHIFT).map_err(|_| invalid())?;
+        arguments.schema =
+            devworks_core::services::jobs::argument_schema(operation, SchemaRevision(new))
+                .ok_or_else(invalid)?;
+        let value = serde_json::to_value(JobDefinition::Native {
+            capability_id,
+            arguments,
+        })
+        .map_err(|_| invalid())?;
+        let canonical = devworks_core::jcs::canonicalize(&value).map_err(|_| invalid())?;
+        db(conn.execute(
+            "UPDATE schedules SET definition_json=?1 WHERE id=?2",
+            params![canonical, id],
+        ))?;
+    }
+    Ok(())
+}
+
+fn document_lineage_changed() -> StorageError {
+    StorageError::IncompatibleSchema(
+        "document migration lineage changed before reconciliation".into(),
+    )
+}
+
 /// Checks store identity, minimum reader/writer versions and the migration ledger without
 /// writing anything. `Ok(None)` means an empty file that may be bootstrapped.
 pub(crate) fn check(
@@ -1327,6 +1676,17 @@ pub(crate) fn check(
         )));
     }
     let applied = ledger(conn)?;
+    if let Some(last) = applied.last()
+        && last.version > meta.schema_version
+    {
+        return Err(StorageError::IncompatibleSchema(format!(
+            "migration {} is recorded above store schema {}",
+            last.version, meta.schema_version
+        )));
+    }
+    if document_lineage(migrations, &meta, &applied).is_some() {
+        return Ok(Some((meta, AccessMode::ReadWrite)));
+    }
     let intelligence = intelligence_branch(migrations, &meta, &applied);
     let watcher_history = watcher_branch(conn, migrations, &meta, &applied)?;
     let legacy_watchers = legacy_watcher_branch(migrations, &meta, &applied);
@@ -1395,7 +1755,9 @@ pub(crate) fn prepare(
         return Ok((meta, access));
     }
     let mut version = meta.schema_version;
-    if legacy_watcher_branch(migrations, &meta, &ledger(conn)?).is_some() {
+    if let Some(lineage) = document_lineage(migrations, &meta, &ledger(conn)?) {
+        version = reconcile_documents(conn, migrations, lineage, now_ms, app_build)?;
+    } else if legacy_watcher_branch(migrations, &meta, &ledger(conn)?).is_some() {
         version = reconcile_legacy_watchers(conn, migrations, now_ms, app_build)?;
     }
     if matches!(version, 64 | 65) {

@@ -72,7 +72,7 @@ impl IndexService {
         query: &AdmittedQuery,
         input: &ops::SearchInput,
     ) -> Result<Snapshot, Failure> {
-        if !crate::authority::authorization_holds(read, query.authorization())? {
+        if !crate::services::fences::authorization_holds(read, query.authorization())? {
             return Err(StorageError::ScopeDenied.into());
         }
         let scoped = access::scope(read, ctx, Some(&input.scope), false)?;
@@ -245,7 +245,11 @@ impl IndexService {
                         || tx.store().restore_epoch != context.restore_epoch().get()
                         || tx.actors().actor_kind(context.principal())?
                             != Some(context.principal_kind())
-                        || !crate::authority::authorization_holds_in(tx, &context, &authorization)?
+                        || !crate::services::fences::authorization_holds_in(
+                            tx,
+                            &context,
+                            &authorization,
+                        )?
                     {
                         return Err(StorageError::ScopeDenied);
                     }
@@ -334,7 +338,7 @@ impl IndexService {
                 Err(EmbeddingFailure::NotStarted { .. }) => {
                     return Err(invalid("native send returned observer-only absence").into());
                 }
-                Err(EmbeddingFailure::Unavailable(_)) => {
+                Err(EmbeddingFailure::Unavailable(_) | EmbeddingFailure::InvalidVectors { .. }) => {
                     prepared.reason = Some(
                         "The configured native embedding route is unavailable; results use \
                     lexical retrieval."

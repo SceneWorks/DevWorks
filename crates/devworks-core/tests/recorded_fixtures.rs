@@ -359,7 +359,7 @@ fn shared_operation_fixtures_match_recorded_outcomes() {
 
 #[test]
 fn domain_fixtures_match_recorded_outcomes() {
-    assert_eq!(run("domain-fixtures.json", 2257), 2257);
+    assert_eq!(run("domain-fixtures.json", 2316), 2316);
 }
 
 #[test]
@@ -460,7 +460,12 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // .entity_bundle, .entity_graph, .claim_bundle, .expand_frontier, .query, .tagged_lessons and
     // approvals.review_queue); addons.invoke and addons.invocation arrive at revision 8;
     // router.catalog revision 4 (offeredEfforts) adds one.
+    // Document detail and exact citation opening cover seven revision-25 and one revision-26
+    // bindings alongside the original revision-1 document operations.
+    // Document re-extraction adds one revision-27 admission, and activity adds seven at revision 28.
     // This also counts revision-3 job and session inputs and revision-4 SystemOne inputs.
+    // Dreaming revision 24 covers ten command and query bindings.
+    // Coordinator document transfers introduce three bindings at revision 29.
     // DW-F7 adds 26 bindings: sixteen analysis bindings at revision 3, eight database
     // bindings at revisions 9 and 10, and two package contributions at revision 9.
     // GitHub synchronization and native remote watchers add nine negotiated bindings.
@@ -471,7 +476,9 @@ fn every_catalog_input_has_a_positive_recorded_fixture_admitted_natively() {
     // DW-183 introduces agents.list at revision 21.
     // DW-184 negotiates resources.holders and .waiters at revision 22.
     // DW-175 introduces sessions.append_screen_context at revision 23.
-    assert_eq!(admitted.len(), 733);
+    // DW-249 negotiates knowledge.search at revision 30 (retrieval mode and work limit).
+    // DW-250 negotiates knowledge.search at revision 31 (token budget).
+    assert_eq!(admitted.len(), 764);
 }
 
 #[test]

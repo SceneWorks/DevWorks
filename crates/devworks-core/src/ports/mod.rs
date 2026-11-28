@@ -30,6 +30,7 @@ pub mod web;
 use crate::context::InvocationContext;
 use crate::fingerprint::Fingerprint;
 use crate::gateway::{AdmittedCommand, AdmittedQuery};
+use crate::kernel::failure::Refusal;
 use crate::operations::OperationInput;
 use crate::protocol::results::{DomainCommandReply, DomainDecision, OperationResult};
 use crate::protocol::{
@@ -169,6 +170,18 @@ pub enum AuthorityFence {
     GitWorktree { id: Id, digest: String },
     /// The principal binding revision authority resolved.
     Principal { actor: ActorId, revision: i64 },
+    /// The claimed document index delivery still owns this exact source and lease.
+    DocumentIndex { run: Id, generation: i64 },
+    /// The exact Dreaming delivery and logical request still own the running sweep.
+    DreamingSweep {
+        run: Id,
+        generation: i64,
+        request: Id,
+    },
+    /// Qualified selection required at native embedding admission and egress.
+    QualifiedEmbedding { source_digest: String },
+    /// The owner enabled routed document vision under this exact Settings revision.
+    DocumentVision { settings_witness: String },
     /// Digest of the access-relevant effective policy of the invocation's scope.
     Policy {
         project_id: Option<ProjectId>,
@@ -264,6 +277,16 @@ pub struct QueryAnswer {
     pub stamp: ReadStamp,
     pub result: OperationResult,
 }
+/// Rechecks an answer's domain-specific authority and provenance on the gateway's publication
+/// snapshot. An optional refusal prevents publication. The check must not materialize
+/// unselected content.
+pub type QueryPublicationCheck = fn(
+    &InvocationContext,
+    &AdmittedQuery,
+    &QueryAnswer,
+    &dyn ReadSnapshot,
+) -> Result<Option<Refusal>, StorageError>;
+
 /// Read use cases publish against one read snapshot. Queries never mint grants, clear blockers
 /// or claim work. Owner-admitted auxiliary inference may reserve and account its actual
 /// configured budget during external preparation; it cannot mutate the queried business state.
@@ -272,6 +295,10 @@ pub trait QueryHandler: Send + Sync {
     /// gateway can only tighten the host's read deadline with this hint; it never replaces
     /// cancellation or allows a handler to extend a host bound.
     fn read_deadline_ms(&self, _query: &AdmittedQuery) -> Option<i64> {
+        None
+    }
+    /// Domain references such as document shares can change independently of participant grants.
+    fn publication_check(&self, _query: &AdmittedQuery) -> Option<QueryPublicationCheck> {
         None
     }
     /// Bounded external preparation of an admitted, currently authorized query, outside any read

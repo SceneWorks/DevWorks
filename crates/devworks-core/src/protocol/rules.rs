@@ -1030,7 +1030,7 @@ pub fn record(name: &str, v: &Value) -> Result<(), String> {
                 }
             }
         }
-        "DiagnosticPage" => require(
+        "DiagnosticPage" | "KnowledgeSearchPage" => require(
             v["hasMore"] == present(v, "nextCursor"),
             "page continuation mismatch",
         )?,
@@ -1434,6 +1434,37 @@ pub fn input(op: &str, mode: &str, v: &Value) -> Result<(), String> {
                 require(unique(a, "memberIds"), "duplicate tier member")?
             }
         }
+        "dreaming.run" => require(
+            !(present(v, "resumeRunId") && present(v, "cancelRunId")),
+            "a Dreaming run cannot resume and cancel together",
+        )?,
+        "dreaming.settings" if v.get("config").is_some() => {
+            let config = &v["config"];
+            let in_range = |key: &str, min: u64, max: u64| {
+                !present(config, key)
+                    || config[key]
+                        .as_str()
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .is_some_and(|value| (min..=max).contains(&value))
+            };
+            require(
+                in_range("minimumIntervalMs", 0, 31_536_000_000)
+                    && in_range("maxTurns", 1, 100)
+                    && in_range("maxTokens", 1, 1_000_000)
+                    && in_range("maxElapsedMs", 1_000, 3_600_000),
+                "Dreaming policy bounds are invalid",
+            )?;
+        }
+        "dreaming.propose" => require(
+            ["evidence", "rationale", "prevalence"]
+                .into_iter()
+                .all(|field| present(v, "change") == present(v, field)),
+            "a typed proposal requires its evidence, and vice versa",
+        )?,
+        "dreaming.revert" => require(
+            present(v, "proposalId") ^ (v["allChanges"].as_bool() == Some(true)),
+            "revert one proposal or all changes",
+        )?,
         "router.decide" => {
             let exact = v.get("modelId").is_some() && v.get("expectedModelRevision").is_some();
             let pooled = v.get("modelId").is_none() && v.get("expectedModelRevision").is_none();

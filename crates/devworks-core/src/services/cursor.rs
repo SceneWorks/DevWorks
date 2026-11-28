@@ -171,6 +171,34 @@ impl<T> Paged<T> {
         }
         Ok(self)
     }
+    /// Keeps the leading rows whose summed `cost` fits in `budget`, and always the first row,
+    /// even when it alone exceeds the budget. A page cut short continues after its new last
+    /// row, so the budget changes only where a page ends, never the listing's order.
+    pub fn clip_to_budget(
+        mut self,
+        binding: &CursorBinding,
+        budget: u64,
+        cost: impl Fn(&T) -> u64,
+        position_of: impl Fn(&T) -> String,
+    ) -> Self {
+        let mut used = 0u64;
+        let kept = self
+            .items
+            .iter()
+            .position(|row| {
+                used = used.saturating_add(cost(row));
+                used > budget
+            })
+            .map_or(self.items.len(), |over| over.max(1));
+        if kept < self.items.len() {
+            self.items.truncate(kept);
+            self.next_cursor = self
+                .items
+                .last()
+                .map(|last| binding.cursor(&position_of(last)));
+        }
+        self
+    }
 }
 
 /// The page size `request` asks for, at most [`MAX_PAGE`].
@@ -371,6 +399,45 @@ mod tests {
             slice(&binding, vec![1, 2, 3], &request(1, Some(issued))),
             Err(StorageError::CursorExpired)
         ));
+    }
+
+    #[test]
+    fn a_budget_ends_pages_early_and_every_row_is_listed_once() {
+        let binding = CursorBinding("b".into());
+        // Row r costs r: rows 0..12 at a budget of 10 fill the page {0..=4}, then one row a
+        // page (5 + 6 is over), and a row over the budget alone (11) still makes a page of one.
+        let costs = |r: &i64| *r as u64;
+        let mut seen = Vec::new();
+        let mut pages = Vec::new();
+        let mut cursor = None;
+        loop {
+            let p = page(&binding, &request(500, cursor), fetch(12), |r| {
+                r.to_string()
+            })
+            .unwrap()
+            .clip_to_budget(&binding, 10, costs, |r| r.to_string());
+            assert!(!p.items.is_empty(), "a page holds at least one row");
+            assert!(
+                p.items.len() == 1 || p.items.iter().map(costs).sum::<u64>() <= 10,
+                "{:?}",
+                p.items
+            );
+            seen.extend(p.items.iter().copied());
+            pages.push(p.items.clone());
+            if !p.has_more() {
+                break;
+            }
+            cursor = p.next_cursor;
+        }
+        assert_eq!(seen, (0..12).collect::<Vec<_>>());
+        assert_eq!(pages[0], vec![0, 1, 2, 3, 4]);
+        assert_eq!(pages.last().unwrap(), &vec![11]);
+        // A page within the budget keeps its own continuation.
+        let whole = page(&binding, &request(3, None), fetch(12), |r| r.to_string()).unwrap();
+        let next = whole.next_cursor.clone();
+        let kept = whole.clip_to_budget(&binding, 100, costs, |r| r.to_string());
+        assert_eq!(kept.items, vec![0, 1, 2]);
+        assert_eq!(kept.next_cursor.map(|c| c.0), next.map(|c| c.0));
     }
 
     #[test]

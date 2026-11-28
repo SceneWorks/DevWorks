@@ -74,7 +74,7 @@ use crate::protocol::{
     RetryAdvice, RevisionDimension,
 };
 use crate::services::cursor::{self, CursorBinding};
-use crate::services::knowledge::rules_for;
+use crate::services::knowledge::{applies_to_repositories, rules_for};
 use serde_json::json;
 use std::sync::Arc;
 use transcript::{AppendPath, BatchOutcome, BatchRefusal, SESSION_AGGREGATE, SessionBatch};
@@ -117,6 +117,7 @@ use super::kernel::{
     query_fault, require_project, rev, visible_root, visible_session,
 };
 /// Tokens of `bytes` by the conservative attributed estimate (4 bytes per token, rounded up).
+/// Bytes on purpose; `knowledge.search` budgets count characters instead (owner-approved).
 pub fn token_estimate(bytes: i64) -> i64 {
     (bytes.max(0) + 3) / 4
 }
@@ -1019,8 +1020,7 @@ impl SessionService {
             for rule in rules_for(snapshot, session.project_id.as_ref(), None)? {
                 let scoped = rule.lesson.as_ref().is_some_and(|l| {
                     let a = &l.applicability;
-                    (a.repository_ids.0.is_empty()
-                        || a.repository_ids.0.iter().any(|r| repositories.contains(r)))
+                    applies_to_repositories(a, &repositories)
                         && a.paths
                             .0
                             .iter()

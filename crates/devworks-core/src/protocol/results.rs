@@ -326,7 +326,7 @@ pub enum OperationResult {
     #[serde(rename = "database.edit_sensitive_column_rules")]
     DatabaseEditSensitiveColumnRules { value: DatabaseSensitiveRuleSet },
     #[serde(rename = "knowledge.search")]
-    KnowledgeSearch { value: Page<KnowledgeClaim> },
+    KnowledgeSearch { value: KnowledgeSearchResult },
     #[serde(rename = "knowledge.read")]
     KnowledgeRead { value: KnowledgeBundle },
     #[serde(rename = "knowledge.record")]
@@ -386,29 +386,41 @@ pub enum OperationResult {
     #[serde(rename = "dreaming.propose")]
     DreamingPropose { value: ProposalRecord },
     #[serde(rename = "dreaming.revert")]
-    DreamingRevert { value: KnowledgeWriteReceipt },
+    DreamingRevert { value: DreamRevertResult },
     #[serde(rename = "dreaming.review")]
     DreamingReview { value: ProposalRecord },
     #[serde(rename = "documents.import")]
-    DocumentsImport { value: DocumentRecord },
+    DocumentsImport { value: DocumentResult },
     #[serde(rename = "documents.list")]
-    DocumentsList { value: Page<DocumentRecord> },
+    DocumentsList { value: DocumentListResult },
     #[serde(rename = "documents.read")]
-    DocumentsRead { value: DocumentRecord },
+    DocumentsRead { value: DocumentResult },
     #[serde(rename = "documents.search")]
     DocumentsSearch { value: RetrievalPage },
     #[serde(rename = "documents.share")]
-    DocumentsShare { value: DocumentRecord },
+    DocumentsShare { value: DocumentResult },
     #[serde(rename = "documents.move")]
-    DocumentsMove { value: DocumentRecord },
+    DocumentsMove { value: DocumentResult },
     #[serde(rename = "documents.index")]
     DocumentsIndex { value: IndexRunRecord },
     #[serde(rename = "documents.retry")]
     DocumentsRetry { value: IndexRunRecord },
     #[serde(rename = "documents.disable_retrieval")]
-    DocumentsDisableRetrieval { value: DocumentRecord },
+    DocumentsDisableRetrieval { value: DocumentResult },
     #[serde(rename = "documents.remove_index")]
-    DocumentsRemoveIndex { value: DocumentRecord },
+    DocumentsRemoveIndex { value: DocumentResult },
+    #[schemars(extend("x-since" = 26))]
+    #[serde(rename = "documents.resolve_citation")]
+    DocumentsResolveCitation { value: ResolvedDocumentCitation },
+    #[schemars(extend("x-since" = 29))]
+    #[serde(rename = "documents.transfer_propose")]
+    DocumentsTransferPropose { value: DocumentTransferRecord },
+    #[schemars(extend("x-since" = 29))]
+    #[serde(rename = "documents.transfer_respond")]
+    DocumentsTransferRespond { value: DocumentTransferRecord },
+    #[schemars(extend("x-since" = 29))]
+    #[serde(rename = "documents.transfer_status")]
+    DocumentsTransferStatus { value: DocumentTransferRecord },
     #[serde(rename = "artifacts.save")]
     ArtifactsSave { value: ArtifactRecord },
     #[serde(rename = "artifacts.list")]
@@ -1018,6 +1030,10 @@ impl OperationResult {
             Self::DocumentsRetry { .. } => "documents.retry",
             Self::DocumentsDisableRetrieval { .. } => "documents.disable_retrieval",
             Self::DocumentsRemoveIndex { .. } => "documents.remove_index",
+            Self::DocumentsResolveCitation { .. } => "documents.resolve_citation",
+            Self::DocumentsTransferPropose { .. } => "documents.transfer_propose",
+            Self::DocumentsTransferRespond { .. } => "documents.transfer_respond",
+            Self::DocumentsTransferStatus { .. } => "documents.transfer_status",
             Self::ArtifactsSave { .. } => "artifacts.save",
             Self::ArtifactsList { .. } => "artifacts.list",
             Self::ArtifactsRead { .. } => "artifacts.read",
@@ -1413,6 +1429,10 @@ impl Check for OperationResult {
             Self::DocumentsRetry { value } => value.check()?,
             Self::DocumentsDisableRetrieval { value } => value.check()?,
             Self::DocumentsRemoveIndex { value } => value.check()?,
+            Self::DocumentsResolveCitation { value } => value.check()?,
+            Self::DocumentsTransferPropose { value } => value.check()?,
+            Self::DocumentsTransferRespond { value } => value.check()?,
+            Self::DocumentsTransferStatus { value } => value.check()?,
             Self::ArtifactsSave { value } => value.check()?,
             Self::ArtifactsList { value } => value.check()?,
             Self::ArtifactsRead { value } => value.check()?,
@@ -1734,8 +1754,19 @@ impl Revisioned for OperationResult {
             Self::KnowledgePromote { value } => value.retain_revision(revision),
             Self::KnowledgeChallenge { value } => value.retain_revision(revision),
             Self::KnowledgeTaggedLessons { value } => value.retain_revision(revision),
+            Self::DreamingRun { value } => value.retain_revision(revision),
+            Self::DreamingRuns { value } => value.retain_revision(revision),
+            Self::DreamingReport { value } => value.retain_revision(revision),
+            Self::DreamingSettings { value } => value.retain_revision(revision),
             Self::DreamingInstructions { value } => value.retain_revision(revision),
             Self::DreamingRevert { value } => value.retain_revision(revision),
+            Self::DocumentsImport { value } => value.retain_revision(revision),
+            Self::DocumentsList { value } => value.retain_revision(revision),
+            Self::DocumentsRead { value } => value.retain_revision(revision),
+            Self::DocumentsShare { value } => value.retain_revision(revision),
+            Self::DocumentsMove { value } => value.retain_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.retain_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.retain_revision(revision),
             Self::ArtifactsSave { value } => value.retain_revision(revision),
             Self::ArtifactsList { value } => value.retain_revision(revision),
             Self::ArtifactsRead { value } => value.retain_revision(revision),
@@ -1903,6 +1934,18 @@ impl Revisioned for OperationResult {
             Self::DatabaseEditSensitiveColumnRules { .. } if revision < 9 => {
                 Err("operation result predates its introduction".into())
             }
+            Self::DocumentsResolveCitation { .. } if revision < 26 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferPropose { .. } if revision < 29 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferRespond { .. } if revision < 29 => {
+                Err("operation result predates its introduction".into())
+            }
+            Self::DocumentsTransferStatus { .. } if revision < 29 => {
+                Err("operation result predates its introduction".into())
+            }
             Self::SkillsSetEnabled { .. } if revision < 8 => {
                 Err("operation result predates its introduction".into())
             }
@@ -1977,6 +2020,15 @@ impl Revisioned for OperationResult {
             Self::AnalysisFleetHealth { value } => value.check_revision(revision),
             Self::AnalysisArchivalCandidates { value } => value.check_revision(revision),
             Self::AnalysisFileHotspot { value } => value.check_revision(revision),
+            Self::KnowledgeSearch { value } => value.check_revision(revision),
+            Self::DreamingRevert { value } => value.check_revision(revision),
+            Self::DocumentsImport { value } => value.check_revision(revision),
+            Self::DocumentsList { value } => value.check_revision(revision),
+            Self::DocumentsRead { value } => value.check_revision(revision),
+            Self::DocumentsShare { value } => value.check_revision(revision),
+            Self::DocumentsMove { value } => value.check_revision(revision),
+            Self::DocumentsDisableRetrieval { value } => value.check_revision(revision),
+            Self::DocumentsRemoveIndex { value } => value.check_revision(revision),
             Self::ConventionsList { value } => value.check_revision(revision),
             Self::ConventionsRead { value } => value.check_revision(revision),
             Self::ConventionsEdit { value } => value.check_revision(revision),

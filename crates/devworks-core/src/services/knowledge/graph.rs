@@ -23,7 +23,8 @@ use super::{
 };
 use crate::context::InvocationContext;
 use crate::ports::storage::{
-    ClaimQuery, KnowledgeRead, ReadSnapshot, StorageError, StoredClaim, StoredEntity,
+    ClaimQuery, ClaimRank, KnowledgeRead, RankedClaim, ReadSnapshot, StorageError, StoredClaim,
+    StoredEntity,
 };
 use crate::protocol::records::{
     KnowledgeBundle, KnowledgeClaim, KnowledgeConflict, KnowledgeEntity, KnowledgeQuery,
@@ -240,21 +241,22 @@ fn seeds(
             };
             let mut admitted = 0;
             let mut scanned = 0;
-            let mut after: Option<(i64, String)> = None;
+            // Best matches first, so the seed budget goes to the most relevant claims.
+            let mut after: Option<(ClaimRank, String)> = None;
             'scan: loop {
                 let page = c.k.knowledge_claims(
                     &query,
-                    after.as_ref().map(|(t, id)| (*t, id.as_str())),
+                    after.as_ref().map(|(r, id)| (*r, id.as_str())),
                     KNOWLEDGE_PAGE_MAX,
                 )?;
                 let last = page.len() < KNOWLEDGE_PAGE_MAX as usize;
-                for claim in page {
+                for RankedClaim { rank, claim } in page {
                     if scanned >= SEED_SCAN_MAX {
                         more = true;
                         break 'scan;
                     }
                     scanned += 1;
-                    after = Some((claim.updated_at_ms, claim.id.as_str().to_owned()));
+                    after = Some((rank, claim.id.as_str().to_owned()));
                     let wire = claim_wire(c.k, &claim, c.th)?;
                     if !filter.admits(&claim, &wire) || claims.contains(&claim.id) {
                         continue;

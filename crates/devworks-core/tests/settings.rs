@@ -97,11 +97,6 @@ fn the_catalog_is_typed_unique_and_self_consistent() {
 
 #[test]
 fn settings_nothing_reads_are_marked_not_yet_active() {
-    assert!(
-        descriptor("knowledge.visionExtraction")
-            .unwrap()
-            .not_yet_active()
-    );
     for key in [
         "delivery.autoMerge",
         "delivery.finalPullRequestReview",
@@ -113,6 +108,9 @@ fn settings_nothing_reads_are_marked_not_yet_active() {
         "github.syncLinkedIssueFields",
         "github.issueTriageIntervalSeconds",
     ] {
+        assert!(!descriptor(key).unwrap().not_yet_active(), "{key}");
+    }
+    for key in ["knowledge.visionExtraction", "knowledge.visionModels"] {
         assert!(!descriptor(key).unwrap().not_yet_active(), "{key}");
     }
     // The list and the visible description agree in both directions, and a harness policy is

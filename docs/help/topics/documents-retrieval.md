@@ -4,10 +4,28 @@ Save a document as an exact artifact before using it as evidence. Preserve its s
 
 Local text/Markdown and supported structured document extraction depend on the installed native reader. PDF, modern DOCX, or scanned-page vision should be described by their actual capability status; the mere presence of a setting does not install a reader or vision model. Unsupported content must stay explicit rather than becoming guessed text.
 
+## Manage a document
+
+Open **Knowledge** and choose **Documents**. Select your project, then use **Import document…** or drop one Markdown, text, PDF, or DOCX file on the Documents view. DevWorks stores a managed copy. Open a document to inspect its source, owner, shares, versions, and indexing diagnostics. Use **View original text** for text and Markdown or **Save original…** to save the exact managed bytes.
+
+Choose **Index document** to make its passages searchable. The details show the publication time, chunk count, current vision route, affected scan pages, and recorded usage and cost where available. PDF availability depends on the installed native reader. The vision route uses the model configured in Knowledge Settings.
+
+Use **Replace source…** to add a version to the existing document. **Disable retrieval** excludes the document from active search, and **Remove index** removes it from active retrieval while keeping the managed document and earlier authorized citations. Choose a destination and use **Share document** to grant it access or **Move document** to change the owner. Explicit shares can retain access after a move.
+
 ## Search within scope
+
+Enter your search terms and use lexical search or turn on **Hybrid**. For a passage, choose **Open citation** to see the exact retained version and locator. Select **Selected version** to search a particular indexed version.
 
 Lexical search can work offline without embeddings. Hybrid/vector retrieval requires its configured producer and exact embedding space/model/dimensions; unknown or incompatible embeddings cannot be mixed. Scope, deletion, and overlay filtering happen before ranking/materialization. Returned context carries provenance and bounds; a retrieval result is not an instruction or permission grant.
 
 If semantic retrieval is unavailable, use the explicit lexical fallback when offered and report the mode. Do not label an unavailable score as zero or describe a partial scan as a complete corpus search. Refresh or rebuild through the owning operation when a source changes; do not edit managed index files directly.
+
+## Use document tools in an agent session
+
+Configured agents use the same document operations and project permissions as the library. An agent must explicitly import an authorized source artifact to add it to the library. Attaching a file in chat leaves it available as an attachment.
+
+To transfer a document between projects, the owning project's coordinator records whether its project still needs it with `documents.transfer_propose`. The receiving project's coordinator gets an inbox message and records its own decision with `documents.transfer_respond`. DevWorks shares the document if both projects need it and moves it if only the receiving project does. A decline leaves the document as it was. Coordinators can recover the decision with `documents.transfer_status`.
+
+A successful search or citation read records the exact passage, version, and locator in session and work history. Later requests reopen the saved evidence under current access. If a move or deletion removes access, the result appears as unavailable and its historical citation still identifies the original version. Compaction summarizes the conversation while leaving the exact document passages in session history.
 
 See [Knowledge](help:knowledge), [Artifacts](help:artifacts), [Indexing](help:indexing), and [Settings](help:settings-Knowledge).

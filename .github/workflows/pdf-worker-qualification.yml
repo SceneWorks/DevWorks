@@ -1,0 +1,90 @@
+name: Native PDF worker qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/dw-f8]
+    paths:
+      - '.github/workflows/pdf-worker-qualification.yml'
+      - 'tools/ci/package-pdf-qualification.py'
+      - 'packaging/pdf/**'
+      - 'crates/devworks-adapters/src/documents/pdf.rs'
+      - 'crates/devworks-core/src/services/documents/pdf.rs'
+      - 'crates/devworks-desktop/src/bin/devworks-pdf-worker.rs'
+      - 'crates/devworks-desktop/src/document_extraction.rs'
+      - 'crates/devworks-desktop/tests/document_extraction.rs'
+      - 'crates/devworks-desktop/tests/pdf_worker.rs'
+      - 'crates/devworks-engine/src/documents/pdf.rs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-pdf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    name: Native PDF worker (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout || 55 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+            # The cold release build alone exhausted the original 55-minute job limit.
+            timeout: 110
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            # The cold release build took 35 minutes before the separate test build.
+            timeout: 75
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "3"
+      CARGO_PROFILE_RELEASE_STRIP: debuginfo
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install and verify native Rust toolchain
+        shell: bash
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          rustup toolchain install "$channel-${{ matrix.target }}" --profile minimal
+          rustup override set "$channel-${{ matrix.target }}"
+          rustc -vV | tee rustc-target.txt
+          grep -Fx 'host: ${{ matrix.target }}' rustc-target.txt
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: native-pdf-${{ matrix.target }}
+          cache-targets: "false"
+      - name: Build distribution and attest installed files
+        shell: bash
+        run: |
+          cargo build --locked -p devworks-desktop --release --bins
+          cargo_target="$(cargo metadata --no-deps --locked --format-version 1 | python -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')"
+          python tools/ci/package-pdf-qualification.py --binaries "$cargo_target/release" --output "$RUNNER_TEMP/pdf-worker" --target "${{ matrix.target }}"
+      - name: Exercise the packaged worker and native Documents processor
+        shell: bash
+        run: |
+          set -o pipefail
+          test -f "$DEVWORKS_PDF_PACKAGED_DESKTOP" || exit 1
+          cargo test --locked --release -p devworks-desktop --test pdf_worker --test document_extraction -- --nocapture 2>&1 | tee "$RUNNER_TEMP/pdf-worker/test.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: devworks-native-pdf-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/pdf-worker/qualification.json
+            ${{ runner.temp }}/pdf-worker/test.log
+            ${{ runner.temp }}/pdf-worker/*.zip
+            ${{ runner.temp }}/pdf-worker/*.tar.gz

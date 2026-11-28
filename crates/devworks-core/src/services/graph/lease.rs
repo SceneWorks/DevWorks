@@ -143,7 +143,7 @@ pub(super) fn select(
             ..WriteOptions::host_state()
         },
         move |tx| {
-            if !crate::authority::authorization_holds_in(tx, &context, &authority)? {
+            if !crate::services::fences::authorization_holds_in(tx, &context, &authority)? {
                 return Ok(Err(crate::services::kernel::Refusal::new(
                     crate::protocol::DomainErrorCode::PermissionDenied,
                     "graph_scope",

@@ -768,46 +768,94 @@ pub fn artifact_read_after(
 /// The complete bytes of `artifact` through `artifacts.read` (paged by byte cursor, or a
 /// verified stream for non-text bytes), checked against the reference's length and digest.
 pub fn read_artifact_bytes(b: &dyn Backend, artifact: &ArtifactRef) -> Result<Vec<u8>, String> {
-    use sha2::{Digest, Sha256};
+    read_artifact_bytes_in(b, None, artifact)
+}
+
+pub(crate) fn read_artifact_bytes_in(
+    b: &dyn Backend,
+    project: Option<&ProjectId>,
+    artifact: &ArtifactRef,
+) -> Result<Vec<u8>, String> {
     let expected = artifact.byte_length.get() as u64;
     let mut bytes: Vec<u8> = Vec::with_capacity(expected as usize);
     let mut cursor: Option<String> = None;
     loop {
         let frame = artifact_read_after(b, artifact, cursor.as_deref());
-        match read_content(b.query("artifacts.read", &frame)).map_err(|e| e.describe())? {
-            devworks_core::protocol::records::ArtifactReadContent::Text {
-                content,
-                truncated,
-                next_byte,
-                ..
-            } => {
-                bytes.extend_from_slice(content.0.as_bytes());
-                if bytes.len() as u64 > expected {
-                    return Err("The text exceeded its recorded length.".into());
-                }
-                if !truncated {
-                    break;
-                }
-                let next = next_byte.get().to_string();
-                if cursor.as_deref() == Some(next.as_str()) {
-                    return Err("The text read did not advance.".into());
-                }
-                cursor = Some(next);
-            }
+        let reply = match project {
+            Some(project) => b.query_in_project(project, "artifacts.read", &frame),
+            None => b.query("artifacts.read", &frame),
+        };
+        match read_content(reply).map_err(|e| e.describe())? {
             devworks_core::protocol::records::ArtifactReadContent::Binary { stream_id, .. } => {
-                bytes = b.read_stream(&stream_id, expected)?;
+                bytes = match project {
+                    Some(project) => b.read_stream_in_project(project, &stream_id, expected)?,
+                    None => b.read_stream(&stream_id, expected)?,
+                };
                 break;
             }
+            text => match append_text_page(&mut bytes, artifact, cursor.as_deref(), text)? {
+                TextPage::More(next) => cursor = Some(next),
+                TextPage::Done => break,
+            },
         }
     }
-    let digest: String = Sha256::digest(&bytes)
+    verify_artifact_bytes(&bytes, artifact)?;
+    Ok(bytes)
+}
+
+/// What remains of an artifact's text after one `artifacts.read` page.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TextPage {
+    /// Read the page at this byte cursor next.
+    More(String),
+    /// The whole text is read.
+    Done,
+}
+
+/// Appends one text page of `artifact`, read at `cursor` (`None`: the first page), to `bytes`.
+/// Refuses text beyond the recorded length, a truncated page whose next byte does not advance
+/// past where it was read (it would be read again forever), and a binary reply.
+pub fn append_text_page(
+    bytes: &mut Vec<u8>,
+    artifact: &ArtifactRef,
+    cursor: Option<&str>,
+    page: devworks_core::protocol::records::ArtifactReadContent,
+) -> Result<TextPage, String> {
+    let devworks_core::protocol::records::ArtifactReadContent::Text {
+        content,
+        truncated,
+        next_byte,
+        ..
+    } = page
+    else {
+        return Err("The artifact is not stored as text.".into());
+    };
+    bytes.extend_from_slice(content.0.as_bytes());
+    if bytes.len() as u64 > artifact.byte_length.get() as u64 {
+        return Err("The text exceeded its recorded length.".into());
+    }
+    if !truncated {
+        return Ok(TextPage::Done);
+    }
+    let start: i64 = cursor.and_then(|c| c.parse().ok()).unwrap_or(0);
+    if next_byte.get() <= start {
+        return Err("The text read did not advance.".into());
+    }
+    Ok(TextPage::More(next_byte.get().to_string()))
+}
+
+/// Checks complete bytes against the reference's recorded length and SHA-256.
+pub fn verify_artifact_bytes(bytes: &[u8], artifact: &ArtifactRef) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let digest: String = Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    if bytes.len() as u64 != expected || digest != artifact.sha256.as_str() {
+    if bytes.len() as u64 != artifact.byte_length.get() as u64 || digest != artifact.sha256.as_str()
+    {
         return Err("The text did not match its recorded length and digest.".into());
     }
-    Ok(bytes)
+    Ok(())
 }
 pub fn read_content(
     outcome: QueryOutcome,

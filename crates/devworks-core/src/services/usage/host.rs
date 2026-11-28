@@ -143,10 +143,16 @@ impl AttemptHost {
         let control = self.control.clone();
         let process = self.process.clone();
         let work = move |tx: &mut dyn WriteTransaction| {
-            if !crate::authority::fences_hold(tx, &source_fences)? {
+            if !crate::services::fences::inference_fences_hold(tx, &context, &source_fences)? {
                 return Err(StorageError::ScopeDenied);
             }
-            if let Some(prior) = tx.router().route_request(&logical.request_id)? {
+            let prior = tx.router().route_request(&logical.request_id)?;
+            // A new vision request may replan if admission creates no physical attempt.
+            // Persist its logical and physical admission together under the same fence.
+            let first_vision =
+                prior.is_none() && logical.purpose == crate::services::router::Purpose::Vision;
+            let admission_point = first_vision.then(|| tx.savepoint()).transpose()?;
+            if let Some(prior) = prior {
                 let op = tx
                     .operations()
                     .operation(&prior.operation_id)?
@@ -165,7 +171,21 @@ impl AttemptHost {
             } else {
                 router.admit_owned_request(tx, &context, &logical, category)?;
             }
-            router.admit_attempt_with_process(tx, &control, &context, &request, process.as_ref())
+            let admission = router.admit_attempt_with_process(
+                tx,
+                &control,
+                &context,
+                &request,
+                process.as_ref(),
+            )?;
+            if let Some(savepoint) = admission_point {
+                if matches!(admission, Admission::Admitted { .. }) {
+                    tx.release(savepoint)?;
+                } else {
+                    tx.rollback_to(savepoint)?;
+                }
+            }
+            Ok(admission)
         };
         self.fence
             .admit(self.store.as_ref(), work, |admission| match admission {

@@ -1435,7 +1435,12 @@ impl InferenceRouter {
         )
         .map_err(StorageError::InvalidRecord)?;
         let f = facts(snapshot.configuration(), snapshot.router(), now)?;
-        let connections = self.connections.connections(snapshot.router())?;
+        let mut connections = self.connections.connections(snapshot.router())?;
+        let vision = request.purpose == Purpose::Vision;
+        if vision {
+            // These requests reserve a bounded output. The subscription codec cannot honor it.
+            connections.retain(|connection| connection.profile != "CodexSubscriptionResponses");
+        }
         if let Some(session) = &request.session_id
             && let Some(pin) = snapshot.router().session_pin(session)?
         {
@@ -1452,7 +1457,10 @@ impl InferenceRouter {
                 &need,
                 Some(&pin.connection_id),
             );
-            if a.eligible() && a.model.as_ref().is_some_and(|m| pin_matches_model(&pin, m)) {
+            if a.eligible()
+                && a.model.as_ref().is_some_and(|m| pin_matches_model(&pin, m))
+                && (!vision || f.contains_pin(&intent_of(&pin.intent)?, &pin))
+            {
                 return Ok(Ok(AuxiliaryRoute {
                     model_id: pin.model_id,
                     connection_id: a.connection.expect("eligible"),

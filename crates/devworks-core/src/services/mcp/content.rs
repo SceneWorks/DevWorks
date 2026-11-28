@@ -60,7 +60,10 @@ impl McpClientService {
                 if snapshot.stamp().store_id != *ctx.store_id()
                     || snapshot.stamp().restore_epoch != ctx.restore_epoch().get()
                     || snapshot.actors().actor_kind(ctx.principal())? != Some(ctx.principal_kind())
-                    || !crate::authority::authorization_holds(snapshot, query.authorization())?
+                    || !crate::services::fences::authorization_holds(
+                        snapshot,
+                        query.authorization(),
+                    )?
                 {
                     return Err(StorageError::ScopeDenied);
                 }
@@ -401,7 +404,7 @@ impl McpClientService {
             .as_str()
             .strip_prefix("mcp-")
             .ok_or(StorageError::ScopeDenied)?;
-        if !crate::authority::authorization_holds(snapshot, query.authorization())?
+        if !crate::services::fences::authorization_holds(snapshot, query.authorization())?
             || !matches!(
                 crate::authority::policy::outgoing_mcp_tool_visibility(
                     ctx,

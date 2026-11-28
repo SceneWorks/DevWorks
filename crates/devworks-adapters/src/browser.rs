@@ -386,6 +386,7 @@ impl BrowserPlatform for NativeBrowserPlatform {
             capture_output: false,
             merge_output: false,
             no_child_processes: false,
+            memory_limit_bytes: None,
             control_pipe: Some(ControlPipe {
                 windows_args: vec!["--remote-debugging-io-pipes={read},{write}".into()],
             }),

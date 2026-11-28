@@ -139,6 +139,28 @@ pub fn prepare_file(
     Ok(TaskOutput::Prepared { frame })
 }
 
+/// Prepare the same exact upload in the selected project so document import can use it there.
+pub fn prepare_project_file(
+    backend: &dyn Backend,
+    project: &devworks_core::protocol::ProjectId,
+    path: &Path,
+    name: &str,
+    media_type: &str,
+) -> Result<TaskOutput, String> {
+    let (digest, bytes) = sha256_file(path, max_attachment_bytes(backend))?;
+    let ticket = backend.mint_project_upload(project, path)?;
+    let frame = ops::save_project_artifact(
+        backend,
+        project.0.as_str(),
+        ticket.as_str(),
+        name,
+        media_type,
+        &digest,
+        bytes,
+    );
+    Ok(TaskOutput::Prepared { frame })
+}
+
 /// Admits an attachment's prepared `artifacts.save` frame, or resubmits it unchanged (same
 /// request key) to confirm an unknown outcome. `owned` is a file the shell created (a pasted
 /// image): it is removed once the artifact service holds its copy, never before.
@@ -391,6 +413,9 @@ mod tests {
             | TaskOutput::ArtifactPreview(_)
             | TaskOutput::ArtifactExported(_)
             | TaskOutput::TextPreview(_)
+            | TaskOutput::DocumentSource(_)
+            | TaskOutput::DocumentAccess(_)
+            | TaskOutput::DreamingReport(_)
             | TaskOutput::WorkspaceReplyStatus(_)
             | TaskOutput::Convention(_)
             | TaskOutput::Instruction(_)

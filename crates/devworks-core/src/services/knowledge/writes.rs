@@ -23,9 +23,11 @@ use crate::ports::storage::{
 };
 use crate::protocol::provider::{ArtifactRef, SchemaRef};
 use crate::protocol::records::{
-    ClaimDraft, Diagnostic, KnowledgeWriteReceipt, LessonDraft, MutationSummary, Severity,
+    ClaimDraft, Diagnostic, KnowledgeBatch, KnowledgeWriteReceipt, LessonDraft, MutationSummary,
+    Severity,
 };
 use crate::protocol::results::{DomainDecision, OperationResult};
+use crate::protocol::support::{BoundedList, BoundedText};
 use crate::protocol::{DomainErrorCode, EventId, Id, Revision, RevisionDimension};
 use crate::services::artifacts::{Viewer, visible};
 use crate::services::kernel::{Failure, Refusal, not_found, rev};
@@ -50,7 +52,7 @@ fn revision_conflict(kind: &'static str, id: &Id, expected: &Revision, current: 
         rev(current),
     ))
 }
-fn is_user(ctx: &InvocationContext) -> bool {
+pub(super) fn is_user(ctx: &InvocationContext) -> bool {
     matches!(
         ctx.principal_kind(),
         PrincipalKind::Human | PrincipalKind::Host
@@ -92,6 +94,7 @@ pub(super) struct Writer<'a> {
     pub diagnostics: Vec<Diagnostic>,
     touched: BTreeMap<String, KnowledgeScope>,
     th: BTreeMap<String, i64>,
+    dreaming_origin: bool,
     /// The fenced `(scope key, source)` this write may change: a deletion job's own batch.
     exempt: Option<(String, String)>,
 }
@@ -124,6 +127,7 @@ impl<'a> Writer<'a> {
             diagnostics: Vec::new(),
             touched: BTreeMap::new(),
             th: BTreeMap::new(),
+            dreaming_origin: false,
             exempt: None,
         }
     }
@@ -634,15 +638,31 @@ fn basis_of(
     mut basis: Vec<(String, String)>,
 ) -> Result<Vec<(String, String)>, Failure> {
     for id in evidence {
-        if let Some(e) = w.k().knowledge_evidence(id)?
-            && let Some(r) = e.source_revision.as_deref().or(default_revision)
-        {
+        let Some(e) = w.k().knowledge_evidence(id)? else {
+            continue;
+        };
+        // A repository file takes no default: its revision is its published index digest.
+        let default = match default_revision {
+            Some(d) if !repository_file(w.tx, &e.source_ref)? => Some(d),
+            _ => None,
+        };
+        if let Some(r) = e.source_revision.as_deref().or(default) {
             basis.retain(|(s, _)| *s != e.source_ref);
             basis.push((e.source_ref.clone(), r.to_owned()));
         }
     }
     basis.sort();
     Ok(basis)
+}
+
+/// Whether `source` is the normalized citation of a file of a registered repository (see
+/// `evidence_source`).
+fn repository_file(tx: &mut dyn WriteTransaction, source: &str) -> Result<bool, StorageError> {
+    let Some((repository, Some(path))) = super::repository_source(source) else {
+        return Ok(false);
+    };
+    Ok(super::repository_source_ref(&repository, &path) == source
+        && tx.projects().repository(&repository)?.is_some())
 }
 
 /// A claim's baselines after evidence is attached to it: a source it has no baseline for gains
@@ -670,9 +690,13 @@ fn attach_basis(
 fn origin_for(
     ctx: &InvocationContext,
     draft: &ClaimDraft,
+    dreaming: bool,
 ) -> Result<(String, Option<String>), Failure> {
     let origin = draft.origin.as_ref().map(wire);
     let reference = draft.origin_ref.as_ref().map(|r| r.0.clone());
+    if dreaming {
+        return Ok(("Agent".into(), reference));
+    }
     if is_user(ctx) {
         if origin.as_deref() == Some("Agent") {
             return Err(invalid("origin"));
@@ -760,7 +784,7 @@ fn build_claim(
             .map(|t| t.0.as_str())
             .chain(std::iter::once(category)),
     );
-    let (origin, origin_ref) = origin_for(w.ctx, d)?;
+    let (origin, origin_ref) = origin_for(w.ctx, d, w.dreaming_origin)?;
     let autonomous = entry == "Decision" && origin == "Agent";
     let basis = basis_of(
         w,
@@ -947,13 +971,74 @@ fn note_conflicts(w: &mut Writer<'_>, scoped: &Scoped, c: &StoredClaim) -> Resul
 // ---------------------------------------------------------------------------------------------
 // knowledge.record
 
+/// The source and revision new evidence is recorded with. A citation of a file of a registered
+/// repository (`repo:<repository-id>/<path>`, see [`super::repository_source_ref`]) is stored
+/// normalized, with the file's content digest in the repository's published index baseline as
+/// its revision whatever revision the writer stated, so an index publication that changes the
+/// file makes the claims citing it read stale (KNOW-03). A file the published baseline does not
+/// hold, or a repository outside the write's scope, is recorded without a revision (no claim
+/// takes a baseline from it until verified) and noted; a path that cannot be normalized is
+/// refused. Any other source, including `repo:` naming no registered repository, is kept as
+/// written with its stated revision.
+fn evidence_source(
+    w: &mut Writer<'_>,
+    scope: &KnowledgeScope,
+    ev: &crate::protocol::records::SourceEvidence,
+) -> Result<(String, Option<String>), Failure> {
+    let written = (
+        ev.source.source_ref.0.clone(),
+        ev.source_revision.as_ref().map(|r| r.0.clone()),
+    );
+    let Some((repository, path)) = super::repository_source(&written.0) else {
+        return Ok(written);
+    };
+    if w.tx.projects().repository(&repository)?.is_none() {
+        return Ok(written);
+    }
+    let path = path.ok_or_else(|| invalid("evidence_repository_path"))?;
+    let source_ref = super::repository_source_ref(&repository, &path);
+    let in_scope = match scope {
+        KnowledgeScope::Project(project) => {
+            w.tx.projects()
+                .repository_projects(&repository)?
+                .contains(project)
+        }
+        KnowledgeScope::Workspace => true,
+    };
+    let indexed = if in_scope {
+        let indexing: &dyn crate::ports::storage::IndexRead = w.tx.indexing();
+        super::published_source_revision(indexing, &repository, &path)?
+    } else {
+        None
+    };
+    if indexed.is_none() {
+        let message = format!(
+            "Evidence {} cites {source_ref}, which no published index of a repository in this \
+             scope holds; it is recorded without a source revision.",
+            ev.id.as_str()
+        );
+        w.note(Severity::Info, "evidence_not_indexed", &message);
+    }
+    Ok((source_ref, indexed))
+}
+
 fn record(
     tx: &mut dyn WriteTransaction,
     ctx: &InvocationContext,
     i: &ops::RecordInput,
 ) -> Result<DomainDecision, Failure> {
+    record_with_origin(tx, ctx, i, false)
+}
+
+fn record_with_origin(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::RecordInput,
+    dreaming_origin: bool,
+) -> Result<DomainDecision, Failure> {
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
     let mut w = Writer::new(tx, ctx, "knowledge.record")?;
+    w.dreaming_origin = dreaming_origin;
     let mut refs = Refs::default();
     for e in &i.batch.entities.0 {
         if refs.entities.contains_key(e.client_id.as_str()) {
@@ -1028,12 +1113,13 @@ fn record(
             };
             import_version(w.tx.artifacts(), &viewer, a)?;
         }
+        let (source_ref, source_revision) = evidence_source(&mut w, &scoped.exact, ev)?;
         let id = w.tx.new_id(IdKind::KnowledgeEvidence);
         let stored = StoredEvidence {
             id: id.clone(),
             scope: scoped.exact.clone(),
             kind: wire(&ev.source.kind),
-            source_ref: ev.source.source_ref.0.clone(),
+            source_ref,
             artifact: ev
                 .source
                 .artifact
@@ -1049,7 +1135,7 @@ fn record(
                 .map(serde_json::to_value)
                 .transpose()
                 .map_err(|e| StorageError::InvalidRecord(e.to_string()))?,
-            source_revision: ev.source_revision.as_ref().map(|r| r.0.clone()),
+            source_revision,
             author: ctx.principal().clone(),
             recorded_at_ms: w.now,
             deleted_at_ms: None,
@@ -1996,6 +2082,15 @@ fn verify(
     ctx: &InvocationContext,
     i: &ops::VerifyInput,
 ) -> Result<DomainDecision, Failure> {
+    verify_at_sources(tx, ctx, i, &BTreeMap::new())
+}
+
+fn verify_at_sources(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::VerifyInput,
+    verified_sources: &BTreeMap<String, String>,
+) -> Result<DomainDecision, Failure> {
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
     let mut w = Writer::new(tx, ctx, "knowledge.verify")?;
     let c = exact_claim(&mut w, &scoped, &i.claim_id, &i.expected_revision)?;
@@ -2009,13 +2104,36 @@ fn verify(
     }
     let revision = i.source_revision.as_ref().map(|r| r.0.clone());
     // The new baseline: every cited source at the stated revision, otherwise its latest
-    // observed revision, otherwise the revision its evidence names.
-    let mut basis = Vec::new();
+    // observed revision, otherwise the revision its evidence names. A repository file's
+    // revision is its published index digest, never a stated one (see `evidence_source`).
     let cited = next.body.evidence_ids.clone();
+    let mut repository_files = BTreeSet::new();
+    for id in &cited {
+        if let Some(e) = w.k().knowledge_evidence(id)?
+            && repository_file(w.tx, &e.source_ref)?
+        {
+            repository_files.insert(e.source_ref);
+        }
+    }
+    for (source, _) in &c.basis {
+        if repository_file(w.tx, source)? {
+            repository_files.insert(source.clone());
+        }
+    }
+    let stated = |source: &str| {
+        revision
+            .clone()
+            .filter(|_| !repository_files.contains(source))
+    };
+    let mut basis = Vec::new();
     for id in &cited {
         if let Some(e) = w.k().knowledge_evidence(id)? {
             let head = w.k().knowledge_source_head(&e.source_ref)?;
-            if let Some(r) = revision.clone().or(head).or(e.source_revision.clone()) {
+            if let Some(r) = stated(&e.source_ref)
+                .or_else(|| verified_sources.get(&e.source_ref).cloned())
+                .or(head)
+                .or(e.source_revision.clone())
+            {
                 basis.retain(|(s, _): &(String, String)| *s != e.source_ref);
                 basis.push((e.source_ref.clone(), r));
             }
@@ -2026,7 +2144,10 @@ fn verify(
             let head = w.k().knowledge_source_head(source)?;
             basis.push((
                 source.clone(),
-                revision.clone().or(head).unwrap_or_else(|| old.clone()),
+                stated(source)
+                    .or_else(|| verified_sources.get(source).cloned())
+                    .or(head)
+                    .unwrap_or_else(|| old.clone()),
             ));
         }
     }
@@ -2482,6 +2603,15 @@ fn challenge(
     ctx: &InvocationContext,
     i: &ops::ChallengeInput,
 ) -> Result<DomainDecision, Failure> {
+    challenge_with_id(tx, ctx, i, None)
+}
+
+fn challenge_with_id(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    i: &ops::ChallengeInput,
+    own_challenge_id: Option<Id>,
+) -> Result<DomainDecision, Failure> {
     let (scoped, _) = scope_for(tx, ctx, &i.scope, true)?;
     let mut w = Writer::new(tx, ctx, "knowledge.challenge")?;
     let c = exact_claim(&mut w, &scoped, &i.claim_id, &i.expected_revision)?;
@@ -2502,7 +2632,7 @@ fn challenge(
                 ));
             }
             let ch = StoredChallenge {
-                id: w.tx.new_id(IdKind::KnowledgeChallenge),
+                id: own_challenge_id.unwrap_or_else(|| w.tx.new_id(IdKind::KnowledgeChallenge)),
                 claim_id: c.id.clone(),
                 state: "Open".into(),
                 reason: i.reason.0.clone(),
@@ -3264,10 +3394,10 @@ pub(super) fn import_outcomes(
                 .collect(),
             ..ClaimQuery::default()
         };
-        let mut after: Option<(i64, String)> = None;
+        let mut after: Option<(crate::ports::storage::ClaimRank, String)> = None;
         loop {
             let rows =
-                k.knowledge_claims(&query, after.as_ref().map(|(t, i)| (*t, i.as_str())), 500)?;
+                k.knowledge_claims(&query, after.as_ref().map(|(r, i)| (*r, i.as_str())), 500)?;
             if rows
                 .iter()
                 .any(|r| r.body.value.as_deref().map(fold).as_deref() == Some(folded.as_str()))
@@ -3277,7 +3407,7 @@ pub(super) fn import_outcomes(
             }
             match rows.last() {
                 Some(last) if rows.len() == 500 => {
-                    after = Some((last.updated_at_ms, last.id.as_str().to_owned()))
+                    after = Some((last.rank, last.id.as_str().to_owned()))
                 }
                 _ => break,
             }
@@ -3461,4 +3591,262 @@ fn import_user_data(
     outcome(w, &primary, |value| {
         OperationResult::KnowledgeImportUserData { value }
     })
+}
+
+/// The same writer, lesson policy and snapshots used by human and agent Knowledge commands.
+pub(crate) fn consolidate(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+    action: super::dream_actions::Consolidation,
+) -> Result<DomainDecision, Failure> {
+    use super::dream_actions::Consolidation::*;
+    match action {
+        Record(draft, evidence) => record_with_origin(
+            tx,
+            ctx,
+            &ops::RecordInput {
+                scope: scope.into(),
+                batch: KnowledgeBatch {
+                    entities: BoundedList(vec![]),
+                    claims: BoundedList(vec![*draft]),
+                    evidence: BoundedList(evidence),
+                },
+            },
+            true,
+        ),
+        Relate(input) => relate(tx, ctx, &input),
+        Promote(input) => promote(tx, ctx, &input),
+        Verify(input, sources) => verify_at_sources(tx, ctx, &input, &sources),
+        Challenge {
+            input,
+            challenge_id,
+        } => challenge_with_id(tx, ctx, &input, Some(challenge_id)),
+        Applicability {
+            target,
+            expected,
+            applicable,
+        } => {
+            let (scoped, _) = scope_for(tx, ctx, &scope.into(), true)?;
+            let mut writer = Writer::new(tx, ctx, "knowledge.revise")?;
+            let mut current = exact_claim(&mut writer, &scoped, &target, &expected)?;
+            require_active(&current)?;
+            let Some(lesson) = current.lesson.as_mut() else {
+                return Err(invalid("lesson"));
+            };
+            if matches!(
+                lesson.source.as_str(),
+                "Prompt" | "Review" | "RelayedPrompt" | "RelayedReview"
+            ) {
+                return Err(invalid("prompt_sourced_rule"));
+            }
+            let applicable =
+                serde_json::to_value(applicable).map_err(|_| invalid("lesson_applicability"))?;
+            if lesson.applicability != applicable {
+                lesson.applicability = applicable;
+                writer.put_claim(current, Some(expected.get()), "Revised")?;
+            }
+            outcome(writer, scope, |value| OperationResult::KnowledgeRevise {
+                value,
+            })
+        }
+    }
+}
+
+/// Invert only an action selected by the run journal and fenced by its owning human command.
+/// The caller holds the exact terminal/cause revisions for every target in the action.
+pub(crate) fn reverse_dream_changes(
+    tx: &mut dyn WriteTransaction,
+    ctx: &InvocationContext,
+    scope: &KnowledgeScope,
+    action: &Value,
+    targets: &[WriteChange],
+    before: &[StoredClaim],
+    current: &BTreeMap<String, i64>,
+) -> Result<KnowledgeWriteReceipt, Failure> {
+    let tool = action["tool"]
+        .as_str()
+        .ok_or_else(|| invalid("dreaming_reversion"))?;
+    let arguments = &action["arguments"];
+    if tool == "dream_challenge" {
+        let id = action["result"]["challengeId"]
+            .as_str()
+            .and_then(|raw| Id::new(raw).ok())
+            .ok_or_else(|| invalid("dreaming_challenge_receipt"))?;
+        let target = before
+            .first()
+            .ok_or_else(|| invalid("dreaming_reversion"))?;
+        let revision = current
+            .get(target.id.as_str())
+            .ok_or_else(|| invalid("dreaming_reversion"))?;
+        let result = challenge(
+            tx,
+            ctx,
+            &ops::ChallengeInput {
+                scope: scope.into(),
+                claim_id: target.id.clone(),
+                expected_revision: rev(*revision),
+                reason: BoundedText("Reverted Dreaming challenge".into()),
+                evidence_ids: BoundedList(vec![]),
+                resolve_challenge_id: Some(id),
+                outcome: Some(crate::protocol::records::ChallengeOutcome::Uphold),
+            },
+        )?;
+        if let DomainDecision::Applied {
+            result: OperationResult::KnowledgeChallenge { value },
+        } = result
+        {
+            return Ok(value);
+        }
+        return Err(invalid("dreaming_challenge_reversion"));
+    }
+    if tool == "dream_relate"
+        && let Some(object) = arguments["same_as"].as_str()
+    {
+        let id = |value: &str| Id::new(value).map_err(|_| invalid("dreaming_reversion"));
+        let result = relate(
+            tx,
+            ctx,
+            &ops::RelateInput {
+                scope: scope.into(),
+                subject_id: id(arguments["id"]
+                    .as_str()
+                    .ok_or_else(|| invalid("dreaming_reversion"))?)?,
+                predicate: BoundedText(model::UNMERGE.into()),
+                object_id: id(object)?,
+                evidence_ids: BoundedList(vec![]),
+            },
+        )?;
+        if let DomainDecision::Applied {
+            result: OperationResult::KnowledgeRelate { value },
+        } = result
+        {
+            return Ok(value);
+        }
+        return Err(invalid("dreaming_unmerge_unavailable"));
+    }
+    let (scoped, _) = scope_for(tx, ctx, &scope.into(), true)?;
+    let mut writer = Writer::new(tx, ctx, "dreaming.revert")?;
+    let mut handled = HashSet::new();
+    let now = writer.now;
+    for target in targets.iter().rev() {
+        if !handled.insert(target.id.clone()) {
+            continue;
+        }
+        if target.target_kind == "Relation" {
+            let witness = before
+                .iter()
+                .filter_map(|row| current.get(row.id.as_str()).map(|r| (&row.id, *r)))
+                .map(|(id, revision)| exact_claim(&mut writer, &scoped, id, &rev(revision)))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut removed = false;
+            for row in &witness {
+                if let Some(relation) = writer
+                    .k()
+                    .knowledge_relations_touching(std::slice::from_ref(&row.id))?
+                    .into_iter()
+                    .find(|relation| relation.id == target.id && relation.scope == *scope)
+                    && writer.k().remove_knowledge_relation(&relation.id, now)?
+                {
+                    writer.changes.push(WriteChange {
+                        target_kind: "Relation".into(),
+                        id: relation.id,
+                        before: None,
+                        after: None,
+                    });
+                    removed = true;
+                    break;
+                }
+            }
+            if !removed {
+                return Err(invalid("dreaming_relation_changed"));
+            }
+            continue;
+        }
+        if target.target_kind == "Evidence" && tool == "dream_record" {
+            // The citation remains as audit evidence, including if another claim now uses it.
+            continue;
+        }
+        if target.target_kind != "Claim" {
+            return Err(invalid("dreaming_unrecognized_reversion"));
+        }
+        let expected = current
+            .get(target.id.as_str())
+            .copied()
+            .ok_or_else(|| invalid("dreaming_reversion"))?;
+        let active = exact_claim(&mut writer, &scoped, &target.id, &rev(expected))?;
+        if let Some(original) = before.iter().find(|original| original.id == target.id) {
+            writer.put_claim(original.clone(), Some(active.revision), "DreamingReverted")?;
+        } else if targets
+            .iter()
+            .any(|change| change.id == target.id && change.before.is_none())
+        {
+            let mut retained = active.clone();
+            retained.lifecycle = "Retracted".into();
+            retained.body.reason = Some("Reverted Dreaming record".into());
+            writer.put_claim(retained, Some(active.revision), "DreamingReverted")?;
+        } else {
+            return Err(invalid("dreaming_prior_revision_unavailable"));
+        }
+    }
+    writer.finish(scope)
+}
+
+/// A current, explicitly approved Dreaming proposal mutates Knowledge as the reviewing person.
+pub(crate) fn review_dream_change(
+    tx: &mut dyn WriteTransaction,
+    human: &InvocationContext,
+    scope: &KnowledgeScope,
+    target: &crate::protocol::records::RevisionedRef,
+    change: crate::protocol::records::DreamProposalChange,
+    rationale: &str,
+) -> Result<(), Failure> {
+    use crate::protocol::records::DreamProposalChange::*;
+    let result = match change {
+        Retract {} => retract(
+            tx,
+            human,
+            &ops::RetractInput {
+                scope: scope.into(),
+                claim_id: target.id.clone(),
+                expected_revision: target.revision.clone(),
+                reason: BoundedText(rationale.into()),
+                evidence_ids: BoundedList(vec![]),
+            },
+        )?,
+        Supersede { mut replacement } => {
+            if replacement.supersedes.is_some() {
+                return Err(invalid("embedded_supersession"));
+            }
+            replacement.supersedes = Some(target.id.clone());
+            record(
+                tx,
+                human,
+                &ops::RecordInput {
+                    scope: scope.into(),
+                    batch: KnowledgeBatch {
+                        entities: BoundedList(vec![]),
+                        claims: BoundedList(vec![replacement]),
+                        evidence: BoundedList(vec![]),
+                    },
+                },
+            )?
+        }
+        Merge { other } => relate(
+            tx,
+            human,
+            &ops::RelateInput {
+                scope: scope.into(),
+                subject_id: target.id.clone(),
+                object_id: other.id,
+                predicate: BoundedText(model::SAME_AS.into()),
+                evidence_ids: BoundedList(vec![]),
+            },
+        )?,
+        SkillDraft {} | HookDraft {} | TestDraft {} => return Ok(()),
+    };
+    match result {
+        DomainDecision::Applied { .. } | DomainDecision::NoChange { .. } => Ok(()),
+        _ => Err(invalid("dreaming_review_knowledge_result")),
+    }
 }

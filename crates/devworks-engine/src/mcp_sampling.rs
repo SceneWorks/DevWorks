@@ -611,6 +611,7 @@ fn context_material(
         instructions,
         instruction_stamps: vec![],
         skill_stamp: None,
+        lesson_stamp: None,
         messages: call
             .messages
             .iter()

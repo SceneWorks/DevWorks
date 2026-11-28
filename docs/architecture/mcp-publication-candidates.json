@@ -3,17 +3,17 @@
   "architectureVersion": "1.1",
   "status": "Reviewed architecture publication candidates; actual MCP schema projection and client interoperability unimplemented",
   "source": "contracts/family-coverage.json",
-  "sourceSha256": "42f52515b835c6419345c8512125de6750f61bfa1af06926418ea25fdbfe90d9",
+  "sourceSha256": "24b1b4fc520a6493748f30c38bdd94f6787cb89800823fe6cc080f71ea9915a3",
   "contract": "mcp-server-contracts.html",
   "argumentProjection": "Existing selected request schema and exact mode; adapter pins protocol and operation and derives authenticated actor/context. A JSON-RPC ID is not a command idempotency key.",
   "newRegistrationPolicy": "Disabled and no grants; human approval selects reads/scopes; commands remain separately opt-in.",
   "resourcePolicy": "Static safe devworks:// templates; object enumeration/read is an authenticated scoped tool/resource projection of these exact queries, preserving the query stamp and citations.",
   "counts": {
-    "catalogOperations": 387,
-    "modeDispositions": 392,
-    "tools": 161,
-    "readTools": 102,
-    "commandTools": 59
+    "catalogOperations": 391,
+    "modeDispositions": 396,
+    "tools": 165,
+    "readTools": 104,
+    "commandTools": 61
   },
   "tools": [
     {
@@ -2804,6 +2804,90 @@
       "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
     },
     {
+      "name": "devworks_documents_resolve_citation",
+      "operation": "documents.resolve_citation",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "documents.resolve_citation"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "documents.resolve_citation"
+      },
+      "authority": "Scoped",
+      "effect": "ReadOnly",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_documents_transfer_propose",
+      "operation": "documents.transfer_propose",
+      "mode": "Command",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "documents.transfer_propose"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "documents.transfer_propose"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "ExplicitCommand",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": true,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_documents_transfer_respond",
+      "operation": "documents.transfer_respond",
+      "mode": "Command",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "documents.transfer_respond"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "documents.transfer_respond"
+      },
+      "authority": "Scoped",
+      "effect": "Local",
+      "clientGrant": "ExplicitCommand",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": true,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
+      "name": "devworks_documents_transfer_status",
+      "operation": "documents.transfer_status",
+      "mode": "Query",
+      "inputSchema": "contracts/domain-request.schema.json",
+      "inputSelection": {
+        "pointer": "/body/kind",
+        "equals": "documents.transfer_status"
+      },
+      "resultSchema": "contracts/operation-result.schema.json",
+      "resultSelection": {
+        "pointer": "/kind",
+        "equals": "documents.transfer_status"
+      },
+      "authority": "Scoped",
+      "effect": "ReadOnly",
+      "clientGrant": "SelectedRead",
+      "defaultForNewRegistration": false,
+      "requiresApplicationIdempotencyKey": false,
+      "hostChecks": "Current registration, scope/view, role, policy, selected operation/mode, revisions and publication revocation; no human impersonation."
+    },
+    {
       "name": "devworks_artifacts_list",
       "operation": "artifacts.list",
       "mode": "Query",
@@ -4520,6 +4604,30 @@
       "mode": "Command",
       "disposition": "PublishCandidate",
       "reason": "Explicit command grant plus all existing domain authority and recovery."
+    },
+    {
+      "operation": "documents.resolve_citation",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
+    },
+    {
+      "operation": "documents.transfer_propose",
+      "mode": "Command",
+      "disposition": "PublishCandidate",
+      "reason": "Explicit command grant plus all existing domain authority and recovery."
+    },
+    {
+      "operation": "documents.transfer_respond",
+      "mode": "Command",
+      "disposition": "PublishCandidate",
+      "reason": "Explicit command grant plus all existing domain authority and recovery."
+    },
+    {
+      "operation": "documents.transfer_status",
+      "mode": "Query",
+      "disposition": "PublishCandidate",
+      "reason": "Eligible scoped read; explicit client selection required."
     },
     {
       "operation": "artifacts.save",

@@ -63,6 +63,7 @@ fn only_source_bound_context_suggestions_pass_for_the_selected_phase() {
         instructions: vec![],
         instruction_stamps: vec![],
         skill_stamp: None,
+        lesson_stamp: None,
         messages: vec![Message {
             role: MessageRole::User,
             content: vec![ContentBlock::Text {

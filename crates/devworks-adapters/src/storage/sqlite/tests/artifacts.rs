@@ -5234,6 +5234,142 @@ fn a_use_case_cannot_pin_collect_or_write_receipt_reply_records() {
     assert_eq!(versions, vec![receipt_version]);
 }
 
+/// An F8 build published an F8 command's reply under the old revision's reply schema. The
+/// reconciliation's revision remap moves both the receipt and that schema reference, so project
+/// purge can still prove and remove the published reply.
+#[test]
+fn renumbered_f8_receipt_replies_stay_purgeable() {
+    use devworks_core::registry::SchemaRevision;
+    use devworks_core::services::artifacts::replies::{
+        REPLY_CONSUMER, ReceiptReplies, ReplyOutcome, reply_schema,
+    };
+    use devworks_core::services::documents::DocumentLibrary;
+    let fx = Fx::new();
+    let source = fx.saved("f8-reply-source", "Notes", "text/plain", b"plain notes");
+    let cases = UseCases::new()
+        .with_artifacts(fx.svc.clone())
+        .with_document_library(Arc::new(DocumentLibrary::new(
+            fx.svc.clone(),
+            fx.h.ids.clone(),
+            fx.h.clock.clone(),
+        )));
+    let authority = fx.authority();
+    let gateway = Gateway {
+        authority: &authority,
+        store: &*fx.store,
+        ids: &*fx.h.ids,
+    };
+    let frame = json!({"protocol": "1.0-draft.1", "mode": "Command", "schemaRevision": 25,
+        "requestKey": "f8-import", "body": {"kind": "documents.import",
+            "scope": {"kind": "Project", "projectId": "project-a"},
+            "source": source.artifact, "title": "Notes"}});
+    applied(
+        cases
+            .command_with(
+                &gateway,
+                &fx.user(),
+                "documents.import",
+                frame.to_string().as_bytes(),
+                WriteOptions::fixture(),
+            )
+            .expect("addressable"),
+    );
+    let claims = fx.write(|tx| {
+        tx.queue().claim_ready(&ClaimRequest {
+            consumer: REPLY_CONSUMER.into(),
+            owner: id("f8-reply-publisher"),
+            lease_ms: 60_000,
+            limit: 10,
+        })
+    });
+    let publisher = ReceiptReplies::new(fx.svc.clone());
+    for claim in &claims {
+        assert!(matches!(
+            publisher.publish(fx.store.as_ref(), claim),
+            ReplyOutcome::Published(_)
+        ));
+    }
+    let assess = || {
+        read_snapshot(fx.store.as_ref(), &ReadOptions::default(), |r| {
+            r.projects().purge_planning(&project("project-a"))
+        })
+        .unwrap()
+        .unwrap()
+    };
+    assert!(assess().is_resolved(), "{:?}", assess().unresolved);
+    let descriptor = devworks_core::registry::find("documents.import").unwrap();
+    let current = serde_json::to_value(reply_schema(descriptor, SchemaRevision(25))).unwrap();
+    // What the F8 build stored: the receipt and its reply schema reference at revision 10.
+    let mut published = current.clone();
+    published["revision"] = json!("10");
+    published["sha256"] = json!("a".repeat(64));
+    let conn = fx.h.raw();
+    let reply_of_import = "EXISTS(SELECT 1 FROM command_receipts r WHERE \
+        r.actor_id=receipt_replies.actor_id AND r.scope_key=receipt_replies.scope_key AND \
+        r.idempotency_key=receipt_replies.idempotency_key AND r.command_kind='documents.import')";
+    assert_eq!(
+        conn.execute(
+            &format!("UPDATE receipt_replies SET schema_json=?1 WHERE {reply_of_import}"),
+            [published.to_string()],
+        )
+        .unwrap(),
+        1
+    );
+    conn.execute(
+        "UPDATE command_receipts SET result_json=json_set(result_json,'$.schemaRevision',10) \
+         WHERE command_kind='documents.import'",
+        [],
+    )
+    .unwrap();
+    // A purged receipt of an F8 operation records its revision the same way.
+    let purged = json!({"contract": "fixture", "schemaRevision": 10, "purged": {}}).to_string();
+    conn.execute(
+        "INSERT INTO command_receipts(actor_id,scope_key,idempotency_key,command_kind,\
+            payload_digest,result_json,created_at) \
+            SELECT actor_id,scope_key,'f8-purged',command_kind,payload_digest,?1,created_at \
+            FROM command_receipts WHERE command_kind='documents.import'",
+        [&purged],
+    )
+    .unwrap();
+    // Before the remap the old reference no longer matches the reply schema purge rebuilds.
+    assert!(
+        assess()
+            .unresolved
+            .iter()
+            .any(|r| r.table == "receipt_replies"),
+        "the F8 reply reference blocks purge before the remap"
+    );
+    super::super::migrations::remap_feature_revisions(&conn).unwrap();
+    let (schema, revision, purged_revision): (String, i64, i64) = conn
+        .query_row(
+            &format!(
+                "SELECT (SELECT schema_json FROM receipt_replies WHERE {reply_of_import}),\
+                    (SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                        WHERE command_kind='documents.import' AND idempotency_key<>'f8-purged'),\
+                    (SELECT json_extract(result_json,'$.schemaRevision') FROM command_receipts \
+                        WHERE idempotency_key='f8-purged')"
+            ),
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&schema).unwrap(), current);
+    assert_eq!((revision, purged_revision), (25, 25));
+    conn.execute(
+        "DELETE FROM command_receipts WHERE idempotency_key='f8-purged'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let plan = assess();
+    assert!(plan.is_resolved(), "{:?}", plan.unresolved);
+    assert!(
+        plan.rows
+            .iter()
+            .any(|r| r.table == "receipt_replies" && r.action == ProjectPurgeRowAction::Delete)
+    );
+}
+
 #[test]
 fn purge_planning_compacts_only_the_validated_published_receipt_and_its_content_lineage() {
     use devworks_core::services::artifacts::replies::{
@@ -5966,11 +6102,8 @@ fn purge_planning_kept_artifact_subjects_retain_minimal_assignment_resource_and_
     assert_eq!(violations, 0);
 }
 
-/// Purging project A removes the links between its lessons or skills and the workspace's, child
-/// first, without a foreign-key error and without touching the workspace skill, its revision or
-/// the workspace lesson.
-#[test]
-fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
+/// Marks project A deleted and runs its reviewed purge to completion.
+fn execute_project_a_purge(fx: &Fx) {
     use devworks_core::services::projects::purge::PurgeCoordinator;
     use devworks_core::{
         operations::projects::{PreparePurgeInput, PurgeInput},
@@ -6003,50 +6136,7 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
             }
         }
     }
-    let fx = Fx::new();
     let c = fx.h.raw();
-    for (lesson, project) in [("lesson-ws", None), ("lesson-a", Some("project-a"))] {
-        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-        c.execute(
-            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
-            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
-            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
-            rusqlite::params![format!("entity-{lesson}"), scope, project],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
-            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
-            updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
-            'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate',\
-            'Prompt')",
-            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
-        )
-        .unwrap();
-    }
-    for (skill, project) in [("skill-ws", None), ("skill-a", Some("project-a"))] {
-        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
-        c.execute(
-            "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
-            root_path,source_path,latest_revision,active_revision,enabled,present,\
-            version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
-            ?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
-            rusqlite::params![skill, scope, project, format!("/r/{skill}")],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
-            content_digest,state,author,origin_json,resources_json,\
-            applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,\
-            'Approved','user-a','{}','[]','[]',0,NULL)",
-            rusqlite::params![skill, "a".repeat(64)],
-        )
-        .unwrap();
-    }
-    for (skill, lesson) in [("skill-ws", "lesson-a"), ("skill-a", "lesson-ws")] {
-        c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,1,?2)",
-            rusqlite::params![skill, lesson]).unwrap();
-    }
     c.execute(
         "UPDATE projects SET lifecycle='Deleted' WHERE id='project-a'",
         [],
@@ -6094,6 +6184,58 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
             .map_err(|e| StorageError::InvalidRecord(format!("{e:?}")))?;
         tx.projects().apply_project_purge(&permit)
     });
+}
+
+/// Purging project A removes the links between its lessons or skills and the workspace's, child
+/// first, without a foreign-key error and without touching the workspace skill, its revision or
+/// the workspace lesson.
+#[test]
+fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
+    let fx = Fx::new();
+    let c = fx.h.raw();
+    for (lesson, project) in [("lesson-ws", None), ("lesson-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
+            rusqlite::params![format!("entity-{lesson}"), scope, project],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+            updated_at,body_json,rule_state,lesson_source) VALUES(?1,?2,?3,1,\
+            'Lesson','Lesson','Active',?4,'lesson','user-a',1,1,'{}','Candidate',\
+            'Prompt')",
+            rusqlite::params![lesson, scope, project, format!("entity-{lesson}")],
+        )
+        .unwrap();
+    }
+    for (skill, project) in [("skill-ws", None), ("skill-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO instructions(id,kind,name,scope_key,project_id,origin,\
+            root_path,source_path,latest_revision,active_revision,enabled,present,\
+            version,created_at,updated_at,confined_project_id) VALUES(?1,'Skill',?1,\
+            ?2,?3,'Harness','/r',?4,1,1,1,1,1,0,0,NULL)",
+            rusqlite::params![skill, scope, project, format!("/r/{skill}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO instruction_revisions(instruction_id,revision,content_json,\
+            content_digest,state,author,origin_json,resources_json,\
+            applicability_json,created_at,confined_project_id) VALUES(?1,1,'{}',?2,\
+            'Approved','user-a','{}','[]','[]',0,NULL)",
+            rusqlite::params![skill, "a".repeat(64)],
+        )
+        .unwrap();
+    }
+    for (skill, lesson) in [("skill-ws", "lesson-a"), ("skill-a", "lesson-ws")] {
+        c.execute("INSERT INTO instruction_revision_lessons(instruction_id,revision,lesson_id) VALUES(?1,1,?2)",
+            rusqlite::params![skill, lesson]).unwrap();
+    }
+    execute_project_a_purge(&fx);
     let count = |sql: &str| -> i64 { fx.h.raw().query_row(sql, [], |r| r.get(0)).unwrap() };
     assert_eq!(
         count("SELECT count(*) FROM instruction_revision_lessons"),
@@ -6118,6 +6260,63 @@ fn executed_project_purge_removes_lesson_links_across_the_workspace_boundary() {
     assert_eq!(
         count("SELECT count(*) FROM knowledge_claims WHERE id='lesson-a'"),
         0
+    );
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+}
+
+/// Purging project A removes its claims' vectors before the claims, and keeps the vector of a
+/// general claim and the shared embedding space.
+#[test]
+fn executed_project_purge_removes_the_projects_claim_vectors_only() {
+    let fx = Fx::new();
+    let c = fx.h.raw();
+    c.execute(
+        "INSERT INTO embedding_spaces(id,model_digest,dimensions,metric,element_type) \
+         VALUES('space-1','m',2,'Cosine','Float32')",
+        [],
+    )
+    .unwrap();
+    for (claim, project) in [("claim-ws", None), ("claim-a", Some("project-a"))] {
+        let scope = project.map_or("workspace".to_owned(), |p| format!("project:{p}"));
+        c.execute(
+            "INSERT INTO knowledge_entities(id,scope_key,project_id,revision,label,\
+            entity_type,aliases_json,canonical_key,author_id,created_at,updated_at) \
+            VALUES(?1,?2,?3,1,?1,'topic','[]',?1,'user-a',1,1)",
+            rusqlite::params![format!("entity-{claim}"), scope, project],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claims(id,scope_key,project_id,revision,kind,\
+            entry_kind,lifecycle,subject_id,predicate,author_id,created_at,\
+            updated_at,body_json) VALUES(?1,?2,?3,1,'Fact','Fact','Active',?4,'states',\
+            'user-a',1,1,'{}')",
+            rusqlite::params![claim, scope, project, format!("entity-{claim}")],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO knowledge_claim_vectors(claim_id,space_id,dimensions,text_digest,\
+            vector) VALUES(?1,'space-1',2,?2,zeroblob(8))",
+            rusqlite::params![claim, "a".repeat(64)],
+        )
+        .unwrap();
+    }
+    execute_project_a_purge(&fx);
+    let count = |sql: &str| -> i64 { fx.h.raw().query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claim_vectors WHERE claim_id='claim-a'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claims WHERE id='claim-a'"),
+        0
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM knowledge_claim_vectors WHERE claim_id='claim-ws'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM embedding_spaces WHERE id='space-1'"),
+        1
     );
     assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
 }
