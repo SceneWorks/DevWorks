@@ -485,19 +485,30 @@ mod tests {
         }
     }
 
-    /// Hangs on the root (`Hang(false)`) or on a required mount (`Hang(true)`).
-    struct Hang(bool);
+    /// Hangs on the root (`on_mount: false`) or on a required mount (`on_mount: true`): it says
+    /// so on `entered`, then blocks until `release` is dropped.
+    struct Hang {
+        on_mount: bool,
+        entered: mpsc::Sender<()>,
+        release: Arc<Mutex<mpsc::Receiver<()>>>,
+    }
+    impl Hang {
+        fn hang(&self) {
+            let _ = self.entered.send(());
+            let _ = self.release.lock().unwrap().recv();
+        }
+    }
     impl VolumeProbe for Hang {
         fn verify(&self, _root: &Path) -> Result<(), String> {
-            if !self.0 {
-                std::thread::sleep(Duration::from_secs(5));
+            if !self.on_mount {
+                self.hang();
             }
             Ok(())
         }
 
         fn verify_mount(&self, _path: &Path) -> Result<(), String> {
-            if self.0 {
-                std::thread::sleep(Duration::from_secs(5));
+            if self.on_mount {
+                self.hang();
             }
             Ok(())
         }
@@ -688,18 +699,34 @@ mod tests {
             format!("required_mount = {}\n", mount.display()),
         )
         .unwrap();
-        for (hang_on_mount, named) in [(false, &root), (true, &mount)] {
+        // The deadline covers the real file checks before the simulated hang, so it is far
+        // longer than they take on a slow runner; the hang itself never ends on its own.
+        let timeout = Duration::from_secs(1);
+        for (on_mount, named) in [(false, &root), (true, &mount)] {
+            let (entered, reached) = mpsc::channel();
+            let (unblock, release) = mpsc::channel::<()>();
+            let release = Arc::new(Mutex::new(release));
             let started = std::time::Instant::now();
-            let err = check_within(&vars_for(&root), Duration::from_millis(100), move |v, p| {
-                host_with(v, &Hang(hang_on_mount), HOST, p)
+            let err = check_within(&vars_for(&root), timeout, move |v, p| {
+                let probe = Hang {
+                    on_mount,
+                    entered,
+                    release,
+                };
+                host_with(v, &probe, HOST, p)
             })
             .unwrap_err();
-            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(started.elapsed() < timeout + Duration::from_secs(2));
+            assert!(
+                reached.try_recv().is_ok(),
+                "the check reached the hang: {err}"
+            );
             assert!(err.contains("did not respond"), "{err}");
             assert!(
                 err.starts_with(&named.display().to_string()),
                 "names what hung: {err}"
             );
+            drop(unblock);
         }
     }
 

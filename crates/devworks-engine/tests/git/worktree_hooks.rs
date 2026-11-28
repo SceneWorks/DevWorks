@@ -101,14 +101,13 @@ pub(super) fn assert_reviewed_create(
     if matches!(case, CreateCase::ContextualPolicy) {
         let conditional = h.root.join("conditional-hooks.config");
         std::fs::write(&conditional, format!("[hook \"target-only\"]\n event = post-checkout\n command = printf contextual > '{shell_marker}'\n")).unwrap();
-        git(
-            source,
-            &[
-                "config",
-                "includeIf.gitdir:**/worktrees/**.path",
-                conditional.to_str().unwrap(),
-            ],
+        // Only this repository's linked worktrees match: a bare `**/worktrees/**` also matches
+        // the source repository itself when the test folder sits under a `worktrees` folder.
+        let linked = format!(
+            "includeIf.gitdir:{}/worktrees/**.path",
+            git(source, &["rev-parse", "--absolute-git-dir"])
         );
+        git(source, &["config", &linked, conditional.to_str().unwrap()]);
         assert!(
             Command::new("git")
                 .args(["config", "--get", "hook.target-only.event"])
