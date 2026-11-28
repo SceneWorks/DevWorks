@@ -536,6 +536,7 @@ fn check_digest_fixture(engine: DbEngine) {
     );
     reject(before);
 
+    let mut latest = new_clause;
     if mysql {
         runtime
             .block_on(
@@ -543,13 +544,53 @@ fn check_digest_fixture(engine: DbEngine) {
                     .execute(&mut external),
             )
             .unwrap();
+        let enforcement = capture();
         assert_ne!(
-            new_clause,
-            capture(),
+            latest, enforcement,
             "CHECK enforcement must change the digest"
         );
-        reject(new_clause);
+        reject(latest);
+        latest = enforcement;
     }
+
+    // The same foreign key name and columns with another delete, then update, action.
+    for (rules, which) in [
+        ("ON DELETE CASCADE ON UPDATE RESTRICT", "ON DELETE"),
+        ("ON DELETE CASCADE ON UPDATE CASCADE", "ON UPDATE"),
+    ] {
+        runtime.block_on(async {
+            sqlx::raw_sql("ALTER TABLE dw_checks DROP FOREIGN KEY fk_parent")
+                .execute(&mut external)
+                .await
+                .unwrap();
+            let add = format!(
+                "ALTER TABLE dw_checks ADD CONSTRAINT fk_parent FOREIGN KEY (parent_id) \
+                 REFERENCES dw_parent(id) {rules}"
+            );
+            sqlx::raw_sql(sqlx::AssertSqlSafe(add))
+                .execute(&mut external)
+                .await
+                .unwrap();
+        });
+        let changed = capture();
+        assert_ne!(
+            latest, changed,
+            "a changed {which} rule must change the digest"
+        );
+        reject(latest);
+        latest = changed;
+    }
+    let rows: (i64, i64) = runtime
+        .block_on(
+            sqlx::query_as("SELECT count(*), CAST(SUM(parent_id) AS SIGNED) FROM dw_checks")
+                .fetch_one(&mut external),
+        )
+        .unwrap();
+    assert_eq!(
+        rows,
+        (1, 1),
+        "stale schema requests must leave the rows unchanged"
+    );
     let markers: i64 = runtime
         .block_on(
             sqlx::query_scalar(
