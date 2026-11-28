@@ -271,6 +271,11 @@ fn run_job_in(
     scope: Value,
 ) -> Id {
     let definition = json!({"kind":"Inference","prompt":prompt,"route":route,"effort":"Default"});
+    run_definition(f, app, definition, scope)
+}
+
+/// Creates a manual job of `definition` in `scope` and runs it now; returns the run.
+fn run_definition(f: &Fx, app: &devworks_engine::Runtime, definition: Value, scope: Value) -> Id {
     let job = job_command(
         f,
         app,
@@ -358,6 +363,13 @@ fn a_scheduled_inference_run_completes_as_its_agent_with_a_tool_call_through_the
         // The saved prompt is the first user content the provider saw.
         assert_eq!(requests.len(), 2, "{requests:?}");
         assert!(requests[0].to_string().contains(PROMPT), "{}", requests[0]);
+        // Once: the prompt notice is not replayed into the context it opened.
+        assert_eq!(
+            requests[0].to_string().matches(PROMPT).count(),
+            1,
+            "{}",
+            requests[0]
+        );
         let offered: Vec<String> = requests[0]["tools"]
             .as_array()
             .map(|tools| {
@@ -886,6 +898,177 @@ fn a_run_started_while_scheduled_inference_stops_resumes_at_the_next_boot() {
         assert_eq!(finished.status, "Succeeded", "{finished:?}");
         assert_eq!(finished.resumptions, 1, "{finished:?}");
         assert_eq!(second.requests().len(), 1);
+        app.shutdown().await;
+    });
+}
+
+/// A workspace job whose task targets a project runs in that project: its session, agent and
+/// usage are the project's, though the run's own scope is the workspace.
+#[test]
+fn a_workspace_job_targeting_a_project_completes_in_that_project() {
+    let _native_case = native_runtime_case();
+    let f = Fx::new();
+    seed_local_route(&f);
+    let prompt = seed_job_prompt(&f);
+    let wire = JobWire::new(vec![Answer::Text("Project scan done")]);
+    runtime().block_on(async {
+        let app = boot(job_ports(&f, wire.clone())).await.unwrap();
+        let run = run_definition(
+            &f,
+            &app,
+            json!({"kind":"Inference","prompt":prompt,
+                "route":{"kind":"Model","modelId":"watch-model"},"effort":"Default",
+                "projectId":"project-a"}),
+            json!({"kind":"Workspace"}),
+        );
+        let finished = within(
+            "a workspace job targeting a project",
+            wait_run(&f, &app, &run, terminal),
+        )
+        .await;
+        assert_eq!(
+            finished.status,
+            "Succeeded",
+            "{finished:?}; {:?}",
+            wire.requests()
+        );
+        assert!(finished.project_id.is_none(), "{finished:?}");
+        assert_eq!(wire.requests().len(), 1);
+        let session = finished.session_id.clone().unwrap();
+        let stored = read(&*f.store, move |r| r.sessions().session(&session)).unwrap();
+        assert_eq!(stored.project_id, Some(ProjectId(id("project-a"))));
+        app.shutdown().await;
+    });
+}
+
+/// Refuses every write that records an inference handoff while `held`.
+struct HoldHandoff {
+    inner: Arc<dyn ApplicationStore>,
+    held: Arc<AtomicBool>,
+    refused: Arc<AtomicUsize>,
+}
+impl ApplicationStore for HoldHandoff {
+    fn info(&self) -> StoreInfo {
+        self.inner.info()
+    }
+    fn submit_write(&self, o: WriteOptions, job: Box<dyn WriteJob>) -> Result<(), StorageError> {
+        self.inner.submit_write(
+            o,
+            Box::new(HandoffJob {
+                inner: job,
+                held: self.held.clone(),
+                refused: self.refused.clone(),
+            }),
+        )
+    }
+    fn read(
+        &self,
+        o: &ReadOptions,
+        w: &mut dyn FnMut(&dyn ReadSnapshot) -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        self.inner.read(o, w)
+    }
+}
+struct HandoffJob {
+    inner: Box<dyn WriteJob>,
+    held: Arc<AtomicBool>,
+    refused: Arc<AtomicUsize>,
+}
+impl HandoffJob {
+    /// The operations of active job runs that record a handoff.
+    fn handed_off(tx: &mut dyn WriteTransaction) -> Result<Vec<String>, StorageError> {
+        let mut found = Vec::new();
+        for job in tx.jobs().all_jobs(None, 50)? {
+            let Some(run) = tx.jobs().active_run(&job.id)? else {
+                continue;
+            };
+            let Some(operation) = run.operation_id else {
+                continue;
+            };
+            if tx
+                .operations()
+                .operation(&operation)?
+                .is_some_and(|record| devworks_core::services::jobs::runner::handed_off(&record))
+            {
+                found.push(operation.0.as_str().to_owned());
+            }
+        }
+        Ok(found)
+    }
+}
+impl WriteJob for HandoffJob {
+    fn run(&mut self, tx: &mut dyn WriteTransaction) -> Result<(), StorageError> {
+        let held = self.held.load(Ordering::SeqCst);
+        let before = if held {
+            Self::handed_off(tx)?
+        } else {
+            Vec::new()
+        };
+        self.inner.run(tx)?;
+        if held && Self::handed_off(tx)?.iter().any(|op| !before.contains(op)) {
+            self.refused.fetch_add(1, Ordering::SeqCst);
+            return Err(StorageError::Busy);
+        }
+        Ok(())
+    }
+    fn finish(self: Box<Self>, outcome: Result<(), StorageError>) {
+        self.inner.finish(outcome)
+    }
+}
+
+/// The turn sends nothing until the scheduler has recorded its handoff, which saves the run:
+/// inference admitted before it would be fenced by that save.
+#[test]
+fn a_scheduled_turn_sends_nothing_before_its_handoff_is_recorded() {
+    let _native_case = native_runtime_case();
+    let h = Harness::new();
+    let inner = h.open();
+    seed(&h);
+    let (held, refused) = (
+        Arc::new(AtomicBool::new(true)),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    let f = Fx::over(
+        h,
+        Arc::new(HoldHandoff {
+            inner,
+            held: held.clone(),
+            refused: refused.clone(),
+        }),
+    );
+    seed_local_route(&f);
+    let prompt = seed_job_prompt(&f);
+    let wire = JobWire::new(vec![Answer::Text("Scheduled work done")]);
+    runtime().block_on(async {
+        let app = boot(job_ports(&f, wire.clone())).await.unwrap();
+        let run = run_job(
+            &f,
+            &app,
+            prompt,
+            json!({"kind":"Model","modelId":"watch-model"}),
+        );
+        within("the handoff is refused", async {
+            while refused.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        // The session is open, but no model request left while the handoff is unrecorded.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(wire.requests().is_empty(), "{:?}", wire.requests());
+        held.store(false, Ordering::SeqCst);
+        let finished = within(
+            "a run whose handoff was delayed",
+            wait_run(&f, &app, &run, terminal),
+        )
+        .await;
+        assert_eq!(
+            finished.status,
+            "Succeeded",
+            "{finished:?}; {:?}",
+            wire.requests()
+        );
+        assert_eq!(wire.requests().len(), 1);
         app.shutdown().await;
     });
 }

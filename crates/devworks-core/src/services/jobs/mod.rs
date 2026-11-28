@@ -320,7 +320,7 @@ pub(crate) fn job_target(job: &StoredJob) -> Option<ProjectId> {
 }
 /// The project a run acts on: [`target_project`] of the run's own snapshot (the definition it
 /// was queued with), never its job's current definition, which an edit may have retargeted.
-pub(crate) fn run_target(run: &StoredJobRun) -> Option<ProjectId> {
+pub fn run_target(run: &StoredJobRun) -> Option<ProjectId> {
     target_project(run.project_id.as_ref(), &run.definition)
 }
 /// A project's archive epoch (advanced by every archival); 0 for an app-level scope.

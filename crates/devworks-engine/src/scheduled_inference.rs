@@ -9,17 +9,17 @@
 //! effective tool permissions, approvals, readiness and pauses apply as for any agent. Usage is
 //! attributed to the run and its session.
 //!
-//! When the turn ends the pipeline reports it through [`JobService::finish_inference`], once the
-//! scheduler recorded the handoff (so the run names its session), and always at the run's current
-//! revision. A run the scheduler already ended (cancelled, say) is left as it is.
+//! The turn starts once the scheduler recorded the handoff, so its inference is admitted at the
+//! run revision the handoff saved. When the turn ends the pipeline reports it through
+//! [`JobService::finish_inference`], always at the run's current revision. A run the scheduler already ended (cancelled, say) is left as it is.
 use crate::background_turn::{JobTurn, TurnEnd, TurnHolds, TurnSource};
 use crate::turn_engine::TurnEngine;
 use devworks_core::context::{HostIngress, PrincipalKind};
 use devworks_core::locks::LockExt;
 use devworks_core::ports::IdKind;
 use devworks_core::ports::storage::{
-    ApplicationStore, ArtifactScope, Cancellation, ReadOptions, StorageError, StoredSession,
-    WriteOptions, read_snapshot, run_write,
+    ApplicationStore, ArtifactScope, Cancellation, OperationRecord, ReadOptions, StorageError,
+    StoredSession, WriteOptions, read_snapshot, run_write,
 };
 use devworks_core::protocol::provider::TranscriptBody;
 use devworks_core::protocol::{Counter, Id, OperationId, Revision};
@@ -181,18 +181,16 @@ impl InferenceJobs for ScheduledInference {
         let (turns, key) = (self.turns.clone(), run.run_id.as_str().to_owned());
         let task = handle.spawn(async move {
             let _own = OwnEntry { turns, key, turn };
-            let operation_id = report.operation.clone();
-            let operation = match crate::store::read(engine.store(), move |read| {
-                read.operations().operation(&operation_id)
-            })
-            .await
-            {
-                Ok(Some(operation)) => operation,
-                read => {
-                    let why = match read {
-                        Err(error) => format!("{error}"),
-                        _ => "it is missing".into(),
-                    };
+            let operation = match report.handoff(&stop).await {
+                Handoff::Recorded(operation) => operation,
+                Handoff::Stopped => {
+                    if asked.load(Ordering::SeqCst) {
+                        report.report(InferenceOutcome::Cancelled).await;
+                    }
+                    return;
+                }
+                Handoff::Ended => return,
+                Handoff::Unreadable(why) => {
                     report
                         .report(InferenceOutcome::Failed(format!(
                             "The scheduled agent could not read its run's operation ({why}). \
@@ -473,7 +471,68 @@ enum Reported {
     NotHandedOff,
 }
 
+/// What the turn found before it began.
+enum Handoff {
+    /// The scheduler recorded the handoff: the run's operation, which the turn runs.
+    Recorded(OperationRecord),
+    /// The turn's cancellation was requested first.
+    Stopped,
+    /// The run is no longer this attempt's, or its handoff never came within [`REPORT_BOUND`].
+    Ended,
+    /// The operation could not be read.
+    Unreadable(String),
+}
+
 impl Reporter {
+    /// Waits for the scheduler to record the handoff before the turn sends anything. The
+    /// handoff saves the run (advancing its revision), and inference admitted against the
+    /// earlier revision would be fenced by it.
+    async fn handoff(&self, stop: &Cancellation) -> Handoff {
+        let deadline = tokio::time::Instant::now() + REPORT_BOUND;
+        let mut wait = Duration::from_millis(10);
+        loop {
+            if stop.is_cancelled() {
+                return Handoff::Stopped;
+            }
+            let (run, operation, attempt) =
+                (self.run.clone(), self.operation.clone(), self.attempt);
+            let read = crate::store::read(&self.store, move |read| {
+                let owned = read.jobs().job_run(&run)?.is_some_and(|current| {
+                    matches!(current.status.as_str(), "Running" | "Holding")
+                        && current.operation_id.as_ref() == Some(&operation)
+                });
+                Ok((owned, read.operations().operation(&operation)?))
+            })
+            .await;
+            match read {
+                Ok((true, Some(record)))
+                    if record
+                        .latest_attempt()
+                        .is_some_and(|latest| latest.attempt_no == attempt) =>
+                {
+                    if handed_off(&record) {
+                        return Handoff::Recorded(record);
+                    }
+                }
+                Ok((_, None)) => return Handoff::Unreadable("it is missing".into()),
+                Ok(_) => return Handoff::Ended,
+                Err(error) => return Handoff::Unreadable(format!("{error}")),
+            }
+            if tokio::time::Instant::now() >= deadline {
+                self.trace(
+                    "The scheduler never recorded the handoff of a scheduled inference run; its \
+                     turn did not start, and the run is left to the supervision of unsettled \
+                     starts."
+                        .into(),
+                )
+                .await;
+                return Handoff::Ended;
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(Duration::from_millis(500));
+        }
+    }
+
     /// Reports `outcome` once the handoff is recorded. A store refusal is retried with backoff
     /// for as long as the runtime runs (shutdown records the run interrupted instead); a handoff
     /// still unrecorded after [`REPORT_BOUND`] is left to the scheduler's supervision of
@@ -523,11 +582,11 @@ impl Reporter {
             match reported {
                 Ok(Reported::Done) => return,
                 Ok(Reported::NotHandedOff) if late => {
-                    self.trace(
+                    self.trace(unrecorded(
                         &outcome,
                         "the scheduler never recorded its handoff; the run is \
                         left to the supervision of unsettled starts",
-                    )
+                    ))
                     .await;
                     return;
                 }
@@ -536,10 +595,10 @@ impl Reporter {
                 Err(error) => {
                     if late && !traced {
                         traced = true;
-                        self.trace(
+                        self.trace(unrecorded(
                             &outcome,
                             &format!("the store refuses it ({error}); retrying"),
-                        )
+                        ))
                         .await;
                     }
                 }
@@ -549,21 +608,25 @@ impl Reporter {
         }
     }
 
-    /// A durable trace of a report that could not be recorded in time.
-    async fn trace(&self, outcome: &InferenceOutcome, why: &str) {
+    /// A durable trace of a run the turn could not settle in time.
+    async fn trace(&self, message: String) {
         use devworks_core::protocol::records::Severity;
         use devworks_core::services::diagnostics::LogEntry;
         let mut entry = LogEntry::new(
             "jobs.inference",
             "report-unrecorded",
             Severity::Error,
-            format!("The outcome {outcome:?} of a scheduled inference run is not recorded: {why}."),
+            message,
         );
         entry.target_kind = Some("job_run".into());
         entry.target_id = Some(self.run.clone());
         let diagnostics = self.diagnostics.clone();
         let _ = tokio::task::spawn_blocking(move || diagnostics.log(entry)).await;
     }
+}
+
+fn unrecorded(outcome: &InferenceOutcome, why: &str) -> String {
+    format!("The outcome {outcome:?} of a scheduled inference run is not recorded: {why}.")
 }
 
 impl TurnHolds for Reporter {

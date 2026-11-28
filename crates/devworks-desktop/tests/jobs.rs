@@ -149,7 +149,7 @@ fn a_job_is_run_disabled_enabled_and_deleted_from_the_schedules_screen() {
     assert!(has_text(&h, "Nothing was sent to a model"));
     // The real pipeline ran it: not the reason of a composition without one.
     assert!(!has_text(&h, "not available in this composition"));
-    let run_id = jobs(&*backend).pop().unwrap().last_run_id.unwrap();
+    let run_id = listed(&*backend, "Issue triage").last_run_id.unwrap();
     let run = read_snapshot(
         &**engine.host().runtime().store(),
         &ReadOptions::default(),

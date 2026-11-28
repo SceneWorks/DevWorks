@@ -3172,7 +3172,8 @@ fn plan_request(
                         && read.jobs().job_run(run)?.is_some_and(|run| {
                             matches!(run.status.as_str(), "Running" | "Holding")
                                 && run.agent_actor.as_ref() == Some(ctx.principal())
-                                && run.project_id.as_ref() == project
+                                && devworks_core::services::jobs::run_target(&run).as_ref()
+                                    == project
                         })
                 }
                 None => {
